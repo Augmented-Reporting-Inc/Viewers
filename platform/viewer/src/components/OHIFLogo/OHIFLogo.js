@@ -9,9 +9,13 @@ function OHIFLogo() {
       target="_blank"
       rel="noopener noreferrer"
       className="header-brand"
-      href="http://ohif.org"
+      href="https://futurepacs.com/"
     >
-      <Icon name="ohif-logo" className="header-logo-image" />
+      <img
+        src="/assets/futurePACS_logo.svg"
+        className="header-logo-image"
+        alt=""
+      />
       {/* Logo text would fit smaller displays at two lines:
        *
        * Open Health
@@ -19,7 +23,11 @@ function OHIFLogo() {
        *
        * Or as `OHIF` on really small displays
        */}
-      <Icon name="ohif-text-logo" className="header-logo-text" />
+      <img
+        src="/assets/futurePACS_text_logo.svg"
+        className="header-logo-text"
+        alt=""
+      />
     </a>
   );
 }
