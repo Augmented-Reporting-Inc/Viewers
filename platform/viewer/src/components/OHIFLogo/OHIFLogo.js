@@ -1,7 +1,9 @@
 import './OHIFLogo.css';
 
-import { Icon } from '@ohif/ui';
 import React from 'react';
+
+import ImgLogo from './futurePACS_logo.svg';
+import TextLogo from './futurePACS_text_logo.svg';
 
 function OHIFLogo() {
   return (
@@ -11,11 +13,7 @@ function OHIFLogo() {
       className="header-brand"
       href="https://futurepacs.com/"
     >
-      <img
-        src="/assets/futurePACS_logo.svg"
-        className="header-logo-image"
-        alt=""
-      />
+      <ImgLogo className="header-logo-image" />
       {/* Logo text would fit smaller displays at two lines:
        *
        * Open Health
@@ -23,11 +21,7 @@ function OHIFLogo() {
        *
        * Or as `OHIF` on really small displays
        */}
-      <img
-        src="/assets/futurePACS_text_logo.svg"
-        className="header-logo-text"
-        alt=""
-      />
+      <TextLogo className="header-logo-text" />
     </a>
   );
 }
