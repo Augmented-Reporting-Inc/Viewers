@@ -15,6 +15,10 @@ const mapStateToProps = state => {
     viewports: viewports.viewportSpecificData,
     activeViewportIndex: viewports.activeViewportIndex,
     activeServer: getActiveServer(servers),
+    isMultiFrame: viewports.viewportSpecificData[viewports.activeViewportIndex]
+      ? viewports.viewportSpecificData[viewports.activeViewportIndex]
+          .isMultiFrame
+      : false,
   };
 };
 
