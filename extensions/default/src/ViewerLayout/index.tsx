@@ -65,7 +65,7 @@ function ViewerLayout({
   const buildNumber = process.env.BUILD_NUM;
 
   const menuOptions = [
-    {
+/*    {
       title: t('Header:About'),
       icon: 'info',
       onClick: () =>
@@ -75,6 +75,7 @@ function ViewerLayout({
           contentProps: { versionNumber, buildNumber },
         }),
     },
+    */
     {
       title: t('Header:Preferences'),
       icon: 'settings',
