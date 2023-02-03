@@ -337,6 +337,54 @@ const toolbarButtons = [
       ],
     },
   },
+  // Previous...
+  {
+    id: 'Previous',
+    type: 'ohif.radioGroup',
+    props: {
+      type: 'toggle',
+      icon: 'ui-arrow-up',
+      label: 'Previous',
+      commands: [
+        {
+          commandName: 'previousViewportDisplaySet',
+          context: 'CORNERSTONE',
+        },
+      ],
+    },
+  },
+  // Next...
+  {
+    id: 'Next',
+    type: 'ohif.radioGroup',
+    props: {
+      type: 'toggle',
+      icon: 'ui-arrow-down',
+      label: 'Next',
+      commands: [
+        {
+          commandName: 'nextViewportDisplaySet',
+          context: 'CORNERSTONE',
+        },
+      ],
+    },
+  },
+  // Cine...
+  {
+    id: 'Cine',
+    type: 'ohif.radioGroup',
+    props: {
+      type: 'toggle',
+      icon: 'tool-cine',
+      label: 'Cine',
+      commands: [
+        {
+          commandName: 'toggleCine',
+          context: 'CORNERSTONE',
+        },
+      ],
+    },
+  },
   // More...
   {
     id: 'MoreTools',

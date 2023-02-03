@@ -119,6 +119,9 @@ function modeFactory() {
         'Layout',
         'MPR',
         'Crosshairs',
+        //        'Previous',
+        //        'Next',
+        'Cine',
         'MoreTools',
       ]);
     },

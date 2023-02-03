@@ -46,10 +46,10 @@ const makeDisplaySet = instances => {
   }
 
   // Include the first image instance number (after sorted)
-  /*imageSet.setAttribute(
+  imageSet.setAttribute(
     'instanceNumber',
     imageSet.getImage(0).InstanceNumber
-  );*/
+  );
 
   /*const isReconstructable = isDisplaySetReconstructable(series, instances);
 
