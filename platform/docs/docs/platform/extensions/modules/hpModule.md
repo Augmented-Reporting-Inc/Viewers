@@ -219,6 +219,17 @@ matching), or provides and array of ids which will
 make the ProtocolEngine to choose the best matching protocol (based on
 protocolMatching rules, which is next section).
 
+### imageLoadStrategy
+The image load strategy specifies a function (by name) containing logic to re-order
+the image load requests.  This allows loading images viewed earlier to be done
+sooner than those loaded later.  The available strategies are:
+
+* interleaveTopToBottom to start at the top and work towards the bottom, for all series being loaded
+* interleaveCenter is like top to bottom but starts at the center
+* nth is a strategy that loads every nth instance, starting with the center
+and end points, and then filling in progressively all along the image.  This results in partial
+image view very quickly.
+
 ### protocolMatchingRules
 A list of criteria for the protocol along with the provided points for ranking.
 
@@ -412,7 +423,8 @@ As you can see in the hanging protocol we defined three viewports (but only show
    - `options` (optional): options for the display set
         - voi: windowing options for the display set (optional: windowWidth, windowCenter)
         - voiInverted: whether the VOI is inverted or not (optional)
-        - colormap: colormap for the display set (optional: 'hsv' etc.)
+        - colormap: colormap for the display set (optional, it is an object with `{ name }` and optional extra `opacityMapping` property)
+        - displayPreset: display preset for the display set (optional, used for 3D volume rendering. e.g., 'CT-Bone')
 
 
 ### Custom attribute

@@ -2,26 +2,27 @@ import React from 'react';
 import { Input, Dialog } from '@ohif/ui';
 
 function segmentationItemEditHandler({ id, servicesManager }) {
-  const { SegmentationService, UIDialogService } = servicesManager.services;
+  const { segmentationService, uiDialogService } = servicesManager.services;
 
-  const segmentation = SegmentationService.getSegmentation(id);
+  const segmentation = segmentationService.getSegmentation(id);
 
   const onSubmitHandler = ({ action, value }) => {
     switch (action.id) {
       case 'save': {
-        SegmentationService.addOrUpdateSegmentation(
+        segmentationService.addOrUpdateSegmentation(
           {
             ...segmentation,
             ...value,
           },
-          true
+          false, // don't suppress event
+          true // it should update cornerstone
         );
       }
     }
-    UIDialogService.dismiss({ id: 'enter-annotation' });
+    uiDialogService.dismiss({ id: 'enter-annotation' });
   };
 
-  UIDialogService.create({
+  uiDialogService.create({
     id: 'enter-annotation',
     centralize: true,
     isDraggable: false,

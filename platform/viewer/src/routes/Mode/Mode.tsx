@@ -1,13 +1,17 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { useParams, useLocation } from 'react-router';
-
+import { useParams, useLocation, useNavigate } from 'react-router';
 import PropTypes from 'prop-types';
 // TODO: DicomMetadataStore should be injected?
-import { DicomMetadataStore } from '@ohif/core';
+import { DicomMetadataStore, ServicesManager, utils } from '@ohif/core';
 import { DragAndDropProvider, ImageViewerProvider } from '@ohif/ui';
-import { useQuery } from '@hooks';
+import { useQuery, useSearchParams } from '@hooks';
 import ViewportGrid from '@components/ViewportGrid';
 import Compose from './Compose';
+import getStudies from './studiesList';
+import { history } from '../../utils/history';
+import loadModules from '../../pluginImports';
+
+const { getSplitParam } = utils;
 
 /**
  * Initialize the route.
@@ -20,11 +24,11 @@ import Compose from './Compose';
  */
 function defaultRouteInit(
   { servicesManager, studyInstanceUIDs, dataSource, filters },
-  hangingProtocol
+  hangingProtocolId
 ) {
   const {
-    DisplaySetService,
-    HangingProtocolService,
+    displaySetService,
+    hangingProtocolService,
   } = servicesManager.services;
 
   const unsubscriptions = [];
@@ -38,7 +42,7 @@ function defaultRouteInit(
         SeriesInstanceUID
       );
 
-      DisplaySetService.makeDisplaySets(seriesMetadata.instances, madeInClient);
+      displaySetService.makeDisplaySets(seriesMetadata.instances, madeInClient);
     }
   );
 
@@ -58,35 +62,23 @@ function defaultRouteInit(
   // until we run the hanging protocol matching service.
 
   Promise.allSettled(allRetrieves).then(() => {
-    const displaySets = DisplaySetService.getActiveDisplaySets();
+    const displaySets = displaySetService.getActiveDisplaySets();
 
     if (!displaySets || !displaySets.length) {
       return;
     }
 
-    const studyMap = {};
+    // Gets the studies list to use
+    const studies = getStudies(studyInstanceUIDs, displaySets);
 
-    // Prior studies don't quite work properly yet, but the studies list
-    // is at least being generated and passed in.
-    const studies = displaySets.reduce((prev, curr) => {
-      const { StudyInstanceUID } = curr;
-      if (!studyMap[StudyInstanceUID]) {
-        const study = DicomMetadataStore.getStudy(StudyInstanceUID);
-        studyMap[StudyInstanceUID] = study;
-        prev.push(study);
-      }
-      return prev;
-    }, []);
-
-    // The assumption is that the display set at position 0 is the first
     // study being displayed, and is thus the "active" study.
     const activeStudy = studies[0];
 
     // run the hanging protocol matching on the displaySets with the predefined
     // hanging protocol in the mode configuration
-    HangingProtocolService.run(
+    hangingProtocolService.run(
       { studies, activeStudy, displaySets },
-      hangingProtocol
+      hangingProtocolId
     );
   });
 
@@ -105,13 +97,22 @@ export default function ModeRoute({
   const location = useLocation();
   const query = useQuery();
   const params = useParams();
+  const searchParams = useSearchParams();
 
   const [studyInstanceUIDs, setStudyInstanceUIDs] = useState();
 
   const [refresh, setRefresh] = useState(false);
+  const [
+    ExtensionDependenciesLoaded,
+    setExtensionDependenciesLoaded,
+  ] = useState(false);
+
   const layoutTemplateData = useRef(false);
   const locationRef = useRef(null);
   const isMounted = useRef(false);
+
+  // Expose the react router dom navigation.
+  history.navigate = useNavigate();
 
   if (location !== locationRef.current) {
     layoutTemplateData.current = null;
@@ -119,11 +120,48 @@ export default function ModeRoute({
   }
 
   const {
-    DisplaySetService,
-    HangingProtocolService: hangingProtocolService,
-  } = servicesManager.services;
+    displaySetService,
+    hangingProtocolService,
+    userAuthenticationService,
+  } = (servicesManager as ServicesManager).services;
 
-  const { extensions, sopClassHandlers, hotkeys, hangingProtocol } = mode;
+  const {
+    extensions,
+    sopClassHandlers,
+    hotkeys: hotkeyObj,
+    hangingProtocol,
+  } = mode;
+
+  const runTimeHangingProtocolId = searchParams.get('hangingprotocolid');
+  const token = searchParams.get('token');
+
+  if (token) {
+    // if a token is passed in, set the userAuthenticationService to use it
+    // for the Authorization header for all requests
+    userAuthenticationService.setServiceImplementation({
+      getAuthorizationHeader: () => ({
+        Authorization: 'Bearer ' + token,
+      }),
+    });
+
+    // Create a URL object with the current location
+    const urlObj = new URL(
+      window.location.origin + location.pathname + location.search
+    );
+
+    // Remove the token from the URL object
+    urlObj.searchParams.delete('token');
+    const cleanUrl = urlObj.toString();
+
+    // Update the browser's history without the token
+    if (window.history && window.history.replaceState) {
+      window.history.replaceState(null, '', cleanUrl);
+    }
+  }
+
+  // Preserve the old array interface for hotkeys
+  const hotkeys = Array.isArray(hotkeyObj) ? hotkeyObj : hotkeyObj?.hotkeys;
+  const hotkeyName = hotkeyObj?.name || 'hotkey-definitions-v2';
 
   if (dataSourceName === undefined) {
     dataSourceName = extensionManager.defaultDataSourceName;
@@ -131,10 +169,8 @@ export default function ModeRoute({
 
   extensionManager.setActiveDataSource(dataSourceName);
 
-  const dataSources = extensionManager.getActiveDataSource();
+  const dataSource = extensionManager.getActiveDataSource()[0];
 
-  // Only handling one instance of the datasource type (E.g. one DICOMWeb server)
-  const dataSource = dataSources[0];
   // Only handling one route per mode for now
   const route = mode.routes[0];
 
@@ -165,6 +201,23 @@ export default function ModeRoute({
   }
 
   useEffect(() => {
+    const loadExtensions = async () => {
+      const loadedExtensions = await loadModules(Object.keys(extensions));
+      for (const extension of loadedExtensions) {
+        const { id: extensionId } = extension;
+        if (
+          extensionManager.registeredExtensionIds.indexOf(extensionId) === -1
+        ) {
+          await extensionManager.registerExtension(extension);
+        }
+      }
+      setExtensionDependenciesLoaded(true);
+    };
+
+    loadExtensions();
+  }, []);
+
+  useEffect(() => {
     // Preventing state update for unmounted component
     isMounted.current = true;
     return () => {
@@ -173,6 +226,10 @@ export default function ModeRoute({
   }, []);
 
   useEffect(() => {
+    if (!ExtensionDependenciesLoaded) {
+      return;
+    }
+
     // Todo: this should not be here, data source should not care about params
     const initializeDataSource = async (params, query) => {
       const studyInstanceUIDs = await dataSource.initialize({
@@ -186,9 +243,13 @@ export default function ModeRoute({
     return () => {
       layoutTemplateData.current = null;
     };
-  }, [location]);
+  }, [location, ExtensionDependenciesLoaded]);
 
   useEffect(() => {
+    if (!ExtensionDependenciesLoaded) {
+      return;
+    }
+
     const retrieveLayoutData = async () => {
       const layoutData = await route.layoutTemplate({
         location,
@@ -206,76 +267,94 @@ export default function ModeRoute({
     return () => {
       layoutTemplateData.current = null;
     };
-  }, [studyInstanceUIDs]);
+  }, [studyInstanceUIDs, ExtensionDependenciesLoaded]);
 
   useEffect(() => {
-    if (!hotkeys) {
+    if (!hotkeys || !ExtensionDependenciesLoaded) {
       return;
     }
 
     hotkeysManager.setDefaultHotKeys(hotkeys);
 
-    const userPreferredHotkeys = JSON.parse(
-      localStorage.getItem('hotkey-definitions')
-    );
+    const userPreferredHotkeys = JSON.parse(localStorage.getItem(hotkeyName));
 
     if (userPreferredHotkeys?.length) {
-      hotkeysManager.setHotkeys(userPreferredHotkeys);
+      hotkeysManager.setHotkeys(userPreferredHotkeys, hotkeyName);
     } else {
-      hotkeysManager.setHotkeys(hotkeys);
+      hotkeysManager.setHotkeys(hotkeys, hotkeyName);
     }
 
     return () => {
       hotkeysManager.destroy();
     };
-  }, []);
+  }, [ExtensionDependenciesLoaded]);
 
   useEffect(() => {
-    if (!layoutTemplateData.current) {
+    if (!layoutTemplateData.current || !ExtensionDependenciesLoaded) {
       return;
     }
 
-    // TODO: For some reason this is running before the Providers
-    // are calling setServiceImplementation
-    // TODO -> iterate through services.
-
-    // Extension
-
-    // Add SOPClassHandlers to a new SOPClassManager.
-    DisplaySetService.init(extensionManager, sopClassHandlers);
-
-    extensionManager.onModeEnter({
-      servicesManager,
-      extensionManager,
-      commandsManager,
-    });
-    // Sets the active hanging protocols - if hangingProtocol is undefined,
-    // resets to default.  Done before the onModeEnter to allow the onModeEnter
-    // to perform custom hanging protocol actions
-    hangingProtocolService.setActiveProtocols(hangingProtocol);
-    mode?.onModeEnter({ servicesManager, extensionManager, commandsManager });
-
     const setupRouteInit = async () => {
+      // TODO: For some reason this is running before the Providers
+      // are calling setServiceImplementation
+      // TODO -> iterate through services.
+
+      // Extension
+
+      // Add SOPClassHandlers to a new SOPClassManager.
+      displaySetService.init(extensionManager, sopClassHandlers);
+
+      extensionManager.onModeEnter({
+        servicesManager,
+        extensionManager,
+        commandsManager,
+      });
+
+      // use the URL hangingProtocolId if it exists, otherwise use the one
+      // defined in the mode configuration
+      const hangingProtocolIdToUse = hangingProtocolService.getProtocolById(
+        runTimeHangingProtocolId
+      )
+        ? runTimeHangingProtocolId
+        : hangingProtocol;
+
+      // Sets the active hanging protocols - if hangingProtocol is undefined,
+      // resets to default.  Done before the onModeEnter to allow the onModeEnter
+      // to perform custom hanging protocol actions
+      hangingProtocolService.setActiveProtocolIds(hangingProtocolIdToUse);
+
+      mode?.onModeEnter({
+        servicesManager,
+        extensionManager,
+        commandsManager,
+      });
+
       /**
        * The next line should get all the query parameters provided by the URL
-       * - except the StudyInstaceUIDs - and create an object called filters
+       * - except the StudyInstanceUIDs - and create an object called filters
        * used to filtering the study as the user wants otherwise it will return
        * a empty object.
        *
        * Example:
        * const filters = {
-       *   seriesInstaceUID: 1.2.276.0.7230010.3.1.3.1791068887.5412.1620253993.114611
+       *   seriesInstanceUID: 1.2.276.0.7230010.3.1.3.1791068887.5412.1620253993.114611
        * }
        */
       const filters =
         Array.from(query.keys()).reduce(
           (acc: Record<string, string>, val: string) => {
-            if (val !== 'StudyInstanceUIDs') {
-              if (['seriesInstanceUID', 'SeriesInstanceUID'].includes(val)) {
-                return { ...acc, seriesInstanceUID: query.get(val) };
+            const lowerVal = val.toLowerCase();
+            if (lowerVal !== 'studyinstanceuids') {
+              // Not sure why the case matters here - it doesn't in the URL
+              if (lowerVal === 'seriesinstanceuid') {
+                const seriesUIDs = getSplitParam(lowerVal, query);
+                return {
+                  ...acc,
+                  seriesInstanceUID: seriesUIDs,
+                };
               }
 
-              return { ...acc, [val]: query.get(val) };
+              return { ...acc, [val]: getSplitParam(lowerVal, query) };
             }
           },
           {}
@@ -291,7 +370,7 @@ export default function ModeRoute({
             dataSource,
             filters,
           },
-          hangingProtocol
+          hangingProtocolIdToUse
         );
       }
 
@@ -302,7 +381,7 @@ export default function ModeRoute({
           dataSource,
           filters,
         },
-        hangingProtocol
+        hangingProtocolIdToUse
       );
     };
 
@@ -316,7 +395,10 @@ export default function ModeRoute({
       // information, and must be in a try/catch to ensure subscriptions
       // are unsubscribed.
       try {
-        mode?.onModeExit?.({ servicesManager, extensionManager });
+        mode?.onModeExit?.({
+          servicesManager,
+          extensionManager,
+        });
       } catch (e) {
         console.warn('mode exit failure', e);
       }
@@ -333,6 +415,7 @@ export default function ModeRoute({
     mode,
     dataSourceName,
     location,
+    ExtensionDependenciesLoaded,
     route,
     servicesManager,
     extensionManager,
@@ -359,8 +442,8 @@ export default function ModeRoute({
       <CombinedContextProvider>
         <DragAndDropProvider>
           {layoutTemplateData.current &&
-            studyInstanceUIDs?.length &&
-            studyInstanceUIDs[0] !== undefined &&
+            studyInstanceUIDs?.[0] !== undefined &&
+            ExtensionDependenciesLoaded &&
             renderLayoutData({
               ...layoutTemplateData.current.props,
               ViewportGridComp: ViewportGridWithDataSource,

@@ -1,60 +1,46 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import PropTypes from 'prop-types';
 import OHIF, { utils } from '@ohif/core';
 
-import {
-  Notification,
-  ViewportActionBar,
-  useCine,
-  useViewportGrid,
-  useViewportDialog,
-  Tooltip,
-  Icon,
-} from '@ohif/ui';
+import { ViewportActionBar, Tooltip, Icon } from '@ohif/ui';
 
 import { useTranslation } from 'react-i18next';
 
-import { eventTarget, Enums } from '@cornerstonejs/core';
 import { annotation } from '@cornerstonejs/tools';
 import { useTrackedMeasurements } from './../getContextModule';
+import { BaseVolumeViewport, Enums } from '@cornerstonejs/core';
 
 const { formatDate } = utils;
 
 function TrackedCornerstoneViewport(props) {
   const {
-    children,
     displaySets,
     viewportIndex,
     viewportLabel,
     servicesManager,
     extensionManager,
-    commandsManager,
     viewportOptions,
   } = props;
 
   const { t } = useTranslation('TrackedViewport');
 
   const {
-    MeasurementService,
-    CornerstoneViewportService,
+    measurementService,
+    cornerstoneViewportService,
   } = servicesManager.services;
 
   // Todo: handling more than one displaySet on the same viewport
   const displaySet = displaySets[0];
 
   const [trackedMeasurements] = useTrackedMeasurements();
-  const [{ activeViewportIndex }] = useViewportGrid();
-  const [{ isCineEnabled, cines }, cineService] = useCine();
-  const [viewportDialogState] = useViewportDialog();
   const [isTracked, setIsTracked] = useState(false);
   const [trackedMeasurementUID, setTrackedMeasurementUID] = useState(null);
-  const [element, setElement] = useState(null);
+  const [viewportElem, setViewportElem] = useState(null);
 
   const { trackedSeries } = trackedMeasurements.context;
   const viewportId = viewportOptions.viewportId;
 
   const {
-    Modality,
     SeriesDate,
     SeriesDescription,
     SeriesInstanceUID,
@@ -71,25 +57,68 @@ function TrackedCornerstoneViewport(props) {
     ManufacturerModelName,
   } = displaySet.images[0];
 
-  const cineHandler = () => {
-    if (!cines || !cines[viewportIndex] || !element) {
-      return;
+  const updateIsTracked = useCallback(() => {
+    const viewport = cornerstoneViewportService.getCornerstoneViewportByIndex(
+      viewportIndex
+    );
+
+    if (viewport instanceof BaseVolumeViewport) {
+      // A current image id will only exist for volume viewports that can have measurements tracked.
+      // Typically these are those volume viewports for the series of acquisition.
+      const currentImageId = viewport?.getCurrentImageId();
+
+      if (!currentImageId) {
+        if (isTracked) {
+          setIsTracked(false);
+        }
+        return;
+      }
     }
 
-    const cine = cines[viewportIndex];
-    const isPlaying = cine.isPlaying || false;
-    const frameRate = cine.frameRate || 24;
-
-    const validFrameRate = Math.max(frameRate, 1);
-
-    if (isPlaying) {
-      cineService.playClip(element, {
-        framesPerSecond: validFrameRate,
-      });
-    } else {
-      cineService.stopClip(element);
+    if (trackedSeries.includes(SeriesInstanceUID) !== isTracked) {
+      setIsTracked(!isTracked);
     }
-  };
+  }, [isTracked, trackedMeasurements, viewportIndex, SeriesInstanceUID]);
+
+  const onElementEnabled = useCallback(
+    evt => {
+      if (evt.detail.element !== viewportElem) {
+        // The VOLUME_VIEWPORT_NEW_VOLUME event allows updateIsTracked to reliably fetch the image id for a volume viewport.
+        evt.detail.element?.addEventListener(
+          Enums.Events.VOLUME_VIEWPORT_NEW_VOLUME,
+          updateIsTracked
+        );
+        setViewportElem(evt.detail.element);
+      }
+    },
+    [updateIsTracked, viewportElem]
+  );
+
+  const onElementDisabled = useCallback(() => {
+    viewportElem?.removeEventListener(
+      Enums.Events.VOLUME_VIEWPORT_NEW_VOLUME,
+      updateIsTracked
+    );
+  }, [updateIsTracked, viewportElem]);
+
+  useEffect(updateIsTracked, [updateIsTracked]);
+
+  useEffect(() => {
+    const { unsubscribe } = cornerstoneViewportService.subscribe(
+      cornerstoneViewportService.EVENTS.VIEWPORT_DATA_CHANGED,
+      props => {
+        if (props.viewportIndex !== viewportIndex) {
+          return;
+        }
+
+        updateIsTracked();
+      }
+    );
+
+    return () => {
+      unsubscribe();
+    };
+  }, [updateIsTracked, viewportIndex]);
 
   useEffect(() => {
     if (isTracked) {
@@ -99,69 +128,25 @@ function TrackedCornerstoneViewport(props) {
         },
       });
 
-      CornerstoneViewportService.getRenderingEngine().renderViewport(
-        viewportId
-      );
+      cornerstoneViewportService
+        .getRenderingEngine()
+        .renderViewport(viewportId);
 
       return;
     }
 
-    annotation.config.style.setViewportToolStyles(`viewport-${viewportIndex}`, {
+    annotation.config.style.setViewportToolStyles(viewportId, {
       global: {
         lineDash: '4,4',
       },
     });
 
-    CornerstoneViewportService.getRenderingEngine().renderViewport(viewportId);
+    cornerstoneViewportService.getRenderingEngine().renderViewport(viewportId);
 
     return () => {
       annotation.config.style.setViewportToolStyles(viewportId, {});
     };
   }, [isTracked]);
-
-  // unmount cleanup
-  useEffect(() => {
-    eventTarget.addEventListener(
-      Enums.Events.STACK_VIEWPORT_NEW_STACK,
-      cineHandler
-    );
-
-    return () => {
-      cineService.setCine({ id: viewportIndex, isPlaying: false });
-      eventTarget.removeEventListener(
-        Enums.Events.STACK_VIEWPORT_NEW_STACK,
-        cineHandler
-      );
-    };
-  }, [element]);
-
-  useEffect(() => {
-    if (!cines || !cines[viewportIndex] || !element) {
-      return;
-    }
-
-    cineHandler();
-
-    return () => {
-      if (element && cines?.[viewportIndex]?.isPlaying) {
-        cineService.stopClip(element);
-      }
-    };
-  }, [cines, viewportIndex, cineService, element, cineHandler]);
-
-  if (trackedSeries.includes(SeriesInstanceUID) !== isTracked) {
-    setIsTracked(!isTracked);
-  }
-
-  /**
-   * OnElementEnabled callback which is called after the cornerstoneExtension
-   * has enabled the element. Note: we delegate all the image rendering to
-   * cornerstoneExtension, so we don't need to do anything here regarding
-   * the image rendering, element enabling etc.
-   */
-  const onElementEnabled = evt => {
-    setElement(evt.detail.element);
-  };
 
   function switchMeasurement(direction) {
     const newTrackedMeasurementUID = _getNextMeasurementUID(
@@ -177,7 +162,7 @@ function TrackedCornerstoneViewport(props) {
 
     setTrackedMeasurementUID(newTrackedMeasurementUID);
 
-    MeasurementService.jumpToMeasurement(
+    measurementService.jumpToMeasurement(
       viewportIndex,
       newTrackedMeasurementUID
     );
@@ -188,11 +173,14 @@ function TrackedCornerstoneViewport(props) {
       '@ohif/extension-cornerstone.viewportModule.cornerstone'
     );
 
-    return <Component {...props} onElementEnabled={onElementEnabled} />;
+    return (
+      <Component
+        {...props}
+        onElementEnabled={onElementEnabled}
+        onElementDisabled={onElementDisabled}
+      />
+    );
   };
-
-  const cine = cines[viewportIndex];
-  const isPlaying = (cine && cine.isPlaying) || false;
 
   return (
     <>
@@ -210,9 +198,7 @@ function TrackedCornerstoneViewport(props) {
           currentSeries: SeriesNumber, // TODO - switch entire currentSeries to be UID based or actual position based
           seriesDescription: SeriesDescription,
           patientInformation: {
-            patientName: PatientName
-              ? OHIF.utils.formatPN(PatientName.Alphabetic)
-              : '',
+            patientName: PatientName ? OHIF.utils.formatPN(PatientName) : '',
             patientSex: PatientSex || '',
             patientAge: PatientAge || '',
             MRN: PatientID || '',
@@ -226,38 +212,10 @@ function TrackedCornerstoneViewport(props) {
             scanner: ManufacturerModelName || '',
           },
         }}
-        showNavArrows={!isCineEnabled}
-        showCine={isCineEnabled}
-        cineProps={{
-          isPlaying,
-          onClose: () => commandsManager.runCommand('toggleCine'),
-          onPlayPauseChange: isPlaying =>
-            cineService.setCine({
-              id: activeViewportIndex,
-              isPlaying,
-            }),
-          onFrameRateChange: frameRate =>
-            cineService.setCine({
-              id: activeViewportIndex,
-              frameRate,
-            }),
-        }}
       />
       {/* TODO: Viewport interface to accept stack or layers of content like this? */}
       <div className="relative flex flex-row w-full h-full overflow-hidden">
         {getCornerstoneViewport()}
-        <div className="absolute w-full">
-          {viewportDialogState.viewportIndex === viewportIndex && (
-            <Notification
-              id={viewportDialogState.id}
-              message={viewportDialogState.message}
-              type={viewportDialogState.type}
-              actions={viewportDialogState.actions}
-              onSubmit={viewportDialogState.onSubmit}
-              onOutsideClick={viewportDialogState.onOutsideClick}
-            />
-          )}
-        </div>
       </div>
     </>
   );
@@ -281,17 +239,25 @@ function _getNextMeasurementUID(
   trackedMeasurementId,
   trackedMeasurements
 ) {
-  const { MeasurementService } = servicesManager.services;
-  const measurements = MeasurementService.getMeasurements();
+  const { measurementService, viewportGridService } = servicesManager.services;
+  const measurements = measurementService.getMeasurements();
+
+  const { activeViewportIndex, viewports } = viewportGridService.getState();
+  const {
+    displaySetInstanceUIDs: activeViewportDisplaySetInstanceUIDs,
+  } = viewports[activeViewportIndex];
 
   const { trackedSeries } = trackedMeasurements.context;
 
-  // Get the potentially trackable measurements for this series,
+  // Get the potentially trackable measurements for the series of the
+  // active viewport.
   // The measurements to jump between are the same
   // regardless if this series is tracked or not.
 
-  const filteredMeasurements = measurements.filter(m =>
-    trackedSeries.includes(m.referenceSeriesUID)
+  const filteredMeasurements = measurements.filter(
+    m =>
+      trackedSeries.includes(m.referenceSeriesUID) &&
+      activeViewportDisplaySetInstanceUIDs.includes(m.displaySetInstanceUID)
   );
 
   if (!filteredMeasurements.length) {
@@ -329,7 +295,7 @@ function _getNextMeasurementUID(
 }
 
 function _getStatusComponent(isTracked) {
-  const trackedIcon = isTracked ? 'tracked' : 'dotted-circle';
+  const trackedIcon = isTracked ? 'status-tracked' : 'status-untracked';
 
   return (
     <div className="relative">
@@ -361,7 +327,7 @@ function _getStatusComponent(isTracked) {
           </div>
         }
       >
-        <Icon name={trackedIcon} className="w-6 text-primary-light" />
+        <Icon name={trackedIcon} className="text-primary-light" />
       </Tooltip>
     </div>
   );

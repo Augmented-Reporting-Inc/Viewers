@@ -14,7 +14,12 @@ import {
   LoadingIndicatorProgress,
 } from '@ohif/ui';
 import i18n from '@ohif/i18n';
-import { hotkeys } from '@ohif/core';
+import {
+  ServicesManager,
+  HangingProtocolService,
+  hotkeys,
+  CommandsManager,
+} from '@ohif/core';
 import { useAppConfig } from '@state';
 import Toolbar from '../Toolbar/Toolbar';
 
@@ -33,7 +38,7 @@ function ViewerLayout({
   rightPanels = [],
   leftPanelDefaultClosed = false,
   rightPanelDefaultClosed = false,
-}) {
+}): React.FunctionComponent {
   const [appConfig] = useAppConfig();
   const navigate = useNavigate();
   const location = useLocation();
@@ -41,13 +46,27 @@ function ViewerLayout({
   const onClickReturnButton = () => {
     const { pathname } = location;
     const dataSourceIdx = pathname.indexOf('/', 1);
-    const search =
-      dataSourceIdx === -1
-        ? undefined
-        : `datasourcename=${pathname.substring(dataSourceIdx + 1)}`;
+    // const search =
+    //   dataSourceIdx === -1
+    //     ? undefined
+    //     : `datasources=${pathname.substring(dataSourceIdx + 1)}`;
+
+    // Todo: Handle parameters in a better way.
+    const query = new URLSearchParams(window.location.search);
+    const configUrl = query.get('configUrl');
+
+    const searchQuery = new URLSearchParams();
+    if (dataSourceIdx !== -1) {
+      searchQuery.append('datasources', pathname.substring(dataSourceIdx + 1));
+    }
+
+    if (configUrl) {
+      searchQuery.append('configUrl', configUrl);
+    }
+
     navigate({
       pathname: '/',
-      search,
+      search: decodeURIComponent(searchQuery.toString()),
     });
   };
 
@@ -58,7 +77,7 @@ function ViewerLayout({
     appConfig.showLoadingIndicator
   );
 
-  const { HangingProtocolService } = servicesManager.services;
+  const { hangingProtocolService } = servicesManager.services;
 
   const { hotkeyDefinitions, hotkeyDefaults } = hotkeysManager;
   const versionNumber = process.env.VERSION_NUMBER;
@@ -159,6 +178,7 @@ function ViewerLayout({
     const { content, entry } = getComponent(id);
 
     return {
+      id: entry.id,
       iconName: entry.iconName,
       iconLabel: entry.iconLabel,
       label: entry.label,
@@ -168,23 +188,21 @@ function ViewerLayout({
   };
 
   useEffect(() => {
-    const { unsubscribe } = HangingProtocolService.subscribe(
-      HangingProtocolService.EVENTS.HANGING_PROTOCOL_APPLIED_FOR_VIEWPORT,
+    const { unsubscribe } = hangingProtocolService.subscribe(
+      HangingProtocolService.EVENTS.PROTOCOL_CHANGED,
 
       // Todo: right now to set the loading indicator to false, we need to wait for the
-      // HangingProtocolService to finish applying the viewport matching to each viewport,
+      // hangingProtocolService to finish applying the viewport matching to each viewport,
       // however, this might not be the only approach to set the loading indicator to false. we need to explore this further.
-      ({ progress }) => {
-        if (progress === 100) {
-          setShowLoadingIndicator(false);
-        }
+      () => {
+        setShowLoadingIndicator(false);
       }
     );
 
     return () => {
       unsubscribe();
     };
-  }, [HangingProtocolService]);
+  }, [hangingProtocolService]);
 
   const getViewportComponentData = viewportComponent => {
     const { entry } = getComponent(viewportComponent.namespace);
@@ -228,6 +246,7 @@ function ViewerLayout({
                 side="left"
                 activeTabIndex={leftPanelDefaultClosed ? null : 0}
                 tabs={leftPanelComponents}
+                servicesManager={servicesManager}
               />
             </ErrorBoundary>
           ) : null}
@@ -249,6 +268,7 @@ function ViewerLayout({
                 side="right"
                 activeTabIndex={rightPanelDefaultClosed ? null : 0}
                 tabs={rightPanelComponents}
+                servicesManager={servicesManager}
               />
             </ErrorBoundary>
           ) : null}
@@ -263,7 +283,8 @@ ViewerLayout.propTypes = {
   extensionManager: PropTypes.shape({
     getModuleEntry: PropTypes.func.isRequired,
   }).isRequired,
-  commandsManager: PropTypes.object,
+  commandsManager: PropTypes.instanceOf(CommandsManager),
+  servicesManager: PropTypes.instanceOf(ServicesManager),
   // From modes
   leftPanels: PropTypes.array,
   rightPanels: PropTypes.array,

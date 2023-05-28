@@ -9,8 +9,8 @@ import { useTranslation } from 'react-i18next';
 //
 import filtersMeta from './filtersMeta.js';
 import { useAppConfig } from '@state';
-import { useDebounce, useQuery } from '@hooks';
-import { utils, hotkeys } from '@ohif/core';
+import { useDebounce, useSearchParams } from '@hooks';
+import { utils, hotkeys, ServicesManager } from '@ohif/core';
 
 import {
   Icon,
@@ -47,6 +47,8 @@ function WorkList({
   dataSource,
   hotkeysManager,
   dataPath,
+  onRefresh,
+  servicesManager,
 }) {
   const { hotkeyDefinitions, hotkeyDefaults } = hotkeysManager;
   const { show, hide } = useModal();
@@ -54,10 +56,10 @@ function WorkList({
   // ~ Modes
   const [appConfig] = useAppConfig();
   // ~ Filters
-  const query = useQuery();
+  const searchParams = useSearchParams();
   const navigate = useNavigate();
   const STUDIES_LIMIT = 101;
-  const queryFilterValues = _getQueryFilterValues(query);
+  const queryFilterValues = _getQueryFilterValues(searchParams);
   const [filterValues, _setFilterValues] = useState({
     ...defaultFilterValues,
     ...queryFilterValues,
@@ -334,21 +336,30 @@ function WorkList({
               : []
           }
         >
-          {appConfig.modes.map((mode, i) => {
+          {appConfig.loadedModes.map((mode, i) => {
             const isFirst = i === 0;
 
-            const isValidMode = mode.isValidMode({ modalities });
+            const modalitiesToCheck = modalities.replaceAll('/', '\\');
+
+            const isValidMode = mode.isValidMode({
+              modalities: modalitiesToCheck,
+            });
             // TODO: Modes need a default/target route? We mostly support a single one for now.
             // We should also be using the route path, but currently are not
             // mode.routeName
             // mode.routes[x].path
             // Don't specify default data source, and it should just be picked up... (this may not currently be the case)
-            // How do we know which params to pass? Today, it's just StudyInstanceUIDs
+            // How do we know which params to pass? Today, it's just StudyInstanceUIDs and configUrl if exists
+            const query = new URLSearchParams();
+            if (filterValues.configUrl) {
+              query.append('configUrl', filterValues.configUrl);
+            }
+            query.append('StudyInstanceUIDs', studyInstanceUid);
             return (
               <Link
                 key={i}
                 to={`${dataPath ? '../../' : ''}${mode.routeName}${dataPath ||
-                  ''}?StudyInstanceUIDs=${studyInstanceUid}`}
+                  ''}?${query.toString()}`}
                 // to={`${mode.routeName}/dicomweb?StudyInstanceUIDs=${studyInstanceUid}`}
               >
                 <Button
@@ -430,49 +441,77 @@ function WorkList({
     });
   }
 
+  const { customizationService } = servicesManager.services;
+  const { component: dicomUploadComponent } =
+    customizationService.get('dicomUploadComponent') ?? {};
+  const uploadProps =
+    dicomUploadComponent && dataSource.getConfig().dicomUploadEnabled
+      ? {
+          title: 'Upload files',
+          closeButton: true,
+          shouldCloseOnEsc: false,
+          shouldCloseOnOverlayClick: false,
+          content: dicomUploadComponent.bind(null, {
+            dataSource,
+            onComplete: () => {
+              hide();
+              onRefresh();
+            },
+            onStarted: () => {
+              show({
+                ...uploadProps,
+                // when upload starts, hide the default close button as closing the dialogue must be handled by the upload dialogue itself
+                closeButton: false,
+              });
+            },
+          }),
+        }
+      : undefined;
+
   return (
-    <div
-      className={classnames('bg-black h-full', {
-        'h-screen': !hasStudies,
-      })}
-    >
+    <div className="bg-black h-screen flex flex-col ">
       <Header
         isSticky
         menuOptions={menuOptions}
         isReturnEnabled={false}
         WhiteLabeling={appConfig.whiteLabeling}
       />
-      <StudyListFilter
-        numOfStudies={pageNumber * resultsPerPage > 100 ? 101 : numOfStudies}
-        filtersMeta={filtersMeta}
-        filterValues={{ ...filterValues, ...defaultSortValues }}
-        onChange={setFilterValues}
-        clearFilters={() => setFilterValues(defaultFilterValues)}
-        isFiltering={isFiltering(filterValues, defaultFilterValues)}
-      />
-      {hasStudies ? (
-        <>
-          <StudyListTable
-            tableDataSource={tableDataSource.slice(offset, offsetAndTake)}
-            numOfStudies={numOfStudies}
-            filtersMeta={filtersMeta}
-          />
-          <StudyListPagination
-            onChangePage={onPageNumberChange}
-            onChangePerPage={onResultsPerPageChange}
-            currentPage={pageNumber}
-            perPage={resultsPerPage}
-          />
-        </>
-      ) : (
-        <div className="flex flex-col items-center justify-center pt-48">
-          {appConfig.showLoadingIndicator && isLoadingData ? (
-            <LoadingIndicatorProgress className={'w-full h-full bg-black'} />
-          ) : (
-            <EmptyStudies />
-          )}
-        </div>
-      )}
+      <div className="overflow-y-auto ohif-scrollbar flex flex-col grow">
+        <StudyListFilter
+          numOfStudies={pageNumber * resultsPerPage > 100 ? 101 : numOfStudies}
+          filtersMeta={filtersMeta}
+          filterValues={{ ...filterValues, ...defaultSortValues }}
+          onChange={setFilterValues}
+          clearFilters={() => setFilterValues(defaultFilterValues)}
+          isFiltering={isFiltering(filterValues, defaultFilterValues)}
+          onUploadClick={uploadProps ? () => show(uploadProps) : undefined}
+        />
+        {hasStudies ? (
+          <div className="grow flex flex-col">
+            <StudyListTable
+              tableDataSource={tableDataSource.slice(offset, offsetAndTake)}
+              numOfStudies={numOfStudies}
+              filtersMeta={filtersMeta}
+            />
+            <div className="grow">
+              <StudyListPagination
+                onChangePage={onPageNumberChange}
+                onChangePerPage={onResultsPerPageChange}
+                currentPage={pageNumber}
+                perPage={resultsPerPage}
+              />
+            </div>
+          </div>
+        ) : (
+          <div className="flex flex-col items-center justify-center pt-48">
+            {appConfig.showLoadingIndicator && isLoadingData ? (
+              <LoadingIndicatorProgress className={'w-full h-full bg-black'} />
+            ) : (
+              <EmptyStudies />
+            )}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -481,8 +520,10 @@ WorkList.propTypes = {
   data: PropTypes.array.isRequired,
   dataSource: PropTypes.shape({
     query: PropTypes.object.isRequired,
+    getConfig: PropTypes.func,
   }).isRequired,
   isLoadingData: PropTypes.bool.isRequired,
+  servicesManager: PropTypes.instanceOf(ServicesManager),
 };
 
 const defaultFilterValues = {
@@ -499,39 +540,39 @@ const defaultFilterValues = {
   sortDirection: 'none',
   pageNumber: 1,
   resultsPerPage: 25,
-  datasourcename: '',
+  datasources: '',
+  configUrl: null,
 };
 
 function _tryParseInt(str, defaultValue) {
   let retValue = defaultValue;
-  if (str !== null) {
-    if (str.length > 0) {
-      if (!isNaN(str)) {
-        retValue = parseInt(str);
-      }
+  if (str && str.length > 0) {
+    if (!isNaN(str)) {
+      retValue = parseInt(str);
     }
   }
   return retValue;
 }
 
-function _getQueryFilterValues(query) {
+function _getQueryFilterValues(params) {
   const queryFilterValues = {
-    patientName: query.get('patientName'),
-    mrn: query.get('mrn'),
+    patientName: params.get('patientname'),
+    mrn: params.get('mrn'),
     studyDate: {
-      startDate: query.get('startDate'),
-      endDate: query.get('endDate'),
+      startDate: params.get('startdate') || null,
+      endDate: params.get('enddate') || null,
     },
-    description: query.get('description'),
-    modalities: query.get('modalities')
-      ? query.get('modalities').split(',')
+    description: params.get('description'),
+    modalities: params.get('modalities')
+      ? params.get('modalities').split(',')
       : [],
-    accession: query.get('accession'),
-    sortBy: query.get('sortBy'),
-    sortDirection: query.get('sortDirection'),
-    pageNumber: _tryParseInt(query.get('pageNumber'), undefined),
-    resultsPerPage: _tryParseInt(query.get('resultsPerPage'), undefined),
-    datasourcename: query.get('datasourcename'),
+    accession: params.get('accession'),
+    sortBy: params.get('sortby'),
+    sortDirection: params.get('sortdirection'),
+    pageNumber: _tryParseInt(params.get('pagenumber'), undefined),
+    resultsPerPage: _tryParseInt(params.get('resultsperpage'), undefined),
+    datasources: params.get('datasources'),
+    configUrl: params.get('configurl'),
   };
 
   // Delete null/undefined keys

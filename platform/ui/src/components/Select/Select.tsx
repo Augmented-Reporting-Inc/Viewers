@@ -77,8 +77,9 @@ const Select = ({
       inputId={`input-${id}`}
       className={classnames(
         className,
-        'flex flex-col flex-1 customSelect__wrapper'
+        'ohif-select flex flex-col flex-1 customSelect__wrapper'
       )}
+      data-cy={`input-${id}`}
       classNamePrefix="customSelect"
       isDisabled={isDisabled}
       isClearable={isClearable}

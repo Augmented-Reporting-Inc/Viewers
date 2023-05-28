@@ -1,9 +1,11 @@
-import { hotkeys } from '@ohif/core';
+import { hotkeys, classes } from '@ohif/core';
 import toolbarButtons from './toolbarButtons.js';
 import { id } from './id.js';
 import initToolGroups, { toolGroupIds } from './initToolGroups.js';
 import setCrosshairsConfiguration from './utils/setCrosshairsConfiguration.js';
 import setFusionActiveVolume from './utils/setFusionActiveVolume.js';
+
+const { MetadataProvider } = classes;
 
 const ohif = {
   layout: '@ohif/extension-default.layoutTemplateModule.viewerLayout',
@@ -42,10 +44,10 @@ function modeFactory({ modeConfiguration }) {
      */
     onModeEnter: ({ servicesManager, extensionManager, commandsManager }) => {
       const {
-        ToolBarService,
-        ToolGroupService,
-        HangingProtocolService,
-        DisplaySetService,
+        toolbarService,
+        toolGroupService,
+        hangingProtocolService,
+        displaySetService,
       } = servicesManager.services;
 
       const utilityModule = extensionManager.getModuleEntry(
@@ -55,10 +57,10 @@ function modeFactory({ modeConfiguration }) {
       const { toolNames, Enums } = utilityModule.exports;
 
       // Init Default and SR ToolGroups
-      initToolGroups(toolNames, Enums, ToolGroupService, commandsManager);
+      initToolGroups(toolNames, Enums, toolGroupService, commandsManager);
 
       const setWindowLevelActive = () => {
-        ToolBarService.recordInteraction({
+        toolbarService.recordInteraction({
           groupId: 'WindowLevel',
           itemId: 'WindowLevel',
           interactionType: 'tool',
@@ -91,28 +93,28 @@ function modeFactory({ modeConfiguration }) {
         });
       };
 
-      const { unsubscribe } = ToolGroupService.subscribe(
-        ToolGroupService.EVENTS.VIEWPORT_ADDED,
+      const { unsubscribe } = toolGroupService.subscribe(
+        toolGroupService.EVENTS.VIEWPORT_ADDED,
         () => {
           // For fusion toolGroup we need to add the volumeIds for the crosshairs
           // since in the fusion viewport we don't want both PT and CT to render MIP
           // when slabThickness is modified
           const {
             displaySetMatchDetails,
-          } = HangingProtocolService.getMatchDetails();
+          } = hangingProtocolService.getMatchDetails();
 
           setCrosshairsConfiguration(
             displaySetMatchDetails,
             toolNames,
-            ToolGroupService,
-            DisplaySetService
+            toolGroupService,
+            displaySetService
           );
 
           setFusionActiveVolume(
             displaySetMatchDetails,
             toolNames,
-            ToolGroupService,
-            DisplaySetService
+            toolGroupService,
+            displaySetService
           );
 
           setWindowLevelActive();
@@ -120,9 +122,9 @@ function modeFactory({ modeConfiguration }) {
       );
 
       unsubscriptions.push(unsubscribe);
-      ToolBarService.init(extensionManager);
-      ToolBarService.addButtons(toolbarButtons);
-      ToolBarService.createButtonSection('primary', [
+      toolbarService.init(extensionManager);
+      toolbarService.addButtons(toolbarButtons);
+      toolbarService.createButtonSection('primary', [
         'MeasurementTools',
         'Zoom',
         'WindowLevel',
@@ -131,22 +133,57 @@ function modeFactory({ modeConfiguration }) {
         'RectangleROIStartEndThreshold',
         'fusionPTColormap',
       ]);
+
+      // For the hanging protocol we need to decide on the window level
+      // based on whether the SUV is corrected or not, hence we can't hard
+      // code the window level in the hanging protocol but we add a custom
+      // attribute to the hanging protocol that will be used to get the
+      // window level based on the metadata
+      hangingProtocolService.addCustomAttribute(
+        'getPTVOIRange',
+        'get PT VOI based on corrected or not',
+        props => {
+          const ptDisplaySet = props.find(
+            imageSet => imageSet.Modality === 'PT'
+          );
+
+          if (!ptDisplaySet) {
+            return;
+          }
+
+          const { imageId } = ptDisplaySet.images[0];
+          const imageIdScalingFactor = MetadataProvider.get(
+            'scalingModule',
+            imageId
+          );
+
+          const isSUVAvailable =
+            imageIdScalingFactor && imageIdScalingFactor.suvbw;
+
+          if (isSUVAvailable) {
+            return {
+              windowWidth: 5,
+              windowCenter: 2.5,
+            };
+          }
+
+          return;
+        }
+      );
     },
     onModeExit: ({ servicesManager }) => {
       const {
-        ToolGroupService,
-        SyncGroupService,
-        ToolBarService,
-        SegmentationService,
-        CornerstoneViewportService,
+        toolGroupService,
+        syncGroupService,
+        segmentationService,
+        cornerstoneViewportService,
       } = servicesManager.services;
 
       unsubscriptions.forEach(unsubscribe => unsubscribe());
-      ToolBarService.reset();
-      ToolGroupService.destroy();
-      SyncGroupService.destroy();
-      SegmentationService.destroy();
-      CornerstoneViewportService.destroy();
+      toolGroupService.destroy();
+      syncGroupService.destroy();
+      segmentationService.destroy();
+      cornerstoneViewportService.destroy();
     },
     validationTags: {
       study: [],

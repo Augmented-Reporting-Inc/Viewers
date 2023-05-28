@@ -18,16 +18,16 @@ const { formatDate } = utils;
 function PanelStudyBrowserTracking({
   servicesManager,
   getImageSrc,
-  getStudiesForPatientByStudyInstanceUID,
+  getStudiesForPatientByMRN,
   requestDisplaySetCreationForStudy,
   dataSource,
 }) {
   const {
-    MeasurementService,
-    DisplaySetService,
-    UIDialogService,
-    HangingProtocolService,
-    UINotificationService,
+    measurementService,
+    displaySetService,
+    uiDialogService,
+    hangingProtocolService,
+    uiNotificationService,
   } = servicesManager.services;
 
   // Normally you nest the components so the tree isn't so deep, and the data
@@ -55,13 +55,13 @@ function PanelStudyBrowserTracking({
     let updatedViewports = [];
     const viewportIndex = activeViewportIndex;
     try {
-      updatedViewports = HangingProtocolService.getViewportsRequireUpdate(
+      updatedViewports = hangingProtocolService.getViewportsRequireUpdate(
         viewportIndex,
         displaySetInstanceUID
       );
     } catch (error) {
       console.warn(error);
-      UINotificationService.show({
+      uiNotificationService.show({
         title: 'Thumbnail Double Click',
         message:
           'The selected display sets could not be added to the viewport due to a mismatch in the Hanging Protocol rules.',
@@ -76,16 +76,14 @@ function PanelStudyBrowserTracking({
   const activeViewportDisplaySetInstanceUIDs =
     viewports[activeViewportIndex]?.displaySetInstanceUIDs;
 
-  const isSingleViewport = numCols === 1 && numRows === 1;
-
   useEffect(() => {
-    const added = MeasurementService.EVENTS.MEASUREMENT_ADDED;
-    const addedRaw = MeasurementService.EVENTS.RAW_MEASUREMENT_ADDED;
+    const added = measurementService.EVENTS.MEASUREMENT_ADDED;
+    const addedRaw = measurementService.EVENTS.RAW_MEASUREMENT_ADDED;
     const subscriptions = [];
 
     [added, addedRaw].forEach(evt => {
       subscriptions.push(
-        MeasurementService.subscribe(evt, ({ source, measurement }) => {
+        measurementService.subscribe(evt, ({ source, measurement }) => {
           const {
             referenceSeriesUID: SeriesInstanceUID,
             referenceStudyUID: StudyInstanceUID,
@@ -106,17 +104,31 @@ function PanelStudyBrowserTracking({
         unsub();
       });
     };
-  }, [MeasurementService, activeViewportIndex, sendTrackedMeasurementsEvent]);
+  }, [measurementService, activeViewportIndex, sendTrackedMeasurementsEvent]);
 
-  const { trackedStudy, trackedSeries } = trackedMeasurements.context;
+  const { trackedSeries } = trackedMeasurements.context;
 
   // ~~ studyDisplayList
   useEffect(() => {
     // Fetch all studies for the patient in each primary study
     async function fetchStudiesForPatient(StudyInstanceUID) {
-      const qidoStudiesForPatient =
-        (await getStudiesForPatientByStudyInstanceUID(StudyInstanceUID)) || [];
-      // TODO: This should be "naturalized DICOM JSON" studies
+      // current study qido
+      const qidoForStudyUID = await dataSource.query.studies.search({
+        studyInstanceUid: StudyInstanceUID,
+      });
+
+      let qidoStudiesForPatient = qidoForStudyUID;
+
+      // try to fetch the prior studies based on the patientID if the
+      // server can respond.
+      try {
+        qidoStudiesForPatient = await getStudiesForPatientByMRN(
+          qidoForStudyUID
+        );
+      } catch (error) {
+        console.warn(error);
+      }
+
       const mappedStudies = _mapDataSourceStudies(qidoStudiesForPatient);
       const actuallyMappedStudies = mappedStudies.map(qidoStudy => {
         return {
@@ -125,7 +137,6 @@ function PanelStudyBrowserTracking({
           description: qidoStudy.StudyDescription,
           modalities: qidoStudy.ModalitiesInStudy,
           numInstances: qidoStudy.NumInstances,
-          // displaySets: []
         };
       });
 
@@ -146,14 +157,19 @@ function PanelStudyBrowserTracking({
 
     StudyInstanceUIDs.forEach(sid => fetchStudiesForPatient(sid));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [StudyInstanceUIDs, getStudiesForPatientByStudyInstanceUID]);
+  }, [StudyInstanceUIDs, getStudiesForPatientByMRN]);
 
   // ~~ Initial Thumbnails
   useEffect(() => {
-    const currentDisplaySets = DisplaySetService.activeDisplaySets;
+    const currentDisplaySets = displaySetService.activeDisplaySets;
+
+    if (!currentDisplaySets.length) {
+      return;
+    }
+
     currentDisplaySets.forEach(async dSet => {
       const newImageSrcEntry = {};
-      const displaySet = DisplaySetService.getDisplaySetByUID(
+      const displaySet = displaySetService.getDisplaySetByUID(
         dSet.displaySetInstanceUID
       );
       const imageIds = dataSource.getImageIdsForDisplaySet(displaySet);
@@ -170,47 +186,50 @@ function PanelStudyBrowserTracking({
         });
       }
     });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [DisplaySetService, dataSource, getImageSrc]);
+  }, [displaySetService, dataSource, getImageSrc]);
 
   // ~~ displaySets
   useEffect(() => {
-    // TODO: Are we sure `activeDisplaySets` will always be accurate?
-    const currentDisplaySets = DisplaySetService.activeDisplaySets;
+    const currentDisplaySets = displaySetService.activeDisplaySets;
+
+    if (!currentDisplaySets.length) {
+      return;
+    }
+
     const mappedDisplaySets = _mapDisplaySets(
       currentDisplaySets,
       thumbnailImageSrcMap,
       trackedSeries,
       viewports,
-      isSingleViewport,
+      viewportGridService,
       dataSource,
-      DisplaySetService,
-      UIDialogService,
-      UINotificationService
+      displaySetService,
+      uiDialogService,
+      uiNotificationService
     );
 
     setDisplaySets(mappedDisplaySets);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
-    DisplaySetService.activeDisplaySets,
+    displaySetService.activeDisplaySets,
     trackedSeries,
-    thumbnailImageSrcMap,
     viewports,
     dataSource,
+    thumbnailImageSrcMap,
   ]);
 
   // ~~ subscriptions --> displaySets
   useEffect(() => {
     // DISPLAY_SETS_ADDED returns an array of DisplaySets that were added
-    const SubscriptionDisplaySetsAdded = DisplaySetService.subscribe(
-      DisplaySetService.EVENTS.DISPLAY_SETS_ADDED,
+    const SubscriptionDisplaySetsAdded = displaySetService.subscribe(
+      displaySetService.EVENTS.DISPLAY_SETS_ADDED,
       data => {
         const { displaySetsAdded, options } = data;
         displaySetsAdded.forEach(async dSet => {
           const displaySetInstanceUID = dSet.displaySetInstanceUID;
 
           const newImageSrcEntry = {};
-          const displaySet = DisplaySetService.getDisplaySetByUID(
+          const displaySet = displaySetService.getDisplaySetByUID(
             displaySetInstanceUID
           );
 
@@ -237,19 +256,19 @@ function PanelStudyBrowserTracking({
 
     // TODO: Will this always hold _all_ the displaySets we care about?
     // DISPLAY_SETS_CHANGED returns `DisplaySerService.activeDisplaySets`
-    const SubscriptionDisplaySetsChanged = DisplaySetService.subscribe(
-      DisplaySetService.EVENTS.DISPLAY_SETS_CHANGED,
+    const SubscriptionDisplaySetsChanged = displaySetService.subscribe(
+      displaySetService.EVENTS.DISPLAY_SETS_CHANGED,
       changedDisplaySets => {
         const mappedDisplaySets = _mapDisplaySets(
           changedDisplaySets,
           thumbnailImageSrcMap,
           trackedSeries,
           viewports,
-          isSingleViewport,
+          viewportGridService,
           dataSource,
-          DisplaySetService,
-          UIDialogService,
-          UINotificationService
+          displaySetService,
+          uiDialogService,
+          uiNotificationService
         );
 
         setDisplaySets(mappedDisplaySets);
@@ -262,7 +281,7 @@ function PanelStudyBrowserTracking({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
-    DisplaySetService,
+    displaySetService,
     dataSource,
     getImageSrc,
     thumbnailImageSrcMap,
@@ -273,7 +292,8 @@ function PanelStudyBrowserTracking({
   const tabs = _createStudyBrowserTabs(
     StudyInstanceUIDs,
     studyDisplayList,
-    displaySets
+    displaySets,
+    hangingProtocolService
   );
 
   // TODO: Should not fire this on "close"
@@ -294,7 +314,7 @@ function PanelStudyBrowserTracking({
     if (!shouldCollapseStudy) {
       const madeInClient = true;
       requestDisplaySetCreationForStudy(
-        DisplaySetService,
+        displaySetService,
         StudyInstanceUID,
         madeInClient
       );
@@ -357,7 +377,7 @@ function PanelStudyBrowserTracking({
         setActiveTabName(clickedTabName);
       }}
       onClickUntrack={displaySetInstanceUID => {
-        const displaySet = DisplaySetService.getDisplaySetByUID(
+        const displaySet = displaySetService.getDisplaySetByUID(
           displaySetInstanceUID
         );
         // TODO: shift this somewhere else where we're centralizing this logic?
@@ -379,7 +399,7 @@ PanelStudyBrowserTracking.propTypes = {
     getImageIdsForDisplaySet: PropTypes.func.isRequired,
   }).isRequired,
   getImageSrc: PropTypes.func.isRequired,
-  getStudiesForPatientByStudyInstanceUID: PropTypes.func.isRequired,
+  getStudiesForPatientByMRN: PropTypes.func.isRequired,
   requestDisplaySetCreationForStudy: PropTypes.func.isRequired,
 };
 
@@ -412,128 +432,138 @@ function _mapDisplaySets(
   thumbnailImageSrcMap,
   trackedSeriesInstanceUIDs,
   viewports, // TODO: make array of `displaySetInstanceUIDs`?
-  isSingleViewport,
+  viewportGridService,
   dataSource,
-  DisplaySetService,
-  UIDialogService,
-  UINotificationService
+  displaySetService,
+  uiDialogService,
+  uiNotificationService
 ) {
   const thumbnailDisplaySets = [];
   const thumbnailNoImageDisplaySets = [];
-  displaySets.forEach(ds => {
-    const imageSrc = thumbnailImageSrcMap[ds.displaySetInstanceUID];
-    const componentType = _getComponentType(ds.Modality);
-    const viewportIdentificator = isSingleViewport
-      ? []
-      : viewports.reduce((acc, viewportData, index) => {
-          if (
-            viewportData?.displaySetInstanceUIDs?.includes(
-              ds.displaySetInstanceUID
-            )
-          ) {
-            acc.push(viewportData.viewportLabel);
-          }
-          return acc;
-        }, []);
+  displaySets
+    .filter(ds => !ds.excludeFromThumbnailBrowser)
+    .forEach(ds => {
+      const imageSrc = thumbnailImageSrcMap[ds.displaySetInstanceUID];
+      const componentType = _getComponentType(ds.Modality);
+      const numPanes = viewportGridService.getNumViewportPanes();
+      const viewportIdentificator =
+        numPanes === 1
+          ? []
+          : viewports.reduce((acc, viewportData, index) => {
+              if (
+                index < numPanes &&
+                viewportData?.displaySetInstanceUIDs?.includes(
+                  ds.displaySetInstanceUID
+                )
+              ) {
+                acc.push(viewportData.viewportLabel);
+              }
+              return acc;
+            }, []);
 
-    const array =
-      componentType === 'thumbnailTracked'
-        ? thumbnailDisplaySets
-        : thumbnailNoImageDisplaySets;
+      const array =
+        componentType === 'thumbnailTracked'
+          ? thumbnailDisplaySets
+          : thumbnailNoImageDisplaySets;
 
-    const { displaySetInstanceUID } = ds;
+      const { displaySetInstanceUID } = ds;
 
-    const thumbnailProps = {
-      displaySetInstanceUID,
-      description: ds.SeriesDescription,
-      seriesNumber: ds.SeriesNumber,
-      modality: ds.Modality,
-      seriesDate: formatDate(ds.SeriesDate),
-      numInstances: ds.numImageFrames,
-      StudyInstanceUID: ds.StudyInstanceUID,
-      componentType,
-      imageSrc,
-      dragData: {
-        type: 'displayset',
+      const thumbnailProps = {
         displaySetInstanceUID,
-        // .. Any other data to pass
-      },
-      isTracked: trackedSeriesInstanceUIDs.includes(ds.SeriesInstanceUID),
-      viewportIdentificator,
-    };
+        description: ds.SeriesDescription,
+        seriesNumber: ds.SeriesNumber,
+        modality: ds.Modality,
+        seriesDate: formatDate(ds.SeriesDate),
+        numInstances: ds.numImageFrames,
+        countIcon: ds.countIcon,
+        StudyInstanceUID: ds.StudyInstanceUID,
+        componentType,
+        imageSrc,
+        dragData: {
+          type: 'displayset',
+          displaySetInstanceUID,
+          // .. Any other data to pass
+        },
+        isTracked: trackedSeriesInstanceUIDs.includes(ds.SeriesInstanceUID),
+        viewportIdentificator,
+      };
 
-    if (componentType === 'thumbnailNoImage') {
-      if (dataSource.reject && dataSource.reject.series) {
-        thumbnailProps.canReject = true;
-        thumbnailProps.onReject = () => {
-          UIDialogService.create({
-            id: 'ds-reject-sr',
-            centralize: true,
-            isDraggable: false,
-            showOverlay: true,
-            content: Dialog,
-            contentProps: {
-              title: 'Delete Report',
-              body: () => (
-                <div className="p-4 text-white bg-primary-dark">
-                  <p>Are you sure you want to delete this report?</p>
-                  <p>This action cannot be undone.</p>
-                </div>
-              ),
-              actions: [
-                { id: 'cancel', text: 'Cancel', type: 'secondary' },
-                {
-                  id: 'yes',
-                  text: 'Yes',
-                  type: 'primary',
-                  classes: ['reject-yes-button'],
+      if (componentType === 'thumbnailNoImage') {
+        if (dataSource.reject && dataSource.reject.series) {
+          thumbnailProps.canReject = true;
+          thumbnailProps.onReject = () => {
+            uiDialogService.create({
+              id: 'ds-reject-sr',
+              centralize: true,
+              isDraggable: false,
+              showOverlay: true,
+              content: Dialog,
+              contentProps: {
+                title: 'Delete Report',
+                body: () => (
+                  <div className="p-4 text-white bg-primary-dark">
+                    <p>Are you sure you want to delete this report?</p>
+                    <p>This action cannot be undone.</p>
+                  </div>
+                ),
+                actions: [
+                  { id: 'cancel', text: 'Cancel', type: 'secondary' },
+                  {
+                    id: 'yes',
+                    text: 'Yes',
+                    type: 'primary',
+                    classes: ['reject-yes-button'],
+                  },
+                ],
+                onClose: () => uiDialogService.dismiss({ id: 'ds-reject-sr' }),
+                onShow: () => {
+                  const yesButton = document.querySelector(
+                    '.reject-yes-button'
+                  );
+
+                  yesButton.focus();
                 },
-              ],
-              onClose: () => UIDialogService.dismiss({ id: 'ds-reject-sr' }),
-              onShow: () => {
-                const yesButton = document.querySelector('.reject-yes-button');
-
-                yesButton.focus();
+                onSubmit: async ({ action }) => {
+                  switch (action.id) {
+                    case 'yes':
+                      try {
+                        await dataSource.reject.series(
+                          ds.StudyInstanceUID,
+                          ds.SeriesInstanceUID
+                        );
+                        displaySetService.deleteDisplaySet(
+                          displaySetInstanceUID
+                        );
+                        uiDialogService.dismiss({ id: 'ds-reject-sr' });
+                        uiNotificationService.show({
+                          title: 'Delete Report',
+                          message: 'Report deleted successfully',
+                          type: 'success',
+                        });
+                      } catch (error) {
+                        uiDialogService.dismiss({ id: 'ds-reject-sr' });
+                        uiNotificationService.show({
+                          title: 'Delete Report',
+                          message: 'Failed to delete report',
+                          type: 'error',
+                        });
+                      }
+                      break;
+                    case 'cancel':
+                      uiDialogService.dismiss({ id: 'ds-reject-sr' });
+                      break;
+                  }
+                },
               },
-              onSubmit: async ({ action }) => {
-                switch (action.id) {
-                  case 'yes':
-                    try {
-                      await dataSource.reject.series(
-                        ds.StudyInstanceUID,
-                        ds.SeriesInstanceUID
-                      );
-                      DisplaySetService.deleteDisplaySet(displaySetInstanceUID);
-                      UIDialogService.dismiss({ id: 'ds-reject-sr' });
-                      UINotificationService.show({
-                        title: 'Delete Report',
-                        message: 'Report deleted successfully',
-                        type: 'success',
-                      });
-                    } catch (error) {
-                      UIDialogService.dismiss({ id: 'ds-reject-sr' });
-                      UINotificationService.show({
-                        title: 'Delete Report',
-                        message: 'Failed to delete report',
-                        type: 'error',
-                      });
-                    }
-                    break;
-                  case 'cancel':
-                    UIDialogService.dismiss({ id: 'ds-reject-sr' });
-                    break;
-                }
-              },
-            },
-          });
-        };
-      } else {
-        thumbnailProps.canReject = false;
+            });
+          };
+        } else {
+          thumbnailProps.canReject = false;
+        }
       }
-    }
 
-    array.push(thumbnailProps);
-  });
+      array.push(thumbnailProps);
+    });
 
   return [...thumbnailDisplaySets, ...thumbnailNoImageDisplaySets];
 }
@@ -541,9 +571,12 @@ function _mapDisplaySets(
 const thumbnailNoImageModalities = [
   'SR',
   'SEG',
+  'SM',
   'RTSTRUCT',
   'RTPLAN',
   'RTDOSE',
+  'DOC',
+  'OT',
 ];
 
 function _getComponentType(Modality) {
@@ -569,7 +602,8 @@ function _getComponentType(Modality) {
 function _createStudyBrowserTabs(
   primaryStudyInstanceUIDs,
   studyDisplayList,
-  displaySets
+  displaySets,
+  hangingProtocolService
 ) {
   const primaryStudies = [];
   const recentStudies = [];
@@ -583,9 +617,8 @@ function _createStudyBrowserTabs(
     );
 
     // Sort them
-    const sortedDisplaySetsForStudy = utils.sortBySeriesDate(
-      displaySetsForStudy
-    );
+    const dsSortFn = hangingProtocolService.getDisplaySetSortFunction();
+    displaySetsForStudy.sort(dsSortFn);
 
     /* Sort by series number, then by series date
       displaySetsForStudy.sort((a, b) => {

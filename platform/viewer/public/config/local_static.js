@@ -9,8 +9,12 @@ window.config = {
   maxNumberOfWebWorkers: 4,
   // below flag is for performance reasons, but it might not work for all servers
   omitQuotationForMultipartRequest: true,
+  showWarningMessageForCrossOrigin: true,
+  showCPUFallbackMessage: true,
   showLoadingIndicator: true,
+  strictZSpacingForVolumeViewport: true,
   // filterQueryParam: false,
+  defaultDataSourceName: 'dicomweb',
   dataSources: [
     {
       friendlyName: 'Static WADO Local Data',
@@ -53,7 +57,6 @@ window.config = {
     // Could use services manager here to bring up a dialog/modal if needed.
     console.warn('test, navigate to https://ohif.org/');
   },
-  defaultDataSourceName: 'dicomweb',
   hotkeys: [
     {
       commandName: 'incrementActiveViewport',

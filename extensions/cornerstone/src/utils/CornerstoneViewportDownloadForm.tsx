@@ -21,7 +21,7 @@ const VIEWPORT_ID = 'cornerstone-viewport-download-form';
 const CornerstoneViewportDownloadForm = ({
   onClose,
   activeViewportIndex,
-  CornerstoneViewportService,
+  cornerstoneViewportService,
 }) => {
   const enabledElement = OHIFgetEnabledElement(activeViewportIndex);
   const activeViewportElement = enabledElement?.element;
@@ -154,7 +154,7 @@ const CornerstoneViewportDownloadForm = ({
 
         const { viewport } = activeViewportEnabledElement;
 
-        const renderingEngine = CornerstoneViewportService.getRenderingEngine();
+        const renderingEngine = cornerstoneViewportService.getRenderingEngine();
         const downloadViewport = renderingEngine.getViewport(VIEWPORT_ID);
 
         if (downloadViewport instanceof StackViewport) {
@@ -217,7 +217,7 @@ const CornerstoneViewportDownloadForm = ({
     );
 
     // add the viewport to the toolGroup
-    toolGroup.addViewport(downloadViewportId);
+    toolGroup.addViewport(downloadViewportId, renderingEngineId);
 
     Object.keys(toolGroup._toolInstances).forEach(toolName => {
       // make all tools Enabled so that they can not be interacted with

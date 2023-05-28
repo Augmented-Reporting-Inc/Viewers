@@ -58,6 +58,8 @@ const variants = {
   contained: {
     default: 'text-black hover:opacity-80 active:opacity-100 focus:opacity-80',
     primary: 'text-white hover:opacity-80 active:opacity-100 focus:opacity-80',
+    primaryDark:
+      'text-primary-active hover:opacity-80 active:opacity-100 focus:opacity-80',
     secondary:
       'text-white hover:opacity-80 active:opacity-100 focus:opacity-80',
     white: 'text-black hover:opacity-80 active:opacity-100 focus:opacity-80',
@@ -93,6 +95,7 @@ const defaultVariantBackGroundColor = {
   contained: {
     default: 'bg-primary-light',
     primary: 'bg-primary-main',
+    primaryDark: 'bg-primary-dark',
     secondary: 'bg-secondary-light',
     white: 'bg-white',
     black: 'bg-black',
@@ -227,9 +230,11 @@ Button.propTypes = {
   /** Button corner roundness  */
   rounded: PropTypes.oneOf(['none', 'small', 'medium', 'large', 'full']),
   variant: PropTypes.oneOf(['text', 'outlined', 'contained', 'disabled']),
+  /* color prop must have all the possible keys of variants defined above */
   color: PropTypes.oneOf([
     'default',
     'primary',
+    'primaryDark',
     'primaryActive',
     'secondary',
     'white',
@@ -243,6 +248,7 @@ Button.propTypes = {
     'light',
     'default',
     'primary',
+    'primaryActive',
     'secondary',
     'white',
     'black',

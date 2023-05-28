@@ -1,6 +1,5 @@
 import React from 'react';
 import ModeRoute from '@routes/Mode';
-import checkExtensionDependencies from './checkExtensionDependencies';
 
 /*
   Routes uniquely define an entry point to:
@@ -31,11 +30,6 @@ export default function buildModeRoutes({
   hotkeysManager,
 }) {
   const routes = [];
-
-  // const dataSources = Object.keys(extensionManager.dataSourceMap).map(a =>
-  //   extensionManager.getDataSources(a)
-  // );
-
   const dataSourceNames = [];
 
   dataSources.forEach(dataSource => {
@@ -46,8 +40,6 @@ export default function buildModeRoutes({
   });
 
   modes.forEach(mode => {
-    checkExtensionDependencies(mode, extensionManager);
-
     // todo: for each route. add route to path.
     dataSourceNames.forEach(dataSourceName => {
       const path = `/${mode.routeName}/${dataSourceName}`;
@@ -61,13 +53,13 @@ export default function buildModeRoutes({
           servicesManager={servicesManager}
           commandsManager={commandsManager}
           hotkeysManager={hotkeysManager}
-          commandsManager={commandsManager}
         />
       );
 
       routes.push({
         path,
         children,
+        private: true,
       });
     });
 
@@ -85,7 +77,6 @@ export default function buildModeRoutes({
         servicesManager={servicesManager}
         commandsManager={commandsManager}
         hotkeysManager={hotkeysManager}
-        commandsManager={commandsManager}
       />
     );
 

@@ -3,7 +3,7 @@ import PropTypes from 'prop-types';
 import { StudyBrowser, useImageViewer, useViewportGrid } from '@ohif/ui';
 import { utils } from '@ohif/core';
 
-const { formatDate } = utils;
+const { sortStudyInstances, formatDate } = utils;
 
 /**
  *
@@ -12,14 +12,14 @@ const { formatDate } = utils;
 function PanelStudyBrowser({
   servicesManager,
   getImageSrc,
-  getStudiesForPatientByStudyInstanceUID,
+  getStudiesForPatientByMRN,
   requestDisplaySetCreationForStudy,
   dataSource,
 }) {
   const {
-    HangingProtocolService,
-    DisplaySetService,
-    UINotificationService,
+    hangingProtocolService,
+    displaySetService,
+    uiNotificationService,
   } = servicesManager.services;
   // Normally you nest the components so the tree isn't so deep, and the data
   // doesn't have to have such an intense shape. This works well enough for now.
@@ -42,16 +42,16 @@ function PanelStudyBrowser({
     let updatedViewports = [];
     const viewportIndex = activeViewportIndex;
     try {
-      updatedViewports = HangingProtocolService.getViewportsRequireUpdate(
+      updatedViewports = hangingProtocolService.getViewportsRequireUpdate(
         viewportIndex,
         displaySetInstanceUID
       );
     } catch (error) {
       console.warn(error);
-      UINotificationService.show({
+      uiNotificationService.show({
         title: 'Thumbnail Double Click',
         message:
-          'The selected display sets could not be added to the viewport due to a mismatch in the Hanging Protocol rules.',
+          'The selected display sets could not be added to the viewport.',
         type: 'info',
         duration: 3000,
       });
@@ -64,12 +64,24 @@ function PanelStudyBrowser({
   useEffect(() => {
     // Fetch all studies for the patient in each primary study
     async function fetchStudiesForPatient(StudyInstanceUID) {
-      const qidoStudiesForPatient =
-        (await getStudiesForPatientByStudyInstanceUID(StudyInstanceUID)) || [];
+      // current study qido
+      const qidoForStudyUID = await dataSource.query.studies.search({
+        studyInstanceUid: StudyInstanceUID,
+      });
 
-      // TODO: This should be "naturalized DICOM JSON" studies
+      let qidoStudiesForPatient = qidoForStudyUID;
+
+      // try to fetch the prior studies based on the patientID if the
+      // server can respond.
+      try {
+        qidoStudiesForPatient = await getStudiesForPatientByMRN(
+          qidoForStudyUID
+        );
+      } catch (error) {
+        console.warn(error);
+      }
+
       const mappedStudies = _mapDataSourceStudies(qidoStudiesForPatient);
-
       const actuallyMappedStudies = mappedStudies.map(qidoStudy => {
         return {
           studyInstanceUid: qidoStudy.StudyInstanceUID,
@@ -77,36 +89,34 @@ function PanelStudyBrowser({
           description: qidoStudy.StudyDescription,
           modalities: qidoStudy.ModalitiesInStudy,
           numInstances: qidoStudy.NumInstances,
-          // displaySets: []
         };
       });
-      if (isMounted.current) {
-        setStudyDisplayList(prevArray => {
-          const ret = [...prevArray];
-          for (const study of actuallyMappedStudies) {
-            if (
-              !prevArray.find(
-                it => it.studyInstanceUid === study.studyInstanceUid
-              )
-            ) {
-              ret.push(study);
-            }
+
+      setStudyDisplayList(prevArray => {
+        const ret = [...prevArray];
+        for (const study of actuallyMappedStudies) {
+          if (
+            !prevArray.find(
+              it => it.studyInstanceUid === study.studyInstanceUid
+            )
+          ) {
+            ret.push(study);
           }
-          return ret;
-        });
-      }
+        }
+        return ret;
+      });
     }
 
     StudyInstanceUIDs.forEach(sid => fetchStudiesForPatient(sid));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [StudyInstanceUIDs, getStudiesForPatientByStudyInstanceUID]);
+  }, [StudyInstanceUIDs, getStudiesForPatientByMRN]);
 
   // // ~~ Initial Thumbnails
   useEffect(() => {
-    const currentDisplaySets = DisplaySetService.activeDisplaySets;
+    const currentDisplaySets = displaySetService.activeDisplaySets;
     currentDisplaySets.forEach(async dSet => {
       const newImageSrcEntry = {};
-      const displaySet = DisplaySetService.getDisplaySetByUID(
+      const displaySet = displaySetService.getDisplaySetByUID(
         dSet.displaySetInstanceUID
       );
       const imageIds = dataSource.getImageIdsForDisplaySet(displaySet);
@@ -134,11 +144,12 @@ function PanelStudyBrowser({
   // ~~ displaySets
   useEffect(() => {
     // TODO: Are we sure `activeDisplaySets` will always be accurate?
-    const currentDisplaySets = DisplaySetService.activeDisplaySets;
+    const currentDisplaySets = displaySetService.activeDisplaySets;
     const mappedDisplaySets = _mapDisplaySets(
       currentDisplaySets,
       thumbnailImageSrcMap
     );
+    sortStudyInstances(mappedDisplaySets);
 
     setDisplaySets(mappedDisplaySets);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -147,13 +158,13 @@ function PanelStudyBrowser({
   // ~~ subscriptions --> displaySets
   useEffect(() => {
     // DISPLAY_SETS_ADDED returns an array of DisplaySets that were added
-    const SubscriptionDisplaySetsAdded = DisplaySetService.subscribe(
-      DisplaySetService.EVENTS.DISPLAY_SETS_ADDED,
+    const SubscriptionDisplaySetsAdded = displaySetService.subscribe(
+      displaySetService.EVENTS.DISPLAY_SETS_ADDED,
       data => {
         const { displaySetsAdded } = data;
         displaySetsAdded.forEach(async dSet => {
           const newImageSrcEntry = {};
-          const displaySet = DisplaySetService.getDisplaySetByUID(
+          const displaySet = displaySetService.getDisplaySetByUID(
             dSet.displaySetInstanceUID
           );
           const imageIds = dataSource.getImageIdsForDisplaySet(displaySet);
@@ -178,8 +189,8 @@ function PanelStudyBrowser({
 
     // TODO: Will this always hold _all_ the displaySets we care about?
     // DISPLAY_SETS_CHANGED returns `DisplaySerService.activeDisplaySets`
-    const SubscriptionDisplaySetsChanged = DisplaySetService.subscribe(
-      DisplaySetService.EVENTS.DISPLAY_SETS_CHANGED,
+    const SubscriptionDisplaySetsChanged = displaySetService.subscribe(
+      displaySetService.EVENTS.DISPLAY_SETS_CHANGED,
       changedDisplaySets => {
         const mappedDisplaySets = _mapDisplaySets(
           changedDisplaySets,
@@ -221,7 +232,7 @@ function PanelStudyBrowser({
     if (!shouldCollapseStudy) {
       const madeInClient = true;
       requestDisplaySetCreationForStudy(
-        DisplaySetService,
+        displaySetService,
         StudyInstanceUID,
         madeInClient
       );
@@ -253,7 +264,7 @@ PanelStudyBrowser.propTypes = {
     getImageIdsForDisplaySet: PropTypes.func.isRequired,
   }).isRequired,
   getImageSrc: PropTypes.func.isRequired,
-  getStudiesForPatientByStudyInstanceUID: PropTypes.func.isRequired,
+  getStudiesForPatientByMRN: PropTypes.func.isRequired,
   requestDisplaySetCreationForStudy: PropTypes.func.isRequired,
 };
 
@@ -285,32 +296,36 @@ function _mapDisplaySets(displaySets, thumbnailImageSrcMap) {
   const thumbnailDisplaySets = [];
   const thumbnailNoImageDisplaySets = [];
 
-  displaySets.forEach(ds => {
-    const imageSrc = thumbnailImageSrcMap[ds.displaySetInstanceUID];
-    const componentType = _getComponentType(ds.Modality);
+  displaySets
+    .filter(ds => !ds.excludeFromThumbnailBrowser)
+    .forEach(ds => {
+      const imageSrc = thumbnailImageSrcMap[ds.displaySetInstanceUID];
+      const componentType = _getComponentType(ds.Modality);
 
-    const array =
-      componentType === 'thumbnail'
-        ? thumbnailDisplaySets
-        : thumbnailNoImageDisplaySets;
+      const array =
+        componentType === 'thumbnail'
+          ? thumbnailDisplaySets
+          : thumbnailNoImageDisplaySets;
 
-    array.push({
-      displaySetInstanceUID: ds.displaySetInstanceUID,
-      description: ds.SeriesDescription || '',
-      seriesNumber: ds.SeriesNumber,
-      modality: ds.Modality,
-      seriesDate: ds.SeriesDate,
-      numInstances: ds.numImageFrames,
-      StudyInstanceUID: ds.StudyInstanceUID,
-      componentType,
-      imageSrc,
-      dragData: {
-        type: 'displayset',
+      array.push({
         displaySetInstanceUID: ds.displaySetInstanceUID,
-        // .. Any other data to pass
-      },
+        description: ds.SeriesDescription || '',
+        seriesNumber: ds.SeriesNumber,
+        modality: ds.Modality,
+        seriesDate: ds.SeriesDate,
+        seriesTime: ds.SeriesTime,
+        numInstances: ds.numImageFrames,
+        countIcon: ds.countIcon,
+        StudyInstanceUID: ds.StudyInstanceUID,
+        componentType,
+        imageSrc,
+        dragData: {
+          type: 'displayset',
+          displaySetInstanceUID: ds.displaySetInstanceUID,
+          // .. Any other data to pass
+        },
+      });
     });
-  });
 
   return [...thumbnailDisplaySets, ...thumbnailNoImageDisplaySets];
 }
@@ -318,6 +333,7 @@ function _mapDisplaySets(displaySets, thumbnailImageSrcMap) {
 const thumbnailNoImageModalities = [
   'SR',
   'SEG',
+  'SM',
   'RTSTRUCT',
   'RTPLAN',
   'RTDOSE',
