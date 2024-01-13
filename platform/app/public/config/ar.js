@@ -1,0 +1,278 @@
+window.config = {
+  routerBasename: '/',
+  extensions: [],
+  modes: [],
+  customizationService: {
+    cornerstoneOverlayBottomRight: {
+      id: 'cornerstoneOverlayBottomRight',
+      customizationType: 'ohif.cornerstoneOverlay',
+      items: [
+        {
+          id: 'AcquisitionNumber',
+          customizationType: 'ohif.overlayItem',
+          label: 'Acquisition Number:',
+          title: 'Acquisition Number',
+          condition: ({ instance }) => instance && instance.AcquisitionNumber,
+          contentF: ({ instance }) => instance.AcquisitionNumber,
+        },
+        {
+          id: 'InstanceNumber',
+          customizationType: 'ohif.overlayItem',
+          label: 'Instance Number:',
+          title: 'Instance Number',
+          condition: ({ instance }) => instance && instance.InstanceNumber,
+          contentF: ({ instance }) => instance.InstanceNumber,
+        },
+        {
+          id: 'HR',
+          customizationType: 'ohif.overlayItem',
+          label: 'HR:',
+          title: 'Heart Rate',
+          condition: ({ instance }) => instance && instance.HeartRate,
+          contentF: ({ instance }) => instance.HeartRate,
+        },
+        {
+          id: 'Timer',
+          customizationType: 'ohif.overlayItem',
+          label: 'Timer Name:',
+          title: 'Timer Name',
+          condition: ({ instance }) => instance && instance.EventTimerNames,
+          contentF: ({ instance }) => instance.EventTimerNames,
+        },
+        {
+          id: 'NumberOfEventTimers',
+          customizationType: 'ohif.overlayItem',
+          label: 'Number of Event Timers:',
+          title: 'Number of Event Timers',
+          condition: ({ instance }) => instance && instance.NumberOfEventTimers,
+          contentF: ({ instance }) => instance.NumberOfEventTimers,
+        },
+        {
+          id: 'Stage',
+          customizationType: 'ohif.overlayItem',
+          label: 'Stage Name:',
+          title: 'Stage Name',
+          condition: ({ instance }) => instance && instance.StageName,
+          contentF: ({ instance }) => instance.StageName,
+        },
+        {
+          id: 'NumberOfStages',
+          customizationType: 'ohif.overlayItem',
+          label: 'Number of Stages:',
+          title: 'Number of Stages',
+          condition: ({ instance }) => instance && instance.NumberOfStages,
+          contentF: ({ instance }) => instance.NumberOfStages,
+        },
+        {
+          id: 'StageNumber',
+          customizationType: 'ohif.overlayItem',
+          label: 'Stage Number:',
+          title: 'Stage Number',
+          condition: ({ instance }) => instance && instance.StageNumber,
+          contentF: ({ instance }) => instance.StageNumber,
+        },
+        {
+          id: 'View',
+          customizationType: 'ohif.overlayItem',
+          label: 'View Name:',
+          title: 'View Name',
+          condition: ({ instance }) => instance && instance.ViewName,
+          contentF: ({ instance }) => instance.ViewName,
+        },
+        {
+          id: 'NumberOfViewsInStage',
+          customizationType: 'ohif.overlayItem',
+          label: 'Number of Views In Stage:',
+          title: 'Number of Views In Stage',
+          condition: ({ instance }) =>
+            instance && instance.NumberOfViewsInStage,
+          contentF: ({ instance }) => instance.NumberOfViewsInStage,
+        },
+        {
+          id: 'ViewNumber',
+          customizationType: 'ohif.overlayItem',
+          label: 'View Number:',
+          title: 'View Number',
+          condition: ({ instance }) => instance && instance.ViewNumber,
+          contentF: ({ instance }) => instance.ViewNumber,
+        },
+      ],
+    },
+  },
+  showStudyList: false,
+  maxNumberOfWebWorkers: 3,
+  omitQuotationForMultipartRequest: true,
+  showWarningMessageForCrossOrigin: true,
+  showCPUFallbackMessage: true,
+  showLoadingIndicator: true,
+  strictZSpacingForVolumeViewport: true,
+  maxNumRequests: {
+    interaction: 100,
+    thumbnail: 75,
+    prefetch: 1000,
+  },
+  useNorm16Texture: true,
+  autoPlayCine: true,
+  defaultDataSourceName: 'dicomweb',
+  dataSources: [
+    {
+      namespace: '@ohif/extension-default.dataSourcesModule.dicomweb',
+      sourceName: 'dicomweb',
+      configuration: {
+        friendlyName: 'orthanc Server',
+        name: 'dicomweb',
+        wadoUriRoot: 'https://[server].futurepacs.com/orthanc/dicom-web',
+        qidoRoot: 'https://[server].futurepacs.com/orthanc/dicom-web',
+        wadoRoot: 'https://[server].futurepacs.com/orthanc/dicom-web',
+        qidoSupportsIncludeField: false,
+        supportsReject: false,
+        imageRendering: 'wadors',
+        thumbnailRendering: 'wadors',
+        enableStudyLazyLoad: true,
+        supportsFuzzyMatching: false,
+        supportsWildcard: true,
+        staticWado: true,
+        singlepart: 'bulkdata,video,pdf',
+        bulkDataURI: {
+          enabled: true,
+          relativeResolution: 'studies',
+        },
+        acceptHeader: [ 'multipart/related; type=application/octet-stream; transfer-syntax=*'],
+        dicomUploadEnabled: true,
+      },
+    },
+    {
+      namespace: '@ohif/extension-default.dataSourcesModule.dicomwebproxy',
+      sourceName: 'dicomwebproxy',
+      configuration: {
+        friendlyName: 'dicomweb delegating proxy',
+        name: 'dicomwebproxy',
+      },
+    },
+    {
+      namespace: '@ohif/extension-default.dataSourcesModule.dicomjson',
+      sourceName: 'dicomjson',
+      configuration: {
+        friendlyName: 'dicom json',
+        name: 'json',
+      },
+    },
+    {
+      namespace: '@ohif/extension-default.dataSourcesModule.dicomlocal',
+      sourceName: 'dicomlocal',
+      configuration: {
+        friendlyName: 'dicom local',
+      },
+    },
+  ],
+  httpErrorHandler: error => {
+    console.warn(error.status);
+    console.warn('test, navigate to https://ohif.org/');
+  },
+  whiteLabeling: {
+    createLogoComponentFn: function(React) {
+      return React.createElement(
+        'a',
+        {
+          target: '_self',
+          rel: 'noopener noreferrer',
+          className: 'text-white text-xl font-serif',
+          href: 'https://futurepacs.com',
+        },
+        React.createElement('div', {}, 'futurePACS')
+      );
+    },
+  },
+  hotkeys: [
+    {
+      commandName: 'incrementActiveViewport',
+      label: 'Next Viewport',
+      keys: ['right'],
+    },
+    {
+      commandName: 'decrementActiveViewport',
+      label: 'Previous Viewport',
+      keys: ['left'],
+    },
+    { commandName: 'rotateViewportCW', label: 'Rotate Right', keys: ['r'] },
+    { commandName: 'rotateViewportCCW', label: 'Rotate Left', keys: ['l'] },
+    { commandName: 'invertViewport', label: 'Invert', keys: ['i'] },
+    {
+      commandName: 'flipViewportHorizontal',
+      label: 'Flip Horizontally',
+      keys: ['h'],
+    },
+    {
+      commandName: 'flipViewportVertical',
+      label: 'Flip Vertically',
+      keys: ['v'],
+    },
+    { commandName: 'scaleUpViewport', label: 'Zoom In', keys: ['+'] },
+    { commandName: 'scaleDownViewport', label: 'Zoom Out', keys: ['-'] },
+    { commandName: 'fitViewportToWindow', label: 'Zoom to Fit', keys: ['='] },
+    { commandName: 'resetViewport', label: 'Reset', keys: ['space'] },
+    { commandName: 'nextImage', label: 'Next Image', keys: ['down'] },
+    { commandName: 'previousImage', label: 'Previous Image', keys: ['up'] },
+    {
+      commandName: 'previousViewportDisplaySet',
+      label: 'Previous Series',
+      keys: ['pagedown'],
+    },
+    {
+      commandName: 'nextViewportDisplaySet',
+      label: 'Next Series',
+      keys: ['pageup'],
+    },
+    {
+      commandName: 'setToolActive',
+      commandOptions: { toolName: 'Zoom' },
+      label: 'Zoom',
+      keys: ['z'],
+    },
+    {
+      commandName: 'windowLevelPreset1',
+      label: 'W/L Preset 1',
+      keys: ['1'],
+    },
+    {
+      commandName: 'windowLevelPreset2',
+      label: 'W/L Preset 2',
+      keys: ['2'],
+    },
+    {
+      commandName: 'windowLevelPreset3',
+      label: 'W/L Preset 3',
+      keys: ['3'],
+    },
+    {
+      commandName: 'windowLevelPreset4',
+      label: 'W/L Preset 4',
+      keys: ['4'],
+    },
+    {
+      commandName: 'windowLevelPreset5',
+      label: 'W/L Preset 5',
+      keys: ['5'],
+    },
+    {
+      commandName: 'windowLevelPreset6',
+      label: 'W/L Preset 6',
+      keys: ['6'],
+    },
+    {
+      commandName: 'windowLevelPreset7',
+      label: 'W/L Preset 7',
+      keys: ['7'],
+    },
+    {
+      commandName: 'windowLevelPreset8',
+      label: 'W/L Preset 8',
+      keys: ['8'],
+    },
+    {
+      commandName: 'windowLevelPreset9',
+      label: 'W/L Preset 9',
+      keys: ['9'],
+    },
+  ],
+};
