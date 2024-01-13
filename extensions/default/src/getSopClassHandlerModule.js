@@ -86,6 +86,7 @@ const makeDisplaySet = instances => {
     SeriesInstanceUID: instance.SeriesInstanceUID,
     StudyInstanceUID: instance.StudyInstanceUID,
     SeriesNumber: instance.SeriesNumber || 0,
+    InstanceNumber: instance.InstanceNumber,
     FrameRate: instance.FrameTime,
     SOPClassUID: instance.SOPClassUID,
     SeriesDescription: instance.SeriesDescription || '',
@@ -183,6 +184,7 @@ function getDisplaySetsFromSeries(instances) {
         acquisitionDatetime: instance.AcquisitionDateTime,
       });
       displaySets.push(displaySet);
+      displaySets.sort((a, b) => (a.InstanceNumber > b.InstanceNumber ? 1 : -1));
     } else if (isSingleImageModality(instance.Modality)) {
       displaySet = makeDisplaySet([instance]);
       displaySet.setAttributes({
