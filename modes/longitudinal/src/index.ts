@@ -106,6 +106,17 @@ function modeFactory({ modeConfiguration }) {
         'MeasurementTools',
         'Zoom',
         'Pan',
+        'Capture',
+        'Layout',
+        'MPR',
+        'Cine',
+        'Previous',
+        'Next',
+        'MoreTools',
+      ]);
+      toolbarService.createButtonSection(MPR_TOOL_GROUP_ID, [
+        'MeasurementTools',
+        'Zoom',
         'TrackballRotate',
         'WindowLevel',
         'Capture',
