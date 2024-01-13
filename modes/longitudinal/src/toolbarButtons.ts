@@ -169,7 +169,6 @@ const toolbarButtons: Button[] = [
       ],
     },
   },
-
   // Window Level + Presets...
   {
     id: 'WindowLevel',
