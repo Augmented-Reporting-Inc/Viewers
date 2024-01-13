@@ -118,7 +118,59 @@ const toolbarButtons: Button[] = [
       evaluate: 'evaluate.cornerstoneTool',
     },
   },
-  // Window Level
+  {
+    id: 'Cine',
+    type: 'ohif.radioGroup',
+    props: {
+      type: 'toggle',
+      icon: 'tool-cine',
+      label: 'Cine',
+      commands: [
+        {
+          commandName: 'toggleCine',
+          context: 'CORNERSTONE',
+        },
+      ],
+    },
+  },
+  {
+    id: 'Previous',
+    type: 'ohif.action',
+    props: {
+      type: 'action',
+      icon: 'chevron-prev',
+      label: 'Previous',
+      commands: [
+        {
+          commandName: 'updateViewportDisplaySet',
+          commandOptions: {
+            direction: -1,
+          },
+          context: 'DEFAULT',
+        },
+      ],
+    },
+  },
+  {
+    id: 'Next',
+    type: 'ohif.action',
+    props: {
+      type: 'action',
+      icon: 'chevron-next',
+      label: 'Next',
+      commands: [
+        {
+          commandName: 'updateViewportDisplaySet',
+          commandOptions: {
+            direction: 1,
+          },
+          context: 'DEFAULT',
+        },
+      ],
+    },
+  },
+
+  // Window Level + Presets...
   {
     id: 'WindowLevel',
     uiType: 'ohif.radioGroup',
