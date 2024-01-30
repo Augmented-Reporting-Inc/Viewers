@@ -20,6 +20,10 @@ const stressecho = {
   hangingProtocol: 'extension-stress-echo.hangingProtocolModule.hpRest',
 };
 
+const stressecho = {
+  rightPanel: 'extension-stress-echo.panelModule.filterStageView',
+};
+
 const cornerstone = {
   viewport: '@ohif/extension-cornerstone.viewportModule.cornerstone',
 };
