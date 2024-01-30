@@ -13,6 +13,10 @@ const ohif = {
   rightPanel: '@ohif/extension-default.panelModule.measure',
 };
 
+const stressecho = {
+  rightPanel: 'extension-stress-echo.panelModule.filterStageView',
+};
+
 const cornerstone = {
   viewport: '@ohif/extension-cornerstone.viewportModule.cornerstone',
 };
@@ -142,7 +146,7 @@ function modeFactory({ modeConfiguration }) {
             id: ohif.layout,
             props: {
               leftPanels: [ohif.leftPanel],
-              rightPanels: [ohif.rightPanel],
+              rightPanels: [stressecho.rightPanel],
               viewports: [
                 {
                   namespace: cornerstone.viewport,

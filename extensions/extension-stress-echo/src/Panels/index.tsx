@@ -1,4 +1,3 @@
-import PanelPetSUV from './PanelPetSUV';
-import PanelROIThresholdSegmentation from './PanelROIThresholdSegmentation';
+import FilterStageView from './FilterStageView';
 
-export { PanelPetSUV, PanelROIThresholdSegmentation };
+export { FilterStageView };

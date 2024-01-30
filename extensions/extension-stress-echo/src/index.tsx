@@ -1,4 +1,6 @@
 import { id } from './id';
+import React from 'react';
+
 import getHangingProtocolModule from './getHangingProtocolModule';
 import getPanelModule from './getPanelModule';
 import init from './init';

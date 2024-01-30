@@ -1,34 +1,46 @@
 import React, { useEffect, useState } from 'react';
+import { Select, Icon } from '../../../../platform/ui/src/components';
 import PropTypes from 'prop-types';
 import { Input, Button } from '@ohif/ui';
 import { DicomMetadataStore, ServicesManager } from '@ohif/core';
 import { useTranslation } from 'react-i18next';
 
-const DEFAULT_MEATADATA = {
+const DEFAULT_METADATA = {
   PatientWeight: null,
   PatientSex: null,
   SeriesTime: null,
-  RadiopharmaceuticalInformationSequence: {
-    RadionuclideTotalDose: null,
-    RadionuclideHalfLife: null,
-    RadiopharmaceuticalStartTime: null,
-  },
 };
 
 /*
- * PETSUV panel enables the user to modify the patient related information, such as
+ * FilterStageView panel enables the user to modify the patient related information, such as
  * patient sex, patientWeight. This is allowed since
  * sometimes these metadata are missing or wrong. By changing them
  * @param param0
  * @returns
  */
-export default function PanelPetSUV({ servicesManager, commandsManager }) {
-  const { t } = useTranslation('PanelSUV');
+export default function FilterStageView({ servicesManager, commandsManager }) {
+  const { t } = useTranslation('FilterStageView');
   const { displaySetService, toolGroupService, toolbarService, hangingProtocolService } = (
     servicesManager as ServicesManager
   ).services;
-  const [metadata, setMetadata] = useState(DEFAULT_MEATADATA);
+  const [metadata, setMetadata] = useState(DEFAULT_METADATA);
   const [ptDisplaySet, setPtDisplaySet] = useState(null);
+
+  const selectOptions = [
+    { value: 'Stage', label: 'by Stage' },
+    { value: 'View', label: 'by View' },
+  ];
+
+  const [filterBy, setFilterBy] = useState(null);
+
+  const onFilterChange = filterValue => {
+    setFilterBy(filterValue);
+    console.log('filterBy', filterBy);
+  };
+
+  const handleChange = option => {
+    onFilterChange(option.value); // Notify the parent
+  };
 
   const handleMetadataChange = metadata => {
     setMetadata(prevState => {
@@ -141,6 +153,18 @@ export default function PanelPetSUV({ servicesManager, commandsManager }) {
       {
         <div className="flex flex-col">
           <div className="bg-primary-dark flex flex-col space-y-4 p-4">
+            <Select
+              id="filter-select"
+              isClearable={false}
+              onChange={handleChange}
+              components={{
+                DropdownIndicator: () => <Icon name={'chevron-down-new'} className="mr-2" />,
+              }}
+              isSearchable={false}
+              options={selectOptions}
+              value={selectOptions?.find(o => o.value)}
+              className="text-aqua-pale w-30 h-[13px] text-[26px]"
+            />
             <Input
               label={t('Patient Sex')}
               labelClassName="text-white mb-2"
@@ -164,47 +188,6 @@ export default function PanelPetSUV({ servicesManager, commandsManager }) {
               }}
             />
             <Input
-              label={t('Total Dose (bq)')}
-              labelClassName="text-white mb-2"
-              className="mt-1"
-              value={metadata.RadiopharmaceuticalInformationSequence.RadionuclideTotalDose || ''}
-              onChange={e => {
-                handleMetadataChange({
-                  RadiopharmaceuticalInformationSequence: {
-                    RadionuclideTotalDose: e.target.value,
-                  },
-                });
-              }}
-            />
-            <Input
-              label={t('Half Life (s)')}
-              labelClassName="text-white mb-2"
-              className="mt-1"
-              value={metadata.RadiopharmaceuticalInformationSequence.RadionuclideHalfLife || ''}
-              onChange={e => {
-                handleMetadataChange({
-                  RadiopharmaceuticalInformationSequence: {
-                    RadionuclideHalfLife: e.target.value,
-                  },
-                });
-              }}
-            />
-            <Input
-              label={t('Injection Time (s)')}
-              labelClassName="text-white mb-2"
-              className="mt-1"
-              value={
-                metadata.RadiopharmaceuticalInformationSequence.RadiopharmaceuticalStartTime || ''
-              }
-              onChange={e => {
-                handleMetadataChange({
-                  RadiopharmaceuticalInformationSequence: {
-                    RadiopharmaceuticalStartTime: e.target.value,
-                  },
-                });
-              }}
-            />
-            <Input
               label={t('Acquisition Time (s)')}
               labelClassName="text-white mb-2"
               className="mt-1 mb-2"
@@ -219,7 +202,7 @@ export default function PanelPetSUV({ servicesManager, commandsManager }) {
   );
 }
 
-PanelPetSUV.propTypes = {
+FilterStageView.propTypes = {
   servicesManager: PropTypes.shape({
     services: PropTypes.shape({
       measurementService: PropTypes.shape({
