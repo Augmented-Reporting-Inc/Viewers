@@ -3,6 +3,8 @@ window.config = {
   extensions: [],
   modes: [],
   customizationService: {
+    dicomUploadComponent:
+      '@ohif/extension-cornerstone.customizationModule.cornerstoneDicomUploadComponent',
     cornerstoneOverlayBottomRight: {
       id: 'cornerstoneOverlayBottomRight',
       customizationType: 'ohif.cornerstoneOverlay',
@@ -84,8 +86,7 @@ window.config = {
           customizationType: 'ohif.overlayItem',
           label: 'Number of Views In Stage:',
           title: 'Number of Views In Stage',
-          condition: ({ instance }) =>
-            instance && instance.NumberOfViewsInStage,
+          condition: ({ instance }) => instance && instance.NumberOfViewsInStage,
           contentF: ({ instance }) => instance.NumberOfViewsInStage,
         },
         {
@@ -99,8 +100,8 @@ window.config = {
       ],
     },
   },
-  showStudyList: false,
-  maxNumberOfWebWorkers: 3,
+  showStudyList: true,
+  maxNumberOfWebWorkers: 4,
   omitQuotationForMultipartRequest: true,
   showWarningMessageForCrossOrigin: true,
   showCPUFallbackMessage: true,
@@ -121,9 +122,9 @@ window.config = {
       configuration: {
         friendlyName: 'orthanc Server',
         name: 'dicomweb',
-        wadoUriRoot: 'https://[server].futurepacs.com/orthanc/dicom-web',
-        qidoRoot: 'https://[server].futurepacs.com/orthanc/dicom-web',
-        wadoRoot: 'https://[server].futurepacs.com/orthanc/dicom-web',
+        wadoUriRoot: 'https://ssoback.futurepacs.com/orthanc/dicom-web',
+        qidoRoot: 'https://ssoback.futurepacs.com/orthanc/dicom-web',
+        wadoRoot: 'https://ssoback.futurepacs.com/orthanc/dicom-web',
         qidoSupportsIncludeField: false,
         supportsReject: false,
         imageRendering: 'wadors',
@@ -132,12 +133,13 @@ window.config = {
         supportsFuzzyMatching: false,
         supportsWildcard: true,
         staticWado: true,
-        singlepart: 'bulkdata,video,pdf',
+        singlepart: 'bulkdata',
         bulkDataURI: {
           enabled: true,
           relativeResolution: 'studies',
         },
-        acceptHeader: [ 'multipart/related; type=application/octet-stream; transfer-syntax=*'],
+        acceptHeader: ['multipart/related; type=application/octet-stream; transfer-syntax=*'],
+        omitQuotationForMultipartRequest: true,
         dicomUploadEnabled: true,
       },
     },
@@ -170,7 +172,7 @@ window.config = {
     console.warn('test, navigate to https://ohif.org/');
   },
   whiteLabeling: {
-    createLogoComponentFn: function(React) {
+    createLogoComponentFn: function (React) {
       return React.createElement(
         'a',
         {
