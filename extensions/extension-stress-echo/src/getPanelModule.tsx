@@ -1,5 +1,5 @@
 import React from 'react';
-import { PanelPetSUV, PanelROIThresholdSegmentation } from '../../tmtv/src/Panels';
+import { FilterStageView } from './Panels';
 
 // TODO:
 // - No loading UI exists yet
@@ -7,19 +7,9 @@ import { PanelPetSUV, PanelROIThresholdSegmentation } from '../../tmtv/src/Panel
 // - show errors in UI for thumbnails if promise fails
 
 function getPanelModule({ commandsManager, extensionManager, servicesManager }) {
-  const wrappedPanelPetSuv = () => {
+  const wrappedPanelfilterStageView = () => {
     return (
-      <PanelPetSUV
-        commandsManager={commandsManager}
-        servicesManager={servicesManager}
-        extensionManager={extensionManager}
-      />
-    );
-  };
-
-  const wrappedROIThresholdSeg = () => {
-    return (
-      <PanelROIThresholdSegmentation
+      <FilterStageView
         commandsManager={commandsManager}
         servicesManager={servicesManager}
         extensionManager={extensionManager}
@@ -29,18 +19,11 @@ function getPanelModule({ commandsManager, extensionManager, servicesManager }) 
 
   return [
     {
-      name: 'petSUV',
+      name: 'filterStageView',
       iconName: 'tab-patient-info',
-      iconLabel: 'PET SUV',
-      label: 'PET SUV',
-      component: wrappedPanelPetSuv,
-    },
-    {
-      name: 'ROIThresholdSeg',
-      iconName: 'tab-roi-threshold',
-      iconLabel: 'ROI Threshold',
-      label: 'ROI Threshold',
-      component: wrappedROIThresholdSeg,
+      iconLabel: 'Filter by Stage or View ',
+      label: 'Filter by Stage or View',
+      component: wrappedPanelfilterStageView,
     },
   ];
 }
