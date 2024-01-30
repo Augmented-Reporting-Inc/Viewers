@@ -401,7 +401,7 @@ const peakSAX = {
   ],
 };
 
-const peakAP4= {
+const peakAP4 = {
   viewportOptions: {
     viewportId: 'peakAP4',
     viewportType: 'stack',
@@ -422,7 +422,7 @@ const peakAP4= {
   ],
 };
 
-const peakAP2= {
+const peakAP2 = {
   viewportOptions: {
     viewportId: 'peakAP2',
     viewportType: 'stack',
@@ -443,7 +443,7 @@ const peakAP2= {
   ],
 };
 
-const peakAP3= {
+const peakAP3 = {
   viewportOptions: {
     viewportId: 'peakAP3',
     viewportType: 'stack',
@@ -464,7 +464,7 @@ const peakAP3= {
   ],
 };
 
-const peakView6= {
+const peakView6 = {
   viewportOptions: {
     viewportId: 'peakView6',
     viewportType: 'stack',
@@ -485,7 +485,7 @@ const peakView6= {
   ],
 };
 
-const recoveryLAX= {
+const recoveryLAX = {
   viewportOptions: {
     viewportId: 'recoveryLAX',
     viewportType: 'stack',
@@ -506,7 +506,7 @@ const recoveryLAX= {
   ],
 };
 
-const recoverySAX= {
+const recoverySAX = {
   viewportOptions: {
     viewportId: 'recoverySAX',
     viewportType: 'stack',
@@ -527,7 +527,7 @@ const recoverySAX= {
   ],
 };
 
-const recoveryAP4={
+const recoveryAP4 = {
   viewportOptions: {
     viewportId: 'recoveryAP4',
     viewportType: 'stack',
@@ -548,7 +548,7 @@ const recoveryAP4={
   ],
 };
 
-const recoveryAP2={
+const recoveryAP2 = {
   viewportOptions: {
     viewportId: 'recoveryAP2',
     viewportType: 'stack',
@@ -569,7 +569,7 @@ const recoveryAP2={
   ],
 };
 
-const recoveryAP3={
+const recoveryAP3 = {
   viewportOptions: {
     viewportId: 'recoveryAP3',
     viewportType: 'stack',
@@ -590,7 +590,7 @@ const recoveryAP3={
   ],
 };
 
-const recoveryView6={
+const recoveryView6 = {
   viewportOptions: {
     viewportId: 'recoveryView6',
     viewportType: 'stack',
