@@ -1,10 +1,24 @@
 import { id } from './id';
 import React from 'react';
 
+import getSopClassHandlerModule from './getSopClassHandlerModule';
 import getHangingProtocolModule from './getHangingProtocolModule';
+import onModeEnter from './onModeEnter';
 import getPanelModule from './getPanelModule';
 import init from './init';
 import commandsModule from './commandsModule';
+
+const Component = React.lazy(() => {
+  return import(/* webpackPrefetch: true */ './viewports/StressEchoViewport');
+});
+
+const StressEchoViewport = props => {
+  return (
+    <React.Suspense fallback={<div>Loading...</div>}>
+      <Component {...props} />
+    </React.Suspense>
+  );
+};
 
 /**
  * You can remove any of the following modules if you don't need them.
@@ -15,6 +29,7 @@ const stressechoExtension = {
    * You ID can be anything you want, but it should be unique.
    */
   id,
+  onModeEnter,
 
   /**
    * Perform any pre-registration tasks here. This is called before the extension
@@ -33,12 +48,24 @@ const stressechoExtension = {
    */
   getPanelModule,
   /**
-   * ViewportModule should provide a list of viewports that will be available in OHIF
-   * for Modes to consume and use in the viewports. Each viewport is defined by
-   * {name, component} object. Example of a viewport module is the CornerstoneViewport
-   * that is provided by the Cornerstone extension in OHIF.
+   *
+   *
+   * @param {object} [configuration={}]
+   * @param {object|array} [configuration.csToolsConfig] - Passed directly to `initCornerstoneTools`
    */
-  //  getViewportModule: ({ servicesManager, commandsManager, extensionManager }) => {},
+  getViewportModule({ servicesManager, extensionManager }) {
+    const ExtendedStressEchoViewport = props => {
+      return (
+        <StressEchoViewport
+          servicesManager={servicesManager}
+          extensionManager={extensionManager}
+          {...props}
+        />
+      );
+    };
+
+    return [{ name: 'stressecho', component: ExtendedStressEchoViewport }];
+  },
   /**
    * ToolbarModule should provide a list of tool buttons that will be available in OHIF
    * for Modes to consume and use in the toolbar. Each tool button is defined by
@@ -61,7 +88,7 @@ const stressechoExtension = {
    * Each sop class handler is defined by a { name, sopClassUids, getDisplaySetsFromSeries}.
    * Examples include the default sop class handler provided by the default extension
    */
-  //  getSopClassHandlerModule: ({ servicesManager, commandsManager, extensionManager }) => {},
+  getSopClassHandlerModule,
   /**
    * HangingProtocolModule should provide a list of hanging protocols that will be
    * available in OHIF for Modes to use to decide on the structure of the viewports
@@ -69,7 +96,7 @@ const stressechoExtension = {
    * { name, protocols}. Examples include the default hanging protocol provided by
    * the default extension that shows 2x2 viewports.
    */
-  getHangingProtocolModule,
+  //  getHangingProtocolModule,
   /**
    * CommandsModule should provide a list of commands that will be available in OHIF
    * for Modes to consume and use in the viewports. Each command is defined by
