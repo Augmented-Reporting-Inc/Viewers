@@ -15,6 +15,7 @@ const ohif = {
 
 const stressecho = {
   rightPanel: 'extension-stress-echo.panelModule.filterStageView',
+  sopClassHandler: 'extension-stress-echo.sopClassHandlerModule.stressecho',
 };
 
 const cornerstone = {
