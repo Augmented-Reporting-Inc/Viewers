@@ -89,6 +89,7 @@ const makeDisplaySet = instances => {
     InstanceNumber: instance.InstanceNumber,
     FrameRate: instance.FrameTime,
     SOPClassUID: instance.SOPClassUID,
+    //    SOPClassUID: '1.2.840.10008.5.1.4.1.1.3.1',
     SeriesDescription: instance.SeriesDescription || '',
     Modality: instance.Modality,
     isMultiFrame: isMultiFrame(instance),
