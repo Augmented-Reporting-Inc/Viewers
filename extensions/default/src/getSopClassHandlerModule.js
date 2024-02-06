@@ -89,6 +89,7 @@ const makeDisplaySet = instances => {
     InstanceNumber: instance.InstanceNumber,
     FrameRate: instance.FrameTime,
     SOPClassUID: instance.SOPClassUID,
+    //    SOPClassUID: '1.2.840.10008.5.1.4.1.1.3.1',
     SeriesDescription: instance.SeriesDescription || '',
     Modality: instance.Modality,
     isMultiFrame: isMultiFrame(instance),
@@ -112,10 +113,7 @@ const makeDisplaySet = instances => {
   }
 
   // Include the first image instance number (after sorted)
-  /*imageSet.setAttribute(
-    'instanceNumber',
-    imageSet.getImage(0).InstanceNumber
-  );*/
+  imageSet.setAttribute('instanceNumber', imageSet.getImage(0).InstanceNumber);
 
   /*const isReconstructable = isDisplaySetReconstructable(series, instances);
 
@@ -173,8 +171,19 @@ function getDisplaySetsFromSeries(instances) {
     }
 
     let displaySet;
+    displaySet = makeDisplaySet([instance]);
 
-    if (isMultiFrame(instance)) {
+    displaySet.setAttributes({
+      sopClassUids,
+      isClip: isMultiFrame(instance),
+      numImageFrames: instance.NumberOfFrames || 1,
+      instanceNumber: instance.InstanceNumber,
+      acquisitionDatetime: instance.AcquisitionDateTime,
+    });
+    displaySets.push(displaySet);
+    displaySets.sort((a, b) => (a.InstanceNumber > b.InstanceNumber ? 1 : -1));
+
+    /**    if (isMultiFrame(instance)) {
       displaySet = makeDisplaySet([instance]);
 
       displaySet.setAttributes({
@@ -206,6 +215,8 @@ function getDisplaySetsFromSeries(instances) {
     });
     displaySets.push(displaySet);
   }
+*/
+  });
 
   return displaySets;
 }

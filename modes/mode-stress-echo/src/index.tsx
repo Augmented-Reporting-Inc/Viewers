@@ -7,10 +7,9 @@ import moreToolsMpr from '../../longitudinal/src/moreToolsMpr';
 
 const ohif = {
   layout: '@ohif/extension-default.layoutTemplateModule.viewerLayout',
-  sopClassHandler: '@ohif/extension-default.sopClassHandlerModule.stack',
-  hangingProtocol: '@ohif/extension-default.hangingProtocolModule.default',
+  //  sopClassHandler: '@ohif/extension-default.sopClassHandlerModule.stack',
+  hangingProtocols: '@ohif/extension-default.hangingProtocolModule.default',
   leftPanel: '@ohif/extension-default.panelModule.seriesList',
-  rightPanel: '@ohif/extension-default.panelModule.measure',
 };
 
 const stressecho = {
@@ -50,7 +49,13 @@ function modeFactory({ modeConfiguration }) {
      * Services and other resources.
      */
     onModeEnter: ({ servicesManager, extensionManager, commandsManager }) => {
-      const { measurementService, toolbarService, toolGroupService } = servicesManager.services;
+      const {
+        measurementService,
+        toolbarService,
+        toolGroupService,
+        panelService,
+        customizationService,
+      } = servicesManager.services;
 
       measurementService.clearMeasurements();
 
@@ -141,7 +146,7 @@ function modeFactory({ modeConfiguration }) {
      */
     routes: [
       {
-        path: 'stressecho',
+        path: 'mode-stress-echo',
         layoutTemplate: ({ location, servicesManager }) => {
           return {
             id: ohif.layout,
@@ -151,7 +156,7 @@ function modeFactory({ modeConfiguration }) {
               viewports: [
                 {
                   namespace: cornerstone.viewport,
-                  displaySetsToDisplay: [ohif.sopClassHandler],
+                  displaySetsToDisplay: [stressecho.sopClassHandler],
                 },
               ],
             },
@@ -162,9 +167,10 @@ function modeFactory({ modeConfiguration }) {
     /** List of extensions that are used by the mode */
     extensions: extensionDependencies,
     /** HangingProtocol used by the mode */
-    // hangingProtocol: [''],
+    hangingProtocol: 'default',
+    hangingProtocols: [ohif.hangingProtocols],
     /** SopClassHandlers used by the mode */
-    sopClassHandlers: [ohif.sopClassHandler],
+    sopClassHandlers: [stressecho.sopClassHandler],
     /** hotkeys for mode */
     hotkeys: [...hotkeys.defaults.hotkeyBindings],
   };

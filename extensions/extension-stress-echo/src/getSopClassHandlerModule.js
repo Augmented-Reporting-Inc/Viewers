@@ -146,7 +146,7 @@ function getDisplaySetsFromSeries(instances) {
       acquisitionDatetime: instance.AcquisitionDateTime,
     });
     displaySets.push(displaySet);
-    displaySets.sort((a, b) => (a.InstanceNumber > b.InstanceNumber ? -1 : 1));
+    displaySets.sort((a, b) => (a.InstanceNumber > b.InstanceNumber ? 1 : -1));
 
     /**     if (isMultiFrame(instance)) {
       displaySet = makeDisplaySet([instance]);
@@ -184,62 +184,13 @@ function getDisplaySetsFromSeries(instances) {
     displaySets.push(displaySet);
   }
 */
-  console.log('no splitting', displaySets);
 
   return displaySets;
 }
 
 const sopClassUids = [
-  sopClassDictionary.ComputedRadiographyImageStorage,
-  sopClassDictionary.DigitalXRayImageStorageForPresentation,
-  sopClassDictionary.DigitalXRayImageStorageForProcessing,
-  sopClassDictionary.DigitalMammographyXRayImageStorageForPresentation,
-  sopClassDictionary.DigitalMammographyXRayImageStorageForProcessing,
-  sopClassDictionary.DigitalIntraOralXRayImageStorageForPresentation,
-  sopClassDictionary.DigitalIntraOralXRayImageStorageForProcessing,
-  sopClassDictionary.CTImageStorage,
-  sopClassDictionary.EnhancedCTImageStorage,
-  sopClassDictionary.LegacyConvertedEnhancedCTImageStorage,
   sopClassDictionary.UltrasoundMultiframeImageStorage,
-  sopClassDictionary.MRImageStorage,
-  sopClassDictionary.EnhancedMRImageStorage,
-  sopClassDictionary.EnhancedMRColorImageStorage,
-  sopClassDictionary.LegacyConvertedEnhancedMRImageStorage,
   sopClassDictionary.UltrasoundImageStorage,
-  sopClassDictionary.UltrasoundImageStorageRET,
-  sopClassDictionary.SecondaryCaptureImageStorage,
-  sopClassDictionary.MultiframeSingleBitSecondaryCaptureImageStorage,
-  sopClassDictionary.MultiframeGrayscaleByteSecondaryCaptureImageStorage,
-  sopClassDictionary.MultiframeGrayscaleWordSecondaryCaptureImageStorage,
-  sopClassDictionary.MultiframeTrueColorSecondaryCaptureImageStorage,
-  sopClassDictionary.XRayAngiographicImageStorage,
-  sopClassDictionary.EnhancedXAImageStorage,
-  sopClassDictionary.XRayRadiofluoroscopicImageStorage,
-  sopClassDictionary.EnhancedXRFImageStorage,
-  sopClassDictionary.XRay3DAngiographicImageStorage,
-  sopClassDictionary.XRay3DCraniofacialImageStorage,
-  sopClassDictionary.BreastTomosynthesisImageStorage,
-  sopClassDictionary.BreastProjectionXRayImageStorageForPresentation,
-  sopClassDictionary.BreastProjectionXRayImageStorageForProcessing,
-  sopClassDictionary.IntravascularOpticalCoherenceTomographyImageStorageForPresentation,
-  sopClassDictionary.IntravascularOpticalCoherenceTomographyImageStorageForProcessing,
-  sopClassDictionary.NuclearMedicineImageStorage,
-  sopClassDictionary.VLEndoscopicImageStorage,
-  sopClassDictionary.VideoEndoscopicImageStorage,
-  sopClassDictionary.VLMicroscopicImageStorage,
-  sopClassDictionary.VideoMicroscopicImageStorage,
-  sopClassDictionary.VLSlideCoordinatesMicroscopicImageStorage,
-  sopClassDictionary.VLPhotographicImageStorage,
-  sopClassDictionary.VideoPhotographicImageStorage,
-  sopClassDictionary.OphthalmicPhotography8BitImageStorage,
-  sopClassDictionary.OphthalmicPhotography16BitImageStorage,
-  sopClassDictionary.OphthalmicTomographyImageStorage,
-  sopClassDictionary.VLWholeSlideMicroscopyImageStorage,
-  sopClassDictionary.PositronEmissionTomographyImageStorage,
-  sopClassDictionary.EnhancedPETImageStorage,
-  sopClassDictionary.LegacyConvertedEnhancedPETImageStorage,
-  sopClassDictionary.RTImageStorage,
-  sopClassDictionary.EnhancedUSVolumeStorage,
 ];
 
 function getSopClassHandlerModule() {
