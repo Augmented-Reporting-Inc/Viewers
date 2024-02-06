@@ -11,6 +11,14 @@ window.config = {
       customizationType: 'ohif.cornerstoneOverlay',
       items: [
         {
+          id: 'InstanceNumber',
+          customizationType: 'ohif.overlayItem',
+          label: 'Instance Number:',
+          title: 'Instance Number',
+          condition: ({ instance }) => instance && instance.InstanceNumber,
+          contentF: ({ instance }) => instance.InstanceNumber,
+        },
+        {
           id: 'AcquisitionNumber',
           customizationType: 'ohif.overlayItem',
           label: 'Acquisition Number:',
