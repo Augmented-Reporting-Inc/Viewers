@@ -1,34 +1,15 @@
 import { isImage } from '@ohif/core/src/utils/isImage';
-import sopClassDictionary from '@ohif/core/src/utils/sopClassDictionary';
 import ImageSet from '@ohif/core/src/classes/ImageSet';
 import isDisplaySetReconstructable from '@ohif/core/src/utils/isDisplaySetReconstructable';
 import { id } from './id';
-// import getDisplaySetMessages from './getDisplaySetMessages';
-import getDisplaySetsFromUnsupportedSeries from './getDisplaySetsFromUnsupportedSeries';
 
 const sopClassHandlerName = 'stressecho';
 
-const isMultiFrame = instance => {
-  return instance.NumberOfFrames > 1;
-};
-
-/**
-  if (instanceDetail.PerformedProcedureStepDescription === "Stress Study") {
-    arrPatMeasures.ProtocolName = "Stress";
-  }
-  //  if (instanceDetail.PerformedProcedureStepDescription === "Dobutamine Study") {
-  if (
-    instanceDetail.PerformedProcedureStepDescription?.toLowerCase().includes(
-      "dobutamine"
-    )
-  ) {
-    arrPatMeasures.ProtocolName = "Dobutamine";
-  }
-*/
-
-const isStress = instance => {
-  return instance.PerformedProcedureStepDescription.includes('Stress Study');
-};
+// mandatory to declare sopClassUids or extension will fail to register
+const sopClassUids = [
+  '1.2.840.10008.5.1.4.1.1.3.1', // UltrasoundMultiframeImageStorage:
+  '1.2.840.10008.5.1.4.1.1.6.1', // UltrasoundImageStorage:
+];
 
 const makeDisplaySet = instances => {
   const instance = instances[0];
@@ -37,11 +18,9 @@ const makeDisplaySet = instances => {
 
   const { value: isReconstructable, averageSpacingBetweenFrames } =
     isDisplaySetReconstructable(instances);
-  // set appropriate attributes to image set...
-  // const messages = getDisplaySetMessages(instances, isReconstructable);
 
   imageSet.setAttributes({
-    displaySetInstanceUID: imageSet.uid, // create a local alias for the imageSet UID
+    displaySetInstanceUID: imageSet.uid, // mandatory create a local alias for the imageSet UID
     SeriesDate: instance.SeriesDate,
     SeriesTime: instance.SeriesTime,
     SeriesInstanceUID: instance.SeriesInstanceUID,
@@ -52,13 +31,11 @@ const makeDisplaySet = instances => {
     SOPClassUID: instance.SOPClassUID,
     SeriesDescription: instance.SeriesDescription || '',
     Modality: instance.Modality,
-    isMultiFrame: isMultiFrame(instance),
     isStress: isStress(instance),
     countIcon: isReconstructable ? 'icon-mpr' : undefined,
     numImageFrames: instances.length,
     SOPClassHandlerId: `${id}.sopClassHandlerModule.${sopClassHandlerName}`,
     isReconstructable,
-    //  messages,
     averageSpacingBetweenFrames: averageSpacingBetweenFrames || null,
   });
 
@@ -122,11 +99,6 @@ function getDisplaySetsFromSeries(instances) {
   const displaySets = [];
   const sopClassUids = getSopClassUids(instances);
 
-  // Search through the instances (InstanceMetadata object) of this series
-  // Split Multi-frame instances and Single-image modalities
-  // into their own specific display sets. Place the rest of each
-  // series into another display set.
-  const stackableInstances = [];
   instances.forEach(instance => {
     // All imaging modalities must have a valid value for sopClassUid (x00080016) or rows (x00280010)
     if (!isImage(instance.SOPClassUID) && !instance.Rows) {
@@ -139,59 +111,35 @@ function getDisplaySetsFromSeries(instances) {
 
     displaySet.setAttributes({
       sopClassUids,
-      // (isMultiFrame(instance) && {numImageFrames: instance.NumberOfFrames}),
-      isClip: isMultiFrame(instance),
+      isClip: instance.NumberOfFrames > 1,
       numImageFrames: instance.NumberOfFrames || 1,
       instanceNumber: instance.InstanceNumber,
       acquisitionDatetime: instance.AcquisitionDateTime,
     });
     displaySets.push(displaySet);
     displaySets.sort((a, b) => (a.InstanceNumber > b.InstanceNumber ? 1 : -1));
-
-    /**     if (isMultiFrame(instance)) {
-      displaySet = makeDisplaySet([instance]);
-
-      displaySet.setAttributes({
-        sopClassUids,
-        isClip: true,
-        numImageFrames: instance.NumberOfFrames,
-        instanceNumber: instance.InstanceNumber,
-        acquisitionDatetime: instance.AcquisitionDateTime,
-      });
-      displaySets.push(displaySet);
-      displaySets.sort((a, b) => (a.InstanceNumber > b.InstanceNumber ? 1 : -1));
-    } else if (isSingleImageModality(instance.Modality)) {
-      displaySet = makeDisplaySet([instance]);
-      displaySet.setAttributes({
-        sopClassUids,
-        instanceNumber: instance.InstanceNumber,
-        acquisitionDatetime: instance.AcquisitionDateTime,
-      });
-      displaySets.push(displaySet);
-      displaySets.sort((a, b) => (a.InstanceNumber > b.InstanceNumber ? 1 : -1));
-    } else {
-      stackableInstances.push(instance);
-    }
-    */
   });
-  /**
-  if (stackableInstances.length) {
-    const displaySet = makeDisplaySet(stackableInstances);
-    displaySet.setAttribute('studyInstanceUid', instances[0].StudyInstanceUID);
-    displaySet.setAttributes({
-      sopClassUids,
-    });
-    displaySets.push(displaySet);
-  }
-*/
 
   return displaySets;
 }
 
-const sopClassUids = [
-  sopClassDictionary.UltrasoundMultiframeImageStorage,
-  sopClassDictionary.UltrasoundImageStorage,
-];
+/**
+  if (instanceDetail.PerformedProcedureStepDescription === "Stress Study") {
+    arrPatMeasures.ProtocolName = "Stress";
+  }
+  //  if (instanceDetail.PerformedProcedureStepDescription === "Dobutamine Study") {
+  if (
+    instanceDetail.PerformedProcedureStepDescription?.toLowerCase().includes(
+      "dobutamine"
+    )
+  ) {
+    arrPatMeasures.ProtocolName = "Dobutamine";
+  }
+*/
+
+const isStress = instance => {
+  return instance.PerformedProcedureStepDescription.includes('Stress Study');
+};
 
 function getSopClassHandlerModule() {
   return [
@@ -199,11 +147,6 @@ function getSopClassHandlerModule() {
       name: sopClassHandlerName,
       sopClassUids,
       getDisplaySetsFromSeries,
-    },
-    {
-      name: 'not-supported-display-sets-handler',
-      sopClassUids: [],
-      getDisplaySetsFromSeries: getDisplaySetsFromUnsupportedSeries,
     },
   ];
 }
