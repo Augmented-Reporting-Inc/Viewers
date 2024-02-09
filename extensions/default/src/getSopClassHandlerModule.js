@@ -22,7 +22,7 @@ const makeDisplaySet = instances => {
   const messages = getDisplaySetMessages(instances, isReconstructable);
 
   imageSet.setAttributes({
-    displaySetInstanceUID: imageSet.uid, // create a local alias for the imageSet UID
+    displaySetInstanceUID: imageSet.uid, // mandatory create a local alias for the imageSet UID
     SeriesDate: instance.SeriesDate,
     SeriesTime: instance.SeriesTime,
     SeriesInstanceUID: instance.SeriesInstanceUID,
@@ -31,7 +31,6 @@ const makeDisplaySet = instances => {
     InstanceNumber: instance.InstanceNumber,
     FrameRate: instance.FrameTime,
     SOPClassUID: instance.SOPClassUID,
-    //    SOPClassUID: '1.2.840.10008.5.1.4.1.1.3.1',
     SeriesDescription: instance.SeriesDescription || '',
     Modality: instance.Modality,
     isMultiFrame: isMultiFrame(instance),
