@@ -15,6 +15,7 @@ const ohif = {
 const stressecho = {
   rightPanel: 'extension-stress-echo.panelModule.filterStageView',
   sopClassHandler: 'extension-stress-echo.sopClassHandlerModule.stressecho',
+  hangingProtocols: 'extension-stress-echo.hangingProtocolModule.stressecho',
 };
 
 const cornerstone = {
@@ -168,7 +169,7 @@ function modeFactory({ modeConfiguration }) {
     extensions: extensionDependencies,
     /** HangingProtocol used by the mode */
     hangingProtocol: 'default',
-    hangingProtocols: [ohif.hangingProtocols],
+    hangingProtocols: [stressecho.hangingProtocols],
     /** SopClassHandlers used by the mode */
     sopClassHandlers: [stressecho.sopClassHandler],
     /** hotkeys for mode */
