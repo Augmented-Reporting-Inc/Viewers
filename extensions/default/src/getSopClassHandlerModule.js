@@ -22,7 +22,7 @@ const makeDisplaySet = instances => {
   const messages = getDisplaySetMessages(instances, isReconstructable);
 
   imageSet.setAttributes({
-    displaySetInstanceUID: imageSet.uid, // create a local alias for the imageSet UID
+    displaySetInstanceUID: imageSet.uid, // mandatory create a local alias for the imageSet UID
     SeriesDate: instance.SeriesDate,
     SeriesTime: instance.SeriesTime,
     SeriesInstanceUID: instance.SeriesInstanceUID,
@@ -52,10 +52,7 @@ const makeDisplaySet = instances => {
   }
 
   // Include the first image instance number (after sorted)
-  /*imageSet.setAttribute(
-    'instanceNumber',
-    imageSet.getImage(0).InstanceNumber
-  );*/
+  imageSet.setAttribute('instanceNumber', imageSet.getImage(0).InstanceNumber);
 
   /*const isReconstructable = isDisplaySetReconstructable(series, instances);
 
@@ -114,8 +111,19 @@ function getDisplaySetsFromSeries(instances) {
     }
 
     let displaySet;
+    displaySet = makeDisplaySet([instance]);
 
-    if (isMultiFrame(instance)) {
+    displaySet.setAttributes({
+      sopClassUids,
+      isClip: isMultiFrame(instance),
+      numImageFrames: instance.NumberOfFrames || 1,
+      instanceNumber: instance.InstanceNumber,
+      acquisitionDatetime: instance.AcquisitionDateTime,
+    });
+    displaySets.push(displaySet);
+    displaySets.sort((a, b) => (a.InstanceNumber > b.InstanceNumber ? 1 : -1));
+
+    /**    if (isMultiFrame(instance)) {
       displaySet = makeDisplaySet([instance]);
 
       displaySet.setAttributes({
@@ -148,6 +156,8 @@ function getDisplaySetsFromSeries(instances) {
     });
     displaySets.push(displaySet);
   }
+*/
+  });
 
   return displaySets;
 }

@@ -3,18 +3,12 @@ window.config = {
   extensions: [],
   modes: [],
   customizationService: {
+    dicomUploadComponent:
+      '@ohif/extension-cornerstone.customizationModule.cornerstoneDicomUploadComponent',
     cornerstoneOverlayBottomRight: {
       id: 'cornerstoneOverlayBottomRight',
       customizationType: 'ohif.cornerstoneOverlay',
       items: [
-        {
-          id: 'AcquisitionNumber',
-          customizationType: 'ohif.overlayItem',
-          label: 'Acquisition Number:',
-          title: 'Acquisition Number',
-          condition: ({ instance }) => instance && instance.AcquisitionNumber,
-          contentF: ({ instance }) => instance.AcquisitionNumber,
-        },
         {
           id: 'InstanceNumber',
           customizationType: 'ohif.overlayItem',
@@ -22,6 +16,14 @@ window.config = {
           title: 'Instance Number',
           condition: ({ instance }) => instance && instance.InstanceNumber,
           contentF: ({ instance }) => instance.InstanceNumber,
+        },
+        {
+          id: 'AcquisitionNumber',
+          customizationType: 'ohif.overlayItem',
+          label: 'Acquisition Number:',
+          title: 'Acquisition Number',
+          condition: ({ instance }) => instance && instance.AcquisitionNumber,
+          contentF: ({ instance }) => instance.AcquisitionNumber,
         },
         {
           id: 'HR',
@@ -56,22 +58,6 @@ window.config = {
           contentF: ({ instance }) => instance.StageName,
         },
         {
-          id: 'NumberOfStages',
-          customizationType: 'ohif.overlayItem',
-          label: 'Number of Stages:',
-          title: 'Number of Stages',
-          condition: ({ instance }) => instance && instance.NumberOfStages,
-          contentF: ({ instance }) => instance.NumberOfStages,
-        },
-        {
-          id: 'StageNumber',
-          customizationType: 'ohif.overlayItem',
-          label: 'Stage Number:',
-          title: 'Stage Number',
-          condition: ({ instance }) => instance && instance.StageNumber,
-          contentF: ({ instance }) => instance.StageNumber,
-        },
-        {
           id: 'View',
           customizationType: 'ohif.overlayItem',
           label: 'View Name:',
@@ -79,28 +65,11 @@ window.config = {
           condition: ({ instance }) => instance && instance.ViewName,
           contentF: ({ instance }) => instance.ViewName,
         },
-        {
-          id: 'NumberOfViewsInStage',
-          customizationType: 'ohif.overlayItem',
-          label: 'Number of Views In Stage:',
-          title: 'Number of Views In Stage',
-          condition: ({ instance }) =>
-            instance && instance.NumberOfViewsInStage,
-          contentF: ({ instance }) => instance.NumberOfViewsInStage,
-        },
-        {
-          id: 'ViewNumber',
-          customizationType: 'ohif.overlayItem',
-          label: 'View Number:',
-          title: 'View Number',
-          condition: ({ instance }) => instance && instance.ViewNumber,
-          contentF: ({ instance }) => instance.ViewNumber,
-        },
       ],
     },
   },
-  showStudyList: false,
-  maxNumberOfWebWorkers: 3,
+  showStudyList: true,
+  maxNumberOfWebWorkers: 4,
   omitQuotationForMultipartRequest: true,
   showWarningMessageForCrossOrigin: true,
   showCPUFallbackMessage: true,
@@ -121,9 +90,9 @@ window.config = {
       configuration: {
         friendlyName: 'orthanc Server',
         name: 'dicomweb',
-        wadoUriRoot: 'https://[server].futurepacs.com/orthanc/dicom-web',
-        qidoRoot: 'https://[server].futurepacs.com/orthanc/dicom-web',
-        wadoRoot: 'https://[server].futurepacs.com/orthanc/dicom-web',
+        wadoUriRoot: 'https://ssoback.futurepacs.com/orthanc/dicom-web',
+        qidoRoot: 'https://ssoback.futurepacs.com/orthanc/dicom-web',
+        wadoRoot: 'https://ssoback.futurepacs.com/orthanc/dicom-web',
         qidoSupportsIncludeField: false,
         supportsReject: false,
         imageRendering: 'wadors',
@@ -132,12 +101,13 @@ window.config = {
         supportsFuzzyMatching: false,
         supportsWildcard: true,
         staticWado: true,
-        singlepart: 'bulkdata,video,pdf',
+        singlepart: 'bulkdata',
         bulkDataURI: {
           enabled: true,
           relativeResolution: 'studies',
         },
-        acceptHeader: [ 'multipart/related; type=application/octet-stream; transfer-syntax=*'],
+        acceptHeader: ['multipart/related; type=application/octet-stream; transfer-syntax=*'],
+        omitQuotationForMultipartRequest: true,
         dicomUploadEnabled: true,
       },
     },
@@ -170,7 +140,7 @@ window.config = {
     console.warn('test, navigate to https://ohif.org/');
   },
   whiteLabeling: {
-    createLogoComponentFn: function(React) {
+    createLogoComponentFn: function (React) {
       return React.createElement(
         'a',
         {
