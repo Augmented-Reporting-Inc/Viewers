@@ -1,6 +1,72 @@
 import hpMNGrid from '../../default/src/hpMNGrid';
 import hpMNCompare from '../../default/src/hpCompare';
 
+/**
+ * represents a 3x2 viewport layout configuration. The layout displays LAX, SAX, and AP4 
+ * images in the first row, AP3, AP2 and View 6 images in the second row.
+ * 0,0 1,0 2,0
+ * 1,0 1,1 1,2
+ * It has synchronizers for windowLevel for all images, and
+ * also camera synchronizer for each orientation
+ */
+const stage = {
+  name: 'default',
+  viewportStructure: {
+    layoutType: 'grid',
+    properties: {
+      rows: 2,
+      columns: 3,
+      layoutOptions: [
+        {
+          x: 0,
+          y: 0,
+          width: 1 / 3,
+          height: 1 / 2,
+        },
+        {
+          x: 1 / 3,
+          y: 0,
+          width: 1 / 3,
+          height: 1 / 2,
+        },
+        {
+          x: 2 / 3,
+          y: 0,
+          width: 1 / 3,
+          height: 1 / 2,
+        },
+        {
+          x: 0,
+          y: 1 / 2,
+          width: 1 / 3,
+          height: 1 / 2,
+        },
+        {
+          x: 1 / 3,
+          y: 1 / 2,
+          width: 1 / 3,
+          height: 1 / 2,
+        },
+        {
+          x: 2 / 3,
+          y: 1 / 2,
+          width: 1 / 3,
+          height: 1 / 2,
+        },
+      ],
+    },
+  },
+  viewports: [
+    restLAX,
+    restSAX,
+    restAP4,
+    stageAP3,
+    stageAP2,
+    stageView6,
+  ],
+  createdDate: '2021-02-23T18:32:42.850Z',
+};
+
 const defaultProtocol = {
   id: 'stressecho',
   locked: true,
