@@ -1,5 +1,24 @@
-import hpMNGrid from '../../default/src/hpMNGrid';
-import hpMNCompare from '../../default/src/hpCompare';
+import 
+  restLAX,
+  restSAX,
+  restAP4,
+  restAP2,
+  restAP3,
+  restView6,
+  peakLAX,
+  peakSAX,
+  peakAP4,
+  peakAP2,
+  peakAP3,
+  peakView6,
+  recoveryLAX,
+  recoverySAX,
+  recoveryAP4,
+  recoveryAP2,
+  recoveryAP3,
+  recoveryView6,
+  
+  from '/utils/hpViewports';
 
 /**
  * represents a 3x2 viewport layout configuration. The layout displays LAX, SAX, and AP4 
@@ -9,51 +28,13 @@ import hpMNCompare from '../../default/src/hpCompare';
  * It has synchronizers for windowLevel for all images, and
  * also camera synchronizer for each orientation
  */
-const stage = {
+const rest = {
   name: 'default',
   viewportStructure: {
     layoutType: 'grid',
     properties: {
       rows: 2,
       columns: 3,
-      layoutOptions: [
-        {
-          x: 0,
-          y: 0,
-          width: 1 / 3,
-          height: 1 / 2,
-        },
-        {
-          x: 1 / 3,
-          y: 0,
-          width: 1 / 3,
-          height: 1 / 2,
-        },
-        {
-          x: 2 / 3,
-          y: 0,
-          width: 1 / 3,
-          height: 1 / 2,
-        },
-        {
-          x: 0,
-          y: 1 / 2,
-          width: 1 / 3,
-          height: 1 / 2,
-        },
-        {
-          x: 1 / 3,
-          y: 1 / 2,
-          width: 1 / 3,
-          height: 1 / 2,
-        },
-        {
-          x: 2 / 3,
-          y: 1 / 2,
-          width: 1 / 3,
-          height: 1 / 2,
-        },
-      ],
     },
   },
   viewports: [
@@ -63,20 +44,26 @@ const stage = {
     restAP3,
     restAP2,
     restView6,
-    peakLAX,
-    peakSAX,
-    peakAP4,
-    peakAP3,
-    peakAP2,
-    peakView6,
-    recoveryLAX,
-    recoverySAX,
-    recoveryAP4,
-    recoveryAP3,
-    recoveryAP2,
-    recoveryView6,
   ],
-  createdDate: '2021-02-23T18:32:42.850Z',
+};
+
+const rest = {
+  name: 'default',
+  viewportStructure: {
+    layoutType: 'grid',
+    properties: {
+      rows: 2,
+      columns: 3,
+    },
+  },
+  viewports: [
+    restLAX,
+    restSAX,
+    restAP4,
+    restAP3,
+    restAP2,
+    restView6,
+  ],
 };
 
 const stage = {
