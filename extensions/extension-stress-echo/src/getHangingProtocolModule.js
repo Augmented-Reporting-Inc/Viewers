@@ -1100,10 +1100,8 @@ const hpAP3 = {
           },
           required: true,
         },
-      ],
-    },
-    recoveryAP3DisplaySet: {
-      seriesMatchingRules: [
+      },
+      viewports: [
         {
           attribute: 'StageName',
           constraint: {
