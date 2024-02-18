@@ -1,20 +1,32 @@
-const ctAXIAL = {
+,
+    restSAX,
+    restAP4,
+    restAP3,
+    restAP2,
+    restView6,
+    peakLAX,
+    peakSAX,
+    peakAP4,
+    peakAP3,
+    peakAP2,
+    peakView6,
+    recoveryLAX,
+    recoverySAX,
+    recoveryAP4,
+    recoveryAP3,
+    recoveryAP2,
+    recoveryView6,
+
+const restLAX = {
   viewportOptions: {
-    viewportId: 'ctAXIAL',
-    viewportType: 'volume',
-    orientation: 'axial',
-    toolGroupId: 'ctToolGroup',
+    viewportId: 'restLAX',
+    viewportType: 'stack',
+    toolGroupId: 'default',
     initialImageOptions: {
       // index: 5,
       preset: 'first', // 'first', 'last', 'middle'
     },
     syncGroups: [
-      {
-        type: 'cameraPosition',
-        id: 'axialSync',
-        source: true,
-        target: true,
-      },
       {
         type: 'voi',
         id: 'ctWLSync',
@@ -25,7 +37,7 @@ const ctAXIAL = {
   },
   displaySets: [
     {
-      id: 'ctDisplaySet',
+      id: 'restDisplaySet',
     },
   ],
 };
