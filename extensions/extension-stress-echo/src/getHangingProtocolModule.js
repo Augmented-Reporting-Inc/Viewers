@@ -1,4 +1,4 @@
-import 
+import {
   restLAX,
   restSAX,
   restAP4,
@@ -17,7 +17,7 @@ import
   recoveryAP2,
   recoveryAP3,
   recoveryView6,
-  
+} 
   from '/utils/hpViewports';
 
 /**
@@ -47,8 +47,8 @@ const rest = {
   ],
 };
 
-const rest = {
-  name: 'default',
+const peak = {
+  name: 'peak',
   viewportStructure: {
     layoutType: 'grid',
     properties: {
@@ -57,12 +57,31 @@ const rest = {
     },
   },
   viewports: [
-    restLAX,
-    restSAX,
-    restAP4,
-    restAP3,
-    restAP2,
-    restView6,
+    peakLAX,
+    peakSAX,
+    peakAP4,
+    peakAP3,
+    peakAP2,
+    peakView6,
+  ],
+};
+
+const recovery = {
+  name: 'recovery',
+  viewportStructure: {
+    layoutType: 'grid',
+    properties: {
+      rows: 2,
+      columns: 3,
+    },
+  },
+  viewports: [
+    recoveryLAX,
+    recoverySAX,
+    recoveryAP4,
+    recoveryAP3,
+    recoveryAP2,
+    recoveryView6,
   ],
 };
 
