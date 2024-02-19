@@ -8,7 +8,7 @@ import moreToolsMpr from '../../longitudinal/src/moreToolsMpr';
 const ohif = {
   layout: '@ohif/extension-default.layoutTemplateModule.viewerLayout',
   //  sopClassHandler: '@ohif/extension-default.sopClassHandlerModule.stack',
-  hangingProtocols: '@ohif/extension-default.hangingProtocolModule.default',
+  //  hangingProtocols: '@ohif/extension-default.hangingProtocolModule.default',
   leftPanel: '@ohif/extension-default.panelModule.seriesList',
 };
 
@@ -168,7 +168,7 @@ function modeFactory({ modeConfiguration }) {
     /** List of extensions that are used by the mode */
     extensions: extensionDependencies,
     /** HangingProtocol used by the mode */
-    hangingProtocol: 'default',
+    //    hangingProtocol: 'default',
     hangingProtocols: [stressecho.hangingProtocols],
     /** SopClassHandlers used by the mode */
     sopClassHandlers: [stressecho.sopClassHandler],
