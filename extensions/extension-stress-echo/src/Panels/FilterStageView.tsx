@@ -14,7 +14,7 @@ export default function FilterStageView({ servicesManager, commandsManager }) {
   const { displaySetService, toolGroupService, toolbarService, hangingProtocolService } = (
     servicesManager as ServicesManager
   ).services;
-  const [ptDisplaySet, setPtDisplaySet] = useState(null);
+  const [svDisplaySet, setSvDisplaySet] = useState(null);
 
   const MultiSelect = () => {
     const [firstDropdownValue, setFirstDropdownValue] = useState('');
@@ -98,20 +98,20 @@ export default function FilterStageView({ servicesManager, commandsManager }) {
   };
 
   const getMatchingDisplaySet = viewportMatchDetails => {
-    const ptDisplaySet = commandsManager.runCommand('getMatchingDisplaySet', {
+    const svDisplaySet = commandsManager.runCommand('getMatchingDisplaySet', {
       viewportMatchDetails,
     });
 
-    if (!ptDisplaySet) {
+    if (!svDisplaySet) {
       return;
     }
 
     const metadata = commandsManager.runCommand('getPTMetadata', {
-      ptDisplaySet,
+      svDisplaySet,
     });
 
     return {
-      ptDisplaySet,
+      svDisplaySet,
       metadata,
     };
   };
@@ -129,8 +129,8 @@ export default function FilterStageView({ servicesManager, commandsManager }) {
       return;
     }
 
-    const { ptDisplaySet, metadata } = displaySetInfo;
-    setPtDisplaySet(ptDisplaySet);
+    const { svDisplaySet, metadata } = displaySetInfo;
+    setSvDisplaySet(svDisplaySet);
     setMetadata(metadata);
   }, []);
 
@@ -144,8 +144,8 @@ export default function FilterStageView({ servicesManager, commandsManager }) {
         if (!displaySetInfo) {
           return;
         }
-        const { ptDisplaySet, metadata } = displaySetInfo;
-        setPtDisplaySet(ptDisplaySet);
+        const { svDisplaySet, metadata } = displaySetInfo;
+        setSvDisplaySet(svDisplaySet);
         setMetadata(metadata);
       }
     );
