@@ -17,11 +17,10 @@ import {
   recoveryAP2,
   recoveryAP3,
   recoveryView6,
-} 
-  from '/utils/hpViewports';
+} from './utils/hpViewports';
 
-/**
- * represents a 3x2 viewport layout configuration. The layout displays LAX, SAX, and AP4 
+/** stages
+ * represents a 2x3 viewport layout configuration. The layout displays LAX, SAX, and AP4
  * images in the first row, AP3, AP2 and View 6 images in the second row.
  * 0,0 1,0 2,0
  * 1,0 1,1 1,2
@@ -37,14 +36,7 @@ const rest = {
       columns: 3,
     },
   },
-  viewports: [
-    restLAX,
-    restSAX,
-    restAP4,
-    restAP3,
-    restAP2,
-    restView6,
-  ],
+  viewports: [restLAX, restSAX, restAP4, restAP3, restAP2, restView6],
 };
 
 const peak = {
@@ -56,14 +48,7 @@ const peak = {
       columns: 3,
     },
   },
-  viewports: [
-    peakLAX,
-    peakSAX,
-    peakAP4,
-    peakAP3,
-    peakAP2,
-    peakView6,
-  ],
+  viewports: [peakLAX, peakSAX, peakAP4, peakAP3, peakAP2, peakView6],
 };
 
 const recovery = {
@@ -75,14 +60,7 @@ const recovery = {
       columns: 3,
     },
   },
-  viewports: [
-    recoveryLAX,
-    recoverySAX,
-    recoveryAP4,
-    recoveryAP3,
-    recoveryAP2,
-    recoveryView6,
-  ],
+  viewports: [recoveryLAX, recoverySAX, recoveryAP4, recoveryAP3, recoveryAP2, recoveryView6],
 };
 
 const LAX = {
@@ -94,11 +72,7 @@ const LAX = {
       columns: 3,
     },
   },
-  viewports: [
-    restLAX,
-    peakLAX,
-    recoveryLAX,
-  ],
+  viewports: [restLAX, peakLAX, recoveryLAX],
 };
 
 const SAX = {
@@ -110,11 +84,7 @@ const SAX = {
       columns: 3,
     },
   },
-  viewports: [
-    restSAX,
-    peakSAX,
-    recoverySAX,
-  ],
+  viewports: [restSAX, peakSAX, recoverySAX],
 };
 
 const AP4 = {
@@ -126,11 +96,7 @@ const AP4 = {
       columns: 3,
     },
   },
-  viewports: [
-    restAP4,
-    peakAP4,
-    recoveryAP4,
-  ],
+  viewports: [restAP4, peakAP4, recoveryAP4],
 };
 
 const AP2 = {
@@ -142,11 +108,7 @@ const AP2 = {
       columns: 3,
     },
   },
-  viewports: [
-    restAP2,
-    peakAP2,
-    recoveryAP2,
-  ],
+  viewports: [restAP2, peakAP2, recoveryAP2],
 };
 
 const AP3 = {
@@ -158,11 +120,7 @@ const AP3 = {
       columns: 3,
     },
   },
-  viewports: [
-    restAP3,
-    peakAP3,
-    recoveryAP3,
-  ],
+  viewports: [restAP3, peakAP3, recoveryAP3],
 };
 
 const View6 = {
@@ -174,15 +132,12 @@ const View6 = {
       columns: 3,
     },
   },
-  viewports: [
-    restView6,
-    peakView6,
-    recoveryView6,
-  ],
+  viewports: [restView6, peakView6, recoveryView6],
 };
 
-const defaultProtocol = {
-  id: 'stressecho',
+// protocol definition
+const stressecho = {
+  id: 'extension-stress-echo.hangingProtocolModule.stressecho',
   locked: true,
   // Don't store this hanging protocol as it applies to the currently active
   // display set by default
@@ -209,7 +164,8 @@ const defaultProtocol = {
     },
     displaySets: [
       {
-        id: 'defaultDisplaySetId',
+        //        id: 'defaultDisplaySetId',
+        id: ['restDisplaySet', 'peakDisplaySet', 'recoveryDisplaySet'],
         //        matchedDisplaySetsIndex: -1,
       },
     ],
@@ -239,61 +195,87 @@ const defaultProtocol = {
       // Can be used to select matching studies
       // studyMatchingRules: [],
     },
-  },
-  stages: [
-    {
-      name: 'default',
-      viewportStructure: {
-        layoutType: 'grid',
-        properties: {
-          rows: 1,
-          columns: 1,
-        },
-      },
-      viewports: [
+    restDisplaySet: {
+      // Matches displaysets, NOT series
+      seriesMatchingRules: [
+        // Try to match series with images by default, to prevent weird display
+        // on SEG/SR containing studies
+        //        {
+        //          attribute: 'numImageFrames',
+        //          constraint: {
+        //            greaterThan: { value: 0 },
+        //          },
+        //        },
+        // This display set will select the specified items by preference
+        // It has no affect if nothing is specified in the URL.
         {
-          viewportOptions: {
-            viewportType: 'stack',
-            viewportId: 'default',
-            toolGroupId: 'default',
-            // This will specify the initial image options index if it matches in the URL
-            // and will otherwise not specify anything.
-            initialImageOptions: {
-              custom: 'sopInstanceLocation',
-            },
-            // Other options for initialImageOptions, which can be included in the default
-            // custom attribute, or can be provided directly.
-            //   index: 180,
-            //   preset: 'middle', // 'first', 'last', 'middle'
-            // },
+          attribute: 'isDisplaySetFromUrl',
+          weight: 10,
+          constraint: {
+            equals: true,
           },
-          displaySets: [
-            {
-              id: 'defaultDisplaySetId',
-            },
-          ],
         },
       ],
-      createdDate: '2021-02-23T18:32:42.850Z',
+      // Can be used to select matching studies
+      // studyMatchingRules: [],
     },
-  ],
+    peakDisplaySet: {
+      // Matches displaysets, NOT series
+      seriesMatchingRules: [
+        // Try to match series with images by default, to prevent weird display
+        // on SEG/SR containing studies
+        //        {
+        //          attribute: 'numImageFrames',
+        //          constraint: {
+        //            greaterThan: { value: 0 },
+        //          },
+        //        },
+        // This display set will select the specified items by preference
+        // It has no affect if nothing is specified in the URL.
+        {
+          attribute: 'isDisplaySetFromUrl',
+          weight: 10,
+          constraint: {
+            equals: true,
+          },
+        },
+      ],
+      // Can be used to select matching studies
+      // studyMatchingRules: [],
+    },
+    recoveryDisplaySet: {
+      // Matches displaysets, NOT series
+      seriesMatchingRules: [
+        // Try to match series with images by default, to prevent weird display
+        // on SEG/SR containing studies
+        //        {
+        //          attribute: 'numImageFrames',
+        //          constraint: {
+        //            greaterThan: { value: 0 },
+        //          },
+        //        },
+        // This display set will select the specified items by preference
+        // It has no affect if nothing is specified in the URL.
+        {
+          attribute: 'isDisplaySetFromUrl',
+          weight: 10,
+          constraint: {
+            equals: true,
+          },
+        },
+      ],
+      // Can be used to select matching studies
+      // studyMatchingRules: [],
+    },
+  },
+  stages: [rest, peak, recovery, LAX, SAX, AP4, AP2, AP3, View6],
 };
 
 function getHangingProtocolModule() {
   return [
     {
-      name: defaultProtocol.id,
-      protocol: defaultProtocol,
-    },
-    // Create a MxN hanging protocol available by default
-    {
-      name: hpMNGrid.id,
-      protocol: hpMNGrid,
-    },
-    // Create a MxN comparison hanging protocol available by default
-    {
-      name: hpMNCompare.id,
-      protocol: hpMNCompare,
+      name: stressecho.id,
+      protocol: stressecho,
     },
   ];
 }
