@@ -842,6 +842,26 @@ const recoveryView6 = {
   ],
 };
 
+const peakSAX = {
+  viewportOptions: {
+    viewportId: 'peakSAX',
+    viewportType: 'stack',
+    toolGroupId: 'default',
+    syncGroups: [
+      {
+        type: 'voi',
+        id: 'ctWLSync',
+        source: true,
+        target: true,
+      },
+    ],
+  },
+  displaySets: [
+    {
+      id: 'peakDisplaySet',
+    },
+  ],
+};
 export {
   restLAX,
   restSAX,
