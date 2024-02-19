@@ -169,6 +169,217 @@ const peakSAX= {
     },
   ],
 };
+
+const peakAP4= {
+  viewportOptions: {
+    viewportId: 'peakAP4',
+    viewportType: 'stack',
+    toolGroupId: 'default',
+    syncGroups: [
+      {
+        type: 'voi',
+        id: 'ctWLSync',
+        source: true,
+        target: true,
+      },
+    ],
+  },
+  displaySets: [
+    {
+      id: 'peakDisplaySet',
+    },
+  ],
+};
+
+const peakAP2= {
+  viewportOptions: {
+    viewportId: 'peakAP2',
+    viewportType: 'stack',
+    toolGroupId: 'default',
+    syncGroups: [
+      {
+        type: 'voi',
+        id: 'ctWLSync',
+        source: true,
+        target: true,
+      },
+    ],
+  },
+  displaySets: [
+    {
+      id: 'peakDisplaySet',
+    },
+  ],
+};
+
+const peakAP3= {
+  viewportOptions: {
+    viewportId: 'peakAP3',
+    viewportType: 'stack',
+    toolGroupId: 'default',
+    syncGroups: [
+      {
+        type: 'voi',
+        id: 'ctWLSync',
+        source: true,
+        target: true,
+      },
+    ],
+  },
+  displaySets: [
+    {
+      id: 'peakDisplaySet',
+    },
+  ],
+};
+
+const peakView6= {
+  viewportOptions: {
+    viewportId: 'peakView6',
+    viewportType: 'stack',
+    toolGroupId: 'default',
+    syncGroups: [
+      {
+        type: 'voi',
+        id: 'ctWLSync',
+        source: true,
+        target: true,
+      },
+    ],
+  },
+  displaySets: [
+    {
+      id: 'peakDisplaySet',
+    },
+  ],
+};
+
+const recoveryLAX= {
+  viewportOptions: {
+    viewportId: 'recoveryLAX',
+    viewportType: 'stack',
+    toolGroupId: 'default',
+    syncGroups: [
+      {
+        type: 'voi',
+        id: 'ctWLSync',
+        source: true,
+        target: true,
+      },
+    ],
+  },
+  displaySets: [
+    {
+      id: 'recoveryDisplaySet',
+    },
+  ],
+};
+
+const recoverySAX= {
+  viewportOptions: {
+    viewportId: 'recoverySAX',
+    viewportType: 'stack',
+    toolGroupId: 'default',
+    syncGroups: [
+      {
+        type: 'voi',
+        id: 'ctWLSync',
+        source: true,
+        target: true,
+      },
+    ],
+  },
+  displaySets: [
+    {
+      id: 'recoveryDisplaySet',
+    },
+  ],
+};
+
+const recoveryAP4={
+  viewportOptions: {
+    viewportId: 'recoveryAP4',
+    viewportType: 'stack',
+    toolGroupId: 'default',
+    syncGroups: [
+      {
+        type: 'voi',
+        id: 'ctWLSync',
+        source: true,
+        target: true,
+      },
+    ],
+  },
+  displaySets: [
+    {
+      id: 'recoveryDisplaySet',
+    },
+  ],
+};
+
+const recoveryAP2={
+  viewportOptions: {
+    viewportId: 'recoveryAP2',
+    viewportType: 'stack',
+    toolGroupId: 'default',
+    syncGroups: [
+      {
+        type: 'voi',
+        id: 'ctWLSync',
+        source: true,
+        target: true,
+      },
+    ],
+  },
+  displaySets: [
+    {
+      id: 'recoveryDisplaySet',
+    },
+  ],
+};
+
+const recoveryAP3={
+  viewportOptions: {
+    viewportId: 'recoveryAP3',
+    viewportType: 'stack',
+    toolGroupId: 'default',
+    syncGroups: [
+      {
+        type: 'voi',
+        id: 'ctWLSync',
+        source: true,
+        target: true,
+      },
+    ],
+  },
+  displaySets: [
+    {
+      id: 'recoveryDisplaySet',
+    },
+  ],
+};
+
+const recoveryView6={
+  viewportOptions: {
+    viewportId: 'recoveryView6',
+    viewportType: 'stack',
+    toolGroupId: 'default',
+    syncGroups: [
+      {
+        type: 'voi',
+        id: 'ctWLSync',
+        source: true,
+        target: true,
+      },
+    ],
+  },
+  displaySets: [
+    {
+      id: 'recoveryDisplaySet',
+    },
+  ],
+};
+
 export {
   restLAX,
   restSAX,
