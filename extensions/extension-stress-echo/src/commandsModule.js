@@ -21,8 +21,8 @@ const commandsModule = ({ servicesManager, extensionManager }) => {
           continue;
         }
 
-        svDisplaySet = displaySets.find(displaySet => displaySet.Modality === 'PT');
-
+        svDisplaySet = displaySets.find(displaySet => displaySet.isStress);
+        console.log("svDisplaySet", svDisplaySet);
         if (svDisplaySet) {
           break;
         }
