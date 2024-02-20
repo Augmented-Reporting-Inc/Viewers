@@ -155,6 +155,7 @@ const stressecho = {
         contains: 'US',
       },
     },
+    /**
     {
       attribute: 'StudyDescription',
       constraint: {
@@ -221,6 +222,7 @@ const stressecho = {
         contains: 'View6',
       },
     },
+    */
   ],
   toolGroupIds: ['default'],
   hpInitiationCriteria: { minSeriesLoaded: 1 },
@@ -243,7 +245,7 @@ const stressecho = {
         {
           attribute: 'StageName',
           constraint: {
-            contains: 'Rest',
+            contains: 'POST',
           },
           required: true,
         },

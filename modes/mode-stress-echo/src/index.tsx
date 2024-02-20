@@ -5,6 +5,8 @@ import initToolGroups from '../../longitudinal/src/initToolGroups.js';
 import moreTools from '../../longitudinal/src/moreTools';
 import moreToolsMpr from '../../longitudinal/src/moreToolsMpr';
 
+const NON_IMAGE_MODALITIES = ['SM', 'ECG', 'SR', 'SEG', 'RTSTRUCT'];
+
 const ohif = {
   layout: '@ohif/extension-default.layoutTemplateModule.viewerLayout',
   //  sopClassHandler: '@ohif/extension-default.sopClassHandlerModule.stack',
@@ -135,13 +137,20 @@ function modeFactory({ modeConfiguration }) {
      */
     isValidMode: ({ modalities, study }) => {
       const modalities_list = modalities.split('\\');
-      const description = study.description;
 
-      const isValid =
+      // Exclude non-image modalities
+      return !!modalities_list.filter(modality => NON_IMAGE_MODALITIES.indexOf(modality) === -1)
+        .length;
+      /** const description = study.description;
+
+            const isValid =
         (modalities_list.includes('US') && description.match(/stress/i)) ||
         description.match(/dobutamine/i);
+
       return isValid;
+      */
     },
+
     /**
      * Mode Routes are used to define the mode's behavior. A list of Mode Route
      * that includes the mode's path and the layout to be used. The layout will
@@ -179,7 +188,7 @@ function modeFactory({ modeConfiguration }) {
     extensions: extensionDependencies,
     /** HangingProtocol used by the mode */
     //    hangingProtocol: 'default',
-    hangingProtocols: [stressecho.hangingProtocol],
+    hangingProtocol: [stressecho.hangingProtocol],
     /** SopClassHandlers used by the mode */
     sopClassHandlers: [stressecho.sopClassHandler],
     /** hotkeys for mode */
