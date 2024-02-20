@@ -155,35 +155,40 @@ const stressecho = {
         contains: 'US',
       },
     },
-    /**
     {
       attribute: 'StudyDescription',
       constraint: {
-        contains: 'stress',
+        containsI: 'stress',
       },
     },
     {
       attribute: 'StudyDescription',
       constraint: {
-        contains: 'dobutamine',
+        containsI: 'dobutamine',
       },
     },
     {
       attribute: 'StageName',
       constraint: {
-        contains: 'Rest',
+        containsI: 'Rest',
       },
     },
     {
       attribute: 'StageName',
       constraint: {
-        contains: 'Peak',
+        containsI: 'Peak',
       },
     },
     {
       attribute: 'StageName',
       constraint: {
-        contains: 'Recovery',
+        containsI: 'Recovery',
+      },
+    },
+    {
+      attribute: 'StageName',
+      constraint: {
+        containsI: 'Post',
       },
     },
     {
@@ -219,10 +224,9 @@ const stressecho = {
     {
       attribute: 'ViewName',
       constraint: {
-        contains: 'View6',
+        containsI: 'View6',
       },
     },
-    */
   ],
   toolGroupIds: ['default'],
   hpInitiationCriteria: { minSeriesLoaded: 1 },
@@ -245,20 +249,20 @@ const stressecho = {
         {
           attribute: 'StageName',
           constraint: {
-            contains: 'POST',
+            containsI: 'Rest',
           },
           required: true,
         },
         {
           attribute: 'StudyDescription',
           constraint: {
-            contains: 'stress',
+            containsI: 'stress',
           },
         },
         {
           attribute: 'StudyDescription',
           constraint: {
-            contains: 'dobutamine',
+            containsI: 'dobutamine',
           },
         },
       ],
@@ -278,20 +282,20 @@ const stressecho = {
         {
           attribute: 'StageName',
           constraint: {
-            contains: 'Peak',
+            containsI: 'Peak',
           },
           required: true,
         },
         {
           attribute: 'StudyDescription',
           constraint: {
-            contains: 'stress',
+            containsI: 'stress',
           },
         },
         {
           attribute: 'StudyDescription',
           constraint: {
-            contains: 'dobutamine',
+            containsI: 'dobutamine',
           },
         },
       ],
@@ -313,20 +317,27 @@ const stressecho = {
         {
           attribute: 'StageName',
           constraint: {
-            contains: 'Recovery',
+            containsI: 'Recovery',
+          },
+          required: true,
+        },
+        {
+          attribute: 'StageName',
+          constraint: {
+            containsI: 'Post',
           },
           required: true,
         },
         {
           attribute: 'StudyDescription',
           constraint: {
-            contains: 'stress',
+            containsI: 'stress',
           },
         },
         {
           attribute: 'StudyDescription',
           constraint: {
-            contains: 'dobutamine',
+            containsI: 'dobutamine',
           },
         },
       ],
