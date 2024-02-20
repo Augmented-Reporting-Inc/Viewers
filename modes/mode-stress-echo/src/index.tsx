@@ -15,7 +15,7 @@ const ohif = {
 const stressecho = {
   rightPanel: 'extension-stress-echo.panelModule.filterStageView',
   sopClassHandler: 'extension-stress-echo.sopClassHandlerModule.stressecho',
-  hangingProtocols: 'extension-stress-echo.hangingProtocolModule.stressecho',
+  hangingProtocol: 'extension-stress-echo.hangingProtocolModule.stressecho',
 };
 
 const cornerstone = {
@@ -56,6 +56,7 @@ function modeFactory({ modeConfiguration }) {
         toolGroupService,
         panelService,
         customizationService,
+        displaySetService,
       } = servicesManager.services;
 
       measurementService.clearMeasurements();
@@ -132,7 +133,15 @@ function modeFactory({ modeConfiguration }) {
      * A boolean return value that indicates whether the mode is valid for the
      * modalities of the selected studies. For instance a PET/CT mode should be
      */
-    isValidMode: ({ modalities }) => true,
+    isValidMode: ({ modalities, study }) => {
+      const modalities_list = modalities.split('\\');
+      const description = study.description;
+
+      const isValid =
+        (modalities_list.includes('US') && description.match(/stress/i)) ||
+        description.match(/dobutamine/i);
+      return isValid;
+    },
     /**
      * Mode Routes are used to define the mode's behavior. A list of Mode Route
      * that includes the mode's path and the layout to be used. The layout will
@@ -153,6 +162,7 @@ function modeFactory({ modeConfiguration }) {
             id: ohif.layout,
             props: {
               leftPanels: [ohif.leftPanel],
+              leftPanelDefaultClosed: true,
               rightPanels: [stressecho.rightPanel],
               viewports: [
                 {
@@ -169,7 +179,7 @@ function modeFactory({ modeConfiguration }) {
     extensions: extensionDependencies,
     /** HangingProtocol used by the mode */
     //    hangingProtocol: 'default',
-    hangingProtocols: [stressecho.hangingProtocols],
+    hangingProtocols: [stressecho.hangingProtocol],
     /** SopClassHandlers used by the mode */
     sopClassHandlers: [stressecho.sopClassHandler],
     /** hotkeys for mode */
