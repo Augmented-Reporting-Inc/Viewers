@@ -1,6 +1,6 @@
 import { classes } from '@ohif/core';
 
-const metadataProvider = classes.MetadataProvider;
+// const metadataProvider = classes.MetadataProvider;
 
 const commandsModule = ({ servicesManager, extensionManager }) => {
   const { displaySetService } = servicesManager.services;
@@ -30,25 +30,7 @@ const commandsModule = ({ servicesManager, extensionManager }) => {
 
       return svDisplaySet;
     },
-    getPTMetadata: ({ svDisplaySet }) => {
-      const dataSource = extensionManager.getDataSources()[0];
-      const imageIds = dataSource.getImageIdsForDisplaySet(svDisplaySet);
 
-      const firstImageId = imageIds[0];
-      const instance = metadataProvider.get('instance', firstImageId);
-      if (instance.Modality !== 'PT') {
-        return;
-      }
-
-      const metadata = {
-        SeriesTime: instance.SeriesTime,
-        Modality: instance.Modality,
-        PatientSex: instance.PatientSex,
-        PatientWeight: instance.PatientWeight,
-      };
-
-      return metadata;
-    },
   };
 
   const definitions = {
@@ -57,17 +39,12 @@ const commandsModule = ({ servicesManager, extensionManager }) => {
       storeContexts: [],
       options: {},
     },
-    getPTMetadata: {
-      commandFn: actions.getPTMetadata,
-      storeContexts: [],
-      options: {},
-    },
   };
 
   return {
     actions,
     definitions,
-    defaultContext: 'TMTV:CORNERSTONE',
+    defaultContext: 'STRESSECHO:CORNERSTONE',
   };
 };
 
