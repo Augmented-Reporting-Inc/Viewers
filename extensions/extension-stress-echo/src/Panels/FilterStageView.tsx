@@ -106,13 +106,8 @@ export default function FilterStageView({ servicesManager, commandsManager }) {
       return;
     }
 
-    const metadata = commandsManager.runCommand('getPTMetadata', {
-      svDisplaySet,
-    });
-
     return {
       svDisplaySet,
-      metadata,
     };
   };
 
@@ -129,9 +124,8 @@ export default function FilterStageView({ servicesManager, commandsManager }) {
       return;
     }
 
-    const { svDisplaySet, metadata } = displaySetInfo;
+    const { svDisplaySet } = displaySetInfo;
     setSvDisplaySet(svDisplaySet);
-    setMetadata(metadata);
   }, []);
 
   // get the patientMetadata from the StudyInstanceUIDs and update the state
@@ -144,9 +138,8 @@ export default function FilterStageView({ servicesManager, commandsManager }) {
         if (!displaySetInfo) {
           return;
         }
-        const { svDisplaySet, metadata } = displaySetInfo;
+        const { svDisplaySet } = displaySetInfo;
         setSvDisplaySet(svDisplaySet);
-        setMetadata(metadata);
       }
     );
     return () => {
