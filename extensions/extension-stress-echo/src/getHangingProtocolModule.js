@@ -147,96 +147,149 @@ const stressecho = {
   modifiedDate: '2023-04-01',
   availableTo: {},
   editableBy: {},
-  protocolMatchingRules: [],
+  imageLoadStrategy: 'interleaveTopToBottom', // "default" , "interleaveTopToBottom",  "interleaveCenter"
+  protocolMatchingRules: [
+    {
+      attribute: 'ModalitiesInStudy',
+      constraint: {
+        contains: 'US',
+      },
+    },
+    {
+      attribute: 'StudyDescription',
+      constraint: {
+        contains: 'stress',
+      },
+    },
+    {
+      attribute: 'StudyDescription',
+      constraint: {
+        contains: 'dobutamine',
+      },
+    },
+    {
+      attribute: 'StageName',
+      constraint: {
+        contains: 'Rest',
+      },
+    },
+    {
+      attribute: 'StageName',
+      constraint: {
+        contains: 'Peak',
+      },
+    },
+    {
+      attribute: 'StageName',
+      constraint: {
+        contains: 'Recovery',
+      },
+    },
+    {
+      attribute: 'ViewName',
+      constraint: {
+        contains: 'LAX',
+      },
+    },
+    {
+      attribute: 'ViewName',
+      constraint: {
+        contains: 'SAX',
+      },
+    },
+    {
+      attribute: 'ViewName',
+      constraint: {
+        contains: 'AP4',
+      },
+    },
+    {
+      attribute: 'ViewName',
+      constraint: {
+        contains: 'AP2',
+      },
+    },
+    {
+      attribute: 'ViewName',
+      constraint: {
+        contains: 'AP3',
+      },
+    },
+    {
+      attribute: 'ViewName',
+      constraint: {
+        contains: 'View6',
+      },
+    },
+  ],
   toolGroupIds: ['default'],
   hpInitiationCriteria: { minSeriesLoaded: 1 },
   // -1 would be used to indicate active only, whereas other values are
   // the number of required priors referenced - so 0 means active with
   // 0 or more priors.
-  numberOfPriorsReferenced: 0,
-  // Default viewport is used to define the viewport when
-  // additional viewports are added using the layout tool
-  defaultViewport: {
-    viewportOptions: {
-      viewportType: 'stack',
-      toolGroupId: 'default',
-      allowUnmatchedView: true,
-    },
-    displaySets: [
-      {
-        //        id: 'defaultDisplaySetId',
-        id: ['restDisplaySet', 'peakDisplaySet', 'recoveryDisplaySet'],
-        //        matchedDisplaySetsIndex: -1,
-      },
-    ],
-  },
   displaySetSelectors: {
-    defaultDisplaySetId: {
-      // Matches displaysets, NOT series
-      seriesMatchingRules: [
-        // Try to match series with images by default, to prevent weird display
-        // on SEG/SR containing studies
-        //        {
-        //          attribute: 'numImageFrames',
-        //          constraint: {
-        //            greaterThan: { value: 0 },
-        //          },
-        //        },
-        // This display set will select the specified items by preference
-        // It has no affect if nothing is specified in the URL.
-        {
-          attribute: 'isDisplaySetFromUrl',
-          weight: 10,
-          constraint: {
-            equals: true,
-          },
-        },
-      ],
-      // Can be used to select matching studies
-      // studyMatchingRules: [],
-    },
     restDisplaySet: {
       // Matches displaysets, NOT series
       seriesMatchingRules: [
-        // Try to match series with images by default, to prevent weird display
-        // on SEG/SR containing studies
-        //        {
-        //          attribute: 'numImageFrames',
-        //          constraint: {
-        //            greaterThan: { value: 0 },
-        //          },
-        //        },
-        // This display set will select the specified items by preference
-        // It has no affect if nothing is specified in the URL.
         {
-          attribute: 'isDisplaySetFromUrl',
-          weight: 10,
+          attribute: 'Modality',
           constraint: {
-            equals: true,
+            equals: {
+              value: 'US',
+            },
+          },
+          required: true,
+        },
+        {
+          attribute: 'StageName',
+          constraint: {
+            contains: 'Rest',
+          },
+          required: true,
+        },
+        {
+          attribute: 'StudyDescription',
+          constraint: {
+            contains: 'stress',
+          },
+        },
+        {
+          attribute: 'StudyDescription',
+          constraint: {
+            contains: 'dobutamine',
           },
         },
       ],
-      // Can be used to select matching studies
-      // studyMatchingRules: [],
     },
     peakDisplaySet: {
       // Matches displaysets, NOT series
       seriesMatchingRules: [
-        // Try to match series with images by default, to prevent weird display
-        // on SEG/SR containing studies
-        //        {
-        //          attribute: 'numImageFrames',
-        //          constraint: {
-        //            greaterThan: { value: 0 },
-        //          },
-        //        },
-        // This display set will select the specified items by preference
-        // It has no affect if nothing is specified in the URL.
         {
-          attribute: 'isDisplaySetFromUrl',
-          weight: 10,
+          attribute: 'Modality',
           constraint: {
-            equals: true,
+            equals: {
+              value: 'US',
+            },
+          },
+          required: true,
+        },
+        {
+          attribute: 'StageName',
+          constraint: {
+            contains: 'Peak',
+          },
+          required: true,
+        },
+        {
+          attribute: 'StudyDescription',
+          constraint: {
+            contains: 'stress',
+          },
+        },
+        {
+          attribute: 'StudyDescription',
+          constraint: {
+            contains: 'dobutamine',
           },
         },
       ],
@@ -246,21 +299,32 @@ const stressecho = {
     recoveryDisplaySet: {
       // Matches displaysets, NOT series
       seriesMatchingRules: [
-        // Try to match series with images by default, to prevent weird display
-        // on SEG/SR containing studies
-        //        {
-        //          attribute: 'numImageFrames',
-        //          constraint: {
-        //            greaterThan: { value: 0 },
-        //          },
-        //        },
-        // This display set will select the specified items by preference
-        // It has no affect if nothing is specified in the URL.
         {
-          attribute: 'isDisplaySetFromUrl',
-          weight: 10,
+          attribute: 'Modality',
           constraint: {
-            equals: true,
+            equals: {
+              value: 'US',
+            },
+          },
+          required: true,
+        },
+        {
+          attribute: 'StageName',
+          constraint: {
+            contains: 'Recovery',
+          },
+          required: true,
+        },
+        {
+          attribute: 'StudyDescription',
+          constraint: {
+            contains: 'stress',
+          },
+        },
+        {
+          attribute: 'StudyDescription',
+          constraint: {
+            contains: 'dobutamine',
           },
         },
       ],
