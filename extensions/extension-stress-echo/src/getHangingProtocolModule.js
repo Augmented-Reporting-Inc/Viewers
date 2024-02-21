@@ -1167,6 +1167,17 @@ const hpAP2 = {
         {
           attribute: 'ViewName',
           constraint: {
+            containsI: 'LAX',
+          },
+          required: true,
+        },
+      ],
+    },
+    recoveryAP4DisplaySet: {
+      seriesMatchingRules: [
+        {
+          attribute: 'ViewName',
+          constraint: {
             containsI: 'AP3',
           },
           required: true,
