@@ -1205,8 +1205,337 @@ const hpAP2 = {
         },
       ],
     },
-    recoveryAP2DisplaySet: {
-    peakView6DisplaySet: {
+    restAP2DisplaySet: {
+      // Matches displaysets, NOT series
+      seriesMatchingRules: [
+        {
+          attribute: 'Modality',
+          constraint: {
+            equals: {
+              value: 'US',
+            },
+          },
+          required: true,
+        },
+        {
+          attribute: 'StageName',
+          constraint: {
+            containsI: 'Rest',
+          },
+          required: true,
+        },
+        {
+          attribute: 'ViewName',
+          constraint: {
+            containsI: 'AP2',
+          },
+          required: true,
+        },
+        {
+          attribute: 'StudyDescription',
+          constraint: {
+            containsI: 'stress',
+          },
+        },
+        {
+          attribute: 'StudyDescription',
+          constraint: {
+            containsI: 'dobutamine',
+          },
+        },
+      ],
+    },
+    restAP3DisplaySet: {
+      // Matches displaysets, NOT series
+      seriesMatchingRules: [
+        {
+          attribute: 'Modality',
+          constraint: {
+            equals: {
+              value: 'US',
+            },
+          },
+          required: true,
+        },
+        {
+          attribute: 'StageName',
+          constraint: {
+            containsI: 'Rest',
+          },
+          required: true,
+        },
+        {
+          attribute: 'ViewName',
+          constraint: {
+            containsI: 'AP3',
+          },
+          required: true,
+        },
+        {
+          attribute: 'StudyDescription',
+          constraint: {
+            containsI: 'stress',
+          },
+        },
+        {
+          attribute: 'StudyDescription',
+          constraint: {
+            containsI: 'dobutamine',
+          },
+        },
+      ],
+    },
+    restView6DisplaySet: {
+      // Matches displaysets, NOT series
+      seriesMatchingRules: [
+        {
+          attribute: 'Modality',
+          constraint: {
+            equals: {
+              value: 'US',
+            },
+          },
+          required: true,
+        },
+        {
+          attribute: 'StageName',
+          constraint: {
+            containsI: 'Rest',
+          },
+          required: true,
+        },
+        {
+          attribute: 'ViewName',
+          constraint: {
+            containsI: 'View6',
+          },
+          required: true,
+        },
+        {
+          attribute: 'StudyDescription',
+          constraint: {
+            containsI: 'stress',
+          },
+        },
+        {
+          attribute: 'StudyDescription',
+          constraint: {
+            containsI: 'dobutamine',
+          },
+        },
+      ],
+    },
+    peakLAXDisplaySet: {
+      // Matches displaysets, NOT series
+      seriesMatchingRules: [
+        {
+          attribute: 'Modality',
+          constraint: {
+            equals: {
+              value: 'US',
+            },
+          },
+          required: true,
+        },
+        {
+          attribute: 'StageName',
+          constraint: {
+            containsI: 'Peak',
+          },
+          required: true,
+        },
+        {
+          attribute: 'ViewName',
+          constraint: {
+            containsI: 'LAX',
+          },
+          required: true,
+        },
+        {
+          attribute: 'StudyDescription',
+          constraint: {
+            containsI: 'stress',
+          },
+        },
+        {
+          attribute: 'StudyDescription',
+          constraint: {
+            containsI: 'dobutamine',
+          },
+        },
+      ],
+      // Can be used to select matching studies
+      // studyMatchingRules: [],
+    },
+    peakSAXDisplaySet: {
+      // Matches displaysets, NOT series
+      seriesMatchingRules: [
+        {
+          attribute: 'Modality',
+          constraint: {
+            equals: {
+              value: 'US',
+            },
+          },
+          required: true,
+        },
+        {
+          attribute: 'StageName',
+          constraint: {
+            containsI: 'Peak',
+          },
+          required: true,
+        },
+        {
+          attribute: 'ViewName',
+          constraint: {
+            containsI: 'SAX',
+          },
+          required: true,
+        },
+        {
+          attribute: 'StudyDescription',
+          constraint: {
+            containsI: 'stress',
+          },
+        },
+        {
+          attribute: 'StudyDescription',
+          constraint: {
+            containsI: 'dobutamine',
+          },
+        },
+      ],
+      // Can be used to select matching studies
+      // studyMatchingRules: [],
+    },
+        peakLAXDisplaySet: {
+      // Matches displaysets, NOT series
+      seriesMatchingRules: [
+        {
+          attribute: 'Modality',
+          constraint: {
+            equals: {
+              value: 'US',
+            },
+          },
+          required: true,
+        },
+        {
+          attribute: 'StageName',
+          constraint: {
+            containsI: 'Peak',
+          },
+          required: true,
+        },
+        {
+          attribute: 'ViewName',
+          constraint: {
+            containsI: 'LAX',
+          },
+          required: true,
+        },
+        {
+          attribute: 'StudyDescription',
+          constraint: {
+            containsI: 'stress',
+          },
+        },
+        {
+          attribute: 'StudyDescription',
+          constraint: {
+            containsI: 'dobutamine',
+          },
+        },
+      ],
+      // Can be used to select matching studies
+      // studyMatchingRules: [],
+    },
+        peakLAXDisplaySet: {
+      // Matches displaysets, NOT series
+      seriesMatchingRules: [
+        {
+          attribute: 'Modality',
+          constraint: {
+            equals: {
+              value: 'US',
+            },
+          },
+          required: true,
+        },
+        {
+          attribute: 'StageName',
+          constraint: {
+            containsI: 'Peak',
+          },
+          required: true,
+        },
+        {
+          attribute: 'ViewName',
+          constraint: {
+            containsI: 'LAX',
+          },
+          required: true,
+        },
+        {
+          attribute: 'StudyDescription',
+          constraint: {
+            containsI: 'stress',
+          },
+        },
+        {
+          attribute: 'StudyDescription',
+          constraint: {
+            containsI: 'dobutamine',
+          },
+        },
+      ],
+      // Can be used to select matching studies
+      // studyMatchingRules: [],
+    },
+        peakLAXDisplaySet: {
+      // Matches displaysets, NOT series
+      seriesMatchingRules: [
+        {
+          attribute: 'Modality',
+          constraint: {
+            equals: {
+              value: 'US',
+            },
+          },
+          required: true,
+        },
+        {
+          attribute: 'StageName',
+          constraint: {
+            containsI: 'Peak',
+          },
+          required: true,
+        },
+        {
+          attribute: 'ViewName',
+          constraint: {
+            containsI: 'LAX',
+          },
+          required: true,
+        },
+        {
+          attribute: 'StudyDescription',
+          constraint: {
+            containsI: 'stress',
+          },
+        },
+        {
+          attribute: 'StudyDescription',
+          constraint: {
+            containsI: 'dobutamine',
+          },
+        },
+      ],
+      // Can be used to select matching studies
+      // studyMatchingRules: [],
+    },
+        peakLAXDisplaySet: {
       // Matches displaysets, NOT series
       seriesMatchingRules: [
         {
@@ -1347,17 +1676,6 @@ const hpLAX = {
           },
           required: true,
         },
-      ],
-    },
-    recoveryLAXDisplaySet: {
-      seriesMatchingRules: [
-        {
-          attribute: 'StageName',
-          constraint: {
-            containsI: ['Recovery', 'Post'],
-          },
-          required: true,
-        },
         {
           attribute: 'ViewName',
           constraint: {
@@ -1365,31 +1683,40 @@ const hpLAX = {
           },
           required: true,
         },
+        {
+          attribute: 'StudyDescription',
+          constraint: {
+            containsI: 'dobutamine',
+          },
+          required: true,
+        },
       ],
+      // Can be used to select matching studies
+      // studyMatchingRules: [],
     },
-  },
-  stages: [LAX],
-};
-
-const hpSAX = {
-  id: 'extension-stress-echo.hangingProtocolModule.hpSAX',
-  locked: true,
-  name: 'hpSAX',
-  createdDate: '2021-02-23T19:22:08.894Z',
-  modifiedDate: '2023-04-01',
-  availableTo: {},
-  editableBy: {},
-  imageLoadStrategy: 'interleaveTopToBottom',
-  protocolMatchingRules: [],
-  toolGroupIds: ['default'],
-  hpInitiationCriteria: { minSeriesLoaded: 1 },
-  displaySetSelectors: {
-    restSAXDisplaySet: {
+    recoveryDisplaySet: {
+      // Matches displaysets, NOT series
       seriesMatchingRules: [
         {
           attribute: 'StageName',
           constraint: {
-            containsI: ['Rest', 'Baseline'],
+            equals: {
+              value: 'US',
+            },
+          },
+          required: true,
+        },
+        {
+          attribute: 'StageName',
+          constraint: {
+            containsI: 'Recovery',
+          },
+          required: true,
+        },
+        {
+          attribute: 'StageName',
+          constraint: {
+            containsI: 'Post',
           },
           required: true,
         },
@@ -1398,332 +1725,19 @@ const hpSAX = {
           constraint: {
             containsI: 'SAX',
           },
-          required: true,
+        },
+        {
+          attribute: 'StudyDescription',
+          constraint: {
+            containsI: 'dobutamine',
+          },
         },
       ],
-    },
-    peakSAXDisplaySet: {
-      seriesMatchingRules: [
-        {
-          attribute: 'StageName',
-          constraint: {
-            containsI: 'Peak',
-          },
-          required: true,
-        },
-        {
-          attribute: 'ViewName',
-          constraint: {
-            containsI: 'SAX',
-          },
-          required: true,
-        },
-      ],
-    },
-    recoverySAXDisplaySet: {
-      seriesMatchingRules: [
-        {
-          attribute: 'StageName',
-          constraint: {
-            containsI: ['Recovery', 'Post'],
-          },
-          required: true,
-        },
-        {
-          attribute: 'ViewName',
-          constraint: {
-            containsI: 'SAX',
-          },
-          required: true,
-        },
-      ],
+      // Can be used to select matching studies
+      // studyMatchingRules: [],
     },
   },
-  stages: [SAX],
-};
-
-const hpAP4 = {
-  id: 'extension-stress-echo.hangingProtocolModule.hpAP4',
-  locked: true,
-  name: 'hpAP4',
-  createdDate: '2021-02-23T19:22:08.894Z',
-  modifiedDate: '2023-04-01',
-  availableTo: {},
-  editableBy: {},
-  imageLoadStrategy: 'interleaveTopToBottom',
-  protocolMatchingRules: [],
-  toolGroupIds: ['default'],
-  hpInitiationCriteria: { minSeriesLoaded: 1 },
-  displaySetSelectors: {
-    restAP4DisplaySet: {
-      seriesMatchingRules: [
-        {
-          attribute: 'StageName',
-          constraint: {
-            containsI: ['Rest', 'Baseline'],
-          },
-          required: true,
-        },
-        {
-          attribute: 'ViewName',
-          constraint: {
-            containsI: ['AP4', '4Ch'],
-          },
-          required: true,
-        },
-      ],
-    },
-    peakAP4DisplaySet: {
-      seriesMatchingRules: [
-        {
-          attribute: 'StageName',
-          constraint: {
-            containsI: 'Peak',
-          },
-          required: true,
-        },
-        {
-          attribute: 'ViewName',
-          constraint: {
-            containsI: ['AP4', '4Ch'],
-          },
-          required: true,
-        },
-      ],
-    },
-    recoveryAP4DisplaySet: {
-      seriesMatchingRules: [
-        {
-          attribute: 'StageName',
-          constraint: {
-            containsI: ['Recovery', 'Post'],
-          },
-          required: true,
-        },
-        {
-          attribute: 'ViewName',
-          constraint: {
-            containsI: ['AP4', '4Ch'],
-          },
-          required: true,
-        },
-      ],
-    },
-  },
-  stages: [AP4],
-};
-
-const hpAP2 = {
-  id: 'extension-stress-echo.hangingProtocolModule.hpAP2',
-  locked: true,
-  name: 'hpAP2',
-  createdDate: '2021-02-23T19:22:08.894Z',
-  modifiedDate: '2023-04-01',
-  availableTo: {},
-  editableBy: {},
-  imageLoadStrategy: 'interleaveTopToBottom',
-  protocolMatchingRules: [],
-  toolGroupIds: ['default'],
-  hpInitiationCriteria: { minSeriesLoaded: 1 },
-  displaySetSelectors: {
-    restAP2DisplaySet: {
-      seriesMatchingRules: [
-        {
-          attribute: 'StageName',
-          constraint: {
-            containsI: ['Rest', 'Baseline'],
-          },
-          required: true,
-        },
-        {
-          attribute: 'ViewName',
-          constraint: {
-            containsI: ['AP2', '2Ch'],
-          },
-          required: true,
-        },
-      ],
-    },
-    peakAP2DisplaySet: {
-      seriesMatchingRules: [
-        {
-          attribute: 'StageName',
-          constraint: {
-            containsI: 'Peak',
-          },
-          required: true,
-        },
-        {
-          attribute: 'ViewName',
-          constraint: {
-            containsI: ['AP2', '2Ch'],
-          },
-          required: true,
-        },
-      ],
-    },
-    recoveryAP2DisplaySet: {
-      seriesMatchingRules: [
-        {
-          attribute: 'StageName',
-          constraint: {
-            containsI: ['Recovery', 'Post'],
-          },
-          required: true,
-        },
-        {
-          attribute: 'ViewName',
-          constraint: {
-            containsI: ['AP2', '2Ch'],
-          },
-          required: true,
-        },
-      ],
-    },
-  },
-  stages: [AP2],
-};
-
-const hpAP3 = {
-  id: 'extension-stress-echo.hangingProtocolModule.hpAP3',
-  locked: true,
-  name: 'hpAP3',
-  createdDate: '2021-02-23T19:22:08.894Z',
-  modifiedDate: '2023-04-01',
-  availableTo: {},
-  editableBy: {},
-  imageLoadStrategy: 'interleaveTopToBottom',
-  protocolMatchingRules: [],
-  toolGroupIds: ['default'],
-  hpInitiationCriteria: { minSeriesLoaded: 1 },
-  displaySetSelectors: {
-    restAP3DisplaySet: {
-      seriesMatchingRules: [
-        {
-          attribute: 'StageName',
-          constraint: {
-            containsI: ['Rest', 'Baseline'],
-          },
-          required: true,
-        },
-        {
-          attribute: 'ViewName',
-          constraint: {
-            containsI: ['AP3', '3Ch'],
-          },
-          required: true,
-        },
-      ],
-    },
-    peakAP3DisplaySet: {
-      seriesMatchingRules: [
-        {
-          attribute: 'StageName',
-          constraint: {
-            containsI: 'Peak',
-          },
-          required: true,
-        },
-        {
-          attribute: 'ViewName',
-          constraint: {
-            containsI: ['AP3', '3Ch'],
-          },
-          required: true,
-        },
-      ],
-    },
-    recoveryAP3DisplaySet: {
-      seriesMatchingRules: [
-        {
-          attribute: 'StageName',
-          constraint: {
-            containsI: ['Recovery', 'Post'],
-          },
-          required: true,
-        },
-        {
-          attribute: 'ViewName',
-          constraint: {
-            containsI: ['AP3', '3Ch'],
-          },
-          required: true,
-        },
-      ],
-    },
-  },
-  stages: [AP3],
-};
-
-const hpView6 = {
-  id: 'extension-stress-echo.hangingProtocolModule.hpView6',
-  locked: true,
-  name: 'hpView6',
-  createdDate: '2021-02-23T19:22:08.894Z',
-  modifiedDate: '2023-04-01',
-  availableTo: {},
-  editableBy: {},
-  imageLoadStrategy: 'interleaveTopToBottom',
-  protocolMatchingRules: [],
-  toolGroupIds: ['default'],
-  hpInitiationCriteria: { minSeriesLoaded: 1 },
-  displaySetSelectors: {
-    restView6DisplaySet: {
-      seriesMatchingRules: [
-        {
-          attribute: 'StageName',
-          constraint: {
-            containsI: ['Rest', 'Baseline'],
-          },
-          required: true,
-        },
-        {
-          attribute: 'ViewName',
-          constraint: {
-            containsI: 'View6',
-          },
-          required: true,
-        },
-      ],
-    },
-    peakView6DisplaySet: {
-      seriesMatchingRules: [
-        {
-          attribute: 'StageName',
-          constraint: {
-            containsI: 'Peak',
-          },
-          required: true,
-        },
-        {
-          attribute: 'ViewName',
-          constraint: {
-            containsI: 'View6',
-          },
-          required: true,
-        },
-      ],
-    },
-    recoveryView6DisplaySet: {
-      seriesMatchingRules: [
-        {
-          attribute: 'StageName',
-          constraint: {
-            containsI: ['Recovery', 'Post'],
-          },
-          required: true,
-        },
-        {
-          attribute: 'ViewName',
-          constraint: {
-            containsI: 'View6',
-          },
-          required: true,
-        },
-      ],
-    },
-  },
-  stages: [View6],
+  stages: [rest, peak, recovery, LAX, SAX, AP4, AP2, AP3, View6],
 };
 
 function getHangingProtocolModule() {
