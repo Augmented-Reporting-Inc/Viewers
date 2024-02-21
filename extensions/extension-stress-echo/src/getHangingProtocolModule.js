@@ -354,7 +354,127 @@ const stressecho = {
         },
       ],
     },  
-    peakDisplaySet: {
+    restAP2DisplaySet: {
+      // Matches displaysets, NOT series
+      seriesMatchingRules: [
+        {
+          attribute: 'Modality',
+          constraint: {
+            equals: {
+              value: 'US',
+            },
+          },
+          required: true,
+        },
+        {
+          attribute: 'StageName',
+          constraint: {
+            containsI: 'Rest',
+          },
+          required: true,
+        },
+        {
+          attribute: 'ViewName',
+          constraint: {
+            containsI: 'AP2',
+          },
+          required: true,
+        },
+        {
+          attribute: 'StudyDescription',
+          constraint: {
+            containsI: 'stress',
+          },
+        },
+        {
+          attribute: 'StudyDescription',
+          constraint: {
+            containsI: 'dobutamine',
+          },
+        },
+      ],
+    },  
+    restAP3DisplaySet: {
+      // Matches displaysets, NOT series
+      seriesMatchingRules: [
+        {
+          attribute: 'Modality',
+          constraint: {
+            equals: {
+              value: 'US',
+            },
+          },
+          required: true,
+        },
+        {
+          attribute: 'StageName',
+          constraint: {
+            containsI: 'Rest',
+          },
+          required: true,
+        },
+        {
+          attribute: 'ViewName',
+          constraint: {
+            containsI: 'AP3',
+          },
+          required: true,
+        },
+        {
+          attribute: 'StudyDescription',
+          constraint: {
+            containsI: 'stress',
+          },
+        },
+        {
+          attribute: 'StudyDescription',
+          constraint: {
+            containsI: 'dobutamine',
+          },
+        },
+      ],
+    },  
+    restView6DisplaySet: {
+      // Matches displaysets, NOT series
+      seriesMatchingRules: [
+        {
+          attribute: 'Modality',
+          constraint: {
+            equals: {
+              value: 'US',
+            },
+          },
+          required: true,
+        },
+        {
+          attribute: 'StageName',
+          constraint: {
+            containsI: 'Rest',
+          },
+          required: true,
+        },
+        {
+          attribute: 'ViewName',
+          constraint: {
+            containsI: 'View6',
+          },
+          required: true,
+        },
+        {
+          attribute: 'StudyDescription',
+          constraint: {
+            containsI: 'stress',
+          },
+        },
+        {
+          attribute: 'StudyDescription',
+          constraint: {
+            containsI: 'dobutamine',
+          },
+        },
+      ],
+    },  
+    peakLAXDisplaySet: {
       // Matches displaysets, NOT series
       seriesMatchingRules: [
         {
@@ -370,6 +490,223 @@ const stressecho = {
           attribute: 'StageName',
           constraint: {
             containsI: 'Peak',
+          },
+          required: true,
+        },
+        {
+          attribute: 'ViewName',
+          constraint: {
+            containsI: 'LAX',
+          },
+          required: true,
+        },
+        {
+          attribute: 'StudyDescription',
+          constraint: {
+            containsI: 'stress',
+          },
+        },
+        {
+          attribute: 'StudyDescription',
+          constraint: {
+            containsI: 'dobutamine',
+          },
+        },
+      ],
+      // Can be used to select matching studies
+      // studyMatchingRules: [],
+    },
+    peakSAXDisplaySet: {
+      // Matches displaysets, NOT series
+      seriesMatchingRules: [
+        {
+          attribute: 'Modality',
+          constraint: {
+            equals: {
+              value: 'US',
+            },
+          },
+          required: true,
+        },
+        {
+          attribute: 'StageName',
+          constraint: {
+            containsI: 'Peak',
+          },
+          required: true,
+        },
+        {
+          attribute: 'ViewName',
+          constraint: {
+            containsI: 'SAX',
+          },
+          required: true,
+        },
+        {
+          attribute: 'StudyDescription',
+          constraint: {
+            containsI: 'stress',
+          },
+        },
+        {
+          attribute: 'StudyDescription',
+          constraint: {
+            containsI: 'dobutamine',
+          },
+        },
+      ],
+      // Can be used to select matching studies
+      // studyMatchingRules: [],
+    },
+        peakLAXDisplaySet: {
+      // Matches displaysets, NOT series
+      seriesMatchingRules: [
+        {
+          attribute: 'Modality',
+          constraint: {
+            equals: {
+              value: 'US',
+            },
+          },
+          required: true,
+        },
+        {
+          attribute: 'StageName',
+          constraint: {
+            containsI: 'Peak',
+          },
+          required: true,
+        },
+        {
+          attribute: 'ViewName',
+          constraint: {
+            containsI: 'LAX',
+          },
+          required: true,
+        },
+        {
+          attribute: 'StudyDescription',
+          constraint: {
+            containsI: 'stress',
+          },
+        },
+        {
+          attribute: 'StudyDescription',
+          constraint: {
+            containsI: 'dobutamine',
+          },
+        },
+      ],
+      // Can be used to select matching studies
+      // studyMatchingRules: [],
+    },
+        peakLAXDisplaySet: {
+      // Matches displaysets, NOT series
+      seriesMatchingRules: [
+        {
+          attribute: 'Modality',
+          constraint: {
+            equals: {
+              value: 'US',
+            },
+          },
+          required: true,
+        },
+        {
+          attribute: 'StageName',
+          constraint: {
+            containsI: 'Peak',
+          },
+          required: true,
+        },
+        {
+          attribute: 'ViewName',
+          constraint: {
+            containsI: 'LAX',
+          },
+          required: true,
+        },
+        {
+          attribute: 'StudyDescription',
+          constraint: {
+            containsI: 'stress',
+          },
+        },
+        {
+          attribute: 'StudyDescription',
+          constraint: {
+            containsI: 'dobutamine',
+          },
+        },
+      ],
+      // Can be used to select matching studies
+      // studyMatchingRules: [],
+    },
+        peakLAXDisplaySet: {
+      // Matches displaysets, NOT series
+      seriesMatchingRules: [
+        {
+          attribute: 'Modality',
+          constraint: {
+            equals: {
+              value: 'US',
+            },
+          },
+          required: true,
+        },
+        {
+          attribute: 'StageName',
+          constraint: {
+            containsI: 'Peak',
+          },
+          required: true,
+        },
+        {
+          attribute: 'ViewName',
+          constraint: {
+            containsI: 'LAX',
+          },
+          required: true,
+        },
+        {
+          attribute: 'StudyDescription',
+          constraint: {
+            containsI: 'stress',
+          },
+        },
+        {
+          attribute: 'StudyDescription',
+          constraint: {
+            containsI: 'dobutamine',
+          },
+        },
+      ],
+      // Can be used to select matching studies
+      // studyMatchingRules: [],
+    },
+        peakLAXDisplaySet: {
+      // Matches displaysets, NOT series
+      seriesMatchingRules: [
+        {
+          attribute: 'Modality',
+          constraint: {
+            equals: {
+              value: 'US',
+            },
+          },
+          required: true,
+        },
+        {
+          attribute: 'StageName',
+          constraint: {
+            containsI: 'Peak',
+          },
+          required: true,
+        },
+        {
+          attribute: 'ViewName',
+          constraint: {
+            containsI: 'LAX',
           },
           required: true,
         },
