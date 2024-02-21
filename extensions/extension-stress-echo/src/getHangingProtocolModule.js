@@ -824,8 +824,7 @@ const stressecho = {
       // Can be used to select matching studies
       // studyMatchingRules: [],
     },
-  },
-  recoveryAP4DisplaySet: {
+    recoveryAP4DisplaySet: {
       // Matches displaysets, NOT series
       seriesMatchingRules: [
         {
@@ -874,8 +873,7 @@ const stressecho = {
       // Can be used to select matching studies
       // studyMatchingRules: [],
     },
-  },
-  recoveryAP2DisplaySet: {
+    recoveryAP2DisplaySet: {
       // Matches displaysets, NOT series
       seriesMatchingRules: [
         {
@@ -924,8 +922,7 @@ const stressecho = {
       // Can be used to select matching studies
       // studyMatchingRules: [],
     },
-  },
-  recoveryAP3DisplaySet: {
+    recoveryAP3DisplaySet: {
       // Matches displaysets, NOT series
       seriesMatchingRules: [
         {
@@ -974,7 +971,6 @@ const stressecho = {
       // Can be used to select matching studies
       // studyMatchingRules: [],
     },
-  },
     recoveryView6DisplaySet: {
       // Matches displaysets, NOT series
       seriesMatchingRules: [
