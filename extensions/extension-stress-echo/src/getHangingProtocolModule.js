@@ -1409,7 +1409,7 @@ const hpAP2 = {
       // Can be used to select matching studies
       // studyMatchingRules: [],
     },
-        peakLAXDisplaySet: {
+    peakAP4DisplaySet: {
       // Matches displaysets, NOT series
       seriesMatchingRules: [
         {
@@ -1431,7 +1431,7 @@ const hpAP2 = {
         {
           attribute: 'ViewName',
           constraint: {
-            containsI: 'LAX',
+            containsI: 'AP4',
           },
           required: true,
         },
@@ -1451,7 +1451,7 @@ const hpAP2 = {
       // Can be used to select matching studies
       // studyMatchingRules: [],
     },
-        peakLAXDisplaySet: {
+    peakAP2DisplaySet: {
       // Matches displaysets, NOT series
       seriesMatchingRules: [
         {
@@ -1473,7 +1473,7 @@ const hpAP2 = {
         {
           attribute: 'ViewName',
           constraint: {
-            containsI: 'LAX',
+            containsI: 'AP2',
           },
           required: true,
         },
@@ -1492,127 +1492,79 @@ const hpAP2 = {
       ],
       // Can be used to select matching studies
       // studyMatchingRules: [],
-    },
-        peakLAXDisplaySet: {
-      // Matches displaysets, NOT series
-      seriesMatchingRules: [
-        {
-          attribute: 'Modality',
-          constraint: {
-            equals: {
-              value: 'US',
-            },
-          },
-          required: true,
-        },
-        {
-          attribute: 'StageName',
-          constraint: {
-            containsI: 'Peak',
-          },
-          required: true,
-        },
-        {
-          attribute: 'ViewName',
-          constraint: {
-            containsI: 'LAX',
-          },
-          required: true,
-        },
-        {
-          attribute: 'StudyDescription',
-          constraint: {
-            containsI: 'stress',
-          },
-        },
-        {
-          attribute: 'StudyDescription',
-          constraint: {
-            containsI: 'dobutamine',
-          },
-        },
-      ],
-      // Can be used to select matching studies
-      // studyMatchingRules: [],
-    },
-        peakLAXDisplaySet: {
-      // Matches displaysets, NOT series
-      seriesMatchingRules: [
-        {
-          attribute: 'StageName',
-          constraint: {
-            containsI: ['Recovery', 'Post'],
-          },
-          required: true,
-        },
-        {
-          attribute: 'ViewName',
-          constraint: {
-            containsI: ['AP2', '2Ch'],
-          },
-          required: true,
-        },
-      ],
-    },
-  },
-  stages: [AP2],
-};
-
-const hpAP3 = {
-  id: 'extension-stress-echo.hangingProtocolModule.hpAP3',
-  locked: true,
-  name: 'hpAP3',
-  createdDate: '2021-02-23T19:22:08.894Z',
-  modifiedDate: '2023-04-01',
-  availableTo: {},
-  editableBy: {},
-  imageLoadStrategy: 'interleaveTopToBottom',
-  protocolMatchingRules: [],
-  toolGroupIds: ['default'],
-  hpInitiationCriteria: { minSeriesLoaded: 1 },
-  displaySetSelectors: {
-    restAP3DisplaySet: {
-      seriesMatchingRules: [
-        {
-          attribute: 'StageName',
-          constraint: {
-            containsI: ['Rest', 'Baseline'],
-          },
-          required: true,
-        },
-        {
-          attribute: 'ViewName',
-          constraint: {
-            containsI: ['AP3', '3Ch'],
-          },
-          required: true,
-        },
-      ],
     },
     peakAP3DisplaySet: {
+      // Matches displaysets, NOT series
       seriesMatchingRules: [
+        {
+          attribute: 'Modality',
+          constraint: {
+            equals: {
+              value: 'US',
+            },
+          },
+          required: true,
+        },
         {
           attribute: 'StageName',
           constraint: {
-            containsI: ['Recovery', 'Post'],
+            containsI: 'Peak',
           },
           required: true,
         },
         {
           attribute: 'ViewName',
           constraint: {
-            containsI: ['AP3', '3Ch'],
+            containsI: 'AP3',
           },
           required: true,
         },
+        {
+          attribute: 'StudyDescription',
+          constraint: {
+            containsI: 'stress',
+          },
+        },
+        {
+          attribute: 'StudyDescription',
+          constraint: {
+            containsI: 'dobutamine',
+          },
+        },
       ],
+      // Can be used to select matching studies
+      // studyMatchingRules: [],
     },
-    recoveryView6DisplaySet: {
+    peakView6DisplaySet: {
+      // Matches displaysets, NOT series
       seriesMatchingRules: [
+        {
+          attribute: 'Modality',
+          constraint: {
+            equals: {
+              value: 'US',
+            },
+          },
+          required: true,
+        },
         {
           attribute: 'StageName',
           constraint: {
-            containsI: ['Recovery', 'Post'],
+            containsI: 'Recovery',
+          },
+          required: true,
+        },
+        {
+          attribute: 'StageName',
+          constraint: {
+            containsI: 'Post',
+          },
+          required: true,
+        },
+        {
+          attribute: 'ViewName',
+          constraint: {
+            containsI: 'LAX',
           },
           required: true,
         },
@@ -1623,56 +1575,45 @@ const hpAP3 = {
           },
           required: true,
         },
+        {
+          attribute: 'StudyDescription',
+          constraint: {
+            containsI: 'stress',
+          },
+        },
+        {
+          attribute: 'StudyDescription',
+          constraint: {
+            containsI: 'dobutamine',
+          },
+        },
       ],
+      // Can be used to select matching studies
+      // studyMatchingRules: [],
     },
-  },
-  stages: [Recovery],
-};
-
-const hpLAX = {
-  id: 'extension-stress-echo.hangingProtocolModule.hpLAX',
-  locked: true,
-  name: 'hpLAX',
-  createdDate: '2021-02-23T19:22:08.894Z',
-  modifiedDate: '2023-04-01',
-  availableTo: {},
-  editableBy: {},
-  imageLoadStrategy: 'interleaveTopToBottom',
-  protocolMatchingRules: [],
-  toolGroupIds: ['default'],
-  hpInitiationCriteria: { minSeriesLoaded: 1 },
-  displaySetSelectors: {
-    restLAXDisplaySet: {
+    recoveryLAXDisplaySet: {
+      // Matches displaysets, NOT series
       seriesMatchingRules: [
+        {
+          attribute: 'Modality',
+          constraint: {
+            equals: {
+              value: 'US',
+            },
+          },
+          required: true,
+        },
         {
           attribute: 'StageName',
           constraint: {
-            containsI: ['Rest', 'Baseline'],
+            containsI: 'Recovery',
           },
           required: true,
         },
-        {
-          attribute: 'ViewName',
-          constraint: {
-            containsI: 'LAX',
-          },
-          required: true,
-        },
-      ],
-    },
-    peakLAXDisplaySet: {
-      seriesMatchingRules: [
         {
           attribute: 'StageName',
           constraint: {
-            containsI: 'Peak',
-          },
-          required: true,
-        },
-        {
-          attribute: 'ViewName',
-          constraint: {
-            containsI: 'LAX',
+            containsI: 'Post',
           },
           required: true,
         },
@@ -1694,7 +1635,7 @@ const hpLAX = {
       // Can be used to select matching studies
       // studyMatchingRules: [],
     },
-    recoveryDisplaySet: {
+    recoverySAXDisplaySet: {
       // Matches displaysets, NOT series
       seriesMatchingRules: [
         {
@@ -1717,6 +1658,412 @@ const hpLAX = {
           attribute: 'StageName',
           constraint: {
             containsI: 'Post',
+          },
+          required: true,
+        },
+        {
+          attribute: 'ViewName',
+          constraint: {
+            containsI: 'SAX',
+          },
+          required: true,
+        },
+        {
+          attribute: 'StudyDescription',
+          constraint: {
+            containsI: 'stress',
+          },
+        },
+        {
+          attribute: 'StudyDescription',
+          constraint: {
+            containsI: 'dobutamine',
+          },
+        },
+      ],
+      // Can be used to select matching studies
+      // studyMatchingRules: [],
+    },
+    recoverySAXDisplaySet: {
+      // Matches displaysets, NOT series
+      seriesMatchingRules: [
+        {
+          attribute: 'Modality',
+          constraint: {
+            equals: {
+              value: 'US',
+            },
+          },
+          required: true,
+        },
+        {
+          attribute: 'StageName',
+          constraint: {
+            containsI: 'Recovery',
+          },
+          required: true,
+        },
+        {
+          attribute: 'StageName',
+          constraint: {
+            containsI: 'Post',
+          },
+          required: true,
+        },
+        {
+          attribute: 'ViewName',
+          constraint: {
+            containsI: 'SAX',
+          },
+          required: true,
+        },
+        {
+          attribute: 'StudyDescription',
+          constraint: {
+            containsI: 'stress',
+          },
+        },
+        {
+          attribute: 'StudyDescription',
+          constraint: {
+            containsI: 'dobutamine',
+          },
+        },
+      ],
+      // Can be used to select matching studies
+      // studyMatchingRules: [],
+    },
+  },
+  recoveryAP4DisplaySet: {
+      // Matches displaysets, NOT series
+      seriesMatchingRules: [
+        {
+          attribute: 'Modality',
+          constraint: {
+            equals: {
+              value: 'US',
+            },
+          },
+          required: true,
+        },
+        {
+          attribute: 'StageName',
+          constraint: {
+            containsI: 'Recovery',
+          },
+          required: true,
+        },
+        {
+          attribute: 'StageName',
+          constraint: {
+            containsI: 'Post',
+          },
+          required: true,
+        },
+        {
+          attribute: 'ViewName',
+          constraint: {
+            containsI: 'AP4',
+          },
+          required: true,
+        },
+        {
+          attribute: 'StudyDescription',
+          constraint: {
+            containsI: 'stress',
+          },
+        },
+        {
+          attribute: 'StudyDescription',
+          constraint: {
+            containsI: 'dobutamine',
+          },
+        },
+      ],
+      // Can be used to select matching studies
+      // studyMatchingRules: [],
+    },
+  },
+  recoveryAP2DisplaySet: {
+      // Matches displaysets, NOT series
+      seriesMatchingRules: [
+        {
+          attribute: 'Modality',
+          constraint: {
+            equals: {
+              value: 'US',
+            },
+          },
+          required: true,
+        },
+        {
+          attribute: 'StageName',
+          constraint: {
+            containsI: 'Recovery',
+          },
+          required: true,
+        },
+        {
+          attribute: 'StageName',
+          constraint: {
+            containsI: 'Post',
+          },
+          required: true,
+        },
+        {
+          attribute: 'ViewName',
+          constraint: {
+            containsI: 'AP2',
+          },
+          required: true,
+        },
+        {
+          attribute: 'StudyDescription',
+          constraint: {
+            containsI: 'stress',
+          },
+        },
+        {
+          attribute: 'StudyDescription',
+          constraint: {
+            containsI: 'dobutamine',
+          },
+        },
+      ],
+      // Can be used to select matching studies
+      // studyMatchingRules: [],
+    },
+  },
+  recoveryAP3DisplaySet: {
+      // Matches displaysets, NOT series
+      seriesMatchingRules: [
+        {
+          attribute: 'Modality',
+          constraint: {
+            equals: {
+              value: 'US',
+            },
+          },
+          required: true,
+        },
+        {
+          attribute: 'StageName',
+          constraint: {
+            containsI: 'Recovery',
+          },
+          required: true,
+        },
+        {
+          attribute: 'StageName',
+          constraint: {
+            containsI: 'Post',
+          },
+          required: true,
+        },
+        {
+          attribute: 'ViewName',
+          constraint: {
+            containsI: 'AP3',
+          },
+          required: true,
+        },
+        {
+          attribute: 'StudyDescription',
+          constraint: {
+            containsI: 'stress',
+          },
+        },
+        {
+          attribute: 'StudyDescription',
+          constraint: {
+            containsI: 'dobutamine',
+          },
+        },
+      ],
+      // Can be used to select matching studies
+      // studyMatchingRules: [],
+    },
+  },
+    recoveryView6DisplaySet: {
+      // Matches displaysets, NOT series
+      seriesMatchingRules: [
+        {
+          attribute: 'Modality',
+          constraint: {
+            equals: {
+              value: 'US',
+            },
+          },
+          required: true,
+        },
+        {
+          attribute: 'StageName',
+          constraint: {
+            containsI: 'Recovery',
+          },
+          required: true,
+        },
+        {
+          attribute: 'StageName',
+          constraint: {
+            containsI: 'Post',
+          },
+          required: true,
+        },
+        {
+          attribute: 'ViewName',
+          constraint: {
+            containsI: 'View6',
+          },
+          required: true,
+        },
+        {
+          attribute: 'StudyDescription',
+          constraint: {
+            containsI: 'stress',
+          },
+        },
+        {
+          attribute: 'StudyDescription',
+          constraint: {
+            containsI: 'dobutamine',
+          },
+        },
+      ],
+      // Can be used to select matching studies
+      // studyMatchingRules: [],
+    },
+  },
+  recoveryAP2DisplaySet: {
+      // Matches displaysets, NOT series
+      seriesMatchingRules: [
+        {
+          attribute: 'Modality',
+          constraint: {
+            equals: {
+              value: 'US',
+            },
+          },
+          required: true,
+        },
+        {
+          attribute: 'StageName',
+          constraint: {
+            containsI: 'Recovery',
+          },
+          required: true,
+        },
+        {
+          attribute: 'StageName',
+          constraint: {
+            containsI: 'Post',
+          },
+          required: true,
+        },
+        {
+          attribute: 'ViewName',
+          constraint: {
+            containsI: 'AP2',
+          },
+          required: true,
+        },
+        {
+          attribute: 'StudyDescription',
+          constraint: {
+            containsI: 'stress',
+          },
+        },
+        {
+          attribute: 'StudyDescription',
+          constraint: {
+            containsI: 'dobutamine',
+          },
+        },
+      ],
+      // Can be used to select matching studies
+      // studyMatchingRules: [],
+    },
+  },
+  recoveryAP3DisplaySet: {
+      // Matches displaysets, NOT series
+      seriesMatchingRules: [
+        {
+          attribute: 'Modality',
+          constraint: {
+            equals: {
+              value: 'US',
+            },
+          },
+          required: true,
+        },
+        {
+          attribute: 'StageName',
+          constraint: {
+            containsI: 'Recovery',
+          },
+          required: true,
+        },
+        {
+          attribute: 'StageName',
+          constraint: {
+            containsI: 'Post',
+          },
+          required: true,
+        },
+        {
+          attribute: 'ViewName',
+          constraint: {
+            containsI: 'AP3',
+          },
+          required: true,
+        },
+        {
+          attribute: 'StudyDescription',
+          constraint: {
+            containsI: 'stress',
+          },
+        },
+        {
+          attribute: 'StudyDescription',
+          constraint: {
+            containsI: 'dobutamine',
+          },
+        },
+      ],
+      // Can be used to select matching studies
+      // studyMatchingRules: [],
+    },
+  },
+    recoveryView6DisplaySet: {
+      // Matches displaysets, NOT series
+      seriesMatchingRules: [
+        {
+          attribute: 'Modality',
+          constraint: {
+            equals: {
+              value: 'US',
+            },
+          },
+          required: true,
+        },
+        {
+          attribute: 'StageName',
+          constraint: {
+            containsI: 'Recovery',
+          },
+          required: true,
+        },
+        {
+          attribute: 'StageName',
+          constraint: {
+            containsI: 'Post',
+          },
+          required: true,
+        },
+        {
+          attribute: 'ViewName',
+          constraint: {
+            containsI: 'View6',
           },
           required: true,
         },
