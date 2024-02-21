@@ -1010,7 +1010,7 @@ const hpAP2 = {
         {
           attribute: 'ViewName',
           constraint: {
-            containsI: 'LAX',
+            containsI: 'AP3',
           },
           required: true,
         },
@@ -1174,6 +1174,10 @@ const hpView6 = {
           },
           required: true,
         },
+      ],
+    },
+    recoveryAP3DisplaySet: {
+      seriesMatchingRules: [
         {
           attribute: 'ViewName',
           constraint: {
