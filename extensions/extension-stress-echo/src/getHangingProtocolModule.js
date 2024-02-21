@@ -914,13 +914,166 @@ const hpView6 = {
           },
           required: true,
         },
+
         {
           attribute: 'ViewName',
           constraint: {
-            containsI: 'AP4',
+            containsI: 'LAX',
           },
           required: true,
         },
+        {
+          attribute: 'StudyDescription',
+          constraint: {
+            containsI: 'Peak',
+          },
+        },
+        {
+          attribute: 'ViewName',
+          constraint: {
+            containsI: ['AP4', '4Ch'],
+          },
+          required: true,
+        },
+      ],
+    },
+    restSAXDisplaySet: {
+      // Matches displaysets, NOT series
+      seriesMatchingRules: [
+        {
+          attribute: 'StageName',
+          constraint: {
+            containsI: ['Recovery', 'Post'],
+          },
+          required: true,
+        },
+        {
+          attribute: 'ViewName',
+          constraint: {
+            containsI: ['AP4', '4Ch'],
+          },
+          required: true,
+        },
+      ],
+    },
+  },
+  stages: [AP4],
+};
+
+const hpAP2 = {
+  id: 'extension-stress-echo.hangingProtocolModule.hpAP2',
+  locked: true,
+  name: 'hpAP2',
+  createdDate: '2021-02-23T19:22:08.894Z',
+  modifiedDate: '2023-04-01',
+  availableTo: {},
+  editableBy: {},
+  imageLoadStrategy: 'interleaveTopToBottom',
+  protocolMatchingRules: [],
+  toolGroupIds: ['default'],
+  hpInitiationCriteria: { minSeriesLoaded: 1 },
+  displaySetSelectors: {
+    restAP2DisplaySet: {
+      seriesMatchingRules: [
+        {
+          attribute: 'StageName',
+          constraint: {
+            containsI: ['Rest', 'Baseline'],
+          },
+          required: true,
+        },
+        {
+          attribute: 'ViewName',
+          constraint: {
+            containsI: ['AP2', '2Ch'],
+          },
+          required: true,
+        },
+      ],
+    },
+    peakAP2DisplaySet: {
+      seriesMatchingRules: [
+        {
+          attribute: 'StageName',
+          constraint: {
+            containsI: 'Rest',
+          },
+          required: true,
+        },
+        {
+          attribute: 'ViewName',
+          constraint: {
+            containsI: 'SAX',
+          },
+          required: true,
+        },
+        {
+          attribute: 'ViewName',
+          constraint: {
+            containsI: 'AP3',
+          },
+          required: true,
+        },
+      ],
+    },
+    recoveryAP4DisplaySet: {
+      seriesMatchingRules: [
+        {
+          attribute: 'ViewName',
+          constraint: {
+            containsI: ['AP2', '2Ch'],
+          },
+          required: true,
+        },
+      ],
+    },
+    recoveryAP2DisplaySet: {
+      seriesMatchingRules: [
+        {
+          attribute: 'StageName',
+          constraint: {
+            containsI: ['Recovery', 'Post'],
+          },
+          required: true,
+        },
+        {
+          attribute: 'ViewName',
+          constraint: {
+            containsI: ['AP2', '2Ch'],
+          },
+          required: true,
+        },
+      ],
+    },
+    restAP4DisplaySet: {
+      // Matches displaysets, NOT series
+      seriesMatchingRules: [
+        {
+          attribute: 'StageName',
+          constraint: {
+            containsI: ['Rest', 'Baseline'],
+          },
+          required: true,
+        },
+        {
+          attribute: 'ViewName',
+          constraint: {
+            equals: {
+              value: 'US',
+            },
+          },
+          required: true,
+        },
+      },
+      viewports: [
+        {
+          attribute: 'StageName',
+          constraint: {
+            containsI: 'Rest',
+          },
+          required: true,
+        },
+
         {
           attribute: 'ViewName',
           constraint: {
