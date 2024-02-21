@@ -627,7 +627,7 @@ const peakSAX = {
   },
   displaySets: [
     {
-      id: 'peakDisplaySet',
+      id: 'peakSAXDisplaySet',
     },
   ],
 };
@@ -648,7 +648,7 @@ const peakAP4= {
   },
   displaySets: [
     {
-      id: 'peakDisplaySet',
+      id: 'peakAP4DisplaySet',
     },
   ],
 };
@@ -669,7 +669,7 @@ const peakAP2= {
   },
   displaySets: [
     {
-      id: 'peakDisplaySet',
+      id: 'peakAP2DisplaySet',
     },
   ],
 };
@@ -690,7 +690,7 @@ const peakAP3= {
   },
   displaySets: [
     {
-      id: 'peakDisplaySet',
+      id: 'peakAP3DisplaySet',
     },
   ],
 };
@@ -711,7 +711,7 @@ const peakView6= {
   },
   displaySets: [
     {
-      id: 'peakDisplaySet',
+      id: 'peakView6DisplaySet',
     },
   ],
 };
@@ -732,7 +732,7 @@ const recoveryLAX= {
   },
   displaySets: [
     {
-      id: 'recoveryDisplaySet',
+      id: 'recoveryLAXDisplaySet',
     },
   ],
 };
@@ -753,7 +753,7 @@ const recoverySAX= {
   },
   displaySets: [
     {
-      id: 'recoveryDisplaySet',
+      id: 'recoverySAXDisplaySet',
     },
   ],
 };
@@ -774,7 +774,7 @@ const recoveryAP4={
   },
   displaySets: [
     {
-      id: 'recoveryDisplaySet',
+      id: 'recoveryAP4DisplaySet',
     },
   ],
 };
@@ -795,7 +795,7 @@ const recoveryAP2={
   },
   displaySets: [
     {
-      id: 'recoveryDisplaySet',
+      id: 'recoveryAP2DisplaySet',
     },
   ],
 };
@@ -816,7 +816,7 @@ const recoveryAP3={
   },
   displaySets: [
     {
-      id: 'recoveryDisplaySet',
+      id: 'recoveryAP3DisplaySet',
     },
   ],
 };
@@ -837,7 +837,7 @@ const recoveryView6={
   },
   displaySets: [
     {
-      id: 'recoveryDisplaySet',
+      id: 'recoveryView6DisplaySet',
     },
   ],
 };
