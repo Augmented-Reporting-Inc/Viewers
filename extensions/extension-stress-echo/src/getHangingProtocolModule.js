@@ -623,7 +623,14 @@ const hpSAX = {
         {
           attribute: 'StageName',
           constraint: {
-            containsI: 'Peak',
+            containsI: 'Rest',
+          },
+          required: true,
+        },
+        {
+          attribute: 'ViewName',
+          constraint: {
+            containsI: 'SAX',
           },
           required: true,
         },
