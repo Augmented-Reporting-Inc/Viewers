@@ -1010,6 +1010,13 @@ const hpAP2 = {
         {
           attribute: 'ViewName',
           constraint: {
+            containsI: 'LAX',
+          },
+          required: true,
+        },
+        {
+          attribute: 'ViewName',
+          constraint: {
             containsI: ['AP2', '2Ch'],
           },
           required: true,
