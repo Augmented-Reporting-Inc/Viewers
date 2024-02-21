@@ -234,7 +234,7 @@ const stressecho = {
   // the number of required priors referenced - so 0 means active with
   // 0 or more priors.
   displaySetSelectors: {
-    restDisplaySet: {
+    restLAXDisplaySet: {
       // Matches displaysets, NOT series
       seriesMatchingRules: [
         {
@@ -254,6 +254,13 @@ const stressecho = {
           required: true,
         },
         {
+          attribute: 'ViewName',
+          constraint: {
+            containsI: 'LAX',
+          },
+          required: true,
+        },
+        {
           attribute: 'StudyDescription',
           constraint: {
             containsI: 'stress',
@@ -267,6 +274,86 @@ const stressecho = {
         },
       ],
     },
+    restSAXDisplaySet: {
+      // Matches displaysets, NOT series
+      seriesMatchingRules: [
+        {
+          attribute: 'Modality',
+          constraint: {
+            equals: {
+              value: 'US',
+            },
+          },
+          required: true,
+        },
+        {
+          attribute: 'StageName',
+          constraint: {
+            containsI: 'Rest',
+          },
+          required: true,
+        },
+        {
+          attribute: 'ViewName',
+          constraint: {
+            containsI: 'SAX',
+          },
+          required: true,
+        },
+        {
+          attribute: 'StudyDescription',
+          constraint: {
+            containsI: 'stress',
+          },
+        },
+        {
+          attribute: 'StudyDescription',
+          constraint: {
+            containsI: 'dobutamine',
+          },
+        },
+      ],
+    },   
+    restAP4DisplaySet: {
+      // Matches displaysets, NOT series
+      seriesMatchingRules: [
+        {
+          attribute: 'Modality',
+          constraint: {
+            equals: {
+              value: 'US',
+            },
+          },
+          required: true,
+        },
+        {
+          attribute: 'StageName',
+          constraint: {
+            containsI: 'Rest',
+          },
+          required: true,
+        },
+        {
+          attribute: 'ViewName',
+          constraint: {
+            containsI: 'AP4',
+          },
+          required: true,
+        },
+        {
+          attribute: 'StudyDescription',
+          constraint: {
+            containsI: 'stress',
+          },
+        },
+        {
+          attribute: 'StudyDescription',
+          constraint: {
+            containsI: 'dobutamine',
+          },
+        },
+      ],
+    },  
     peakDisplaySet: {
       // Matches displaysets, NOT series
       seriesMatchingRules: [
