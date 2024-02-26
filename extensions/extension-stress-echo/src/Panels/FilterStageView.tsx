@@ -34,9 +34,23 @@ export default function FilterStageView({ servicesManager, commandsManager }) {
       setFilterBy('');
     }, [firstDropdownValue]);
 
-    useEffect(() => {
+    /**    useEffect(() => {
       // action when the second dropdown value
       console.log('filterBy useEffect', filterBy);
+    }, [filterBy]);
+*/
+    /** side effect for change to filterBy */
+    useEffect(() => {
+      const protocol = 'extension-stress-echo.hangingProtocolModule.hp' + filterBy;
+      console.log('filterBy useEffect protocolID', protocol, filterBy);
+
+      const updateCurrentProtocol = commandsManager.runCommand('setHangingProtocol', {
+        activeStudyUID: '',
+        protocolId: protocol,
+        //        stageId: filterBy,
+        //        stageIndex: 0,
+      });
+      console.log('updateCurrentProtocol', updateCurrentProtocol);
     }, [filterBy]);
 
     const firstDropdownOptions = [
@@ -54,8 +68,8 @@ export default function FilterStageView({ servicesManager, commandsManager }) {
         { value: 'LAX', label: 'LAX' },
         { value: 'SAX', label: 'SAX' },
         { value: 'AP4', label: 'AP4' },
-        { value: 'AP3', label: 'AP3' },
         { value: 'AP2', label: 'AP2' },
+        { value: 'AP3', label: 'AP3' },
         { value: 'View6', label: 'View 6' },
       ],
     };
@@ -139,6 +153,7 @@ export default function FilterStageView({ servicesManager, commandsManager }) {
           return;
         }
         const { svDisplaySet } = displaySetInfo;
+        console.log('svDisplaySet after protocol change', svDisplaySet);
         setSvDisplaySet(svDisplaySet);
       }
     );

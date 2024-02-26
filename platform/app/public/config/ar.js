@@ -6,13 +6,13 @@ window.config = {
     dicomUploadComponent:
       '@ohif/extension-cornerstone.customizationModule.cornerstoneDicomUploadComponent',
     cornerstoneOverlayBottomRight: {
-      id: 'cornerstoneOverlayBottomRight',
+      id: 'cornerstoneOverlayTopLeft',
       customizationType: 'ohif.cornerstoneOverlay',
       items: [
         {
           id: 'InstanceNumber',
           customizationType: 'ohif.overlayItem',
-          label: 'Instance Number:',
+          label: 'Instance:',
           title: 'Instance Number',
           condition: ({ instance }) => instance && instance.InstanceNumber,
           contentF: ({ instance }) => instance.InstanceNumber,
@@ -36,23 +36,15 @@ window.config = {
         {
           id: 'Timer',
           customizationType: 'ohif.overlayItem',
-          label: 'Timer Name:',
+          label: 'Timer:',
           title: 'Timer Name',
           condition: ({ instance }) => instance && instance.EventTimerNames,
           contentF: ({ instance }) => instance.EventTimerNames,
         },
         {
-          id: 'NumberOfEventTimers',
-          customizationType: 'ohif.overlayItem',
-          label: 'Number of Event Timers:',
-          title: 'Number of Event Timers',
-          condition: ({ instance }) => instance && instance.NumberOfEventTimers,
-          contentF: ({ instance }) => instance.NumberOfEventTimers,
-        },
-        {
           id: 'Stage',
           customizationType: 'ohif.overlayItem',
-          label: 'Stage Name:',
+          label: 'Stage:',
           title: 'Stage Name',
           condition: ({ instance }) => instance && instance.StageName,
           contentF: ({ instance }) => instance.StageName,
@@ -60,7 +52,7 @@ window.config = {
         {
           id: 'View',
           customizationType: 'ohif.overlayItem',
-          label: 'View Name:',
+          label: 'View:',
           title: 'View Name',
           condition: ({ instance }) => instance && instance.ViewName,
           contentF: ({ instance }) => instance.ViewName,
