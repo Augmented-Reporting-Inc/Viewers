@@ -777,6 +777,10 @@ const hpAP2 = {
           },
           required: true,
         },
+      ],
+    },
+    recoveryAP4DisplaySet: {
+      seriesMatchingRules: [
         {
           attribute: 'ViewName',
           constraint: {
@@ -1014,6 +1018,10 @@ const hpAP2 = {
           },
           required: true,
         },
+      ],
+    },
+    recoveryAP4DisplaySet: {
+      seriesMatchingRules: [
         {
           attribute: 'ViewName',
           constraint: {
