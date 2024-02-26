@@ -5,17 +5,19 @@ import initToolGroups from '../../longitudinal/src/initToolGroups.js';
 import moreTools from '../../longitudinal/src/moreTools';
 import moreToolsMpr from '../../longitudinal/src/moreToolsMpr';
 
+const NON_IMAGE_MODALITIES = ['SM', 'ECG', 'SR', 'SEG', 'RTSTRUCT'];
+
 const ohif = {
   layout: '@ohif/extension-default.layoutTemplateModule.viewerLayout',
   //  sopClassHandler: '@ohif/extension-default.sopClassHandlerModule.stack',
-  hangingProtocols: '@ohif/extension-default.hangingProtocolModule.default',
+  //  hangingProtocols: '@ohif/extension-default.hangingProtocolModule.default',
   leftPanel: '@ohif/extension-default.panelModule.seriesList',
 };
 
 const stressecho = {
   rightPanel: 'extension-stress-echo.panelModule.filterStageView',
   sopClassHandler: 'extension-stress-echo.sopClassHandlerModule.stressecho',
-  hangingProtocols: 'extension-stress-echo.hangingProtocolModule.stressecho',
+  hangingProtocol: 'extension-stress-echo.hangingProtocolModule.hpRest',
 };
 
 const cornerstone = {
@@ -56,6 +58,7 @@ function modeFactory({ modeConfiguration }) {
         toolGroupService,
         panelService,
         customizationService,
+        displaySetService,
       } = servicesManager.services;
 
       measurementService.clearMeasurements();
@@ -132,7 +135,22 @@ function modeFactory({ modeConfiguration }) {
      * A boolean return value that indicates whether the mode is valid for the
      * modalities of the selected studies. For instance a PET/CT mode should be
      */
-    isValidMode: ({ modalities }) => true,
+    isValidMode: ({ modalities, study }) => {
+      const modalities_list = modalities.split('\\');
+
+      // Exclude non-image modalities
+      return !!modalities_list.filter(modality => NON_IMAGE_MODALITIES.indexOf(modality) === -1)
+        .length;
+      /** const description = study.description;
+
+            const isValid =
+        (modalities_list.includes('US') && description.match(/stress/i)) ||
+        description.match(/dobutamine/i);
+
+      return isValid;
+      */
+    },
+
     /**
      * Mode Routes are used to define the mode's behavior. A list of Mode Route
      * that includes the mode's path and the layout to be used. The layout will
@@ -153,6 +171,7 @@ function modeFactory({ modeConfiguration }) {
             id: ohif.layout,
             props: {
               leftPanels: [ohif.leftPanel],
+              leftPanelDefaultClosed: true,
               rightPanels: [stressecho.rightPanel],
               viewports: [
                 {
@@ -168,8 +187,10 @@ function modeFactory({ modeConfiguration }) {
     /** List of extensions that are used by the mode */
     extensions: extensionDependencies,
     /** HangingProtocol used by the mode */
-    hangingProtocol: 'default',
-    hangingProtocols: [stressecho.hangingProtocols],
+    //    hangingProtocol: 'default',
+    //    hangingProtocol: [stressecho.hangingProtocols],
+    hangingProtocol: [stressecho.hangingProtocol],
+
     /** SopClassHandlers used by the mode */
     sopClassHandlers: [stressecho.sopClassHandler],
     /** hotkeys for mode */

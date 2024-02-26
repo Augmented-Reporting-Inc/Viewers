@@ -1,80 +1,127 @@
 import React, { useEffect, useState } from 'react';
 import { Select, Icon } from '../../../../platform/ui/src/components';
 import PropTypes from 'prop-types';
-import { Input, Button } from '@ohif/ui';
-import { DicomMetadataStore, ServicesManager } from '@ohif/core';
+import { ServicesManager } from '@ohif/core';
+import { Input } from '@ohif/ui';
 import { useTranslation } from 'react-i18next';
 
-const DEFAULT_METADATA = {
-  PatientWeight: null,
-  PatientSex: null,
-  SeriesTime: null,
-};
-
 /*
- * FilterStageView panel enables the user to modify the patient related information, such as
- * patient sex, patientWeight. This is allowed since
- * sometimes these metadata are missing or wrong. By changing them
- * @param param0
- * @returns
+ * FilterStageView panel enables the user to select stress echo stage or view
  */
+
 export default function FilterStageView({ servicesManager, commandsManager }) {
   const { t } = useTranslation('FilterStageView');
   const { displaySetService, toolGroupService, toolbarService, hangingProtocolService } = (
     servicesManager as ServicesManager
   ).services;
-  const [metadata, setMetadata] = useState(DEFAULT_METADATA);
-  const [ptDisplaySet, setPtDisplaySet] = useState(null);
+  const [svDisplaySet, setSvDisplaySet] = useState(null);
 
-  const selectOptions = [
-    { value: 'Stage', label: 'by Stage' },
-    { value: 'View', label: 'by View' },
-  ];
+  const MultiSelect = () => {
+    const [firstDropdownValue, setFirstDropdownValue] = useState('');
+    const [filterBy, setFilterBy] = useState('');
 
-  const [filterBy, setFilterBy] = useState(null);
+    const handleFirstDropdownChange = options => {
+      setFirstDropdownValue(options.value);
+      setFilterBy('');
+    };
 
-  const onFilterChange = filterValue => {
-    setFilterBy(filterValue);
-    console.log('filterBy', filterBy);
-  };
+    const handleSecondDropdownChange = options => {
+      setFilterBy(options.value); // Notify the parent
+    };
 
-  const handleChange = option => {
-    onFilterChange(option.value); // Notify the parent
-  };
+    useEffect(() => {
+      // Update the second dropdown value when the first dropdown value changes
+      setFilterBy('');
+    }, [firstDropdownValue]);
 
-  const handleMetadataChange = metadata => {
-    setMetadata(prevState => {
-      const newState = { ...prevState };
-      Object.keys(metadata).forEach(key => {
-        if (typeof metadata[key] === 'object') {
-          newState[key] = {
-            ...prevState[key],
-            ...metadata[key],
-          };
-        } else {
-          newState[key] = metadata[key];
-        }
+    /**    useEffect(() => {
+      // action when the second dropdown value
+      console.log('filterBy useEffect', filterBy);
+    }, [filterBy]);
+*/
+    /** side effect for change to filterBy */
+    useEffect(() => {
+      const protocol = 'extension-stress-echo.hangingProtocolModule.hp' + filterBy;
+      console.log('filterBy useEffect protocolID', protocol, filterBy);
+
+      const updateCurrentProtocol = commandsManager.runCommand('setHangingProtocol', {
+        activeStudyUID: '',
+        protocolId: protocol,
+        //        stageId: filterBy,
+        //        stageIndex: 0,
       });
-      return newState;
-    });
+      console.log('updateCurrentProtocol', updateCurrentProtocol);
+    }, [filterBy]);
+
+    const firstDropdownOptions = [
+      { value: 'Stage', label: 'by Stage' },
+      { value: 'Value', label: 'by Value' },
+    ];
+
+    const secondDropdownOptions = {
+      Stage: [
+        { value: 'Rest', label: 'Rest' },
+        { value: 'Peak', label: 'Peak' },
+        { value: 'Recovery', label: 'Recovery' },
+      ],
+      Value: [
+        { value: 'LAX', label: 'LAX' },
+        { value: 'SAX', label: 'SAX' },
+        { value: 'AP4', label: 'AP4' },
+        { value: 'AP2', label: 'AP2' },
+        { value: 'AP3', label: 'AP3' },
+        { value: 'View6', label: 'View 6' },
+      ],
+    };
+
+    return (
+      <div>
+        <Select
+          id="first-dropdown"
+          value={firstDropdownValue}
+          onChange={handleFirstDropdownChange}
+          placeholder={firstDropdownValue}
+          isClearable={false}
+          components={{
+            DropdownIndicator: () => <Icon name={'chevron-down-new'} className="mr-2" />,
+          }}
+          isSearchable={false}
+          className="text-aqua-pale w-30 h-[13px] text-[26px]"
+          options={firstDropdownOptions}
+        />
+        {firstDropdownValue && (
+          <div>
+            <label htmlFor="second-dropdown">gap</label>
+            <Select
+              id="second-dropdown"
+              value={filterBy}
+              placeholder={filterBy}
+              onChange={handleSecondDropdownChange}
+              isClearable={false}
+              components={{
+                DropdownIndicator: () => <Icon name={'chevron-down-new'} className="mr-2" />,
+              }}
+              isSearchable={false}
+              className="text-aqua-pale w-30 h-[13px] text-[26px]"
+              options={secondDropdownOptions[firstDropdownValue]}
+            ></Select>
+          </div>
+        )}
+      </div>
+    );
   };
 
-  const getMatchingPTDisplaySet = viewportMatchDetails => {
-    const ptDisplaySet = commandsManager.runCommand('getMatchingPTDisplaySet', {
+  const getMatchingDisplaySet = viewportMatchDetails => {
+    const svDisplaySet = commandsManager.runCommand('getMatchingDisplaySet', {
       viewportMatchDetails,
     });
 
-    if (!ptDisplaySet) {
+    if (!svDisplaySet) {
       return;
     }
 
-    const metadata = commandsManager.runCommand('getPTMetadata', {
-      ptDisplaySet,
-    });
-
     return {
-      ptDisplaySet,
-      metadata,
+      svDisplaySet,
     };
   };
 
@@ -85,15 +132,14 @@ export default function FilterStageView({ servicesManager, commandsManager }) {
       return;
     }
 
-    const displaySetInfo = getMatchingPTDisplaySet(viewportMatchDetails);
+    const displaySetInfo = getMatchingDisplaySet(viewportMatchDetails);
 
     if (!displaySetInfo) {
       return;
     }
 
-    const { ptDisplaySet, metadata } = displaySetInfo;
-    setPtDisplaySet(ptDisplaySet);
-    setMetadata(metadata);
+    const { svDisplaySet } = displaySetInfo;
+    setSvDisplaySet(svDisplaySet);
   }, []);
 
   // get the patientMetadata from the StudyInstanceUIDs and update the state
@@ -101,14 +147,14 @@ export default function FilterStageView({ servicesManager, commandsManager }) {
     const { unsubscribe } = hangingProtocolService.subscribe(
       hangingProtocolService.EVENTS.PROTOCOL_CHANGED,
       ({ viewportMatchDetails }) => {
-        const displaySetInfo = getMatchingPTDisplaySet(viewportMatchDetails);
+        const displaySetInfo = getMatchingDisplaySet(viewportMatchDetails);
 
         if (!displaySetInfo) {
           return;
         }
-        const { ptDisplaySet, metadata } = displaySetInfo;
-        setPtDisplaySet(ptDisplaySet);
-        setMetadata(metadata);
+        const { svDisplaySet } = displaySetInfo;
+        console.log('svDisplaySet after protocol change', svDisplaySet);
+        setSvDisplaySet(svDisplaySet);
       }
     );
     return () => {
@@ -116,85 +162,12 @@ export default function FilterStageView({ servicesManager, commandsManager }) {
     };
   }, []);
 
-  function updateMetadata() {
-    if (!ptDisplaySet) {
-      throw new Error('No ptDisplaySet found');
-    }
-
-    const toolGroupIds = toolGroupService.getToolGroupIds();
-
-    // Todo: we don't have a proper way to perform a toggle command and update the
-    // state for the toolbar, so here, we manually toggle the toolbar
-
-    // Todo: Crosshairs have bugs for the camera reset currently, so we need to
-    // force turn it off before we update the metadata
-    toolGroupIds.forEach(toolGroupId => {
-      commandsManager.runCommand('toggleCrosshairs', {
-        toolGroupId,
-        toggledState: false,
-      });
-    });
-
-    toolbarService.state.toggles['Crosshairs'] = false;
-    toolbarService._broadcastEvent(toolbarService.EVENTS.TOOL_BAR_STATE_MODIFIED);
-
-    // metadata should be dcmjs naturalized
-    DicomMetadataStore.updateMetadataForSeries(
-      ptDisplaySet.StudyInstanceUID,
-      ptDisplaySet.SeriesInstanceUID,
-      metadata
-    );
-
-    // update the displaySets
-    displaySetService.setDisplaySetMetadataInvalidated(ptDisplaySet.displaySetInstanceUID);
-  }
   return (
-    <div className="invisible-scrollbar overflow-y-auto overflow-x-hidden">
+    <div className="invisible-scrollbar">
       {
         <div className="flex flex-col">
           <div className="bg-primary-dark flex flex-col space-y-4 p-4">
-            <Select
-              id="filter-select"
-              isClearable={false}
-              onChange={handleChange}
-              components={{
-                DropdownIndicator: () => <Icon name={'chevron-down-new'} className="mr-2" />,
-              }}
-              isSearchable={false}
-              options={selectOptions}
-              value={selectOptions?.find(o => o.value)}
-              className="text-aqua-pale w-30 h-[13px] text-[26px]"
-            />
-            <Input
-              label={t('Patient Sex')}
-              labelClassName="text-white mb-2"
-              className="mt-1"
-              value={metadata.PatientSex || ''}
-              onChange={e => {
-                handleMetadataChange({
-                  PatientSex: e.target.value,
-                });
-              }}
-            />
-            <Input
-              label={t('Patient Weight (kg)')}
-              labelClassName="text-white mb-2"
-              className="mt-1"
-              value={metadata.PatientWeight || ''}
-              onChange={e => {
-                handleMetadataChange({
-                  PatientWeight: e.target.value,
-                });
-              }}
-            />
-            <Input
-              label={t('Acquisition Time (s)')}
-              labelClassName="text-white mb-2"
-              className="mt-1 mb-2"
-              value={metadata.SeriesTime || ''}
-              onChange={() => {}}
-            />
-            <Button onClick={updateMetadata}>Reload Data</Button>
+            <MultiSelect />
           </div>
         </div>
       }

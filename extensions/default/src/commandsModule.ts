@@ -185,6 +185,16 @@ const commandsModule = ({
         const { hangingProtocolStageIndexMap, viewportGridStore, displaySetSelectorMap } =
           stateSyncReduce;
 
+        console.log('hpInfo', hpInfo);
+        console.log(
+          'default commandsModule protocolId',
+          protocolId,
+          'stageId',
+          stageId,
+          'stageIndex',
+          stageIndex
+        );
+
         if (!protocolId) {
           // Reuse the previous protocol id, and optionally stage
           protocolId = hpInfo.protocolId;
@@ -220,11 +230,13 @@ const commandsModule = ({
           !activeStudyUID
         ) {
           // Clear the HP setting to reset them
+          console.log('!activeStudyUID');
           hangingProtocolService.setProtocol(protocolId, {
             stageId,
             stageIndex: useStageIdx,
           });
         } else {
+          console.log('activeStudyUID useStageIdx', useStageIdx);
           hangingProtocolService.setProtocol(protocolId, {
             displaySetSelectorMap,
             stageId,
@@ -232,6 +244,7 @@ const commandsModule = ({
             restoreProtocol,
           });
           if (restoreProtocol) {
+            console.log('restoreProtocol');
             viewportGridService.set(viewportGridStore[storedHanging]);
           }
         }

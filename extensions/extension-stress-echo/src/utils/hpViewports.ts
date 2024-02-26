@@ -1,20 +1,34 @@
-const ctAXIAL = {
+const restLAX = {
   viewportOptions: {
-    viewportId: 'ctAXIAL',
-    viewportType: 'volume',
-    orientation: 'axial',
-    toolGroupId: 'ctToolGroup',
+    viewportId: 'restLAX',
+    viewportType: 'stack',
+    toolGroupId: 'default',
     initialImageOptions: {
       // index: 5,
       preset: 'first', // 'first', 'last', 'middle'
     },
     syncGroups: [
       {
-        type: 'cameraPosition',
-        id: 'axialSync',
+        type: 'voi',
+        id: 'ctWLSync',
         source: true,
         target: true,
       },
+    ],
+  },
+  displaySets: [
+    {
+      id: 'restLAXDisplaySet',
+    },
+  ],
+};
+
+const restSAX = {
+  viewportOptions: {
+    viewportId: 'restSAX',
+    viewportType: 'stack',
+    toolGroupId: 'default',
+    syncGroups: [
       {
         type: 'voi',
         id: 'ctWLSync',
@@ -25,24 +39,17 @@ const ctAXIAL = {
   },
   displaySets: [
     {
-      id: 'ctDisplaySet',
+      id: 'restSAXDisplaySet',
     },
   ],
 };
 
-const ctSAGITTAL = {
+const restAP4 = {
   viewportOptions: {
-    viewportId: 'ctSAGITTAL',
-    viewportType: 'volume',
-    orientation: 'sagittal',
-    toolGroupId: 'ctToolGroup',
+    viewportId: 'restAP4',
+    viewportType: 'stack',
+    toolGroupId: 'default',
     syncGroups: [
-      {
-        type: 'cameraPosition',
-        id: 'sagittalSync',
-        source: true,
-        target: true,
-      },
       {
         type: 'voi',
         id: 'ctWLSync',
@@ -53,23 +60,17 @@ const ctSAGITTAL = {
   },
   displaySets: [
     {
-      id: 'ctDisplaySet',
+      id: 'restAP4DisplaySet',
     },
   ],
 };
-const ctCORONAL = {
+
+const restAP2 = {
   viewportOptions: {
-    viewportId: 'ctCORONAL',
-    viewportType: 'volume',
-    orientation: 'coronal',
-    toolGroupId: 'ctToolGroup',
+    viewportId: 'restAP2',
+    viewportType: 'stack',
+    toolGroupId: 'default',
     syncGroups: [
-      {
-        type: 'cameraPosition',
-        id: 'coronalSync',
-        source: true,
-        target: true,
-      },
       {
         type: 'voi',
         id: 'ctWLSync',
@@ -80,394 +81,322 @@ const ctCORONAL = {
   },
   displaySets: [
     {
-      id: 'ctDisplaySet',
+      id: 'restAP2DisplaySet',
     },
   ],
 };
 
-const ptAXIAL = {
+const restAP3 = {
   viewportOptions: {
-    viewportId: 'ptAXIAL',
-    viewportType: 'volume',
-    background: [1, 1, 1],
-    orientation: 'axial',
-    toolGroupId: 'ptToolGroup',
-    initialImageOptions: {
-      // index: 5,
-      preset: 'first', // 'first', 'last', 'middle'
-    },
+    viewportId: 'restAP3',
+    viewportType: 'stack',
+    toolGroupId: 'default',
     syncGroups: [
-      {
-        type: 'cameraPosition',
-        id: 'axialSync',
-        source: true,
-        target: true,
-      },
-      {
-        type: 'voi',
-        id: 'ptWLSync',
-        source: true,
-        target: true,
-      },
-      {
-        type: 'voi',
-        id: 'ptFusionWLSync',
-        source: true,
-        target: false,
-        options: {
-          syncInvertState: false,
-        },
-      },
-    ],
-  },
-  displaySets: [
-    {
-      options: {
-        voi: {
-          custom: 'getPTVOIRange',
-        },
-        voiInverted: true,
-      },
-      id: 'ptDisplaySet',
-    },
-  ],
-};
-
-const ptSAGITTAL = {
-  viewportOptions: {
-    viewportId: 'ptSAGITTAL',
-    viewportType: 'volume',
-    orientation: 'sagittal',
-    background: [1, 1, 1],
-    toolGroupId: 'ptToolGroup',
-    syncGroups: [
-      {
-        type: 'cameraPosition',
-        id: 'sagittalSync',
-        source: true,
-        target: true,
-      },
-      {
-        type: 'voi',
-        id: 'ptWLSync',
-        source: true,
-        target: true,
-      },
-      {
-        type: 'voi',
-        id: 'ptFusionWLSync',
-        source: true,
-        target: false,
-        options: {
-          syncInvertState: false,
-        },
-      },
-    ],
-  },
-  displaySets: [
-    {
-      options: {
-        voi: {
-          custom: 'getPTVOIRange',
-        },
-        voiInverted: true,
-      },
-      id: 'ptDisplaySet',
-    },
-  ],
-};
-
-const ptCORONAL = {
-  viewportOptions: {
-    viewportId: 'ptCORONAL',
-    viewportType: 'volume',
-    orientation: 'coronal',
-    background: [1, 1, 1],
-    toolGroupId: 'ptToolGroup',
-    syncGroups: [
-      {
-        type: 'cameraPosition',
-        id: 'coronalSync',
-        source: true,
-        target: true,
-      },
-      {
-        type: 'voi',
-        id: 'ptWLSync',
-        source: true,
-        target: true,
-      },
-      {
-        type: 'voi',
-        id: 'ptFusionWLSync',
-        source: true,
-        target: false,
-        options: {
-          syncInvertState: false,
-        },
-      },
-    ],
-  },
-  displaySets: [
-    {
-      options: {
-        voi: {
-          custom: 'getPTVOIRange',
-        },
-        voiInverted: true,
-      },
-      id: 'ptDisplaySet',
-    },
-  ],
-};
-
-const fusionAXIAL = {
-  viewportOptions: {
-    viewportId: 'fusionAXIAL',
-    viewportType: 'volume',
-    orientation: 'axial',
-    toolGroupId: 'fusionToolGroup',
-    initialImageOptions: {
-      // index: 5,
-      preset: 'first', // 'first', 'last', 'middle'
-    },
-    syncGroups: [
-      {
-        type: 'cameraPosition',
-        id: 'axialSync',
-        source: true,
-        target: true,
-      },
       {
         type: 'voi',
         id: 'ctWLSync',
-        source: false,
-        target: true,
-      },
-      {
-        type: 'voi',
-        id: 'fusionWLSync',
         source: true,
         target: true,
-      },
-      {
-        type: 'voi',
-        id: 'ptFusionWLSync',
-        source: false,
-        target: true,
-        options: {
-          syncInvertState: false,
-        },
       },
     ],
   },
   displaySets: [
     {
-      id: 'ctDisplaySet',
-    },
-    {
-      id: 'ptDisplaySet',
-      options: {
-        colormap: {
-          name: 'hsv',
-          opacity: [
-            { value: 0, opacity: 0 },
-            { value: 0.1, opacity: 0.9 },
-            { value: 1, opacity: 0.95 },
-          ],
-        },
-        voi: {
-          custom: 'getPTVOIRange',
-        },
-      },
+      id: 'restAP3DisplaySet',
     },
   ],
 };
 
-const fusionSAGITTAL = {
+const restView6 = {
   viewportOptions: {
-    viewportId: 'fusionSAGITTAL',
-    viewportType: 'volume',
-    orientation: 'sagittal',
-    toolGroupId: 'fusionToolGroup',
-    // initialImageOptions: {
-    //   index: 180,
-    //   preset: 'middle', // 'first', 'last', 'middle'
-    // },
+    viewportId: 'restView6',
+    viewportType: 'stack',
+    toolGroupId: 'default',
     syncGroups: [
-      {
-        type: 'cameraPosition',
-        id: 'sagittalSync',
-        source: true,
-        target: true,
-      },
       {
         type: 'voi',
         id: 'ctWLSync',
-        source: false,
-        target: true,
-      },
-      {
-        type: 'voi',
-        id: 'fusionWLSync',
         source: true,
         target: true,
-      },
-      {
-        type: 'voi',
-        id: 'ptFusionWLSync',
-        source: false,
-        target: true,
-        options: {
-          syncInvertState: false,
-        },
       },
     ],
   },
   displaySets: [
     {
-      id: 'ctDisplaySet',
-    },
-    {
-      id: 'ptDisplaySet',
-      options: {
-        colormap: {
-          name: 'hsv',
-          opacity: [
-            { value: 0, opacity: 0 },
-            { value: 0.1, opacity: 0.9 },
-            { value: 1, opacity: 0.95 },
-          ],
-        },
-        voi: {
-          custom: 'getPTVOIRange',
-        },
-      },
+      id: 'restView6DisplaySet',
     },
   ],
 };
 
-const fusionCORONAL = {
+const peakLAX = {
   viewportOptions: {
-    viewportId: 'fusionCoronal',
-    viewportType: 'volume',
-    orientation: 'coronal',
-    toolGroupId: 'fusionToolGroup',
-    // initialImageOptions: {
-    //   index: 180,
-    //   preset: 'middle', // 'first', 'last', 'middle'
-    // },
+    viewportId: 'peakLAX',
+    viewportType: 'stack',
+    toolGroupId: 'default',
     syncGroups: [
-      {
-        type: 'cameraPosition',
-        id: 'coronalSync',
-        source: true,
-        target: true,
-      },
       {
         type: 'voi',
         id: 'ctWLSync',
-        source: false,
-        target: true,
-      },
-      {
-        type: 'voi',
-        id: 'fusionWLSync',
         source: true,
         target: true,
-      },
-      {
-        type: 'voi',
-        id: 'ptFusionWLSync',
-        source: false,
-        target: true,
-        options: {
-          syncInvertState: false,
-        },
       },
     ],
   },
   displaySets: [
     {
-      id: 'ctDisplaySet',
-    },
-    {
-      id: 'ptDisplaySet',
-      options: {
-        colormap: {
-          name: 'hsv',
-          opacity: [
-            { value: 0, opacity: 0 },
-            { value: 0.1, opacity: 0.9 },
-            { value: 1, opacity: 0.95 },
-          ],
-        },
-        voi: {
-          custom: 'getPTVOIRange',
-        },
-      },
+      id: 'peakLAXDisplaySet',
     },
   ],
 };
 
-const mipSAGITTAL = {
+const peakSAX= {
   viewportOptions: {
-    viewportId: 'mipSagittal',
-    viewportType: 'volume',
-    orientation: 'sagittal',
-    background: [1, 1, 1],
-    toolGroupId: 'mipToolGroup',
+    viewportId: 'peakSAX',
+    viewportType: 'stack',
+    toolGroupId: 'default',
     syncGroups: [
       {
         type: 'voi',
-        id: 'ptWLSync',
+        id: 'ctWLSync',
         source: true,
         target: true,
       },
-      {
-        type: 'voi',
-        id: 'ptFusionWLSync',
-        source: true,
-        target: false,
-        options: {
-          syncInvertState: false,
-        },
-      },
     ],
-
-    // Custom props can be used to set custom properties which extensions
-    // can react on.
-    customViewportProps: {
-      // We use viewportDisplay to filter the viewports which are displayed
-      // in mip and we set the scrollbar according to their rotation index
-      // in the cornerstone extension.
-      hideOverlays: true,
-    },
   },
   displaySets: [
     {
-      options: {
-        blendMode: 'MIP',
-        slabThickness: 'fullVolume',
-        voi: {
-          custom: 'getPTVOIRange',
-        },
-        voiInverted: true,
+      id: 'peakSAXDisplaySet',
+    },
+  ],
+};
+
+const peakAP4= {
+  viewportOptions: {
+    viewportId: 'peakAP4',
+    viewportType: 'stack',
+    toolGroupId: 'default',
+    syncGroups: [
+      {
+        type: 'voi',
+        id: 'ctWLSync',
+        source: true,
+        target: true,
       },
-      id: 'ptDisplaySet',
+    ],
+  },
+  displaySets: [
+    {
+      id: 'peakAP4DisplaySet',
+    },
+  ],
+};
+
+const peakAP2= {
+  viewportOptions: {
+    viewportId: 'peakAP2',
+    viewportType: 'stack',
+    toolGroupId: 'default',
+    syncGroups: [
+      {
+        type: 'voi',
+        id: 'ctWLSync',
+        source: true,
+        target: true,
+      },
+    ],
+  },
+  displaySets: [
+    {
+      id: 'peakAP2DisplaySet',
+    },
+  ],
+};
+
+const peakAP3= {
+  viewportOptions: {
+    viewportId: 'peakAP3',
+    viewportType: 'stack',
+    toolGroupId: 'default',
+    syncGroups: [
+      {
+        type: 'voi',
+        id: 'ctWLSync',
+        source: true,
+        target: true,
+      },
+    ],
+  },
+  displaySets: [
+    {
+      id: 'peakAP3DisplaySet',
+    },
+  ],
+};
+
+const peakView6= {
+  viewportOptions: {
+    viewportId: 'peakView6',
+    viewportType: 'stack',
+    toolGroupId: 'default',
+    syncGroups: [
+      {
+        type: 'voi',
+        id: 'ctWLSync',
+        source: true,
+        target: true,
+      },
+    ],
+  },
+  displaySets: [
+    {
+      id: 'peakView6DisplaySet',
+    },
+  ],
+};
+
+const recoveryLAX= {
+  viewportOptions: {
+    viewportId: 'recoveryLAX',
+    viewportType: 'stack',
+    toolGroupId: 'default',
+    syncGroups: [
+      {
+        type: 'voi',
+        id: 'ctWLSync',
+        source: true,
+        target: true,
+      },
+    ],
+  },
+  displaySets: [
+    {
+      id: 'recoveryLAXDisplaySet',
+    },
+  ],
+};
+
+const recoverySAX= {
+  viewportOptions: {
+    viewportId: 'recoverySAX',
+    viewportType: 'stack',
+    toolGroupId: 'default',
+    syncGroups: [
+      {
+        type: 'voi',
+        id: 'ctWLSync',
+        source: true,
+        target: true,
+      },
+    ],
+  },
+  displaySets: [
+    {
+      id: 'recoverySAXDisplaySet',
+    },
+  ],
+};
+
+const recoveryAP4={
+  viewportOptions: {
+    viewportId: 'recoveryAP4',
+    viewportType: 'stack',
+    toolGroupId: 'default',
+    syncGroups: [
+      {
+        type: 'voi',
+        id: 'ctWLSync',
+        source: true,
+        target: true,
+      },
+    ],
+  },
+  displaySets: [
+    {
+      id: 'recoveryAP4DisplaySet',
+    },
+  ],
+};
+
+const recoveryAP2={
+  viewportOptions: {
+    viewportId: 'recoveryAP2',
+    viewportType: 'stack',
+    toolGroupId: 'default',
+    syncGroups: [
+      {
+        type: 'voi',
+        id: 'ctWLSync',
+        source: true,
+        target: true,
+      },
+    ],
+  },
+  displaySets: [
+    {
+      id: 'recoveryAP2DisplaySet',
+    },
+  ],
+};
+
+const recoveryAP3={
+  viewportOptions: {
+    viewportId: 'recoveryAP3',
+    viewportType: 'stack',
+    toolGroupId: 'default',
+    syncGroups: [
+      {
+        type: 'voi',
+        id: 'ctWLSync',
+        source: true,
+        target: true,
+      },
+    ],
+  },
+  displaySets: [
+    {
+      id: 'recoveryAP3DisplaySet',
+    },
+  ],
+};
+
+const recoveryView6={
+  viewportOptions: {
+    viewportId: 'recoveryView6',
+    viewportType: 'stack',
+    toolGroupId: 'default',
+    syncGroups: [
+      {
+        type: 'voi',
+        id: 'ctWLSync',
+        source: true,
+        target: true,
+      },
+    ],
+  },
+  displaySets: [
+    {
+      id: 'recoveryView6DisplaySet',
     },
   ],
 };
 
 export {
-  ctAXIAL,
-  ctSAGITTAL,
-  ctCORONAL,
-  ptAXIAL,
-  ptSAGITTAL,
-  ptCORONAL,
-  fusionAXIAL,
-  fusionSAGITTAL,
-  fusionCORONAL,
-  mipSAGITTAL,
+  restLAX,
+  restSAX,
+  restAP4,
+  restAP2,
+  restAP3,
+  restView6,
+  peakLAX,
+  peakSAX,
+  peakAP4,
+  peakAP2,
+  peakAP3,
+  peakView6,
+  recoveryLAX,
+  recoverySAX,
+  recoveryAP4,
+  recoveryAP2,
+  recoveryAP3,
+  recoveryView6,
 };
