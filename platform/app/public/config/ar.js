@@ -13,7 +13,7 @@ window.config = {
         {
           id: 'InstanceNumber',
           customizationType: 'ohif.overlayItem',
-          label: 'Instance Number:',
+          label: 'Instance:',
           title: 'Instance Number',
           condition: ({ instance }) => instance && instance.InstanceNumber,
           contentF: ({ instance }) => instance.InstanceNumber,
@@ -37,18 +37,10 @@ window.config = {
         {
           id: 'Timer',
           customizationType: 'ohif.overlayItem',
-          label: 'Timer Name:',
+          label: 'Timer:',
           title: 'Timer Name',
           condition: ({ instance }) => instance && instance.EventTimerNames,
           contentF: ({ instance }) => instance.EventTimerNames,
-        },
-        {
-          id: 'NumberOfEventTimers',
-          customizationType: 'ohif.overlayItem',
-          label: 'Number of Event Timers:',
-          title: 'Number of Event Timers',
-          condition: ({ instance }) => instance && instance.NumberOfEventTimers,
-          contentF: ({ instance }) => instance.NumberOfEventTimers,
         },
         {
           id: 'Stage',

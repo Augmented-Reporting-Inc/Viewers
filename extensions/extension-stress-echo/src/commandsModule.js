@@ -22,7 +22,7 @@ const commandsModule = ({ servicesManager, extensionManager }) => {
         }
 
         svDisplaySet = displaySets.find(displaySet => displaySet.isStress);
-        console.log("svDisplaySet", svDisplaySet);
+        console.log('svDisplaySet via commandsModule', svDisplaySet);
         if (svDisplaySet) {
           break;
         }
@@ -30,7 +30,6 @@ const commandsModule = ({ servicesManager, extensionManager }) => {
 
       return svDisplaySet;
     },
-
   };
 
   const definitions = {
