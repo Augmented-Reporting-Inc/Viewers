@@ -1,62 +1,51 @@
 import React, { useEffect, useState } from 'react';
 import { Select, Icon } from '../../../../platform/ui/src/components';
 import PropTypes from 'prop-types';
-import { ServicesManager } from '@ohif/core';
-import { Input } from '@ohif/ui';
-import { useTranslation } from 'react-i18next';
-
+// import { ServicesManager } from '@ohif/core';
 /*
  * FilterStageView panel enables the user to select stress echo stage or view
  */
 
-export default function FilterStageView({ servicesManager, commandsManager }) {
-  const { t } = useTranslation('FilterStageView');
-  const { displaySetService, toolGroupService, toolbarService, hangingProtocolService } = (
-    servicesManager as ServicesManager
-  ).services;
-  const [svDisplaySet, setSvDisplaySet] = useState(null);
+export default function FilterStageView({ /** servicesManager,*/ commandsManager }) {
+  //  const { displaySetService, hangingProtocolService } = (servicesManager as ServicesManager)
+  //    .services;
+  //  const [svDisplaySet, setSvDisplaySet] = useState(null);
 
-  const MultiSelect = () => {
-    const [firstDropdownValue, setFirstDropdownValue] = useState('');
-    const [filterBy, setFilterBy] = useState('');
+  const [firstDropdownValue, setFirstDropdownValue] = useState('Stage');
+  const [filterBy, setFilterBy] = useState('Rest');
 
-    const handleFirstDropdownChange = options => {
-      setFirstDropdownValue(options.value);
-      setFilterBy('');
-    };
+  const handleFirstDropdownChange = options => {
+    setFirstDropdownValue(options.value);
+    // setFilterBy(''); or else triggers setHangingProtocol with undefined id
+  };
 
+  const firstDropdownOptions = [
+    { value: 'Stage', label: 'by Stage' },
+    { value: 'Value', label: 'by Value' },
+  ];
+
+  /** side effect for change to filterBy */
+  useEffect(() => {
+    const protocol = 'extension-stress-echo.hangingProtocolModule.hp' + filterBy;
+    console.log('filterBy useEffect protocolID', protocol, filterBy);
+
+    const updateCurrentProtocol = commandsManager.runCommand('setHangingProtocol', {
+      activeStudyUID: '',
+      protocolId: protocol,
+    });
+    console.log('updateCurrentProtocol', updateCurrentProtocol);
+  }, [filterBy, commandsManager]);
+
+  const FilterSelect = () => {
     const handleSecondDropdownChange = options => {
       setFilterBy(options.value); // Notify the parent
     };
 
-    useEffect(() => {
+    /**     useEffect(() => {
       // Update the second dropdown value when the first dropdown value changes
       setFilterBy('');
     }, [firstDropdownValue]);
-
-    /**    useEffect(() => {
-      // action when the second dropdown value
-      console.log('filterBy useEffect', filterBy);
-    }, [filterBy]);
 */
-    /** side effect for change to filterBy */
-    useEffect(() => {
-      const protocol = 'extension-stress-echo.hangingProtocolModule.hp' + filterBy;
-      console.log('filterBy useEffect protocolID', protocol, filterBy);
-
-      const updateCurrentProtocol = commandsManager.runCommand('setHangingProtocol', {
-        activeStudyUID: '',
-        protocolId: protocol,
-        //        stageId: filterBy,
-        //        stageIndex: 0,
-      });
-      console.log('updateCurrentProtocol', updateCurrentProtocol);
-    }, [filterBy]);
-
-    const firstDropdownOptions = [
-      { value: 'Stage', label: 'by Stage' },
-      { value: 'Value', label: 'by Value' },
-    ];
 
     const secondDropdownOptions = {
       Stage: [
@@ -76,19 +65,8 @@ export default function FilterStageView({ servicesManager, commandsManager }) {
 
     return (
       <div>
-        <Select
-          id="first-dropdown"
-          value={firstDropdownValue}
-          onChange={handleFirstDropdownChange}
-          placeholder={firstDropdownValue}
-          isClearable={false}
-          components={{
-            DropdownIndicator: () => <Icon name={'chevron-down-new'} className="mr-2" />,
-          }}
-          isSearchable={false}
-          className="text-aqua-pale w-30 h-[13px] text-[26px]"
-          options={firstDropdownOptions}
-        />
+        {/**
+         */}
         {firstDropdownValue && (
           <div>
             <label htmlFor="second-dropdown">gap</label>
@@ -110,7 +88,7 @@ export default function FilterStageView({ servicesManager, commandsManager }) {
       </div>
     );
   };
-
+  /**
   const getMatchingDisplaySet = viewportMatchDetails => {
     const svDisplaySet = commandsManager.runCommand('getMatchingDisplaySet', {
       viewportMatchDetails,
@@ -161,13 +139,26 @@ export default function FilterStageView({ servicesManager, commandsManager }) {
       unsubscribe();
     };
   }, []);
-
+*/
   return (
     <div className="invisible-scrollbar">
       {
         <div className="flex flex-col">
           <div className="bg-primary-dark flex flex-col space-y-4 p-4">
-            <MultiSelect />
+            <Select
+              id="first-dropdown"
+              value={firstDropdownValue}
+              onChange={handleFirstDropdownChange}
+              placeholder={firstDropdownValue}
+              isClearable={false}
+              components={{
+                DropdownIndicator: () => <Icon name={'chevron-down-new'} className="mr-2" />,
+              }}
+              isSearchable={false}
+              className="text-aqua-pale w-30 h-[13px] text-[26px]"
+              options={firstDropdownOptions}
+            />
+            <FilterSelect />
           </div>
         </div>
       }
@@ -176,6 +167,9 @@ export default function FilterStageView({ servicesManager, commandsManager }) {
 }
 
 FilterStageView.propTypes = {
+  commandsManager: PropTypes.shape({
+    runCommand: PropTypes.func.isRequired,
+  }),
   servicesManager: PropTypes.shape({
     services: PropTypes.shape({
       measurementService: PropTypes.shape({
