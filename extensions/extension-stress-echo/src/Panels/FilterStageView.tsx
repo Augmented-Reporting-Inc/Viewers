@@ -69,7 +69,6 @@ export default function FilterStageView({ /** servicesManager,*/ commandsManager
          */}
         {firstDropdownValue && (
           <div>
-            <label htmlFor="second-dropdown">gap</label>
             <Select
               id="second-dropdown"
               value={filterBy}
