@@ -61,10 +61,14 @@ function WrappedCinePlayer({ enabledVPElement, viewportId, servicesManager }) {
     let isPlaying = cines[viewportId].isPlaying;
     displaySetInstanceUIDs.forEach(displaySetInstanceUID => {
       const displaySet = displaySetService.getDisplaySetByUID(displaySetInstanceUID);
-      if (displaySet.FrameRate) {
+      const EffectiveFrameRate = displaySet.numImageFrames / displaySet.EffectiveDuration;
+      if (displaySet.FrameRate || EffectiveFrameRate) {
         // displaySet.FrameRate corresponds to DICOM tag (0018,1063) which is defined as the the frame time in milliseconds
         // So a bit of math to get the actual frame rate.
-        frameRate = Math.round(1000 / displaySet.FrameRate);
+        // according to DICOM spec, Effective Duration is entire multiframe image in seconds.
+        frameRate = displaySet.FrameRate
+          ? Math.round(1000 / displaySet.FrameRate)
+          : Math.round(EffectiveFrameRate);
         isPlaying ||= !!appConfig.autoPlayCine;
       }
     });
