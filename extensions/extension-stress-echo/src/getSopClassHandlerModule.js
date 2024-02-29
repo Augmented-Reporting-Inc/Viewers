@@ -28,6 +28,7 @@ const makeDisplaySet = instances => {
     SeriesNumber: instance.SeriesNumber || 0,
     InstanceNumber: instance.InstanceNumber,
     FrameRate: instance.FrameTime,
+    EffectiveDuration: instance.EffectiveDuration,
     SOPClassUID: instance.SOPClassUID,
     SeriesDescription: instance.SeriesDescription || '',
     Modality: instance.Modality,
