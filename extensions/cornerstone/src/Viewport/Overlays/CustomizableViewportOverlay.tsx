@@ -5,8 +5,13 @@ import { metaData, Enums, utilities } from '@cornerstonejs/core';
 import type { ImageSliceData } from '@cornerstonejs/core/types';
 import { ViewportOverlay } from '@ohif/ui';
 import type { InstanceMetadata } from '@ohif/core/src/types';
-import { formatDICOMDate, formatDICOMTime, formatNumberPrecision } from './utils';
-import { utils } from '@ohif/core';
+import {
+  formatPN,
+  formatDuration,
+  formatDICOMDate,
+  formatDICOMTime,
+  formatNumberPrecision,
+} from './utils';
 import { StackViewportData, VolumeViewportData } from '../../types/CornerstoneCacheService';
 
 import './CustomizableViewportOverlay.css';
@@ -29,6 +34,7 @@ interface OverlayItemProps {
     formatDate: (val) => string;
     formatTime: (val) => string;
     formatNumberPrecision: (val, number) => string;
+    formatDuration: (val) => string;
   };
 
   // calculated values
@@ -256,7 +262,8 @@ function CustomizableViewportOverlay({
           formatPN,
           formatDate: formatDICOMDate,
           formatTime: formatDICOMTime,
-          formatNumberPrecision,
+          formatNumberPrecision: formatNumberPrecision,
+          formatDuration: formatDuration,
         },
       };
 
