@@ -11,38 +11,6 @@ window.config = {
       customizationType: 'ohif.cornerstoneOverlay',
       items: [
         {
-          id: 'InstanceNumber',
-          customizationType: 'ohif.overlayItem',
-          label: 'Instance:',
-          title: 'Instance Number',
-          condition: ({ instance }) => instance && instance.InstanceNumber,
-          contentF: ({ instance }) => instance.InstanceNumber,
-        },
-        {
-          id: 'AcquisitionNumber',
-          customizationType: 'ohif.overlayItem',
-          label: 'Acquisition Number:',
-          title: 'Acquisition Number',
-          condition: ({ instance }) => instance && instance.AcquisitionNumber,
-          contentF: ({ instance }) => instance.AcquisitionNumber,
-        },
-        {
-          id: 'HR',
-          customizationType: 'ohif.overlayItem',
-          label: 'HR:',
-          title: 'Heart Rate',
-          condition: ({ instance }) => instance && instance.HeartRate,
-          contentF: ({ instance }) => instance.HeartRate,
-        },
-        {
-          id: 'Timer',
-          customizationType: 'ohif.overlayItem',
-          label: 'Timer:',
-          title: 'Timer Name',
-          condition: ({ instance }) => instance && instance.EventTimerNames,
-          contentF: ({ instance }) => instance.EventTimerNames,
-        },
-        {
           id: 'Stage',
           customizationType: 'ohif.overlayItem',
           title: 'Stage Name',
