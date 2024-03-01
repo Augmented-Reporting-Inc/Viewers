@@ -5,46 +5,13 @@ window.config = {
   customizationService: {
     dicomUploadComponent:
       '@ohif/extension-cornerstone.customizationModule.cornerstoneDicomUploadComponent',
-    cornerstoneOverlayBottomRight: {
+    cornerstoneOverlayTopLeft: {
       id: 'cornerstoneOverlayTopLeft',
       customizationType: 'ohif.cornerstoneOverlay',
       items: [
         {
-          id: 'InstanceNumber',
-          customizationType: 'ohif.overlayItem',
-          label: 'Instance:',
-          title: 'Instance Number',
-          condition: ({ instance }) => instance && instance.InstanceNumber,
-          contentF: ({ instance }) => instance.InstanceNumber,
-        },
-        {
-          id: 'AcquisitionNumber',
-          customizationType: 'ohif.overlayItem',
-          label: 'Acquisition Number:',
-          title: 'Acquisition Number',
-          condition: ({ instance }) => instance && instance.AcquisitionNumber,
-          contentF: ({ instance }) => instance.AcquisitionNumber,
-        },
-        {
-          id: 'HR',
-          customizationType: 'ohif.overlayItem',
-          label: 'HR:',
-          title: 'Heart Rate',
-          condition: ({ instance }) => instance && instance.HeartRate,
-          contentF: ({ instance }) => instance.HeartRate,
-        },
-        {
-          id: 'Timer',
-          customizationType: 'ohif.overlayItem',
-          label: 'Timer:',
-          title: 'Timer Name',
-          condition: ({ instance }) => instance && instance.EventTimerNames,
-          contentF: ({ instance }) => instance.EventTimerNames,
-        },
-        {
           id: 'Stage',
           customizationType: 'ohif.overlayItem',
-          label: 'Stage:',
           title: 'Stage Name',
           condition: ({ instance }) => instance && instance.StageName,
           contentF: ({ instance }) => instance.StageName,
@@ -52,10 +19,47 @@ window.config = {
         {
           id: 'View',
           customizationType: 'ohif.overlayItem',
-          label: 'View:',
           title: 'View Name',
           condition: ({ instance }) => instance && instance.ViewName,
           contentF: ({ instance }) => instance.ViewName,
+        },
+        {
+          id: 'Timer',
+          customizationType: 'ohif.overlayItem',
+          title: 'Timer Name',
+          label: 'timer =',
+          condition: ({ instance }) => instance && instance.EventElapsedTimes,
+          contentF: ({ instance, formatters: { formatDuration } }) =>
+            formatDuration(instance.EventElapsedTimes),
+        },
+      ],
+    },
+    cornerstoneOverlayTopRight: {
+      id: 'cornerstoneOverlayTopRight',
+      customizationType: 'ohif.cornerstoneOverlay',
+      items: [
+        /**        {
+          id: 'InstanceNumber',
+          customizationType: 'ohif.overlayItem',
+          title: 'Instance Number',
+          condition: ({ instance }) => instance && instance.InstanceNumber,
+          contentF: ({ instance }) => instance.InstanceNumber,
+        },
+*/
+        {
+          id: 'AcquisitionTime',
+          customizationType: 'ohif.overlayItem',
+          title: 'Acquisition Time',
+          condition: ({ instance }) => instance && instance.AcquisitionTime,
+          contentF: ({ instance, formatters: { formatTime } }) =>
+            formatTime(instance.AcquisitionTime),
+        },
+        {
+          id: 'HR',
+          customizationType: 'ohif.overlayItem',
+          title: 'Heart Rate',
+          condition: ({ instance }) => instance && instance.HeartRate,
+          contentF: ({ instance }) => instance.HeartRate + ' bpm',
         },
       ],
     },
