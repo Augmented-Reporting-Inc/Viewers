@@ -3,6 +3,7 @@ import React from 'react';
 
 import getSopClassHandlerModule from './getSopClassHandlerModule';
 import getHangingProtocolModule from './getHangingProtocolModule';
+// import getCustomizationModule from './getCustomizationModule';
 import onModeEnter from './onModeEnter';
 import getPanelModule from './getPanelModule';
 import init from './init';
@@ -111,6 +112,7 @@ const stressechoExtension = {
       extensionManager,
     });
   },
+  //  getCustomizationModule,
   /**
    * ContextModule should provide a list of context that will be available in OHIF
    * and will be provided to the Modes. A context is a state that is shared OHIF.
