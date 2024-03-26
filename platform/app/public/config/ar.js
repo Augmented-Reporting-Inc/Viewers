@@ -38,14 +38,13 @@ window.config = {
       id: 'cornerstoneOverlayTopRight',
       customizationType: 'ohif.cornerstoneOverlay',
       items: [
-        /**        {
+        {
           id: 'InstanceNumber',
           customizationType: 'ohif.overlayItem',
           title: 'Instance Number',
           condition: ({ instance }) => instance && instance.InstanceNumber,
           contentF: ({ instance }) => instance.InstanceNumber,
         },
-*/
         {
           id: 'AcquisitionTime',
           customizationType: 'ohif.overlayItem',
