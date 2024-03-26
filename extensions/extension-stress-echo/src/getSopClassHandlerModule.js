@@ -139,7 +139,7 @@ function getDisplaySetsFromSeries(instances) {
 */
 
 const isStress = instance => {
-  return instance.PerformedProcedureStepDescription.includes('Stress Study');
+  return instance.PerformedProcedureStepDescription?.includes('Stress Study');
 };
 
 function getSopClassHandlerModule() {
