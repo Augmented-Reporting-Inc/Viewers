@@ -10,6 +10,7 @@ import {
   metaData,
   volumeLoader,
   imageLoadPoolManager,
+  getEnabledElement,
   Settings,
   utilities as csUtilities,
   Enums as csEnums,
@@ -97,6 +98,7 @@ export default async function init({
     toolbarService,
     viewportGridService,
     stateSyncService,
+    syncGroupService,
   } = servicesManager.services as CornerstoneServices;
 
   window.services = servicesManager.services;
@@ -123,6 +125,9 @@ export default async function init({
   // Stores a map from `lutPresentationId` to a Presentation object so that
   // an OHIFCornerstoneViewport can be redisplayed with the same LUT
   stateSyncService.register('lutPresentationStore', { clearOnModeExit: true });
+
+  // Stores synchronizers state to be restored
+  stateSyncService.register('synchronizersStore', { clearOnModeExit: true });
 
   // Stores a map from `positionPresentationId` to a Presentation object so that
   // an OHIFCornerstoneViewport can be redisplayed with the same position
@@ -198,6 +203,16 @@ export default async function init({
       }
     }
   );
+
+  // resize the cornerstone viewport service when the grid size changes
+  // IMPORTANT: this should happen outside of the OHIFCornerstoneViewport
+  // since it will trigger a rerender of each viewport and each resizing
+  // the offscreen canvas which would result in a performance hit, this should
+  // done only once per grid resize here. Doing it once here, allows us to reduce
+  // the refreshRage(in ms) to 10 from 50. I tried with even 1 or 5 ms it worked fine
+  viewportGridService.subscribe(viewportGridService.EVENTS.GRID_SIZE_CHANGED, () => {
+    cornerstoneViewportService.resize(true);
+  });
 
   initContextMenu({
     cornerstoneViewportService,
