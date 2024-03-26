@@ -1017,7 +1017,7 @@ const hpAP2 = {
         {
           attribute: 'ViewName',
           constraint: {
-            containsI: 'AP3',
+            containsI: ['AP3', '3Ch', '3'],
           },
           required: true,
         },
@@ -1312,7 +1312,7 @@ const hpAP2 = {
         {
           attribute: 'ViewName',
           constraint: {
-            containsI: 'View6',
+            containsI: ['View6', '55', '3'],
           },
           required: true,
         },
@@ -1491,7 +1491,7 @@ const hpRecovery = {
         {
           attribute: 'ViewName',
           constraint: {
-            containsI: 'AP4',
+            containsI: ['AP4', '4Ch'],
           },
           required: true,
         },
@@ -1509,7 +1509,7 @@ const hpRecovery = {
         {
           attribute: 'ViewName',
           constraint: {
-            containsI: 'AP2',
+            containsI: ['AP2', '2Ch'],
           },
           required: true,
         },
@@ -1541,7 +1541,7 @@ const hpRecovery = {
         {
           attribute: 'ViewName',
           constraint: {
-            containsI: 'AP3',
+            containsI: ['AP3', '3Ch'],
           },
           required: true,
         },
@@ -1587,7 +1587,7 @@ const hpLAX = {
         {
           attribute: 'StageName',
           constraint: {
-            containsI: 'Rest',
+            containsI: ['Rest', 'Baseline'],
           },
           required: true,
         },
@@ -1698,7 +1698,7 @@ const hpSAX = {
         {
           attribute: 'StageName',
           constraint: {
-            containsI: 'Rest',
+            containsI: ['Rest', 'Baseline'],
           },
           required: true,
         },
@@ -1716,7 +1716,14 @@ const hpSAX = {
         {
           attribute: 'StageName',
           constraint: {
-            containsI: 'Peak',
+            containsI: 'Rest',
+          },
+          required: true,
+        },
+        {
+          attribute: 'ViewName',
+          constraint: {
+            containsI: 'SAX',
           },
           required: true,
         },
@@ -1769,7 +1776,7 @@ const hpAP4 = {
         {
           attribute: 'StageName',
           constraint: {
-            containsI: 'Rest',
+            containsI: ['Rest', 'Baseline'],
           },
           required: true,
         },
@@ -1794,13 +1801,14 @@ const hpAP4 = {
         {
           attribute: 'ViewName',
           constraint: {
-            containsI: 'AP4',
+            containsI: ['AP4', '4Ch'],
           },
           required: true,
         },
       ],
     },
     recoveryAP4DisplaySet: {
+      // Matches displaysets, NOT series
       seriesMatchingRules: [
         {
           attribute: 'StageName',
@@ -1813,6 +1821,131 @@ const hpAP4 = {
           attribute: 'ViewName',
           constraint: {
             containsI: 'AP4',
+          },
+          required: true,
+        },
+      ],
+    },
+    peakAP2DisplaySet: {
+      seriesMatchingRules: [
+        {
+          attribute: 'StageName',
+          constraint: {
+            containsI: 'Rest',
+          },
+          required: true,
+        },
+        {
+          attribute: 'ViewName',
+          constraint: {
+            containsI: ['AP3', '3Ch', '3'],
+          },
+          required: true,
+        },
+      ],
+    },
+    recoveryAP4DisplaySet: {
+      seriesMatchingRules: [
+        {
+          attribute: 'ViewName',
+          constraint: {
+            containsI: ['AP2', '2Ch'],
+          },
+          required: true,
+        },
+      ],
+    },
+    recoveryAP2DisplaySet: {
+      seriesMatchingRules: [
+        {
+          attribute: 'StageName',
+          constraint: {
+            containsI: ['Recovery', 'Post'],
+          },
+          required: true,
+        },
+        {
+          attribute: 'ViewName',
+          constraint: {
+            containsI: ['AP2', '2Ch'],
+          },
+          required: true,
+        },
+      ],
+    },
+    restAP4DisplaySet: {
+      // Can be used to select matching studies
+      // studyMatchingRules: [],
+    },
+    peakView6DisplaySet: {
+      seriesMatchingRules: [
+        {
+          attribute: 'StageName',
+          constraint: {
+            containsI: ['Rest', 'Baseline'],
+          },
+          required: true,
+        },
+        {
+          attribute: 'ViewName',
+          constraint: {
+            equals: {
+              value: 'US',
+            },
+          },
+          required: true,
+        },
+      },
+      viewports: [
+        {
+          attribute: 'StageName',
+          constraint: {
+            containsI: 'Rest',
+          },
+          required: true,
+        },
+
+        {
+          attribute: 'ViewName',
+          constraint: {
+            containsI: ['AP4', '4Ch'],
+            containsI: 'AP2',
+          },
+          required: true,
+        },
+      ],
+    },
+    peakAP4DisplaySet: {
+      seriesMatchingRules: [
+        {
+          attribute: 'StageName',
+          constraint: {
+            containsI: 'Peak',
+          },
+          required: true,
+        },
+        {
+          attribute: 'ViewName',
+          constraint: {
+            containsI: ['AP4', '4Ch'],
+          },
+          required: true,
+        },
+      ],
+    },
+    recoverySAXDisplaySet: {
+      seriesMatchingRules: [
+        {
+          attribute: 'StageName',
+          constraint: {
+            containsI: ['Recovery', 'Post'],
+          },
+          required: true,
+        },
+        {
+          attribute: 'ViewName',
+          constraint: {
+            containsI: ['AP4', '4Ch'],
           },
           required: true,
         },
@@ -1840,6 +1973,128 @@ const hpAP2 = {
         {
           attribute: 'StageName',
           constraint: {
+            containsI: ['Rest', 'Baseline'],
+          },
+          required: true,
+        },
+        {
+          attribute: 'ViewName',
+          constraint: {
+            containsI: ['AP2', '2Ch'],
+          },
+          required: true,
+        },
+      ],
+    },
+    peakAP2DisplaySet: {
+      seriesMatchingRules: [
+        {
+          attribute: 'StageName',
+          constraint: {
+            containsI: ['Recovery', 'Post'],
+          },
+          required: true,
+        },
+        {
+          attribute: 'ViewName',
+          constraint: {
+            containsI: ['AP4', '4Ch'],
+            containsI: 'AP2',
+          },
+          required: true,
+        },
+      ],
+    },
+    recoveryAP4DisplaySet: {
+      seriesMatchingRules: [
+        {
+          attribute: 'ViewName',
+          constraint: {
+            containsI: 'AP3',
+          },
+          required: true,
+        },
+      ],
+    },
+    recoveryAP4DisplaySet: {
+      seriesMatchingRules: [
+        {
+          attribute: 'ViewName',
+          constraint: {
+            containsI: ['AP2', '2Ch'],
+          },
+          required: true,
+        },
+      ],
+    },
+    restAP2DisplaySet: {
+      // Matches displaysets, NOT series
+      seriesMatchingRules: [
+        {
+          attribute: 'StageName',
+          constraint: {
+            containsI: ['Recovery', 'Post'],
+          },
+          required: true,
+        },
+        {
+          attribute: 'ViewName',
+          constraint: {
+            containsI: ['AP4', '4Ch'],
+          },
+          required: true,
+        },
+        {
+          attribute: 'StudyDescription',
+          constraint: {
+            containsI: 'stress',
+          },
+        },
+        {
+          attribute: 'StudyDescription',
+          constraint: {
+            containsI: 'dobutamine',
+          },
+        },
+      ],
+    },
+    restAP3DisplaySet: {
+      // Matches displaysets, NOT series
+      seriesMatchingRules: [
+        {
+          attribute: 'StageName',
+          constraint: {
+            containsI: ['Recovery', 'Post'],
+          },
+          required: true,
+        },
+        {
+          attribute: 'ViewName',
+          constraint: {
+            containsI: 'AP4',
+          },
+          required: true,
+        },
+        {
+          attribute: 'StudyDescription',
+          constraint: {
+            containsI: 'stress',
+          },
+        },
+        {
+          attribute: 'StudyDescription',
+          constraint: {
+            containsI: 'dobutamine',
+          },
+        },
+      ],
+    },
+    restView6DisplaySet: {
+      // Matches displaysets, NOT series
+      seriesMatchingRules: [
+        {
+          attribute: 'StageName',
+          constraint: {
             containsI: 'Rest',
           },
           required: true,
@@ -1851,10 +2106,131 @@ const hpAP2 = {
           },
           required: true,
         },
+        {
+          attribute: 'StudyDescription',
+          constraint: {
+            containsI: 'stress',
+          },
+        },
+        {
+          attribute: 'StudyDescription',
+          constraint: {
+            containsI: 'dobutamine',
+          },
+        },
+      ],
+    },
+    peakLAXDisplaySet: {
+      // Matches displaysets, NOT series
+      seriesMatchingRules: [
+        {
+          attribute: 'StageName',
+          constraint: {
+            containsI: 'Rest',
+          },
+          required: true,
+        },
+        {
+          attribute: 'ViewName',
+          constraint: {
+            containsI: ['View6', '55', '3'],
+          },
+          required: true,
+        },
+        {
+          attribute: 'StudyDescription',
+          constraint: {
+            containsI: 'stress',
+          },
+        },
+        {
+          attribute: 'StudyDescription',
+          constraint: {
+            containsI: 'dobutamine',
+          },
+        },
+      ],
+      // Can be used to select matching studies
+      // studyMatchingRules: [],
+    },
+    peakSAXDisplaySet: {
+      // Matches displaysets, NOT series
+      seriesMatchingRules: [
+        {
+          attribute: 'StageName',
+          constraint: {
+            containsI: 'Peak',
+          },
+          required: true,
+        },
+        {
+          attribute: 'ViewName',
+          constraint: {
+            containsI: 'LAX',
+          },
+          required: true,
+        },
+        {
+          attribute: 'StageName',
+          constraint: {
+            containsI: 'Peak',
+          },
+          required: true,
+        },
+        {
+          attribute: 'ViewName',
+          constraint: {
+            containsI: 'dobutamine',
+          },
+          required: true,
+        },
+      ],
+    },
+    peakAP4DisplaySet: {
+      // Matches displaysets, NOT series
+      seriesMatchingRules: [
+        {
+          attribute: 'StageName',
+          constraint: {
+            containsI: 'Peak',
+          },
+          required: true,
+        },
+        {
+          attribute: 'ViewName',
+          constraint: {
+            containsI: 'AP4',
+          },
+          required: true,
+        },
+        {
+          attribute: 'StageName',
+          constraint: {
+            containsI: 'Peak',
+          },
+          required: true,
+        },
+        {
+          attribute: 'ViewName',
+          constraint: {
+            containsI: 'dobutamine',
+          },
+          required: true,
+        },
       ],
     },
     peakAP2DisplaySet: {
+      // Matches displaysets, NOT series
       seriesMatchingRules: [
+        {
+          attribute: 'Modality',
+          constraint: {
+            equals: {
+              value: 'US',
+            },
+          },
+          required: true,
+        },
         {
           attribute: 'StageName',
           constraint: {
@@ -1911,14 +2287,14 @@ const hpAP3 = {
         {
           attribute: 'StageName',
           constraint: {
-            containsI: 'Rest',
+            containsI: ['Rest', 'Baseline'],
           },
           required: true,
         },
         {
           attribute: 'ViewName',
           constraint: {
-            containsI: 'AP3',
+            containsI: ['AP3', '3Ch'],
           },
           required: true,
         },
@@ -1936,7 +2312,7 @@ const hpAP3 = {
         {
           attribute: 'ViewName',
           constraint: {
-            containsI: 'AP3',
+            containsI: ['AP3', '3Ch'],
           },
           required: true,
         },
@@ -1954,7 +2330,7 @@ const hpAP3 = {
         {
           attribute: 'ViewName',
           constraint: {
-            containsI: 'AP3',
+            containsI: ['AP3', '3Ch'],
           },
           required: true,
         },
@@ -1982,7 +2358,7 @@ const hpView6 = {
         {
           attribute: 'StageName',
           constraint: {
-            containsI: 'Rest',
+            containsI: ['Rest', 'Baseline'],
           },
           required: true,
         },
