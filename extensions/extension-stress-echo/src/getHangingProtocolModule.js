@@ -773,7 +773,7 @@ const hpAP2 = {
         {
           attribute: 'StageName',
           constraint: {
-            containsI: 'Rest',
+            containsI: ['Rest', 'Baseline'],
           },
           required: true,
         },
