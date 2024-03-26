@@ -1265,7 +1265,7 @@ const hpAP3 = {
         {
           attribute: 'ViewName',
           constraint: {
-            containsI: 'AP3',
+            containsI: ['AP3', '3Ch'],
           },
           required: true,
         },
@@ -1311,7 +1311,7 @@ const hpLAX = {
         {
           attribute: 'StageName',
           constraint: {
-            containsI: 'Rest',
+            containsI: ['Rest', 'Baseline'],
           },
           required: true,
         },
@@ -1382,7 +1382,7 @@ const hpSAX = {
         {
           attribute: 'StageName',
           constraint: {
-            containsI: 'Rest',
+            containsI: ['Rest', 'Baseline'],
           },
           required: true,
         },
@@ -1453,14 +1453,14 @@ const hpAP4 = {
         {
           attribute: 'StageName',
           constraint: {
-            containsI: 'Rest',
+            containsI: ['Rest', 'Baseline'],
           },
           required: true,
         },
         {
           attribute: 'ViewName',
           constraint: {
-            containsI: 'AP4',
+            containsI: ['AP4', '4Ch'],
           },
           required: true,
         },
@@ -1478,7 +1478,7 @@ const hpAP4 = {
         {
           attribute: 'ViewName',
           constraint: {
-            containsI: 'AP4',
+            containsI: ['AP4', '4Ch'],
           },
           required: true,
         },
@@ -1496,7 +1496,7 @@ const hpAP4 = {
         {
           attribute: 'ViewName',
           constraint: {
-            containsI: 'AP4',
+            containsI: ['AP4', '4Ch'],
           },
           required: true,
         },
@@ -1524,14 +1524,14 @@ const hpAP2 = {
         {
           attribute: 'StageName',
           constraint: {
-            containsI: 'Rest',
+            containsI: ['Rest', 'Baseline'],
           },
           required: true,
         },
         {
           attribute: 'ViewName',
           constraint: {
-            containsI: 'AP2',
+            containsI: ['AP2', '2Ch'],
           },
           required: true,
         },
@@ -1549,7 +1549,7 @@ const hpAP2 = {
         {
           attribute: 'ViewName',
           constraint: {
-            containsI: 'AP2',
+            containsI: ['AP2', '2Ch'],
           },
           required: true,
         },
@@ -1567,7 +1567,7 @@ const hpAP2 = {
         {
           attribute: 'ViewName',
           constraint: {
-            containsI: 'AP2',
+            containsI: ['AP2', '2Ch'],
           },
           required: true,
         },
@@ -1595,14 +1595,14 @@ const hpAP3 = {
         {
           attribute: 'StageName',
           constraint: {
-            containsI: 'Rest',
+            containsI: ['Rest', 'Baseline'],
           },
           required: true,
         },
         {
           attribute: 'ViewName',
           constraint: {
-            containsI: 'AP3',
+            containsI: ['AP3', '3Ch'],
           },
           required: true,
         },
@@ -1620,7 +1620,7 @@ const hpAP3 = {
         {
           attribute: 'ViewName',
           constraint: {
-            containsI: 'AP3',
+            containsI: ['AP3', '3Ch'],
           },
           required: true,
         },
@@ -1638,7 +1638,7 @@ const hpAP3 = {
         {
           attribute: 'ViewName',
           constraint: {
-            containsI: 'AP3',
+            containsI: ['AP3', '3Ch'],
           },
           required: true,
         },
@@ -1666,7 +1666,7 @@ const hpView6 = {
         {
           attribute: 'StageName',
           constraint: {
-            containsI: 'Rest',
+            containsI: ['Rest', 'Baseline'],
           },
           required: true,
         },
