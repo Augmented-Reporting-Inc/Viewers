@@ -25,6 +25,26 @@ export function formatNumberPrecision(number, precision = 0) {
 }
 
 /**
+ * Formats duration.
+ *
+ * @param {number} number
+ * @returns {number} formatted number.
+ */
+export function formatDuration(ms: number): string {
+  if (ms !== null) {
+    const seconds = Math.floor((ms / 1000) % 60);
+    const minutes = Math.floor((ms / (1000 * 60)) % 60);
+    const hours = Math.floor((ms / (1000 * 60 * 60)) % 24);
+
+    const displayHours = hours < 10 ? '0' + hours : hours;
+    const displayMinutes = minutes < 10 ? '0' + minutes : minutes;
+    const displaySeconds = seconds < 10 ? '0' + seconds : seconds;
+
+    return `${displayHours}:${displayMinutes}:${displaySeconds}`;
+  }
+}
+
+/**
  * Formats DICOM date.
  *
  * @param {string} date

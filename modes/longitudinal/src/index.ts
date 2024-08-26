@@ -12,6 +12,7 @@ const NON_IMAGE_MODALITIES = ['ECG', 'SEG', 'RTSTRUCT', 'RTPLAN', 'PR'];
 const ohif = {
   layout: '@ohif/extension-default.layoutTemplateModule.viewerLayout',
   sopClassHandler: '@ohif/extension-default.sopClassHandlerModule.stack',
+  hangingProtocols: '@ohif/extension-default.hangingProtocolModule.default',
   thumbnailList: '@ohif/extension-default.panelModule.seriesList',
   wsiSopClassHandler:
     '@ohif/extension-cornerstone.sopClassHandlerModule.DicomMicroscopySopClassHandler',
@@ -107,6 +108,17 @@ function modeFactory({ modeConfiguration }) {
         'MeasurementTools',
         'Zoom',
         'Pan',
+        'Capture',
+        'Layout',
+        'MPR',
+        'Cine',
+        'Previous',
+        'Next',
+        'MoreTools',
+      ]);
+      toolbarService.createButtonSection(MPR_TOOL_GROUP_ID, [
+        'MeasurementTools',
+        'Zoom',
         'TrackballRotate',
         'WindowLevel',
         'Capture',
@@ -235,6 +247,7 @@ function modeFactory({ modeConfiguration }) {
     extensions: extensionDependencies,
     // Default protocol gets self-registered by default in the init
     hangingProtocol: 'default',
+    hangingProtocols: [ohif.hangingProtocols],
     // Order is important in sop class handlers when two handlers both use
     // the same sop class under different situations.  In that case, the more
     // general handler needs to come last.  For this case, the dicomvideo must
