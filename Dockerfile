@@ -21,7 +21,7 @@
 
 # Stage 1: Build the application
 # docker build -t ohif/viewer:latest .
-FROM node:18.16.1-slim as json-copier
+FROM node:18.16.1-slim AS json-copier
 
 RUN mkdir /usr/src/app
 WORKDIR /usr/src/app
@@ -37,7 +37,7 @@ COPY platform /usr/src/app/platform
 #RUN find platform \! -name "package.json" -mindepth 2 -maxdepth 2 -print | xargs rm -rf
 
 # Copy Files
-FROM node:18.16.1-slim as builder
+FROM node:18.16.1-slim AS builder
 RUN apt-get update && apt-get install -y build-essential python3
 RUN mkdir /usr/src/app
 WORKDIR /usr/src/app
@@ -53,8 +53,8 @@ COPY . .
 # To restore workspaces symlinks
 RUN yarn install --frozen-lockfile --verbose
 
-ENV PATH /usr/src/app/node_modules/.bin:$PATH
-ENV QUICK_BUILD true
+ENV PATH=/usr/src/app/node_modules/.bin:$PATH
+ENV QUICK_BUILD=true
 # ENV GENERATE_SOURCEMAP=false
 # ENV REACT_APP_CONFIG=config/default.js
 
@@ -62,7 +62,7 @@ RUN yarn run build
 
 # Stage 3: Bundle the built application into a Docker container
 # which runs Nginx using Alpine Linux
-FROM nginxinc/nginx-unprivileged:1.25-alpine as final
+FROM nginxinc/nginx-unprivileged:1.25-alpine AS final
 #RUN apk add --no-cache bash
 ENV PORT=80
 RUN rm /etc/nginx/conf.d/default.conf
