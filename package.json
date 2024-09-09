@@ -64,7 +64,10 @@
     "link-list": "npm ls --depth=0 --link=true"
   },
   "dependencies": {
-    "execa": "^8.0.1"
+    "@babel/runtime": "^7.20.13",
+    "dcmjs": ">=0.33.0",
+    "execa": "^8.0.1",
+    "ip": "https://registry.npmjs.org/ip-address/-/ip-address-9.0.5.tgz"
   },
   "optionalDependencies": {
     "@percy/cypress": "^3.1.1",

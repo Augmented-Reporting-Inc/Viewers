@@ -3,7 +3,7 @@ import { id } from './id';
 import toolbarButtons from '../../longitudinal/src/toolbarButtons';
 import initToolGroups from '../../longitudinal/src/initToolGroups.js';
 import moreTools from '../../longitudinal/src/moreTools';
-import moreToolsMpr from '../../longitudinal/src/moreToolsMpr';
+// import moreToolsMpr from '../../longitudinal/src/moreToolsMpr';
 
 const NON_IMAGE_MODALITIES = ['SM', 'ECG', 'SR', 'SEG', 'RTSTRUCT'];
 
@@ -12,6 +12,7 @@ const ohif = {
   //  sopClassHandler: '@ohif/extension-default.sopClassHandlerModule.stack',
   //  hangingProtocols: '@ohif/extension-default.hangingProtocolModule.default',
   leftPanel: '@ohif/extension-default.panelModule.seriesList',
+  measurements: '@ohif/extension-default.panelModule.measurements',
 };
 
 const stressecho = {
@@ -66,6 +67,7 @@ function modeFactory({ modeConfiguration }) {
       // Init Default and SR ToolGroups
       initToolGroups(extensionManager, toolGroupService, commandsManager);
 
+      /* removed for 3.7 to 3.8 migration https://docs.ohif.org/migration-guide/from-3p7-to-3p8
       let unsubscribe;
 
       const activateTool = () => {
@@ -94,9 +96,9 @@ function modeFactory({ modeConfiguration }) {
         toolGroupService.EVENTS.VIEWPORT_ADDED,
         activateTool
       ));
+      */
 
-      toolbarService.init(extensionManager);
-      toolbarService.addButtons([...toolbarButtons, ...moreTools, ...moreToolsMpr]);
+      toolbarService.addButtons([...toolbarButtons, ...moreTools]); // ...moreToolsMpr
       toolbarService.createButtonSection('primary', [
         'MeasurementTools',
         'Zoom',
@@ -139,16 +141,18 @@ function modeFactory({ modeConfiguration }) {
       const modalities_list = modalities.split('\\');
 
       // Exclude non-image modalities
-      return !!modalities_list.filter(modality => NON_IMAGE_MODALITIES.indexOf(modality) === -1)
-        .length;
-      /** const description = study.description;
+      // return !!modalities_list.filter(modality => NON_IMAGE_MODALITIES.indexOf(modality) === -1)
+      //  .length;
+      const description = study.description;
 
-            const isValid =
+      const isValid =
         (modalities_list.includes('US') && description.match(/stress/i)) ||
         description.match(/dobutamine/i);
 
-      return isValid;
-      */
+      return {
+        valid: isValid,
+        description: description,
+      };
     },
 
     /**
@@ -171,7 +175,7 @@ function modeFactory({ modeConfiguration }) {
             id: ohif.layout,
             props: {
               leftPanels: [ohif.leftPanel],
-              leftPanelDefaultClosed: true,
+              leftPanelClosed: true,
               rightPanels: [stressecho.rightPanel],
               viewports: [
                 {

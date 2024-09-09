@@ -104,7 +104,7 @@ const CinePlayer: React.FC<CinePlayerProps> = ({
           onClick={() => onPlayPauseChange(!isPlaying)}
         />
         {isDynamic && dynamicInfo && (
-          <div className="min-w-16 max-w-44 flex flex-col  text-white">
+          <div className="min-w-16 max-w-44 flex flex-col text-white">
             {/* Add Tailwind classes for monospace font and center alignment */}
             <div className="text-[11px]">
               <span className="w-2 text-white">{dynamicInfo.timePointIndex}</span>{' '}

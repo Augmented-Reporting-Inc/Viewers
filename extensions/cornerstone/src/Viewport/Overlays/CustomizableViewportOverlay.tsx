@@ -13,15 +13,7 @@ import {
 import { InstanceMetadata } from 'platform/core/src/types';
 import { ServicesManager } from '@ohif/core';
 import { ImageSliceData } from '@cornerstonejs/core/dist/esm/types';
-import { ViewportOverlay } from '@ohif/ui';
-import { InstanceMetadata } from '@ohif/core/src/types';
-import {
-  formatPN,
-  formatDuration,
-  formatDICOMDate,
-  formatDICOMTime,
-  formatNumberPrecision,
-} from './utils';
+// import { InstanceMetadata } from '@ohif/core/src/types';
 import { StackViewportData, VolumeViewportData } from '../../types/CornerstoneCacheService';
 
 import './CustomizableViewportOverlay.css';
@@ -274,7 +266,7 @@ function CustomizableViewportOverlay({
           formatNumberPrecision: formatNumberPrecision,
           formatDuration: formatDuration,
         },
-        instance,
+        //        instance,
         // calculated
         voi,
         scale,
