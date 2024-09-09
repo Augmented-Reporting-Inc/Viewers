@@ -115,7 +115,7 @@ function modeFactory({ modeConfiguration }) {
         'Next',
         'MoreTools',
       ]);
-      toolbarService.createButtonSection(MPR_TOOL_GROUP_ID, [
+      /*      toolbarService.createButtonSection(MPR_TOOL_GROUP_ID, [
         'MeasurementTools',
         'Zoom',
         'TrackballRotate',

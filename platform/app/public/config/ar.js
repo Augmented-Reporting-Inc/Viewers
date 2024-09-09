@@ -77,6 +77,25 @@ window.config = {
   },
   useNorm16Texture: true,
   autoPlayCine: true,
+  investigationalUseDialog: {
+    option: 'never',
+  },
+  studyPrefetcher: {
+    enabled: true,
+    /* Number of displaysets to be prefetched  (default: 2)*/
+    displaySetCount: 2,
+    /**
+     * Max number of concurrent prefetch requests (default: 10)
+     * High numbers may impact on the time to load a new dropped series because
+     * the browser will be busy with all prefetching requests. As soon as the
+     * prefetch requests get fulfilled the new ones from the new dropped series
+     * are sent to the server.
+     *
+     * */
+    maxNumPrefetchRequests: 10,
+    /* Display sets loading order (closest (deafult), downward or upward) */
+    order: 'closest',
+  },
   defaultDataSourceName: 'dicomweb',
   dataSources: [
     {
@@ -96,7 +115,7 @@ window.config = {
         supportsFuzzyMatching: false,
         supportsWildcard: true,
         staticWado: true,
-        singlepart: 'bulkdata',
+        singlepart: 'bulkdata,video,thumbnail,pdf',
         bulkDataURI: {
           enabled: true,
           relativeResolution: 'studies',
