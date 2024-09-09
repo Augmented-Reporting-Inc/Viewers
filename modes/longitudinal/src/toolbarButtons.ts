@@ -120,9 +120,8 @@ const toolbarButtons: Button[] = [
   },
   {
     id: 'Cine',
-    type: 'ohif.radioGroup',
+    uiType: 'ohif.radioGroup',
     props: {
-      type: 'toggle',
       icon: 'tool-cine',
       label: 'Cine',
       commands: [
@@ -131,13 +130,13 @@ const toolbarButtons: Button[] = [
           context: 'CORNERSTONE',
         },
       ],
+      //      evaluate: 'evaluate.cornerstoneTool.toggle',
     },
   },
   {
     id: 'Previous',
-    type: 'ohif.action',
+    uiType: 'ohif.radioGroup',
     props: {
-      type: 'action',
       icon: 'chevron-prev',
       label: 'Previous',
       commands: [
@@ -149,13 +148,13 @@ const toolbarButtons: Button[] = [
           context: 'DEFAULT',
         },
       ],
+      //      evaluate: 'evaluate.action',
     },
   },
   {
     id: 'Next',
-    type: 'ohif.action',
+    uiType: 'ohif.radioGroup',
     props: {
-      type: 'action',
       icon: 'chevron-next',
       label: 'Next',
       commands: [
