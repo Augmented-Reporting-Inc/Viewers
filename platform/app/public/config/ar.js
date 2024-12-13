@@ -1,7 +1,8 @@
 window.config = {
-  routerBasename: '/',
+  routerBasename: '/rviewer',
   extensions: [],
   modes: [],
+  showPatientInfo: 'visible',
   customizationService: {
     dicomUploadComponent:
       '@ohif/extension-cornerstone.customizationModule.cornerstoneDicomUploadComponent',
@@ -65,7 +66,6 @@ window.config = {
   },
   showStudyList: true,
   maxNumberOfWebWorkers: 4,
-  omitQuotationForMultipartRequest: true,
   showWarningMessageForCrossOrigin: true,
   showCPUFallbackMessage: true,
   showLoadingIndicator: true,
@@ -76,6 +76,7 @@ window.config = {
     prefetch: 1000,
   },
   useNorm16Texture: true,
+  useSharedArrayBuffer: 'AUTO',
   autoPlayCine: true,
   investigationalUseDialog: {
     option: 'never',
@@ -104,9 +105,6 @@ window.config = {
       configuration: {
         friendlyName: 'orthanc Server',
         name: 'dicomweb',
-        wadoUriRoot: 'https://ssoback.futurepacs.com/orthanc/dicom-web',
-        qidoRoot: 'https://ssoback.futurepacs.com/orthanc/dicom-web',
-        wadoRoot: 'https://ssoback.futurepacs.com/orthanc/dicom-web',
         qidoSupportsIncludeField: false,
         supportsReject: false,
         imageRendering: 'wadors',
@@ -115,7 +113,20 @@ window.config = {
         supportsFuzzyMatching: false,
         supportsWildcard: true,
         staticWado: true,
-        singlepart: 'bulkdata,video,thumbnail,pdf',
+        // https://github.com/OHIF/Viewers/pull/3878
+        singlepart: 'video,thumbnail',
+        onConfiguration: (dicomWebConfig, options) => {
+          const { query } = options;
+          const gateway = query.get('gateway');
+          const pathUrlDicomWeb = `${gateway}/orthanc/dicom-web`;
+          const pathUrlWado = `${gateway}/orthanc/wado`;
+          return {
+            ...dicomWebConfig,
+            wadoRoot: pathUrlDicomWeb,
+            qidoRoot: pathUrlDicomWeb,
+            wadoUriRoot: pathUrlWado,
+          };
+        },
         bulkDataURI: {
           enabled: true,
           relativeResolution: 'studies',
@@ -123,6 +134,7 @@ window.config = {
         acceptHeader: ['multipart/related; type=application/octet-stream; transfer-syntax=*'],
         omitQuotationForMultipartRequest: true,
         dicomUploadEnabled: true,
+        allowMultiSelectExport: true,
       },
     },
     {
