@@ -166,8 +166,10 @@ const toolbarButtons: Button[] = [
           context: 'DEFAULT',
         },
       ],
+      //     evaluate: 'evaluate.action',
     },
   },
+
   // Window Level + Presets...
   {
     id: 'WindowLevel',
