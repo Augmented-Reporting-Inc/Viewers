@@ -57,6 +57,7 @@ ENV PATH=/usr/src/app/node_modules/.bin:$PATH
 ENV QUICK_BUILD=true
 # ENV GENERATE_SOURCEMAP=false
 # ENV REACT_APP_CONFIG=config/default.js
+ENV PUBLIC_URL=/rviewer/
 
 RUN yarn run build
 
