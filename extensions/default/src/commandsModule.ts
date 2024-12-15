@@ -141,47 +141,6 @@ const commandsModule = ({
         reuseCachedLayouts(state, hangingProtocolService);
         const { hangingProtocolStageIndexMap } = useHangingProtocolStageIndexStore.getState();
         const { displaySetSelectorMap } = useDisplaySetSelectorStore.getState();
-
-        console.log('hpInfo', hpInfo);
-        console.log(
-          'default commandsModule protocolId',
-          protocolId,
-          'stageId',
-          stageId,
-          'stageIndex',
-          stageIndex
-        );
-
-        console.log('hpInfo', hpInfo);
-        console.log(
-          'default commandsModule protocolId',
-          protocolId,
-          'stageId',
-          stageId,
-          'stageIndex',
-          stageIndex
-        );
-
-        console.log('hpInfo', hpInfo);
-        console.log(
-          'default commandsModule protocolId',
-          protocolId,
-          'stageId',
-          stageId,
-          'stageIndex',
-          stageIndex
-        );
-
-        console.log('hpInfo', hpInfo);
-        console.log(
-          'default commandsModule protocolId',
-          protocolId,
-          'stageId',
-          stageId,
-          'stageIndex',
-          stageIndex
-        );
-
         console.log('hpInfo', hpInfo);
         console.log(
           'default commandsModule protocolId',
