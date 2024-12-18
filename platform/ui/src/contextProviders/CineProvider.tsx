@@ -2,13 +2,13 @@ import React, { createContext, useCallback, useContext, useEffect, useReducer } 
 import PropTypes from 'prop-types';
 
 const DEFAULT_STATE = {
-  isCineEnabled: true,
+  isCineEnabled: false,
   cines: {
-    1: { isPlaying: true, frameRate: 50 },
+    /* 1: { isPlaying: true, frameRate: 50 },*/
   },
 };
 
-const DEFAULT_CINE = { isPlaying: true, frameRate: 24 };
+const DEFAULT_CINE = { isPlaying: false, frameRate: 24 };
 
 export const CineContext = createContext(DEFAULT_STATE);
 

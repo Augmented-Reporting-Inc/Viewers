@@ -114,13 +114,14 @@ window.config = {
         supportsWildcard: true,
         staticWado: true,
         // https://github.com/OHIF/Viewers/pull/3878
-        singlepart: 'video,thumbnail',
+        // https://docs.ohif.org/configuration/datasources/dicom-web/#singlepart
+        singlepart: 'thumbnail',
         /*        wadoUriRoot: 'https://d14fa38qiwhyfd.cloudfront.net/dicomweb',
         qidoRoot: 'https://d14fa38qiwhyfd.cloudfront.net/dicomweb',
         wadoRoot: 'https://d14fa38qiwhyfd.cloudfront.net/dicomweb',*/
-        wadoUriRoot: 'https://ssoback.futurepacs.com/orthanc/wado',
-        qidoRoot: 'https://ssoback.futurepacs.com/orthanc/dicom-web',
-        wadoRoot: 'https://ssoback.futurepacs.com/orthanc/dicom-web',
+        wadoUriRoot: 'https://cneatbe.futurepacs.com/orthanc/wado',
+        qidoRoot: 'https://cneatbe.futurepacs.com/orthanc/dicom-web',
+        wadoRoot: 'https://cneatbe.futurepacs.com/orthanc/dicom-web',
         /*        onConfiguration: (dicomWebConfig, options) => {
           const { query } = options;
           const gateway = query.get('gateway');
@@ -133,12 +134,15 @@ window.config = {
             wadoUriRoot: pathUrlWado,
           };
         },
-        */
+
         bulkDataURI: {
           enabled: true,
-          relativeResolution: 'studies',
-        },
-        acceptHeader: ['multipart/related; type=application/octet-stream; transfer-syntax=*'],
+          relativeResolution: 'series',
+        },*/
+        acceptHeader: [
+          'multipart/related; type=application/octet-stream; transfer-syntax=*',
+          //          'multipart/related; type=image/jpeg; transfer-syntax=*',
+        ],
         omitQuotationForMultipartRequest: true,
         dicomUploadEnabled: true,
         allowMultiSelectExport: true,
