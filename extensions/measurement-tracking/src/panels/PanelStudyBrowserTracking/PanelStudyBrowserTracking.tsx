@@ -229,8 +229,12 @@ export default function PanelStudyBrowserTracking({
       return;
     }
 
+    const sortedDisplaySets = currentDisplaySets.sort((a, b) => {
+      return a.InstanceNumber - b.InstanceNumber;
+    });
+
     const mappedDisplaySets = _mapDisplaySets(
-      currentDisplaySets,
+      sortedDisplaySets,
       displaySetsLoadingState,
       thumbnailImageSrcMap,
       trackedSeries,
