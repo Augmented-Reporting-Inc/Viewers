@@ -141,6 +141,7 @@ window.config = {
         },*/
         acceptHeader: [
           'multipart/related; type=application/octet-stream; transfer-syntax=*',
+          'multipart/related; type=application/octet-stream; transfer-syntax=1.2.840.10008.1.2.4.50',
           //          'multipart/related; type=image/jpeg; transfer-syntax=*',
         ],
         omitQuotationForMultipartRequest: true,

@@ -607,7 +607,7 @@ function _mapDisplaySets(
       const thumbnailProps = {
         displaySetInstanceUID,
         description: ds.SeriesDescription,
-        seriesNumber: ds.SeriesNumber,
+        seriesNumber: ds.InstanceNumber,
         modality: ds.Modality,
         seriesDate: formatDate(ds.SeriesDate),
         numInstances: ds.numImageFrames,
