@@ -1,13 +1,11 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ViewportActionArrows } from '@ohif/ui-next';
-import { useViewportGrid } from '@ohif/ui-next';
+import { LoadingIndicatorTotalPercent, useViewportGrid, ViewportActionArrows } from '@ohif/ui';
 import createSEGToolGroupAndAddTools from '../utils/initSEGToolGroup';
 import promptHydrateSEG from '../utils/promptHydrateSEG';
 import _getStatusComponent from './_getStatusComponent';
 import { usePositionPresentationStore } from '@ohif/extension-cornerstone';
 import { SegmentationRepresentations } from '@cornerstonejs/tools/enums';
-import { utils } from '@ohif/extension-cornerstone';
 
 const SEG_TOOLGROUP_BASE_NAME = 'SEGToolGroup';
 
@@ -32,10 +30,6 @@ function OHIFCornerstoneSEGViewport(props: withAppTypes) {
     viewportActionCornersService,
   } = servicesManager.services;
 
-  const LoadingIndicatorTotalPercent = customizationService.getCustomization(
-    'ui.loadingIndicatorTotalPercent'
-  );
-
   const toolGroupId = `${SEG_TOOLGROUP_BASE_NAME}-${viewportId}`;
 
   // SEG viewport will always have a single display set
@@ -47,7 +41,7 @@ function OHIFCornerstoneSEGViewport(props: withAppTypes) {
   const [viewportGrid, viewportGridService] = useViewportGrid();
 
   // States
-  const selectedSegmentObjectIndex: number = 0;
+  const [selectedSegment, setSelectedSegment] = useState(1);
   const { setPositionPresentation } = usePositionPresentationStore();
 
   // Hydration means that the SEG is opened and segments are loaded into the
@@ -132,15 +126,27 @@ function OHIFCornerstoneSEGViewport(props: withAppTypes) {
 
   const onSegmentChange = useCallback(
     direction => {
-      utils.handleSegmentChange({
-        direction,
-        segDisplaySet: segDisplaySet,
-        viewportId,
-        selectedSegmentObjectIndex,
-        segmentationService,
-      });
+      const segmentationId = segDisplaySet.displaySetInstanceUID;
+      const segmentation = segmentationService.getSegmentation(segmentationId);
+
+      const { segments } = segmentation;
+
+      const numberOfSegments = Object.keys(segments).length;
+
+      let newSelectedSegmentIndex = selectedSegment + direction;
+
+      // Segment 0 is always background
+
+      if (newSelectedSegmentIndex > numberOfSegments - 1) {
+        newSelectedSegmentIndex = 1;
+      } else if (newSelectedSegmentIndex === 0) {
+        newSelectedSegmentIndex = numberOfSegments - 1;
+      }
+
+      segmentationService.jumpToSegmentCenter(segmentationId, newSelectedSegmentIndex, viewportId);
+      setSelectedSegment(newSelectedSegmentIndex);
     },
-    [selectedSegmentObjectIndex]
+    [selectedSegment]
   );
 
   const hydrateSEG = useCallback(() => {
@@ -160,7 +166,7 @@ function OHIFCornerstoneSEGViewport(props: withAppTypes) {
       displaySetInstanceUID: referencedDisplaySet.displaySetInstanceUID,
     });
 
-    commandsManager.runCommand('loadSegmentationDisplaySetsForViewport', {
+    viewportGridService.setDisplaySetsForViewport({
       viewportId,
       displaySetInstanceUIDs: [referencedDisplaySet.displaySetInstanceUID],
     });
