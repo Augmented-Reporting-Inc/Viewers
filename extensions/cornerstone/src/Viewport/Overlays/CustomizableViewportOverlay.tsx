@@ -2,9 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { vec3 } from 'gl-matrix';
 import PropTypes from 'prop-types';
 import { metaData, Enums, utilities } from '@cornerstonejs/core';
-import type { ImageSliceData } from '@cornerstonejs/core/types';
 import { ViewportOverlay } from '@ohif/ui';
-import type { InstanceMetadata } from '@ohif/core/src/types';
 import {
   formatPN,
   formatDuration,
@@ -12,6 +10,10 @@ import {
   formatDICOMTime,
   formatNumberPrecision,
 } from './utils';
+import { InstanceMetadata } from 'platform/core/src/types';
+import { ServicesManager } from '@ohif/core';
+import { ImageSliceData } from '@cornerstonejs/core/dist/esm/types';
+// import { InstanceMetadata } from '@ohif/core/src/types';
 import { StackViewportData, VolumeViewportData } from '../../types/CornerstoneCacheService';
 
 import './CustomizableViewportOverlay.css';
@@ -265,6 +267,11 @@ function CustomizableViewportOverlay({
           formatNumberPrecision: formatNumberPrecision,
           formatDuration: formatDuration,
         },
+        //        instance,
+        // calculated
+        voi,
+        scale,
+        instanceNumber,
       };
 
       if (!item) {

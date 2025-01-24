@@ -151,6 +151,16 @@ const commandsModule = ({
           stageIndex
         );
 
+        console.log('hpInfo', hpInfo);
+        console.log(
+          'default commandsModule protocolId',
+          protocolId,
+          'stageId',
+          stageId,
+          'stageIndex',
+          stageIndex
+        );
+
         if (!protocolId) {
           // Reuse the previous protocol id, and optionally stage
           protocolId = hpInfo.protocolId;
