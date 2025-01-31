@@ -42,7 +42,7 @@ function ViewerHeader({ appConfig }: withAppTypes<{ appConfig: AppTypes.Config }
   const UserPreferencesModal = customizationService.getCustomization('ohif.userPreferencesModal');
 
   const menuOptions = [
-    {
+    /*    {
       title: t('Header:About'),
       icon: 'info',
       onClick: () =>
@@ -52,6 +52,7 @@ function ViewerHeader({ appConfig }: withAppTypes<{ appConfig: AppTypes.Config }
           containerClassName: 'max-w-md',
         }),
     },
+    */
     {
       title: t('Header:Preferences'),
       icon: 'settings',

@@ -145,7 +145,7 @@ const Thumbnail = ({
             </TooltipTrigger>
           </Tooltip>
           <div className="flex h-[12px] items-center gap-[7px] overflow-hidden">
-            <div className="text-muted-foreground pl-1 text-[11px]"> S:{seriesNumber}</div>
+            <div className="text-muted-foreground pl-1 text-[11px]"> I:{seriesNumber}</div>
             <div className="text-muted-foreground text-[11px]">
               <div className="flex items-center gap-[4px]">
                 {countIcon ? (
@@ -192,7 +192,7 @@ const Thumbnail = ({
             </div>
 
             <div className="flex h-[12px] items-center gap-[7px] overflow-hidden">
-              <div className="text-muted-foreground text-[12px]"> S:{seriesNumber}</div>
+              <div className="text-muted-foreground text-[12px]"> I:{seriesNumber}</div>
               <div className="text-muted-foreground text-[12px]">
                 <div className="flex items-center gap-[4px]">
                   {' '}

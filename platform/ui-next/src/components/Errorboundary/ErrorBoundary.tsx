@@ -54,7 +54,7 @@ Stack: ${error.stack}
     navigator.clipboard.writeText(errorDetails);
     toast.success(t('Copied to clipboard'));
   };
-
+  /*
   useEffect(() => {
     toast.error(title, {
       description: subtitle,
@@ -65,7 +65,7 @@ Stack: ${error.stack}
       duration: 0,
     });
   }, [error]);
-
+*/
   if (isProduction) {
     return null;
   }

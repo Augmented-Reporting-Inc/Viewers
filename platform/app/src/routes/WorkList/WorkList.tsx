@@ -470,7 +470,7 @@ function WorkList({
   const UserPreferencesModal = customizationService.getCustomization('ohif.userPreferencesModal');
 
   const menuOptions = [
-    {
+    /*   {
       title: t('Header:About'),
       icon: 'info',
       onClick: () =>
@@ -480,6 +480,7 @@ function WorkList({
           containerClassName: 'max-w-md ',
         }),
     },
+    */
     {
       title: t('Header:Preferences'),
       icon: 'settings',

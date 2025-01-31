@@ -1,7 +1,10 @@
+import { hotkeys } from '@ohif/core';
 import i18n from 'i18next';
 import { id } from './id';
 import initToolGroups from './initToolGroups';
 import toolbarButtons from './toolbarButtons';
+import moreTools from './moreTools';
+import { performCustomizations } from './customizations';
 
 // Allow this mode by excluding non-imaging modalities such as SR, SEG
 // Also, SM is not a simple imaging modalities, so exclude it.
@@ -10,9 +13,11 @@ const NON_IMAGE_MODALITIES = ['ECG', 'SEG', 'RTSTRUCT', 'RTPLAN', 'PR'];
 const ohif = {
   layout: '@ohif/extension-default.layoutTemplateModule.viewerLayout',
   sopClassHandler: '@ohif/extension-default.sopClassHandlerModule.stack',
+  hangingProtocols: '@ohif/extension-default.hangingProtocolModule.default',
   thumbnailList: '@ohif/extension-default.panelModule.seriesList',
   wsiSopClassHandler:
     '@ohif/extension-cornerstone.sopClassHandlerModule.DicomMicroscopySopClassHandler',
+  measurements: '@ohif/extension-default.panelModule.measurements',
 };
 
 const cornerstone = {
@@ -82,15 +87,23 @@ function modeFactory({ modeConfiguration }) {
      * Lifecycle hooks
      */
     onModeEnter: function ({ servicesManager, extensionManager, commandsManager }: withAppTypes) {
-      const { measurementService, toolbarService, toolGroupService, customizationService } =
-        servicesManager.services;
+      const {
+        measurementService,
+        toolbarService,
+        toolGroupService,
+        customizationService,
+        panelService,
+        segmentationService,
+      } = servicesManager.services;
 
       measurementService.clearMeasurements();
 
-      // Init Default and SR ToolGroups
-      initToolGroups(extensionManager, toolGroupService, commandsManager);
+      performCustomizations(customizationService);
 
-      toolbarService.addButtons(toolbarButtons);
+      // Init Default and SR ToolGroups
+      initToolGroups(extensionManager, toolGroupService, commandsManager, this.labelConfig);
+
+      toolbarService.addButtons([...toolbarButtons, ...moreTools]);
       toolbarService.createButtonSection('primary', [
         'MeasurementTools',
         'Zoom',
@@ -100,76 +113,38 @@ function modeFactory({ modeConfiguration }) {
         'Capture',
         'Layout',
         'Crosshairs',
+        'Cine',
+        'Previous',
+        'Next',
         'MoreTools',
       ]);
 
-      toolbarService.createButtonSection('measurementSection', [
-        'Length',
-        'Bidirectional',
-        'ArrowAnnotate',
-        'EllipticalROI',
-        'RectangleROI',
-        'CircleROI',
-        'PlanarFreehandROI',
-        'SplineROI',
-        'LivewireContour',
-      ]);
-
-      toolbarService.createButtonSection('moreToolsSection', [
-        'Reset',
-        'rotate-right',
-        'flipHorizontal',
-        'ImageSliceSync',
-        'ReferenceLines',
-        'ImageOverlayViewer',
-        'StackScroll',
-        'invert',
-        'Probe',
-        'Cine',
-        'Angle',
-        'CobbAngle',
-        'Magnify',
-        'CalibrationLine',
-        'TagBrowser',
-        'AdvancedMagnify',
-        'UltrasoundDirectionalTool',
-        'WindowLevelRegion',
-      ]);
-
-      customizationService.setCustomizations({
-        'panelSegmentation.disableEditing': {
-          $set: true,
+      customizationService.addModeCustomizations([
+        {
+          id: 'segmentation.panel',
+          disableEditing: true,
         },
-      });
+      ]);
 
       // // ActivatePanel event trigger for when a segmentation or measurement is added.
       // // Do not force activation so as to respect the state the user may have left the UI in.
-      // _activatePanelTriggersSubscriptions = [
-      //   ...panelService.addActivatePanelTriggers(
-      //     cornerstone.segmentation,
-      //     [
-      //       {
-      //         sourcePubSubService: segmentationService,
-      //         sourceEvents: [segmentationService.EVENTS.SEGMENTATION_ADDED],
-      //       },
-      //     ],
-      //     true
-      //   ),
-      //   ...panelService.addActivatePanelTriggers(
-      //     tracked.measurements,
-      //     [
-      //       {
-      //         sourcePubSubService: measurementService,
-      //         sourceEvents: [
-      //           measurementService.EVENTS.MEASUREMENT_ADDED,
-      //           measurementService.EVENTS.RAW_MEASUREMENT_ADDED,
-      //         ],
-      //       },
-      //     ],
-      //     true
-      //   ),
-      //   true,
-      // ];
+      _activatePanelTriggersSubscriptions = [
+        ...panelService.addActivatePanelTriggers(cornerstone.segmentation, [
+          {
+            sourcePubSubService: segmentationService,
+            sourceEvents: [segmentationService.EVENTS.SEGMENTATION_ADDED],
+          },
+        ]),
+        ...panelService.addActivatePanelTriggers(tracked.measurements, [
+          {
+            sourcePubSubService: measurementService,
+            sourceEvents: [
+              measurementService.EVENTS.MEASUREMENT_ADDED,
+              measurementService.EVENTS.RAW_MEASUREMENT_ADDED,
+            ],
+          },
+        ]),
+      ];
     },
     onModeExit: ({ servicesManager }: withAppTypes) => {
       const {
@@ -184,7 +159,7 @@ function modeFactory({ modeConfiguration }) {
       _activatePanelTriggersSubscriptions.forEach(sub => sub.unsubscribe());
       _activatePanelTriggersSubscriptions = [];
 
-      uiDialogService.hideAll();
+      uiDialogService.dismissAll();
       uiModalService.hide();
       toolGroupService.destroy();
       syncGroupService.destroy();
@@ -218,10 +193,8 @@ function modeFactory({ modeConfiguration }) {
             id: ohif.layout,
             props: {
               leftPanels: [tracked.thumbnailList],
-              leftPanelResizable: true,
               rightPanels: [cornerstone.segmentation, tracked.measurements],
               rightPanelClosed: true,
-              rightPanelResizable: true,
               viewports: [
                 {
                   namespace: tracked.viewport,
@@ -261,6 +234,7 @@ function modeFactory({ modeConfiguration }) {
     extensions: extensionDependencies,
     // Default protocol gets self-registered by default in the init
     hangingProtocol: 'default',
+    hangingProtocols: [ohif.hangingProtocols],
     // Order is important in sop class handlers when two handlers both use
     // the same sop class under different situations.  In that case, the more
     // general handler needs to come last.  For this case, the dicomvideo must
@@ -276,6 +250,7 @@ function modeFactory({ modeConfiguration }) {
       dicomsr.sopClassHandler,
       dicomRT.sopClassHandler,
     ],
+    hotkeys: [...hotkeys.defaults.hotkeyBindings],
     ...modeConfiguration,
   };
 }
@@ -287,4 +262,4 @@ const mode = {
 };
 
 export default mode;
-export { initToolGroups, toolbarButtons };
+export { initToolGroups, moreTools, toolbarButtons };

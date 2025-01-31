@@ -229,8 +229,12 @@ export default function PanelStudyBrowserTracking({
       return;
     }
 
+    const sortedDisplaySets = currentDisplaySets.sort((a, b) => {
+      return a.InstanceNumber - b.InstanceNumber;
+    });
+
     const mappedDisplaySets = _mapDisplaySets(
-      currentDisplaySets,
+      sortedDisplaySets,
       displaySetsLoadingState,
       thumbnailImageSrcMap,
       trackedSeries,
@@ -603,7 +607,7 @@ function _mapDisplaySets(
       const thumbnailProps = {
         displaySetInstanceUID,
         description: ds.SeriesDescription,
-        seriesNumber: ds.SeriesNumber,
+        seriesNumber: ds.InstanceNumber,
         modality: ds.Modality,
         seriesDate: formatDate(ds.SeriesDate),
         numInstances: ds.numImageFrames,
