@@ -206,21 +206,6 @@ const toolbarButtons: Button[] = [
     },
   },
   {
-    id: 'Cine',
-    uiType: 'ohif.radioGroup',
-    props: {
-      icon: 'tool-cine',
-      label: 'Cine',
-      commands: [
-        {
-          commandName: 'toggleCine',
-          context: 'CORNERSTONE',
-        },
-      ],
-      //      evaluate: 'evaluate.cornerstoneTool.toggle',
-    },
-  },
-  {
     id: 'Previous',
     uiType: 'ohif.radioGroup',
     props: {
