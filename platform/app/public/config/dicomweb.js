@@ -192,9 +192,9 @@ window.config = {
         onConfiguration: (dicomWebConfig, options) => {
           //         console.log("options", options);
           const { params } = options;
-          const { clinic } = params;
-          const pathUrlDicomWeb = `/${clinic}`;
-          const pathUrlWado = `/${clinic}`;
+          const { clinicName } = params;
+          const pathUrlDicomWeb = `/${clinicName}`;
+          const pathUrlWado = `/${clinicName}`;
           return {
             ...dicomWebConfig,
             wadoRoot: pathUrlDicomWeb,
