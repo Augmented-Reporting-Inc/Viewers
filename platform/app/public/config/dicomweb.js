@@ -178,9 +178,9 @@ window.config = {
       configuration: {
         friendlyName: 'AWS S3 Static wado server',
         name: 'aws',
-        wadoUriRoot: '/dicomweb',
-        qidoRoot: '/dicomweb',
-        wadoRoot: '/dicomweb',
+        //        wadoUriRoot: '/dicomweb',
+        //        qidoRoot: '/dicomweb',
+        //        wadoRoot: '/dicomweb',
         qidoSupportsIncludeField: false,
         imageRendering: 'wadors',
         thumbnailRendering: 'wadors',
@@ -189,6 +189,19 @@ window.config = {
         supportsWildcard: true,
         staticWado: true,
         singlepart: 'thumbnail',
+        onConfiguration: (dicomWebConfig, options) => {
+          //         console.log("options", options);
+          const { params } = options;
+          const { clinic } = params;
+          const pathUrlDicomWeb = `/${clinic}`;
+          const pathUrlWado = `/${clinic}`;
+          return {
+            ...dicomWebConfig,
+            wadoRoot: pathUrlDicomWeb,
+            qidoRoot: pathUrlDicomWeb,
+            wadoUriRoot: pathUrlWado,
+          };
+        },
         acceptHeader: ['multipart/related; type=application/octet-stream; transfer-syntax=*'],
         omitQuotationForMultipartRequest: true,
         dicomUploadEnabled: true,
