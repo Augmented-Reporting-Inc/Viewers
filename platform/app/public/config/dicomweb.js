@@ -4,7 +4,7 @@ window.config = {
   extensions: [],
   modes: [],
   showPatientInfo: 'visible',
-  showStudyList: true,
+  showStudyList: false,
   // below flag is for performance reasons, but it might not work for all servers
   maxNumberOfWebWorkers: 3,
   showWarningMessageForCrossOrigin: false,
@@ -35,8 +35,8 @@ window.config = {
     '@ohif/extension-default.customizationModule.datasources',
     '@ohif/extension-default.customizationModule.helloPage',
     {
-      dicomUploadComponent:
-        '@ohif/extension-cornerstone.customizationModule.cornerstoneDicomUploadComponent',
+      //      dicomUploadComponent:
+      //        '@ohif/extension-cornerstone.customizationModule.cornerstoneDicomUploadComponent',
       cornerstoneOverlayTopLeft: {
         id: 'cornerstoneOverlayTopLeft',
         customizationType: 'ohif.cornerstoneOverlay',
@@ -186,30 +186,26 @@ window.config = {
         thumbnailRendering: 'wadors',
         enableStudyLazyLoad: true,
         supportsFuzzyMatching: false,
-        supportsWildcard: true,
+        supportsWildcard: false,
         staticWado: true,
         singlepart: 'thumbnail',
-        onConfiguration: (dicomWebConfig, options) => {
-          //         console.log("options", options);
-          const { params } = options;
-          const { clinicName } = params;
-          const pathUrlDicomWeb = `/${clinicName}`;
-          const pathUrlWado = `/${clinicName}`;
+        onConfiguration: dicomWebConfig => {
+          const clinicName = new URLSearchParams(window.location.search).get('clinicName');
           return {
             ...dicomWebConfig,
-            wadoRoot: pathUrlDicomWeb,
-            qidoRoot: pathUrlDicomWeb,
-            wadoUriRoot: pathUrlWado,
+            wadoRoot: `/${clinicName}`,
+            qidoRoot: `/${clinicName}`,
+            wadoUriRoot: `/${clinicName}`,
           };
         },
         acceptHeader: ['multipart/related; type=application/octet-stream; transfer-syntax=*'],
         omitQuotationForMultipartRequest: true,
-        dicomUploadEnabled: true,
-        allowMultiSelectExport: true,
+        //        dicomUploadEnabled: true,
+        allowMultiSelectExport: false,
         bulkDataURI: {
           enabled: true,
-          relativeResolution: 'studies',
-          transform: url => url.replace('/pixeldata.mp4', '/rendered'),
+          relativeResolution: 'series',
+          //          transform: url => url.replace('/pixeldata.mp4', '/rendered'),
         },
       },
     },
