@@ -10,6 +10,7 @@ const NON_IMAGE_MODALITIES = ['ECG', 'SEG', 'RTSTRUCT', 'RTPLAN', 'PR'];
 const ohif = {
   layout: '@ohif/extension-default.layoutTemplateModule.viewerLayout',
   sopClassHandler: '@ohif/extension-default.sopClassHandlerModule.stack',
+  hangingProtocols: '@ohif/extension-default.hangingProtocolModule.default',
   thumbnailList: '@ohif/extension-default.panelModule.seriesList',
   wsiSopClassHandler:
     '@ohif/extension-cornerstone.sopClassHandlerModule.DicomMicroscopySopClassHandler',
@@ -99,6 +100,9 @@ function modeFactory({ modeConfiguration }) {
         'WindowLevel',
         'Capture',
         'Layout',
+        'Cine',
+        'Previous',
+        'Next',
         'Crosshairs',
         'MoreTools',
       ]);
@@ -141,6 +145,8 @@ function modeFactory({ modeConfiguration }) {
           $set: true,
         },
       });
+      //    hangingProtocol: 'default',
+      //    hangingProtocols: [ohif.hangingProtocols],
 
       // // ActivatePanel event trigger for when a segmentation or measurement is added.
       // // Do not force activation so as to respect the state the user may have left the UI in.

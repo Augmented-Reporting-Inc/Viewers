@@ -43,16 +43,6 @@ function ViewerHeader({ appConfig }: withAppTypes<{ appConfig: AppTypes.Config }
 
   const menuOptions = [
     {
-      title: t('Header:About'),
-      icon: 'info',
-      onClick: () =>
-        show({
-          content: AboutModal,
-          title: t('AboutModal:About OHIF Viewer'),
-          containerClassName: 'max-w-md',
-        }),
-    },
-    {
       title: t('Header:Preferences'),
       icon: 'settings',
       onClick: () =>

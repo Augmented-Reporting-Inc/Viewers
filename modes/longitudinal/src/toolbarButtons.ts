@@ -518,6 +518,59 @@ const toolbarButtons: Button[] = [
       },
     },
   },
+
+  {
+    id: 'Cine',
+    uiType: 'ohif.radioGroup',
+    props: {
+      icon: 'tool-cine',
+      label: 'Cine',
+      commands: [
+        {
+          commandName: 'toggleCine',
+          context: 'CORNERSTONE',
+        },
+      ],
+      //      evaluate: 'evaluate.cornerstoneTool.toggle',
+    },
+  },
+  {
+    id: 'Previous',
+    uiType: 'ohif.radioGroup',
+    props: {
+      icon: 'ChevronLeft',
+      label: 'Previous',
+      commands: [
+        {
+          commandName: 'updateViewportDisplaySet',
+          commandOptions: {
+            direction: -1,
+          },
+          context: 'DEFAULT',
+        },
+      ],
+      //      evaluate: 'evaluate.action',
+    },
+  },
+  {
+    id: 'Next',
+    uiType: 'ohif.radioGroup',
+    props: {
+      icon: 'ChevronRight',
+      label: 'Next',
+      commands: [
+        {
+          commandName: 'updateViewportDisplaySet',
+          commandOptions: {
+            direction: 1,
+          },
+          context: 'DEFAULT',
+        },
+      ],
+      //     evaluate: 'evaluate.action',
+    },
+  },
+
   // {
   //   id: 'Undo',
   //   uiType: 'ohif.toolButton',

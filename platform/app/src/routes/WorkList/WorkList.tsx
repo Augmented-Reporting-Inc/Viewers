@@ -471,16 +471,6 @@ function WorkList({
 
   const menuOptions = [
     {
-      title: t('Header:About'),
-      icon: 'info',
-      onClick: () =>
-        show({
-          content: AboutModal as React.ComponentType,
-          title: t('AboutModal:About OHIF Viewer'),
-          containerClassName: 'max-w-md ',
-        }),
-    },
-    {
       title: t('Header:Preferences'),
       icon: 'settings',
       onClick: () =>

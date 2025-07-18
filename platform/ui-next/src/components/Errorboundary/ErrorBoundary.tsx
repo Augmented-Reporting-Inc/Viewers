@@ -154,7 +154,7 @@ const DefaultFallback = ({
     }
   };
 
-  useEffect(() => {
+  /*  useEffect(() => {
     // Use a stable ID based on error message to support deduplication
     const errorId = `error-${errorTitle || error.message}`;
 
@@ -171,7 +171,7 @@ const DefaultFallback = ({
       },
     });
   }, [error, errorTitle, subtitle, t, title, show]);
-
+*/
   if (isProduction) {
     return null;
   }
