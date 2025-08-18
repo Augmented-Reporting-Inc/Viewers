@@ -1,6 +1,12 @@
 // https://developers.google.com/web/tools/workbox/guides/codelabs/webpack
 // ~~ WebPack
 const path = require('path');
+// Resolve packages specifically from the APP workspace, not siblings (e.g., docs)
+const aliasFromApp = {
+  'react-router-dom': path.dirname(require.resolve('react-router-dom/package.json', { paths: [__dirname] })),
+  'react-router':     path.dirname(require.resolve('react-router/package.json',     { paths: [__dirname] })),
+  'history':          path.dirname(require.resolve('history/package.json',          { paths: [__dirname] })),
+};
 const { merge } = require('webpack-merge');
 const webpack = require('webpack');
 const webpackBase = require('./../../../.webpack/webpack.base.js');
@@ -63,6 +69,11 @@ module.exports = (env, argv) => {
       },
     },
     resolve: {
+        // 🔒 Force everything this build compiles (app + extensions)
+  // to use the app’s copies of React Router v6 + history v5.
+  alias: {
+    ...aliasFromApp,
+  },
       modules: [
         // Modules specific to this package
         path.resolve(__dirname, '../node_modules'),
