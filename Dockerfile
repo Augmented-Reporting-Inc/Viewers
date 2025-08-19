@@ -38,20 +38,30 @@ COPY platform /usr/src/app/platform
 
 # Copy Files
 FROM node:18.16.1-slim as builder
-RUN apt-get update && apt-get install -y build-essential python3
+# Tools needed by various deps + git fetches
+RUN apt-get update && apt-get install -y --no-install-recommends \
+  build-essential python3 git ca-certificates && \
+  rm -rf /var/lib/apt/lists/*
+
+# Use Yarn 4 from your package.json's "packageManager"
+RUN corepack enable && corepack prepare yarn@4.9.2 --activate
+
 RUN mkdir /usr/src/app
 WORKDIR /usr/src/app
 
 COPY --from=json-copier /usr/src/app .
 
 # Run the install before copying the rest of the files
-RUN yarn config set workspaces-experimental true
-RUN yarn install --frozen-lockfile --verbose
+RUN yarn install --immutable --inline-builds
 
 COPY . .
 
 # To restore workspaces symlinks
-RUN yarn install --frozen-lockfile --verbose
+RUN yarn install --immutable --inline-builds
+
+# Make the build see your subpath + config
+ARG PUBLIC_URL=/rviewer/
+ENV PUBLIC_URL=${PUBLIC_URL}
 
 ENV PATH /usr/src/app/node_modules/.bin:$PATH
 ENV QUICK_BUILD true

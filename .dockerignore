@@ -1,37 +1,36 @@
-# Reduces size of context and hides
-# files from Docker (can't COPY or ADD these)
-
-# Note that typically the Docker context for various OHIF containers is the
-# directory of this file (i.e. the root of the source). As such, this is
-# the .dockerignore file for ALL Docker containers that are built. For example,
-# the Docker containers built from the recipes in ./platform/app/.recipes will
-# have this file as their .dockerignore.
-
-# Output
-dist/
-build/
-
-# Dependencies
-node_modules/
-
-# Root
-README.md
-Dockerfile
-dockerfile
-
-# Misc. Config
-.git
-.DS_Store
-.gitignore
-.vscode
-.circleci
-
-# Unnecessary things to pull into container
-.circleci/
-.github/
-.netlify/
-.scripts/
-.vscode/
+# ===== Outputs / caches
+**/dist/
+**/build/
+**/.cache/
 coverage/
+
+# ===== Dependencies (ignore EVERY node_modules in the monorepo)
+**/node_modules/
+
+# Yarn 4 (keep releases/plugins if you use them)
+.yarn/*
+!.yarn/releases/**
+!.yarn/plugins/**
+!.yarn/patches/**
+!.yarn/sdks/**
+.yarn/cache
+.yarn/install-state.gz
+.pnp.cjs
+.pnp.loader.mjs
+
+# ===== VCS & CI
+.git
+.gitignore
+.github/
+.circleci/
+.netlify/
+
+# ===== Misc
+.DS_Store
+.vscode/
 docs/
 testdata/
+
+# (Optional) large local files or env
+*.log
+.env*

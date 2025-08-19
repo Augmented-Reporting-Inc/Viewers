@@ -18,29 +18,30 @@ Write-Host "Building version $Version ($ShortSha) with PUBLIC_URL=$PublicUrl" -F
 # Build
 docker build `
   --build-arg PUBLIC_URL=$PublicUrl `
-  -t "$Image:$Version" `
+  -t "${Image}:${Version}" `
   -f "$Dockerfile" `
-  . || exit 1
+  .
+if ($LASTEXITCODE -ne 0) { exit 1 }
 
 # Local tags
 $major = ($Version.Split('.'))[0]
 $minor = ($Version.Split('.'))[0..1] -join '.'
 $tags = @(
-  "$Image:$Version",
-  "$Image:$minor",
-  "$Image:$major",
-  "$Image:latest",
-  "$Image:$Version-$ShortSha"
+  "${Image}:${Version}",
+  "${Image}:${minor}",
+  "${Image}:${major}",
+  "${Image}:latest",
+  "${Image}:${Version}-${ShortSha}"
 )
 
 # Tag locally
-foreach ($t in $tags[1..($tags.Count-1)]) { docker tag "$Image:$Version" "$t" }
+$tags[1..($tags.Count-1)] | ForEach-Object { docker tag "${Image}:${Version}" $_ }
 
 # ECR tagging/push (optional)
 if ($EcrRepo) {
   Write-Host "Tagging for ECR: $EcrRepo" -ForegroundColor Yellow
-  $ecrTags = $tags | ForEach-Object { "$EcrRepo:" + ($_ -split ':')[-1] }
-  foreach ($e in $ecrTags) { docker tag "$Image:$Version" "$e" }
+  $ecrTags = $tags | ForEach-Object { "${EcrRepo}:" + (($_ -split ':')[-1]) }
+  foreach ($e in $ecrTags) { docker tag "${Image}:${Version}" "$e" }
 
   # Login (requires AWS CLI v2 configured)  skip if already logged in
   try {
@@ -60,5 +61,5 @@ Write-Host "Done. Tags:" -ForegroundColor Green
 $tags | ForEach-Object { Write-Host "  - $_" }
 if ($EcrRepo) {
   Write-Host "ECR Tags:" -ForegroundColor Green
-  ($tags | ForEach-Object { "$EcrRepo:" + ($_ -split ':')[-1] }) | ForEach-Object { Write-Host "  - $_" }
+  ($tags | ForEach-Object { "${EcrRepo}:" + (($_ -split ':')[-1]) }) | ForEach-Object { Write-Host "  - $_" }
 }
