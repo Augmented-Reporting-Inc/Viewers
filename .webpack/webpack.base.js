@@ -147,6 +147,7 @@ module.exports = (env, argv, { SRC_DIR, ENTRY }) => {
           test: /\.m?js/,
           resolve: {
             fullySpecified: false,
+            extensions: ['.mjs', '.cjs', '.js', '.jsx', '.ts', '.tsx', '.json'],
           },
         },
         cssToJavaScript,

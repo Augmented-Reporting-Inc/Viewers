@@ -19,7 +19,7 @@ import { StackViewportData, VolumeViewportData } from '../../types/CornerstoneCa
 import './CustomizableViewportOverlay.css';
 
 const EPSILON = 1e-4;
-const { formatPN } = utils;
+// const { formatPN } = utils;
 
 type ViewportData = StackViewportData | VolumeViewportData;
 

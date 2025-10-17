@@ -119,9 +119,9 @@ window.config = {
         /*        wadoUriRoot: 'https://d14fa38qiwhyfd.cloudfront.net/dicomweb',
         qidoRoot: 'https://d14fa38qiwhyfd.cloudfront.net/dicomweb',
         wadoRoot: 'https://d14fa38qiwhyfd.cloudfront.net/dicomweb',*/
-        wadoUriRoot: 'https://cneatbe.futurepacs.com/orthanc/wado',
-        qidoRoot: 'https://cneatbe.futurepacs.com/orthanc/dicom-web',
-        wadoRoot: 'https://cneatbe.futurepacs.com/orthanc/dicom-web',
+        wadoUriRoot: 'https://ssoback.futurepacs.com/orthanc/wado',
+        qidoRoot: 'https://ssoback.futurepacs.com/orthanc/dicom-web',
+        wadoRoot: 'https://ssoback.futurepacs.com/orthanc/dicom-web',
         /*        onConfiguration: (dicomWebConfig, options) => {
           const { query } = options;
           const gateway = query.get('gateway');
@@ -141,7 +141,7 @@ window.config = {
         },*/
         acceptHeader: [
           'multipart/related; type=application/octet-stream; transfer-syntax=*',
-          'multipart/related; type=application/octet-stream; transfer-syntax=1.2.840.10008.1.2.4.50',
+          //          'multipart/related; type=application/octet-stream; transfer-syntax=1.2.840.10008.1.2.4.50',
           //          'multipart/related; type=image/jpeg; transfer-syntax=*',
         ],
         omitQuotationForMultipartRequest: true,
