@@ -48,7 +48,7 @@ function ViewerHeader({ appConfig }: withAppTypes<{ appConfig: AppTypes.Config }
   ) as Types.MenuComponentCustomization;
 
   const menuOptions = [
-    {
+    /*    {
       title: AboutModal?.menuTitle ?? t('Header:About'),
       icon: 'info',
       onClick: () =>
@@ -58,6 +58,7 @@ function ViewerHeader({ appConfig }: withAppTypes<{ appConfig: AppTypes.Config }
           containerClassName: AboutModal?.containerClassName ?? 'max-w-md',
         }),
     },
+    */
     {
       title: UserPreferencesModal.menuTitle ?? t('Header:Preferences'),
       icon: 'settings',

@@ -99,6 +99,9 @@ function modeFactory({ modeConfiguration }) {
         'WindowLevel',
         'Capture',
         'Layout',
+        'Cine',
+        'Previous',
+        'Next',
         'Crosshairs',
         'MoreTools',
       ]);

@@ -92,7 +92,7 @@ export default function PanelStudyBrowserTracking({
         array.push({
           displaySetInstanceUID,
           description: ds.SeriesDescription || '',
-          seriesNumber: ds.SeriesNumber,
+          seriesNumber: ds.InstanceNumber,
           modality: ds.Modality,
           seriesDate: ds.SeriesDate ? new Date(ds.SeriesDate).toLocaleDateString() : '',
           numInstances: ds.numImageFrames,

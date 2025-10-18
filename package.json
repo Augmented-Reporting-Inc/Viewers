@@ -75,7 +75,14 @@
     "link-list": "npm ls --depth=0 --link=true"
   },
   "dependencies": {
-    "execa": "^8.0.1"
+    "@radix-ui/react-hover-card": "^1.1.15",
+    "execa": "^8.0.1",
+    "immutability-helper": "^3.1.1",
+    "lodash.compact": "^3.0.1",
+    "lodash.flatten": "^4.4.0",
+    "lodash.uniqby": "^4.7.0",
+    "lodash.zip": "^4.2.0",
+    "react-resizable-panels": "^3.0.6"
   },
   "optionalDependencies": {
     "@percy/cypress": "^3.1.1",
@@ -83,21 +90,21 @@
   },
   "devDependencies": {
     "@babel/core": "7.28.0",
+    "@babel/plugin-syntax-dynamic-import": "^7.8.3",
+    "@babel/plugin-transform-arrow-functions": "^7.16.7",
     "@babel/plugin-transform-class-properties": "^7.27.1",
+    "@babel/plugin-transform-for-of": "^7.27.1",
     "@babel/plugin-transform-object-rest-spread": "^7.28.0",
     "@babel/plugin-transform-private-methods": "^7.27.1",
     "@babel/plugin-transform-private-property-in-object": "^7.27.1",
-    "@babel/plugin-syntax-dynamic-import": "^7.8.3",
-    "@babel/plugin-transform-arrow-functions": "^7.16.7",
-    "@babel/plugin-transform-for-of": "^7.27.1",
     "@babel/plugin-transform-regenerator": "^7.16.7",
     "@babel/plugin-transform-runtime": "7.28.0",
     "@babel/plugin-transform-typescript": "^7.28.0",
     "@babel/preset-env": "7.28.0",
     "@babel/preset-react": "^7.27.1",
     "@babel/preset-typescript": "^7.27.1",
-    "babel-plugin-istanbul": "^7.0.0",
     "@istanbuljs/nyc-config-typescript": "^1.0.2",
+    "babel-plugin-istanbul": "^7.0.0",
     "cypress": "14.5.2",
     "cypress-file-upload": "^5.0.8",
     "istanbul": "0.4.5",
@@ -107,7 +114,12 @@
     "prettier": "^3.3.3",
     "prettier-plugin-tailwindcss": "0.6.9",
     "source-map-support": "^0.5.21",
-    "ts-node": "^10.9.2"
+    "ts-node": "^10.9.2",
+    "webpack": "^5",
+    "webpack-cli": "^5",
+    "webpack-dev-middleware": "^5",
+    "webpack-dev-server": "^4",
+    "webpack-merge": "^5"
   },
   "husky": {
     "hooks": {

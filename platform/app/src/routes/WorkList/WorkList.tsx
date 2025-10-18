@@ -473,7 +473,7 @@ function WorkList({
   ) as coreTypes.MenuComponentCustomization;
 
   const menuOptions = [
-    {
+    /*    {
       title: AboutModal?.menuTitle ?? t('Header:About'),
       icon: 'info',
       onClick: () =>
@@ -483,6 +483,7 @@ function WorkList({
           containerClassName: AboutModal?.containerClassName ?? 'max-w-md',
         }),
     },
+*/
     {
       title: UserPreferencesModal.menuTitle ?? t('Header:Preferences'),
       icon: 'settings',

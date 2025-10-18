@@ -106,6 +106,7 @@ const makeDisplaySet = instances => {
     SeriesInstanceUID: instance.SeriesInstanceUID,
     StudyInstanceUID: instance.StudyInstanceUID,
     SeriesNumber: instance.SeriesNumber || 0,
+    InstanceNumber: instance.InstanceNumber,
     FrameRate: instance.FrameTime,
     SOPClassUID: instance.SOPClassUID,
     SeriesDescription: instance.SeriesDescription || '',
@@ -186,7 +187,6 @@ function getDisplaySetsFromSeries(instances) {
   // Split Multi-frame instances and Single-image modalities
   // into their own specific display sets. Place the rest of each
   // series into another display set.
-  const stackableInstances = [];
   instances.forEach(instance => {
     // All imaging modalities must have a valid value for sopClassUid (x00080016) or rows (x00280010)
     if (!isImage(instance.SOPClassUID) && !instance.Rows) {
@@ -194,36 +194,17 @@ function getDisplaySetsFromSeries(instances) {
     }
 
     let displaySet;
-    if (isMultiFrame(instance)) {
-      displaySet = makeDisplaySet([instance]);
-      displaySet.setAttributes({
-        sopClassUids,
-        numImageFrames: instance.NumberOfFrames,
-        instanceNumber: instance.InstanceNumber,
-        acquisitionDatetime: instance.AcquisitionDateTime,
-      });
-      displaySets.push(displaySet);
-    } else if (isSingleImageModality(instance.Modality)) {
-      displaySet = makeDisplaySet([instance]);
-      displaySet.setAttributes({
-        sopClassUids,
-        instanceNumber: instance.InstanceNumber,
-        acquisitionDatetime: instance.AcquisitionDateTime,
-      });
-      displaySets.push(displaySet);
-    } else {
-      stackableInstances.push(instance);
-    }
-  });
-
-  if (stackableInstances.length) {
-    const displaySet = makeDisplaySet(stackableInstances);
-    displaySet.setAttribute('studyInstanceUid', instances[0].StudyInstanceUID);
+    displaySet = makeDisplaySet([instance]);
     displaySet.setAttributes({
       sopClassUids,
+      isClip: isMultiFrame(instance),
+      numImageFrames: instance.NumberOfFrames || 1,
+      instanceNumber: instance.InstanceNumber,
+      acquisitionDatetime: instance.AcquisitionDateTime,
     });
     displaySets.push(displaySet);
-  }
+    displaySets.sort((a, b) => (a.InstanceNumber > b.InstanceNumber ? 1 : -1));
+  });
 
   return displaySets;
 }

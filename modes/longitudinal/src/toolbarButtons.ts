@@ -342,6 +342,34 @@ const toolbarButtons: Button[] = [
     },
   },
   {
+    id: 'Previous',
+    uiType: 'ohif.toolButton',
+    props: {
+      icon: 'ChevronLeft',
+      label: 'Previous',
+      commands: {
+        commandName: 'updateViewportDisplaySet',
+        commandOptions: {
+          direction: -1,
+        },
+      },
+    },
+  },
+  {
+    id: 'Next',
+    uiType: 'ohif.toolButton',
+    props: {
+      icon: 'ChevronRight',
+      label: 'Next',
+      commands: {
+        commandName: 'updateViewportDisplaySet',
+        commandOptions: {
+          direction: 1,
+        },
+      },
+    },
+  },
+  {
     id: 'Angle',
     uiType: 'ohif.toolButton',
     props: {

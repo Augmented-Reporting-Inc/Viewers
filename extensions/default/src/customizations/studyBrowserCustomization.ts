@@ -37,9 +37,9 @@ export default {
   ],
   'studyBrowser.sortFunctions': [
     {
-      label: 'Series Number',
+      label: 'Instance Number',
       sortFunction: (a, b) => {
-        return a?.SeriesNumber - b?.SeriesNumber;
+        return a?.InstanceNumber - b?.InstanceNumber;
       },
     },
     {

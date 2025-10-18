@@ -6,7 +6,7 @@ import { Enums as csToolsEnums, UltrasoundPleuraBLineTool } from '@cornerstonejs
 import type { ImageSliceData } from '@cornerstonejs/core/types';
 import { ViewportOverlay } from '@ohif/ui-next';
 import type { InstanceMetadata } from '@ohif/core/src/types';
-import { formatDICOMDate, formatDICOMTime, formatNumberPrecision } from './utils';
+import { formatDuration, formatDICOMDate, formatDICOMTime, formatNumberPrecision } from './utils';
 import { utils } from '@ohif/core';
 import { StackViewportData, VolumeViewportData } from '../../types/CornerstoneCacheService';
 
@@ -31,6 +31,7 @@ interface OverlayItemProps {
     formatDate: (val) => string;
     formatTime: (val) => string;
     formatNumberPrecision: (val, number) => string;
+    formatDuration: (val) => string;
   };
 
   // calculated values
@@ -194,6 +195,7 @@ function CustomizableViewportOverlay({
           formatDate: formatDICOMDate,
           formatTime: formatDICOMTime,
           formatNumberPrecision,
+          formatDuration: formatDuration,
         },
       };
 

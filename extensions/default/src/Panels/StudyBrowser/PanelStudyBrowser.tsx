@@ -219,8 +219,12 @@ function PanelStudyBrowser({
       return;
     }
 
+    const sortedDisplaySets = currentDisplaySets.sort((a, b) => {
+      return a.InstanceNumber - b.InstanceNumber;
+    });
+
     const mappedDisplaySets = mapDisplaySetsWithState(
-      currentDisplaySets,
+      sortedDisplaySets,
       displaySetsLoadingState,
       thumbnailImageSrcMap,
       viewports
@@ -483,7 +487,7 @@ function _mapDisplaySets(displaySets, displaySetLoadingState, thumbnailImageSrcM
       array.push({
         displaySetInstanceUID,
         description: ds.SeriesDescription || '',
-        seriesNumber: ds.SeriesNumber,
+        seriesNumber: ds.InstanceNumber,
         modality: ds.Modality,
         seriesDate: formatDate(ds.SeriesDate),
         numInstances: ds.numImageFrames,
