@@ -1,7 +1,7 @@
 {
   "name": "mode-stress-echo",
-  "version": "0.0.1",
-  "description": "stress echo mode",
+  "version": "3.11.0",
+  "description": "futurePACS stress echo extension for OHIF Viewer",
   "author": "",
   "license": "MIT",
   "main": "dist/umd/mode-stress-echo/index.umd.js",
@@ -32,15 +32,15 @@
     "test:unit:ci": "jest --ci --runInBand --collectCoverage --passWithNoTests"
   },
   "peerDependencies": {
-    "@ohif/core": "3.9.0-beta.80",
-    "@ohif/extension-cornerstone": "3.9.0-beta.80",
-    "@ohif/extension-cornerstone-dicom-rt": "3.9.0-beta.80",
-    "@ohif/extension-cornerstone-dicom-seg": "3.9.0-beta.80",
-    "@ohif/extension-cornerstone-dicom-sr": "3.9.0-beta.80",
-    "@ohif/extension-default": "3.9.0-beta.80",
-    "@ohif/extension-dicom-pdf": "3.9.0-beta.80",
-    "@ohif/extension-dicom-video": "3.9.0-beta.80",
-    "@ohif/extension-measurement-tracking": "3.9.0-beta.80"
+    "@ohif/core": "3.11.0",
+    "@ohif/extension-cornerstone": "3.11.0",
+    "@ohif/extension-cornerstone-dicom-rt": "3.11.0",
+    "@ohif/extension-cornerstone-dicom-seg": "3.11.0",
+    "@ohif/extension-cornerstone-dicom-sr": "3.11.0",
+    "@ohif/extension-default": "3.11.0",
+    "@ohif/extension-dicom-pdf": "3.11.0",
+    "@ohif/extension-dicom-video": "3.11.0",
+    "@ohif/extension-measurement-tracking": "3.11.0"
   },
   "dependencies": {
     "@babel/runtime": "^7.20.13",
@@ -68,7 +68,7 @@
     "dotenv": "^14.1.0",
     "eslint": "^5.0.1",
     "eslint-loader": "^2.0.0",
-    "webpack": "5.89.0",
+    "webpack": "5.95.0",
     "webpack-merge": "^5.7.3",
     "webpack-cli": "^4.7.2"
   }
