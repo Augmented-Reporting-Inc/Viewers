@@ -75,9 +75,11 @@ export default function FilterStageView({ /** servicesManager,*/ commandsManager
               placeholder={filterBy}
               onChange={handleSecondDropdownChange}
               isClearable={false}
-              components={{
-                DropdownIndicator: () => <Icon name={'chevron-down-new'} className="mr-2" />,
-              }}
+              components={
+                {
+                  //                DropdownIndicator: () => <Icon name="chevron-down" className="mr-2" />,
+                }
+              }
               isSearchable={false}
               className="text-aqua-pale w-30 h-[13px] text-[26px]"
               options={secondDropdownOptions[firstDropdownValue]}
@@ -150,9 +152,11 @@ export default function FilterStageView({ /** servicesManager,*/ commandsManager
               onChange={handleFirstDropdownChange}
               placeholder={firstDropdownValue}
               isClearable={false}
-              components={{
-                DropdownIndicator: () => <Icon name={'chevron-down-new'} className="mr-2" />,
-              }}
+              components={
+                {
+                  //                DropdownIndicator: () => <Icon name="chevron-down" className="mr-2" />,
+                }
+              }
               isSearchable={false}
               className="text-aqua-pale w-30 h-[13px] text-[26px]"
               options={firstDropdownOptions}

@@ -1,340 +1,731 @@
-// TODO: torn, can either bake this here; or have to create a whole new button type
-// Only ways that you can pass in a custom React component for render :l
-import { WindowLevelMenuItem } from '@ohif/ui';
-import { defaults } from '@ohif/core';
-import { toolGroupIds } from './initToolGroups';
-const { windowLevelPresets } = defaults;
-/**
- *
- * @param {*} type - 'tool' | 'action' | 'toggle'
- * @param {*} id
- * @param {*} icon
- * @param {*} label
- */
-function _createButton(type, id, icon, label, commands, tooltip) {
-  return {
-    id,
-    icon,
-    label,
-    type,
-    commands,
-    tooltip,
-  };
-}
+import type { Button } from '@ohif/core/types';
 
-function _createColormap(label, colormap) {
-  return {
-    id: label,
-    label,
-    type: 'action',
-    commands: [
-      {
-        commandName: 'setFusionPTColormap',
-        commandOptions: {
-          toolGroupId: toolGroupIds.Fusion,
-          colormap,
-        },
-      },
-    ],
-  };
-}
+import { EVENTS } from '@cornerstonejs/core';
+import { ViewportGridService } from '@ohif/core';
 
-const _createActionButton = _createButton.bind(null, 'action');
-const _createToggleButton = _createButton.bind(null, 'toggle');
-const _createToolButton = _createButton.bind(null, 'tool');
-
-/**
- *
- * @param {*} preset - preset number (from above import)
- * @param {*} title
- * @param {*} subtitle
- */
-function _createWwwcPreset(preset, title, subtitle) {
-  return {
-    id: preset.toString(),
-    title,
-    subtitle,
-    type: 'action',
-    commands: [
-      {
-        commandName: 'setWindowLevel',
-        commandOptions: {
-          ...windowLevelPresets[preset],
-        },
-        context: 'CORNERSTONE',
-      },
-    ],
-  };
-}
-
-function _createCommands(commandName, toolName, toolGroupIds) {
-  return toolGroupIds.map(toolGroupId => ({
-    /* It's a command that is being run when the button is clicked. */
-    commandName,
+const callbacks = (toolName: string) => [
+  {
+    commandName: 'setViewportForToolConfiguration',
     commandOptions: {
       toolName,
-      toolGroupId,
     },
-    context: 'CORNERSTONE',
-  }));
-}
+  },
+];
 
-const toolbarButtons = [
-  // Measurement
+export const setToolActiveToolbar = {
+  commandName: 'setToolActiveToolbar',
+  commandOptions: {
+    toolGroupIds: ['default', 'mpr', 'SRToolGroup', 'volume3d'],
+  },
+};
+
+const toolbarButtons: Button[] = [
+  // sections
   {
     id: 'MeasurementTools',
-    type: 'ohif.splitButton',
+    uiType: 'ohif.toolButtonList',
     props: {
-      groupId: 'MeasurementTools',
-      isRadio: true, // ?
-      // Switch?
-      primary: _createToolButton(
-        'Length',
-        'tool-length',
-        'Length',
-        [
-          ..._createCommands('setToolActive', 'Length', [
-            toolGroupIds.CT,
-            toolGroupIds.PT,
-            toolGroupIds.Fusion,
-            // toolGroupIds.MPR,
-          ]),
-        ],
-        'Length'
-      ),
-      secondary: {
-        icon: 'chevron-down',
-        label: '',
-        isActive: true,
-        tooltip: 'More Measure Tools',
-      },
-      items: [
-        _createToolButton(
-          'Length',
-          'tool-length',
-          'Length',
-          [
-            ..._createCommands('setToolActive', 'Length', [
-              toolGroupIds.CT,
-              toolGroupIds.PT,
-              toolGroupIds.Fusion,
-              // toolGroupIds.MPR,
-            ]),
-          ],
-          'Length Tool'
-        ),
-        _createToolButton(
-          'Bidirectional',
-          'tool-bidirectional',
-          'Bidirectional',
-          [
-            ..._createCommands('setToolActive', 'Bidirectional', [
-              toolGroupIds.CT,
-              toolGroupIds.PT,
-              toolGroupIds.Fusion,
-              // toolGroupIds.MPR,
-            ]),
-          ],
-          'Bidirectional Tool'
-        ),
-        _createToolButton(
-          'ArrowAnnotate',
-          'tool-annotate',
-          'Annotation',
-          [
-            ..._createCommands('setToolActive', 'ArrowAnnotate', [
-              toolGroupIds.CT,
-              toolGroupIds.PT,
-              toolGroupIds.Fusion,
-              // toolGroupIds.MPR,
-            ]),
-          ],
-          'Arrow Annotate'
-        ),
-        _createToolButton(
-          'EllipticalROI',
-          'tool-elipse',
-          'Ellipse',
-          [
-            ..._createCommands('setToolActive', 'EllipticalROI', [
-              toolGroupIds.CT,
-              toolGroupIds.PT,
-              toolGroupIds.Fusion,
-              // toolGroupIds.MPR,
-            ]),
-          ],
-          'Ellipse Tool'
-        ),
-      ],
+      buttonSection: true,
     },
   },
-  // Zoom..
   {
-    id: 'Zoom',
-    type: 'ohif.radioGroup',
+    id: 'MoreTools',
+    uiType: 'ohif.toolButtonList',
+    props: {
+      buttonSection: true,
+    },
+  },
+  {
+    id: 'AdvancedRenderingControls',
+    uiType: 'ohif.advancedRenderingControls',
+    props: {
+      buttonSection: true,
+    },
+  },
+  // tool defs
+  {
+    id: 'modalityLoadBadge',
+    uiType: 'ohif.modalityLoadBadge',
+    props: {
+      icon: 'Status',
+      label: 'Status',
+      tooltip: 'Status',
+      evaluate: {
+        name: 'evaluate.modalityLoadBadge',
+        hideWhenDisabled: true,
+      },
+    },
+  },
+  {
+    id: 'navigationComponent',
+    uiType: 'ohif.navigationComponent',
+    props: {
+      icon: 'Navigation',
+      label: 'Navigation',
+      tooltip: 'Navigate between segments/measurements and manage their visibility',
+      evaluate: {
+        name: 'evaluate.navigationComponent',
+        hideWhenDisabled: true,
+      },
+    },
+  },
+  {
+    id: 'trackingStatus',
+    uiType: 'ohif.trackingStatus',
+    props: {
+      icon: 'TrackingStatus',
+      label: 'Tracking Status',
+      tooltip: 'View and manage tracking status of measurements and annotations',
+      evaluate: {
+        name: 'evaluate.trackingStatus',
+        hideWhenDisabled: true,
+      },
+    },
+  },
+  {
+    id: 'dataOverlayMenu',
+    uiType: 'ohif.dataOverlayMenu',
+    props: {
+      icon: 'ViewportViews',
+      label: 'Data Overlay',
+      tooltip: 'Configure data overlay options and manage foreground/background display sets',
+      evaluate: 'evaluate.dataOverlayMenu',
+    },
+  },
+  {
+    id: 'orientationMenu',
+    uiType: 'ohif.orientationMenu',
+    props: {
+      icon: 'OrientationSwitch',
+      label: 'Orientation',
+      tooltip: 'Change viewport orientation between axial, sagittal, coronal and reformat planes',
+      evaluate: {
+        name: 'evaluate.orientationMenu',
+        // hideWhenDisabled: true,
+      },
+    },
+  },
+  {
+    id: 'windowLevelMenuEmbedded',
+    uiType: 'ohif.windowLevelMenuEmbedded',
+    props: {
+      icon: 'WindowLevel',
+      label: 'Window Level',
+      tooltip: 'Adjust window/level presets and customize image contrast settings',
+      evaluate: {
+        name: 'evaluate.windowLevelMenuEmbedded',
+        hideWhenDisabled: true,
+      },
+    },
+  },
+  {
+    id: 'windowLevelMenu',
+    uiType: 'ohif.windowLevelMenu',
+    props: {
+      icon: 'WindowLevel',
+      label: 'Window Level',
+      tooltip: 'Adjust window/level presets and customize image contrast settings',
+      evaluate: {
+        name: 'evaluate.windowLevelMenu',
+      },
+    },
+  },
+  {
+    id: 'voiManualControlMenu',
+    uiType: 'ohif.voiManualControlMenu',
+    props: {
+      icon: 'WindowLevelAdvanced',
+      label: 'Advanced Window Level',
+      tooltip: 'Advanced window/level settings with manual controls and presets',
+      evaluate: 'evaluate.voiManualControlMenu',
+    },
+  },
+  {
+    id: 'thresholdMenu',
+    uiType: 'ohif.thresholdMenu',
+    props: {
+      icon: 'Threshold',
+      label: 'Threshold',
+      tooltip: 'Image threshold settings',
+      evaluate: {
+        name: 'evaluate.thresholdMenu',
+        hideWhenDisabled: true,
+      },
+    },
+  },
+  {
+    id: 'opacityMenu',
+    uiType: 'ohif.opacityMenu',
+    props: {
+      icon: 'Opacity',
+      label: 'Opacity',
+      tooltip: 'Image opacity settings',
+      evaluate: {
+        name: 'evaluate.opacityMenu',
+        hideWhenDisabled: true,
+      },
+    },
+  },
+  {
+    id: 'Colorbar',
+    uiType: 'ohif.colorbar',
     props: {
       type: 'tool',
-      icon: 'tool-zoom',
-      label: 'Zoom',
-      commands: [
-        ..._createCommands('setToolActive', 'Zoom', [
-          toolGroupIds.CT,
-          toolGroupIds.PT,
-          toolGroupIds.Fusion,
-          // toolGroupIds.MPR,
-        ]),
-      ],
+      label: 'Colorbar',
     },
   },
   {
-    id: 'MPR',
-    type: 'ohif.action',
+    id: 'Reset',
+    uiType: 'ohif.toolButton',
     props: {
-      type: 'toggle',
-      icon: 'icon-mpr',
-      label: 'MPR',
-      commands: [
+      icon: 'tool-reset',
+      label: 'Reset View',
+      tooltip: 'Reset View',
+      commands: 'resetViewport',
+      evaluate: 'evaluate.action',
+    },
+  },
+  {
+    id: 'rotate-right',
+    uiType: 'ohif.toolButton',
+    props: {
+      icon: 'tool-rotate-right',
+      label: 'Rotate Right',
+      tooltip: 'Rotate +90',
+      commands: 'rotateViewportCW',
+      evaluate: [
+        'evaluate.action',
         {
-          commandName: 'toggleHangingProtocol',
-          commandOptions: {
-            protocolId: 'mpr',
-          },
-          context: 'DEFAULT',
+          name: 'evaluate.viewport.supported',
+          unsupportedViewportTypes: ['video'],
         },
       ],
     },
   },
-  // Window Level + Presets...
+  {
+    id: 'flipHorizontal',
+    uiType: 'ohif.toolButton',
+    props: {
+      icon: 'tool-flip-horizontal',
+      label: 'Flip Horizontal',
+      tooltip: 'Flip Horizontally',
+      commands: 'flipViewportHorizontal',
+      evaluate: [
+        'evaluate.viewportProperties.toggle',
+        {
+          name: 'evaluate.viewport.supported',
+          unsupportedViewportTypes: ['video', 'volume3d'],
+        },
+      ],
+    },
+  },
+  {
+    id: 'ImageSliceSync',
+    uiType: 'ohif.toolButton',
+    props: {
+      icon: 'link',
+      label: 'Image Slice Sync',
+      tooltip: 'Enable position synchronization on stack viewports',
+      commands: {
+        commandName: 'toggleSynchronizer',
+        commandOptions: {
+          type: 'imageSlice',
+        },
+      },
+      listeners: {
+        [EVENTS.VIEWPORT_NEW_IMAGE_SET]: {
+          commandName: 'toggleImageSliceSync',
+          commandOptions: { toggledState: true },
+        },
+      },
+      evaluate: [
+        'evaluate.cornerstone.synchronizer',
+        {
+          name: 'evaluate.viewport.supported',
+          unsupportedViewportTypes: ['video', 'volume3d'],
+        },
+      ],
+    },
+  },
+  {
+    id: 'ReferenceLines',
+    uiType: 'ohif.toolButton',
+    props: {
+      icon: 'tool-referenceLines',
+      label: 'Reference Lines',
+      tooltip: 'Show Reference Lines',
+      commands: 'toggleEnabledDisabledToolbar',
+      listeners: {
+        [ViewportGridService.EVENTS.ACTIVE_VIEWPORT_ID_CHANGED]: callbacks('ReferenceLines'),
+        [ViewportGridService.EVENTS.VIEWPORTS_READY]: callbacks('ReferenceLines'),
+      },
+      evaluate: [
+        'evaluate.cornerstoneTool.toggle',
+        {
+          name: 'evaluate.viewport.supported',
+          unsupportedViewportTypes: ['video'],
+        },
+      ],
+    },
+  },
+  {
+    id: 'ImageOverlayViewer',
+    uiType: 'ohif.toolButton',
+    props: {
+      icon: 'toggle-dicom-overlay',
+      label: 'Image Overlay',
+      tooltip: 'Toggle Image Overlay',
+      commands: 'toggleEnabledDisabledToolbar',
+      evaluate: [
+        'evaluate.cornerstoneTool.toggle',
+        {
+          name: 'evaluate.viewport.supported',
+          unsupportedViewportTypes: ['video'],
+        },
+      ],
+    },
+  },
+  {
+    id: 'StackScroll',
+    uiType: 'ohif.toolButton',
+    props: {
+      icon: 'tool-stack-scroll',
+      label: 'Stack Scroll',
+      tooltip: 'Stack Scroll',
+      commands: setToolActiveToolbar,
+      evaluate: 'evaluate.cornerstoneTool',
+    },
+  },
+  {
+    id: 'invert',
+    uiType: 'ohif.toolButton',
+    props: {
+      icon: 'tool-invert',
+      label: 'Invert',
+      tooltip: 'Invert Colors',
+      commands: 'invertViewport',
+      evaluate: [
+        'evaluate.viewportProperties.toggle',
+        {
+          name: 'evaluate.viewport.supported',
+          unsupportedViewportTypes: ['video'],
+        },
+      ],
+    },
+  },
+  {
+    id: 'Probe',
+    uiType: 'ohif.toolButton',
+    props: {
+      icon: 'tool-probe',
+      label: 'Probe',
+      tooltip: 'Probe',
+      commands: setToolActiveToolbar,
+      evaluate: 'evaluate.cornerstoneTool',
+    },
+  },
+  {
+    id: 'Cine',
+    uiType: 'ohif.toolButton',
+    props: {
+      icon: 'tool-cine',
+      label: 'Cine',
+      tooltip: 'Cine',
+      commands: 'toggleCine',
+      evaluate: [
+        'evaluate.cine',
+        {
+          name: 'evaluate.viewport.supported',
+          unsupportedViewportTypes: ['volume3d'],
+        },
+      ],
+    },
+  },
+  {
+    id: 'Previous',
+    uiType: 'ohif.toolButton',
+    props: {
+      icon: 'ChevronLeft',
+      label: 'Previous',
+      commands: {
+        commandName: 'updateViewportDisplaySet',
+        commandOptions: {
+          direction: -1,
+        },
+      },
+    },
+  },
+  {
+    id: 'Next',
+    uiType: 'ohif.toolButton',
+    props: {
+      icon: 'ChevronRight',
+      label: 'Next',
+      commands: {
+        commandName: 'updateViewportDisplaySet',
+        commandOptions: {
+          direction: 1,
+        },
+      },
+    },
+  },
+  {
+    id: 'Angle',
+    uiType: 'ohif.toolButton',
+    props: {
+      icon: 'tool-angle',
+      label: 'Angle',
+      tooltip: 'Angle',
+      commands: setToolActiveToolbar,
+      evaluate: 'evaluate.cornerstoneTool',
+    },
+  },
+  {
+    id: 'CobbAngle',
+    uiType: 'ohif.toolButton',
+    props: {
+      icon: 'icon-tool-cobb-angle',
+      label: 'Cobb Angle',
+      tooltip: 'Cobb Angle',
+      commands: setToolActiveToolbar,
+      evaluate: 'evaluate.cornerstoneTool',
+    },
+  },
+  {
+    id: 'Magnify',
+    uiType: 'ohif.toolButton',
+    props: {
+      icon: 'tool-magnify',
+      label: 'Zoom-in',
+      tooltip: 'Zoom-in',
+      commands: setToolActiveToolbar,
+      evaluate: [
+        'evaluate.cornerstoneTool',
+        {
+          name: 'evaluate.viewport.supported',
+          unsupportedViewportTypes: ['video'],
+        },
+      ],
+    },
+  },
+  {
+    id: 'CalibrationLine',
+    uiType: 'ohif.toolButton',
+    props: {
+      icon: 'tool-calibration',
+      label: 'Calibration',
+      tooltip: 'Calibration Line',
+      commands: setToolActiveToolbar,
+      evaluate: [
+        'evaluate.cornerstoneTool',
+        {
+          name: 'evaluate.viewport.supported',
+          unsupportedViewportTypes: ['video'],
+        },
+      ],
+    },
+  },
+  {
+    id: 'TagBrowser',
+    uiType: 'ohif.toolButton',
+    props: {
+      icon: 'dicom-tag-browser',
+      label: 'Dicom Tag Browser',
+      tooltip: 'Dicom Tag Browser',
+      commands: 'openDICOMTagViewer',
+    },
+  },
+  {
+    id: 'AdvancedMagnify',
+    uiType: 'ohif.toolButton',
+    props: {
+      icon: 'icon-tool-loupe',
+      label: 'Magnify Probe',
+      tooltip: 'Magnify Probe',
+      commands: 'toggleActiveDisabledToolbar',
+      evaluate: [
+        'evaluate.cornerstoneTool.toggle.ifStrictlyDisabled',
+        {
+          name: 'evaluate.viewport.supported',
+          unsupportedViewportTypes: ['video'],
+        },
+      ],
+    },
+  },
+  {
+    id: 'UltrasoundDirectionalTool',
+    uiType: 'ohif.toolButton',
+    props: {
+      icon: 'icon-tool-ultrasound-bidirectional',
+      label: 'Ultrasound Directional',
+      tooltip: 'Ultrasound Directional',
+      commands: setToolActiveToolbar,
+      evaluate: [
+        'evaluate.cornerstoneTool',
+        {
+          name: 'evaluate.modality.supported',
+          supportedModalities: ['US'],
+        },
+      ],
+    },
+  },
+  {
+    id: 'WindowLevelRegion',
+    uiType: 'ohif.toolButton',
+    props: {
+      icon: 'icon-tool-window-region',
+      label: 'Window Level Region',
+      tooltip: 'Window Level Region',
+      commands: setToolActiveToolbar,
+      evaluate: [
+        'evaluate.cornerstoneTool',
+        {
+          name: 'evaluate.viewport.supported',
+          unsupportedViewportTypes: ['video'],
+        },
+      ],
+    },
+  },
+  {
+    id: 'Length',
+    uiType: 'ohif.toolButton',
+    props: {
+      icon: 'tool-length',
+      label: 'Length',
+      tooltip: 'Length Tool',
+      commands: setToolActiveToolbar,
+      evaluate: 'evaluate.cornerstoneTool',
+    },
+  },
+  {
+    id: 'Bidirectional',
+    uiType: 'ohif.toolButton',
+    props: {
+      icon: 'tool-bidirectional',
+      label: 'Bidirectional',
+      tooltip: 'Bidirectional Tool',
+      commands: setToolActiveToolbar,
+      evaluate: 'evaluate.cornerstoneTool',
+    },
+  },
+  {
+    id: 'ArrowAnnotate',
+    uiType: 'ohif.toolButton',
+    props: {
+      icon: 'tool-annotate',
+      label: 'Annotation',
+      tooltip: 'Arrow Annotate',
+      commands: setToolActiveToolbar,
+      evaluate: 'evaluate.cornerstoneTool',
+    },
+  },
+  {
+    id: 'EllipticalROI',
+    uiType: 'ohif.toolButton',
+    props: {
+      icon: 'tool-ellipse',
+      label: 'Ellipse',
+      tooltip: 'Ellipse ROI',
+      commands: setToolActiveToolbar,
+      evaluate: 'evaluate.cornerstoneTool',
+    },
+  },
+  {
+    id: 'RectangleROI',
+    uiType: 'ohif.toolButton',
+    props: {
+      icon: 'tool-rectangle',
+      label: 'Rectangle',
+      tooltip: 'Rectangle ROI',
+      commands: setToolActiveToolbar,
+      evaluate: 'evaluate.cornerstoneTool',
+    },
+  },
+  {
+    id: 'CircleROI',
+    uiType: 'ohif.toolButton',
+    props: {
+      icon: 'tool-circle',
+      label: 'Circle',
+      tooltip: 'Circle Tool',
+      commands: setToolActiveToolbar,
+      evaluate: 'evaluate.cornerstoneTool',
+    },
+  },
+  {
+    id: 'PlanarFreehandROI',
+    uiType: 'ohif.toolButton',
+    props: {
+      icon: 'icon-tool-freehand-roi',
+      label: 'Freehand ROI',
+      tooltip: 'Freehand ROI',
+      commands: setToolActiveToolbar,
+      evaluate: 'evaluate.cornerstoneTool',
+    },
+  },
+  {
+    id: 'SplineROI',
+    uiType: 'ohif.toolButton',
+    props: {
+      icon: 'icon-tool-spline-roi',
+      label: 'Spline ROI',
+      tooltip: 'Spline ROI',
+      commands: setToolActiveToolbar,
+      evaluate: 'evaluate.cornerstoneTool',
+    },
+  },
+  {
+    id: 'LivewireContour',
+    uiType: 'ohif.toolButton',
+    props: {
+      icon: 'icon-tool-livewire',
+      label: 'Livewire tool',
+      tooltip: 'Livewire tool',
+      commands: setToolActiveToolbar,
+      evaluate: 'evaluate.cornerstoneTool',
+    },
+  },
+  // Window Level
   {
     id: 'WindowLevel',
-    type: 'ohif.splitButton',
+    uiType: 'ohif.toolButton',
     props: {
-      groupId: 'WindowLevel',
-      primary: _createToolButton(
-        'WindowLevel',
-        'tool-window-level',
-        'Window Level',
-        [
-          ..._createCommands('setToolActive', 'WindowLevel', [
-            toolGroupIds.CT,
-            toolGroupIds.PT,
-            toolGroupIds.Fusion,
-            // toolGroupIds.MPR,
-          ]),
-        ],
-        'Window Level'
-      ),
-      secondary: {
-        icon: 'chevron-down',
-        label: 'W/L Manual',
-        isActive: true,
-        tooltip: 'W/L Presets',
-      },
-      isAction: true, // ?
-      renderer: WindowLevelMenuItem,
-      items: [
-        _createWwwcPreset(1, 'Soft tissue', '400 / 40'),
-        _createWwwcPreset(2, 'Lung', '1500 / -600'),
-        _createWwwcPreset(3, 'Liver', '150 / 90'),
-        _createWwwcPreset(4, 'Bone', '2500 / 480'),
-        _createWwwcPreset(5, 'Brain', '80 / 40'),
+      icon: 'tool-window-level',
+      label: 'Window Level',
+      commands: setToolActiveToolbar,
+      evaluate: [
+        'evaluate.cornerstoneTool',
+        {
+          name: 'evaluate.viewport.supported',
+          unsupportedViewportTypes: ['wholeSlide'],
+        },
       ],
     },
   },
-  {
-    id: 'Crosshairs',
-    type: 'ohif.radioGroup',
-    props: {
-      type: 'tool',
-      icon: 'tool-crosshair',
-      label: 'Crosshairs',
-      commands: [
-        ..._createCommands('setToolActive', 'Crosshairs', [
-          toolGroupIds.CT,
-          toolGroupIds.PT,
-          toolGroupIds.Fusion,
-          // toolGroupIds.MPR,
-        ]),
-      ],
-    },
-  },
-  // Pan...
   {
     id: 'Pan',
-    type: 'ohif.radioGroup',
+    uiType: 'ohif.toolButton',
     props: {
       type: 'tool',
       icon: 'tool-move',
       label: 'Pan',
-      commands: [
-        ..._createCommands('setToolActive', 'Pan', [
-          toolGroupIds.CT,
-          toolGroupIds.PT,
-          toolGroupIds.Fusion,
-          // toolGroupIds.MPR,
-        ]),
-      ],
+      commands: setToolActiveToolbar,
+      evaluate: 'evaluate.cornerstoneTool',
     },
   },
   {
-    id: 'RectangleROIStartEndThreshold',
-    type: 'ohif.radioGroup',
+    id: 'Zoom',
+    uiType: 'ohif.toolButton',
     props: {
       type: 'tool',
-      icon: 'tool-create-threshold',
-      label: 'Rectangle ROI Threshold',
-      commands: [
-        ..._createCommands('setToolActive', 'RectangleROIStartEndThreshold', [toolGroupIds.PT]),
+      icon: 'tool-zoom',
+      label: 'Zoom',
+      commands: setToolActiveToolbar,
+      evaluate: 'evaluate.cornerstoneTool',
+    },
+  },
+  {
+    id: 'TrackballRotate',
+    uiType: 'ohif.toolButton',
+    props: {
+      type: 'tool',
+      icon: 'tool-3d-rotate',
+      label: '3D Rotate',
+      commands: setToolActiveToolbar,
+      evaluate: {
+        name: 'evaluate.cornerstoneTool',
+        disabledText: 'Select a 3D viewport to enable this tool',
+      },
+    },
+  },
+  {
+    id: 'Capture',
+    uiType: 'ohif.toolButton',
+    props: {
+      icon: 'tool-capture',
+      label: 'Capture',
+      commands: 'showDownloadViewportModal',
+      evaluate: [
+        'evaluate.action',
         {
-          commandName: 'displayNotification',
-          commandOptions: {
-            title: 'RectangleROI Threshold Tip',
-            text: 'RectangleROI Threshold tool should be used on PT Axial Viewport',
-            type: 'info',
-          },
-        },
-        {
-          commandName: 'setViewportActive',
-          commandOptions: {
-            viewportId: 'ptAXIAL',
-          },
+          name: 'evaluate.viewport.supported',
+          unsupportedViewportTypes: ['video', 'wholeSlide'],
         },
       ],
     },
   },
   {
-    id: 'fusionPTColormap',
-    type: 'ohif.splitButton',
+    id: 'Layout',
+    uiType: 'ohif.layoutSelector',
     props: {
-      groupId: 'fusionPTColormap',
-      primary: _createToolButton(
-        'fusionPTColormap',
-        'tool-fusion-color',
-        'Fusion PT Colormap',
-        [],
-        'Fusion PT Colormap'
-      ),
-      secondary: {
-        icon: 'chevron-down',
-        label: 'PT Colormap',
-        isActive: true,
-        tooltip: 'PET Image Colormap',
-      },
-      isAction: true, // ?
-      items: [
-        _createColormap('HSV', 'hsv'),
-        _createColormap('Hot Iron', 'hot_iron'),
-        _createColormap('S PET', 's_pet'),
-        _createColormap('Red Hot', 'red_hot'),
-        _createColormap('Perfusion', 'perfusion'),
-        _createColormap('Rainbow', 'rainbow_2'),
-        _createColormap('SUV', 'suv'),
-        _createColormap('GE 256', 'ge_256'),
-        _createColormap('GE', 'ge'),
-        _createColormap('Siemens', 'siemens'),
-      ],
+      rows: 3,
+      columns: 4,
+      evaluate: 'evaluate.action',
     },
   },
+  {
+    id: 'Crosshairs',
+    uiType: 'ohif.toolButton',
+    props: {
+      type: 'tool',
+      icon: 'tool-crosshair',
+      label: 'Crosshairs',
+      commands: {
+        commandName: 'setToolActiveToolbar',
+        commandOptions: {
+          toolGroupIds: ['mpr'],
+        },
+      },
+      evaluate: {
+        name: 'evaluate.cornerstoneTool',
+        disabledText: 'Select an MPR viewport to enable this tool',
+      },
+    },
+  },
+  // Section containers for the nested toolbox
+  {
+    id: 'SegmentationUtilities',
+    uiType: 'ohif.toolBoxButton',
+    props: {
+      buttonSection: true,
+    },
+  },
+  {
+    id: 'SegmentLabelTool',
+    uiType: 'ohif.toolBoxButton',
+    props: {
+      icon: 'tool-segment-label',
+      label: 'Segment Label Display',
+      tooltip: 'Click to show or hide segment labels when hovering with your mouse.',
+      commands: { commandName: 'toggleSegmentLabel' },
+    },
+  },
+  // {
+  //   id: 'Undo',
+  //   uiType: 'ohif.toolButton',
+  //   props: {
+  //     type: 'tool',
+  //     icon: 'prev-arrow',
+  //     label: 'Undo',
+  //     commands: {
+  //       commandName: 'undo',
+  //     },
+  //     evaluate: 'evaluate.action',
+  //   },
+  // },
+  // {
+  //   id: 'Redo',
+  //   uiType: 'ohif.toolButton',
+  //   props: {
+  //     type: 'tool',
+  //     icon: 'next-arrow',
+  //     label: 'Redo',
+  //     commands: {
+  //       commandName: 'redo',
+  //     },
+  //     evaluate: 'evaluate.action',
+  //   },
+  // },
 ];
 
 export default toolbarButtons;

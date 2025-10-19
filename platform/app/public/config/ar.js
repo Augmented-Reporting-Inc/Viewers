@@ -6,28 +6,23 @@ window.config = {
   customizationService: {
     dicomUploadComponent:
       '@ohif/extension-cornerstone.customizationModule.cornerstoneDicomUploadComponent',
-    cornerstoneOverlayTopLeft: {
-      id: 'cornerstoneOverlayTopLeft',
-      customizationType: 'ohif.cornerstoneOverlay',
-      items: [
+    'viewportOverlay.topLeft': {
+      $push: [
         {
           id: 'Stage',
-          customizationType: 'ohif.overlayItem',
-          title: 'Stage Name',
+          inheritsFrom: 'ohif.overlayItem',
           condition: ({ instance }) => instance && instance.StageName,
           contentF: ({ instance }) => instance.StageName,
         },
         {
           id: 'View',
-          customizationType: 'ohif.overlayItem',
-          title: 'View Name',
+          inheritsFrom: 'ohif.overlayItem',
           condition: ({ instance }) => instance && instance.ViewName,
           contentF: ({ instance }) => instance.ViewName,
         },
         {
           id: 'Timer',
-          customizationType: 'ohif.overlayItem',
-          title: 'Timer Name',
+          inheritsFrom: 'ohif.overlayItem',
           label: 'timer =',
           condition: ({ instance }) => instance && instance.EventElapsedTimes,
           contentF: ({ instance, formatters: { formatDuration } }) =>
@@ -35,29 +30,20 @@ window.config = {
         },
       ],
     },
-    cornerstoneOverlayTopRight: {
-      id: 'cornerstoneOverlayTopRight',
-      customizationType: 'ohif.cornerstoneOverlay',
-      items: [
-        {
-          id: 'InstanceNumber',
-          customizationType: 'ohif.overlayItem',
-          title: 'Instance Number',
-          condition: ({ instance }) => instance && instance.InstanceNumber,
-          contentF: ({ instance }) => instance.InstanceNumber,
-        },
+    'viewportOverlay.topRight': {
+      $push: [
         {
           id: 'AcquisitionTime',
-          customizationType: 'ohif.overlayItem',
-          title: 'Acquisition Time',
+          inheritsFrom: 'ohif.overlayItem',
+          label: 'Acquisition',
           condition: ({ instance }) => instance && instance.AcquisitionTime,
           contentF: ({ instance, formatters: { formatTime } }) =>
             formatTime(instance.AcquisitionTime),
         },
         {
           id: 'HR',
-          customizationType: 'ohif.overlayItem',
-          title: 'Heart Rate',
+          inheritsFrom: 'ohif.overlayItem',
+          label: 'HR',
           condition: ({ instance }) => instance && instance.HeartRate,
           contentF: ({ instance }) => instance.HeartRate + ' bpm',
         },

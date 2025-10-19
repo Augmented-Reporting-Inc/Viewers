@@ -1,10 +1,11 @@
 {
   "name": "extension-stress-echo",
-  "version": "0.0.1",
-  "description": "",
-  "author": "",
+  "version": "3.11.0",
+  "description": "futurePACS stress echo extension for OHIF Viewer",
+  "author": "Augmented Reporting Inc.",
   "license": "MIT",
   "main": "dist/umd/extension-stress-echo/index.umd.js",
+  "module": "src/index.tsx",
   "files": [
     "dist/**",
     "public/**",
@@ -14,7 +15,6 @@
   "keywords": [
     "ohif-extension"
   ],
-  "module": "src/index.tsx",
   "engines": {
     "node": ">=14",
     "npm": ">=6",
@@ -30,11 +30,12 @@
     "start": "yarn run dev"
   },
   "peerDependencies": {
-    "@ohif/core": "3.9.0-beta.80",
-    "@ohif/extension-default": "^3.0.0",
-    "@ohif/extension-cornerstone": "^3.0.0",
-    "@ohif/i18n": "3.9.0-beta.80",
-    "dcmjs": "*",
+    "@ohif/core": "3.11.0",
+    "@ohif/ui": "3.11.0",
+    "@ohif/extension-cornerstone": "3.11.0",
+    "@ohif/extension-default": "3.11.0",
+    "@ohif/i18n": "3.11.0",
+    "dcmjs": "0.43.1",
     "dicomweb-client": "^0.10.4",
     "prop-types": "^15.6.2",
     "react": "^18.3.1",

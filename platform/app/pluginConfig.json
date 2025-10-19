@@ -65,6 +65,10 @@
     {
       "packageName": "@ohif/extension-ultrasound-pleura-bline",
       "version": "3.0.0"
+    },
+    {
+      "packageName": "extension-stress-echo",
+      "version": "3.11.0"
     }
   ],
   "modes": [
@@ -96,6 +100,10 @@
     {
       "packageName": "@ohif/mode-ultrasound-pleura-bline",
       "version": "3.0.0"
+    },
+    {
+      "packageName": "mode-stress-echo",
+      "version": "3.11.0"
     }
   ],
   "public": [
