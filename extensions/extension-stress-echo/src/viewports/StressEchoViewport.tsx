@@ -3,10 +3,9 @@ import React, { useCallback, useContext, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import OHIF, { utils, ServicesManager, ExtensionManager } from '@ohif/core';
 
-// import { setTrackingUniqueIdentifiersForElement } from '../tools/modules/dicomSRModule';
-import { Tooltip, useViewportGrid, ViewportActionBar } from '@ohif/ui-next';
+import { useViewportGrid } from '@ohif/ui-next';
+import { Tooltip, TooltipTrigger, TooltipContent } from '@ohif/ui-next';
 import { Icon } from '@ohif/ui';
-// import hydrateStructuredReport from '../utils/hydrateStructuredReport';
 import { useAppConfig } from '@state';
 
 const { formatDate } = utils;
@@ -374,8 +373,15 @@ function _getStatusComponent({
   return (
     <>
       {ToolTipMessage && (
-        <Tooltip content={<ToolTipMessage />} position="bottom-left">
+        /*        <Tooltip content={<ToolTipMessage />} position="bottom-left">
           <StatusArea />
+        </Tooltip>
+*/
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <StatusArea />
+          </TooltipTrigger>
+          <TooltipContent side="bottom">{<ToolTipMessage />}</TooltipContent>
         </Tooltip>
       )}
       {!ToolTipMessage && <StatusArea />}
