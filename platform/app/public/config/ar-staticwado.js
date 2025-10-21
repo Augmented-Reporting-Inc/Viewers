@@ -1,5 +1,5 @@
 window.config = {
-  name: 'config/ar.js',
+  name: 'config/ar-staticwado.js',
   routerBasename: null,
   extensions: [],
   modes: [],
