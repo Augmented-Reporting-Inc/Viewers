@@ -1,6 +1,6 @@
 window.config = {
   name: 'config/ar-staticwado.js',
-  routerBasename: null,
+  routerBasename: '/ohif-assets/',
   extensions: [],
   modes: [],
   showPatientInfo: 'visible',
