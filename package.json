@@ -85,8 +85,7 @@
     "lodash.compact": "^3.0.1",
     "lodash.flatten": "^4.4.0",
     "lodash.uniqby": "^4.7.0",
-    "lodash.zip": "^4.2.0",
-    "react-resizable-panels": "^4.7.3"
+    "lodash.zip": "^4.2.0"
   },
   "optionalDependencies": {
     "@percy/cypress": "3.1.6",
