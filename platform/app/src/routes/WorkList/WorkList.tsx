@@ -391,21 +391,12 @@ function WorkList({
                 })
               : appConfig.loadedModes
             ).map((mode, i) => {
-              if (mode.hide) {
-                // Hide this mode from display
-                return null;
-              }
               const modalitiesToCheck = modalities.replaceAll('/', '\\');
 
               const { valid: isValidMode, description: invalidModeDescription } = mode.isValidMode({
                 modalities: modalitiesToCheck,
                 study,
               });
-              if (isValidMode === null) {
-                // Hide this as a computed result.
-                return null;
-              }
-
               // TODO: Modes need a default/target route? We mostly support a single one for now.
               // We should also be using the route path, but currently are not
               // mode.routeName
@@ -437,7 +428,7 @@ function WorkList({
                     {/* TODO revisit the completely rounded style of buttons used for launching a mode from the worklist later */}
                     <Button
                       type={ButtonEnums.type.primary}
-                      size={ButtonEnums.size.smallTall}
+                      size={ButtonEnums.size.medium}
                       disabled={!isValidMode}
                       startIconTooltip={
                         !isValidMode ? (
@@ -455,7 +446,7 @@ function WorkList({
                       }
                       onClick={() => {}}
                       dataCY={`mode-${mode.routeName}-${studyInstanceUid}`}
-                      className={!isValidMode && 'bg-[#222d44]'}
+                      className={isValidMode ? 'text-[13px]' : 'bg-[#222d44] text-[13px]'}
                     >
                       {mode.displayName}
                     </Button>
@@ -482,7 +473,7 @@ function WorkList({
   ) as coreTypes.MenuComponentCustomization;
 
   const menuOptions = [
-    {
+    /*    {
       title: AboutModal?.menuTitle ?? t('Header:About'),
       icon: 'info',
       onClick: () =>
@@ -492,6 +483,7 @@ function WorkList({
           containerClassName: AboutModal?.containerClassName ?? 'max-w-md',
         }),
     },
+*/
     {
       title: UserPreferencesModal.menuTitle ?? t('Header:Preferences'),
       icon: 'settings',
@@ -524,7 +516,6 @@ function WorkList({
     DicomUploadComponent && dataSource.getConfig()?.dicomUploadEnabled
       ? {
           title: 'Upload files',
-          containerClassName: DicomUploadComponent?.containerClassName,
           closeButton: true,
           shouldCloseOnEsc: false,
           shouldCloseOnOverlayClick: false,

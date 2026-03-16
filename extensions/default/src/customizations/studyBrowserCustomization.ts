@@ -1,5 +1,4 @@
 import { utils } from '@ohif/core';
-import i18n from '@ohif/i18n';
 const { formatDate } = utils;
 
 export default {
@@ -7,26 +6,44 @@ export default {
   'studyBrowser.thumbnailMenuItems': [
     {
       id: 'tagBrowser',
-      label: i18n.t('StudyBrowser:Tag Browser'),
+      label: 'Tag Browser',
       iconName: 'DicomTagBrowser',
-      commands: 'openDICOMTagViewer',
+      onClick: ({ commandsManager, displaySetInstanceUID }: withAppTypes) => {
+        commandsManager.runCommand('openDICOMTagViewer', {
+          displaySetInstanceUID,
+        });
+      },
     },
     {
       id: 'addAsLayer',
-      label: i18n.t('StudyBrowser:Add as Layer'),
+      label: 'Add as Layer',
       iconName: 'ViewportViews',
-      commands: 'addDisplaySetAsLayer',
+      onClick: ({ commandsManager, displaySetInstanceUID, servicesManager }: withAppTypes) => {
+        const { viewportGridService } = servicesManager.services;
+
+        // Get the active viewport
+        const { activeViewportId } = viewportGridService.getState();
+        if (!activeViewportId) {
+          return;
+        }
+
+        // Use the new command to add the display set as a layer
+        commandsManager.runCommand('addDisplaySetAsLayer', {
+          viewportId: activeViewportId,
+          displaySetInstanceUID,
+        });
+      },
     },
   ],
   'studyBrowser.sortFunctions': [
     {
-      label: i18n.t('StudyBrowser:Series Number'),
+      label: 'Instance Number',
       sortFunction: (a, b) => {
-        return a?.SeriesNumber - b?.SeriesNumber;
+        return a?.InstanceNumber - b?.InstanceNumber;
       },
     },
     {
-      label: i18n.t('StudyBrowser:Series Date'),
+      label: 'Series Date',
       sortFunction: (a, b) => {
         const dateA = new Date(formatDate(a?.SeriesDate));
         const dateB = new Date(formatDate(b?.SeriesDate));
@@ -64,10 +81,8 @@ export default {
           } catch (error) {
             console.warn(error);
             uiNotificationService.show({
-              title: i18n.t('StudyBrowser:Thumbnail Double Click'),
-              message: i18n.t(
-                'StudyBrowser:The selected display sets could not be added to the viewport.'
-              ),
+              title: 'Thumbnail Double Click',
+              message: 'The selected display sets could not be added to the viewport.',
               type: 'error',
               duration: 3000,
             });

@@ -24,7 +24,7 @@ export default function PanelStudyBrowserTracking({
 
   const checkDirtyMeasurements = displaySetInstanceUID => {
     const displaySet = displaySetService.getDisplaySetByUID(displaySetInstanceUID);
-    if (displaySet.Modality === 'SR' || displaySet.Modality === 'ANN') {
+    if (displaySet.Modality === 'SR') {
       const activeViewportId = viewportGridService.getActiveViewportId();
       sendTrackedMeasurementsEvent('CHECK_DIRTY', {
         viewportId: activeViewportId,
@@ -92,10 +92,10 @@ export default function PanelStudyBrowserTracking({
         array.push({
           displaySetInstanceUID,
           description: ds.SeriesDescription || '',
-          seriesNumber: ds.SeriesNumber,
+          seriesNumber: ds.InstanceNumber,
           modality: ds.Modality,
           seriesDate: ds.SeriesDate ? new Date(ds.SeriesDate).toLocaleDateString() : '',
-          numInstances: ds.numImageFrames ?? ds.instances?.length,
+          numInstances: ds.numImageFrames,
           loadingProgress,
           countIcon: ds.countIcon,
           messages: ds.messages,
