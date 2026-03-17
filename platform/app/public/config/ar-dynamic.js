@@ -80,7 +80,7 @@ window.config = () => {
     extensions: [],
     modes: [],
     showPatientInfo: 'visible',
-    showStudyList: false,
+    showStudyList: true,
     maxNumberOfWebWorkers: 4,
     showWarningMessageForCrossOrigin: true,
     showCPUFallbackMessage: true,
