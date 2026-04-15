@@ -27,7 +27,9 @@ const stressechoExtension: Types.Extensions.Extension = {
    */
   id,
   preRegistration,
-  onModeExit() {},
+  onModeExit({ servicesManager }) {
+    servicesManager.services.cardiacSyncService?.onModeExit();
+  },
   getPanelModule,
   getViewportModule({ servicesManager, extensionManager }) {
     const ExtendedStressEchoViewport = props => {

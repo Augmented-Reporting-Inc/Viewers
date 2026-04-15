@@ -102,13 +102,13 @@ window.config = {
         // https://github.com/OHIF/Viewers/pull/3878
         // https://docs.ohif.org/configuration/datasources/dicom-web/#singlepart
         singlepart: 'thumbnail',
-        /*        wadoUriRoot: 'https://d14fa38qiwhyfd.cloudfront.net/dicomweb',
+        wadoUriRoot: 'https://d14fa38qiwhyfd.cloudfront.net/dicomweb',
         qidoRoot: 'https://d14fa38qiwhyfd.cloudfront.net/dicomweb',
-        wadoRoot: 'https://d14fa38qiwhyfd.cloudfront.net/dicomweb',*/
-        wadoUriRoot: 'https://ssoback.futurepacs.com/orthanc/wado',
-        qidoRoot: 'https://ssoback.futurepacs.com/orthanc/dicom-web',
-        wadoRoot: 'https://ssoback.futurepacs.com/orthanc/dicom-web',
-        /*        onConfiguration: (dicomWebConfig, options) => {
+        wadoRoot: 'https://d14fa38qiwhyfd.cloudfront.net/dicomweb',
+        /* wadoUriRoot: 'https://arview.futurepacs.com',
+        qidoRoot: 'https://arview.futurepacs.com',
+        wadoRoot: 'https://arview.futurepacs.com',
+          onConfiguration: (dicomWebConfig, options) => {
           const { query } = options;
           const gateway = query.get('gateway');
           const pathUrlDicomWeb = `${gateway}/orthanc/dicom-web`;

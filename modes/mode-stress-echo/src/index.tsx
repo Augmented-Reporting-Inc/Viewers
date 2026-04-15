@@ -207,6 +207,7 @@ function modeFactory({ modeConfiguration }) {
         cornerstoneViewportService,
         uiDialogService,
         uiModalService,
+        cardiacSyncService,
       } = servicesManager.services;
 
       uiDialogService.hideAll();
@@ -215,6 +216,7 @@ function modeFactory({ modeConfiguration }) {
       syncGroupService.destroy();
       segmentationService.destroy();
       cornerstoneViewportService.destroy();
+      cardiacSyncService?.onModeExit();
     },
     validationTags: {
       study: [],

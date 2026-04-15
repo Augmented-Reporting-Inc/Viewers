@@ -1,5 +1,6 @@
 import { addTool } from '@cornerstonejs/tools';
 import { utilities } from '@cornerstonejs/core';
+import CardiacSyncService from './services/CardiacSyncService';
 
 import measurementServiceMappingsFactory from './utils/measurementServiceMappings/measurementServiceMappingsFactory';
 import colormaps from './utils/colormaps';
@@ -17,6 +18,13 @@ const CORNERSTONE_3D_TOOLS_SOURCE_VERSION = '0.1';
 export default function init({ servicesManager, extensionManager }) {
   const { measurementService, displaySetService, cornerstoneViewportService } =
     servicesManager.services;
+
+  // Register the cardiac sync service
+  servicesManager.registerService({
+    name: 'cardiacSyncService',
+    altName: 'CardiacSyncService',
+    create: ({ configuration = {} } = {}) => new CardiacSyncService({ servicesManager }),
+  });
 
   //  addTool(RectangleROIStartEndThresholdTool);
 

@@ -1,7 +1,9 @@
 import PropTypes from 'prop-types';
-import React, { useCallback, useContext, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import OHIF, { utils, ServicesManager, ExtensionManager } from '@ohif/core';
+import { useCardiacSync } from '../hooks/useCardiacSync';
+import { SyncControls } from '../components/SyncControls';
 
 import { useViewportGrid } from '@ohif/ui-next';
 import { Tooltip, TooltipTrigger, TooltipContent } from '@ohif/ui-next';
@@ -31,6 +33,49 @@ function StressEchoViewport(props) {
     servicesManager.services;
 
   const viewportId = viewportOptions.viewportId;
+
+  // ── Cardiac sync ─────────────────────────────────────────────────────────
+  //
+  // displaySet attributes are promoted from DICOM tags in getSopClassHandlerModule:
+  //   HeartRate      ← (0018,1088)   BPM
+  //   FrameTime      ← (0018,1063)   ms/frame
+  //   numImageFrames ← already set   total frames
+  //   StageName      ← (0008,2130)   'REST' | 'PEAK' | 'POST'
+  //   StageNumber    ← (0008,2122)   1 | 2 | 3
+  //   ViewName       ← (0008,2128)   'LAX' | 'A4C' | …
+  //
+  const dicomTimingMeta = stressEchoDisplaySet
+    ? {
+        HeartRate: stressEchoDisplaySet.HeartRate,
+        FrameTime: stressEchoDisplaySet.FrameTime,
+        numImageFrames: stressEchoDisplaySet.numImageFrames,
+        StageName: stressEchoDisplaySet.StageName,
+        StageNumber: stressEchoDisplaySet.StageNumber,
+        ViewName: stressEchoDisplaySet.ViewName,
+      }
+    : null;
+
+  // Mirror the service's isSyncEnabled flag into local state so the
+  // component re-renders when the user toggles sync in any viewport.
+  const cardiacSyncService = servicesManager.services.cardiacSyncService;
+
+  const [isSyncEnabled, setIsSyncEnabled] = useState<boolean>(
+    () => cardiacSyncService?.getState()?.isSyncEnabled ?? false
+  );
+
+  useEffect(() => {
+    if (!cardiacSyncService) return;
+    const { unsubscribe } = cardiacSyncService.subscribe(
+      cardiacSyncService.EVENTS.SYNC_STATE_CHANGED,
+      ({ isSyncEnabled: enabled }: { isSyncEnabled: boolean }) => setIsSyncEnabled(enabled)
+    );
+    return unsubscribe;
+  }, [cardiacSyncService]);
+
+  // Register / unregister this viewport with the sync engine.
+  // The hook is a no-op when isSyncEnabled is false.
+  useCardiacSync(viewportId, dicomTimingMeta, isSyncEnabled, servicesManager);
+  // ─────────────────────────────────────────────────────────────────────────
 
   // SR viewport will always have a single display set
   if (displaySets.length > 1) {
@@ -207,6 +252,13 @@ function StressEchoViewport(props) {
   // TODO -> disabled double click for now: onDoubleClick={_onDoubleClick}
   return (
     <>
+      {/* Sync controls — rendered once per viewport instance.
+          The SyncControls component reads service state globally so all
+          viewports show the same play/pause state. */}
+      <div className="absolute top-0 right-0 z-10 m-1">
+        <SyncControls servicesManager={servicesManager} />
+      </div>
+
       <ViewportActionBar
         onDoubleClick={evt => {
           evt.stopPropagation();
