@@ -1,5 +1,7 @@
 import { hotkeys } from '@ohif/core';
+import React from 'react';
 import { id } from './id';
+import { SyncControls } from '../../../extensions/extension-stress-echo/src/components/SyncControls';
 import toolbarButtons from './toolbarButtons';
 import initToolGroups from './initToolGroups.js';
 
@@ -98,7 +100,6 @@ function modeFactory({ modeConfiguration }) {
         'Pan',
         'Capture',
         'Layout',
-        'Cine',
         'Previous',
         'Next',
         'Crosshairs',
@@ -107,6 +108,13 @@ function modeFactory({ modeConfiguration }) {
       toolbarService.updateSection(toolbarService.sections.viewportActionMenu.topLeft, [
         'orientationMenu',
         'dataOverlayMenu',
+        {
+          id: 'cardiacSyncControls',
+          Component: ({ servicesManager: sm }) =>
+            React.createElement(SyncControls, {
+              servicesManager: sm ?? servicesManager,
+            }),
+        },
       ]);
 
       toolbarService.updateSection(toolbarService.sections.viewportActionMenu.bottomMiddle, [
@@ -153,7 +161,6 @@ function modeFactory({ modeConfiguration }) {
         'StackScroll',
         'invert',
         'Probe',
-        'Cine',
         'Angle',
         'CobbAngle',
         'Magnify',
@@ -167,6 +174,10 @@ function modeFactory({ modeConfiguration }) {
       customizationService.setCustomizations({
         'panelSegmentation.disableEditing': {
           $set: true,
+        },
+        // Hide the auto-play cine bar for stress echo — sync service drives playback instead
+        'cinePlayer.enabled': {
+          $set: false,
         },
       });
 

@@ -1,12 +1,14 @@
 import React, { useEffect, useState } from 'react';
 import { Select, Icon } from '../../../../platform/ui/src/components';
 import PropTypes from 'prop-types';
+import { SyncControls } from '../../../extension-stress-echo/src/components/SyncControls';
+
 // import { ServicesManager } from '@ohif/core';
 /*
  * FilterStageView panel enables the user to select stress echo stage or view
  */
 
-export default function FilterStageView({ /** servicesManager,*/ commandsManager }) {
+export default function FilterStageView({ servicesManager, commandsManager }) {
   //  const { displaySetService, hangingProtocolService } = (servicesManager as ServicesManager)
   //    .services;
   //  const [svDisplaySet, setSvDisplaySet] = useState(null);
@@ -16,12 +18,20 @@ export default function FilterStageView({ /** servicesManager,*/ commandsManager
 
   const handleFirstDropdownChange = options => {
     setFirstDropdownValue(options.value);
-    // setFilterBy(''); or else triggers setHangingProtocol with undefined id
   };
+
+  const secondDropdownFirstOptions = {
+    Stage: 'Rest',
+    Value: 'LAX',
+  };
+
+  useEffect(() => {
+    setFilterBy(secondDropdownFirstOptions[firstDropdownValue]);
+  }, [firstDropdownValue]);
 
   const firstDropdownOptions = [
     { value: 'Stage', label: 'by Stage' },
-    { value: 'Value', label: 'by Value' },
+    { value: 'Value', label: 'by View' },
   ];
 
   /** side effect for change to filterBy */
@@ -146,11 +156,24 @@ export default function FilterStageView({ /** servicesManager,*/ commandsManager
       {
         <div className="flex flex-col">
           <div className="bg-primary-dark flex flex-col space-y-4 p-4">
+            <div className="flex items-center gap-2 text-xs text-green-400">
+              <svg
+                className="h-3 w-3"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth={2.5}
+                strokeLinecap="round"
+              >
+                <polyline points="2,12 6,12 8,4 11,20 14,10 16,14 18,12 22,12" />
+              </svg>
+              <span className="font-semibold uppercase tracking-wide">Synchronized</span>
+            </div>
+            <SyncControls servicesManager={servicesManager} />
             <Select
               id="first-dropdown"
               value={firstDropdownValue}
               onChange={handleFirstDropdownChange}
-              placeholder={firstDropdownValue}
               isClearable={false}
               components={
                 {

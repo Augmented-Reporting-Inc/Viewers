@@ -8,6 +8,7 @@ import getCustomizationModule from './getCustomizationModule';
 import { id } from './id';
 import preRegistration from './init';
 import React from 'react';
+import { SyncControls } from './components/SyncControls';
 
 const Component = React.lazy(() => {
   return import(/* webpackPrefetch: true */ './viewports/StressEchoViewport');
@@ -48,6 +49,12 @@ const stressechoExtension: Types.Extensions.Extension = {
   getSopClassHandlerModule,
   getCommandsModule,
   getCustomizationModule,
+  getComponentModule: () => [
+    {
+      name: 'syncControls',
+      component: SyncControls,
+    },
+  ],
 };
 
 export default stressechoExtension;

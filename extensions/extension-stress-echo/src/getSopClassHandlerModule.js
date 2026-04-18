@@ -39,7 +39,11 @@ const makeDisplaySet = instances => {
     // Promote the timing + stage identity tags so viewports don't need
     // to reach into images[0] themselves.
     HeartRate: instance.HeartRate, // (0018,1088) BPM
-    FrameTime: instance.FrameTime, // (0018,1063) ms/frame  (alias: FrameRate attr above)
+    FrameTime:
+      instance.FrameTime ?? // (0018,1063) ms/frame
+      (instance.HeartRate && instance.NumberOfFrames
+        ? Math.round(((60 / Number(instance.HeartRate)) * 1000) / Number(instance.NumberOfFrames))
+        : undefined),
     StageName: instance.StageName, // (0008,2130) e.g. 'REST'
     StageNumber: instance.StageNumber, // (0008,2122) 1 / 2 / 3
     ViewName: instance.ViewName, // (0008,2128) e.g. 'LAX'

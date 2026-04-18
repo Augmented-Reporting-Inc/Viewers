@@ -3,14 +3,6 @@ import type { SyncState } from '../services/CardiacSyncService';
 
 type Props = { servicesManager: any };
 
-/**
- * Sync + Play/Pause bar for synchronised cardiac cine.
- *
- * Uses inline SVG for icons (no @ohif/ui icon dependency) and plain Tailwind
- * classes already present in OHIF's bundle.
- *
- * Usage: <SyncControls servicesManager={servicesManager} />
- */
 export function SyncControls({ servicesManager }: Props) {
   const cardiacSyncService = servicesManager?.services?.cardiacSyncService;
 
@@ -34,44 +26,43 @@ export function SyncControls({ servicesManager }: Props) {
     return unsubscribe;
   }, [cardiacSyncService]);
 
-  const referenceHR = state.targetRRMs ? Math.round(60000 / state.targetRRMs) : null;
+  const stages = state.stages ?? [];
+
+  const stageNames = [...new Set(stages.map(s => s.stageName))];
+  const viewNames = [...new Set(stages.map(s => s.viewName).filter(Boolean))];
+  // By stage: all viewports share one stage name → show it (e.g. "REST")
+  // By view: viewports span multiple stages but share one view name → show it (e.g. "LAX")
+  // Fallback: show unique stage names joined
+  const label =
+    stageNames.length === 1
+      ? stageNames[0]
+      : viewNames.length === 1
+        ? viewNames[0]
+        : viewNames.length > 0
+          ? viewNames.join(' / ')
+          : stageNames.join(' / ');
+
+  const heartRates = stages.map(s => s.heartRate).filter(Boolean);
+  const minHR = heartRates.length ? Math.min(...heartRates) : null;
+  const maxHR = heartRates.length ? Math.max(...heartRates) : null;
+  const hrRange =
+    minHR && maxHR ? (minHR === maxHR ? `${minHR} BPM` : `${minHR}–${maxHR} BPM`) : null;
 
   return (
-    <div className="flex select-none items-center gap-2 rounded bg-black/70 px-3 py-1.5 text-xs text-white">
-      {/* Sync toggle */}
-      <button
-        onClick={() => cardiacSyncService?.setSyncEnabled(!state.isSyncEnabled)}
-        title="Toggle synchronised cardiac cine"
-        className={[
-          'flex items-center gap-1.5 rounded px-2 py-1 font-semibold transition-colors',
-          state.isSyncEnabled ? 'bg-blue-600 hover:bg-blue-500' : 'bg-gray-600 hover:bg-gray-500',
-        ].join(' ')}
-      >
-        {/* Heartbeat / ECG icon */}
-        <svg
-          className="h-3.5 w-3.5"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth={2.5}
-          strokeLinecap="round"
-        >
-          <polyline points="2,12 6,12 8,4 11,20 14,10 16,14 18,12 22,12" />
-        </svg>
-        Sync
-      </button>
+    <div className="flex select-none flex-col gap-2 rounded bg-black/70 px-3 py-2 text-xs text-white">
+      {/* Current stage/view label + HR range */}
+      {label && (
+        <div className="flex items-center justify-between gap-4">
+          <span className="font-semibold uppercase tracking-wide text-blue-300">{label}</span>
+          {hrRange && <span className="text-gray-300">{hrRange}</span>}
+        </div>
+      )}
 
       {/* Play / Pause */}
       <button
         onClick={() => cardiacSyncService?.togglePlayPause()}
-        disabled={!state.isSyncEnabled}
         title={state.isPlaying ? 'Pause' : 'Play'}
-        className={[
-          'flex items-center gap-1 rounded px-2 py-1 transition-colors',
-          state.isSyncEnabled
-            ? 'cursor-pointer bg-gray-700 hover:bg-gray-600'
-            : 'cursor-not-allowed opacity-40',
-        ].join(' ')}
+        className="flex items-center justify-center gap-2 rounded bg-gray-700 px-3 py-1.5 transition-colors hover:bg-gray-600"
       >
         {state.isPlaying ? (
           <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="currentColor">
@@ -85,20 +76,6 @@ export function SyncControls({ servicesManager }: Props) {
         )}
         {state.isPlaying ? 'Pause' : 'Play'}
       </button>
-
-      {/* Per-stage info — shown when sync is on */}
-      {state.isSyncEnabled && referenceHR && (
-        <span className="ml-1 text-gray-300">
-          ref {referenceHR} BPM
-          {state.stages
-            .sort((a, b) => a.stageNumber - b.stageNumber)
-            .map(s => (
-              <span key={s.viewportId} className="ml-2 opacity-70">
-                {s.stageName} {s.heartRate}bpm
-              </span>
-            ))}
-        </span>
-      )}
     </div>
   );
 }

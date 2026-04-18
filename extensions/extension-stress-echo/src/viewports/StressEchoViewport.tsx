@@ -2,8 +2,6 @@ import PropTypes from 'prop-types';
 import React, { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import OHIF, { utils, ServicesManager, ExtensionManager } from '@ohif/core';
-import { useCardiacSync } from '../hooks/useCardiacSync';
-import { SyncControls } from '../components/SyncControls';
 
 import { useViewportGrid } from '@ohif/ui-next';
 import { Tooltip, TooltipTrigger, TooltipContent } from '@ohif/ui-next';
@@ -33,6 +31,8 @@ function StressEchoViewport(props) {
     servicesManager.services;
 
   const viewportId = viewportOptions.viewportId;
+
+  const stressEchoDisplaySet = displaySets[0]; // ← move here, before dicomTimingMeta
 
   // ── Cardiac sync ─────────────────────────────────────────────────────────
   //
@@ -72,22 +72,26 @@ function StressEchoViewport(props) {
     return unsubscribe;
   }, [cardiacSyncService]);
 
-  // Register / unregister this viewport with the sync engine.
-  // The hook is a no-op when isSyncEnabled is false.
-  useCardiacSync(viewportId, dicomTimingMeta, isSyncEnabled, servicesManager);
-  // ─────────────────────────────────────────────────────────────────────────
+  // Inline the sync registration directly — avoids circular import
+  useEffect(() => {
+    const cardiacSyncService = servicesManager?.services?.cardiacSyncService;
+    if (!cardiacSyncService || !viewportId || !dicomTimingMeta || !isSyncEnabled) return;
+    if (!dicomTimingMeta.HeartRate || !dicomTimingMeta.FrameTime) return;
+
+    cardiacSyncService.registerStage(viewportId, dicomTimingMeta);
+    return () => cardiacSyncService.unregisterStage(viewportId);
+  }, [viewportId, dicomTimingMeta?.HeartRate, dicomTimingMeta?.FrameTime, isSyncEnabled]);
 
   // SR viewport will always have a single display set
   if (displaySets.length > 1) {
     throw new Error('Stress Echo viewport should only have a single display set');
   }
 
-  const stressEchoDisplaySet = displaySets[0];
-
   const [viewportGrid, viewportGridService] = useViewportGrid();
   const [activeImageDisplaySetData, setActiveImageDisplaySetData] = useState(null);
   const [referencedDisplaySetMetadata, setReferencedDisplaySetMetadata] = useState(null);
   const [element, setElement] = useState(null);
+  const [measurementSelected, setMeasurementSelected] = useState(0);
   const { viewports, activeViewportId } = viewportGrid;
 
   /**
@@ -254,11 +258,11 @@ function StressEchoViewport(props) {
     <>
       {/* Sync controls — rendered once per viewport instance.
           The SyncControls component reads service state globally so all
-          viewports show the same play/pause state. */}
+          viewports show the same play/pause state.
       <div className="absolute top-0 right-0 z-10 m-1">
         <SyncControls servicesManager={servicesManager} />
       </div>
-
+*/}
       <ViewportActionBar
         onDoubleClick={evt => {
           evt.stopPropagation();

@@ -1,5 +1,3 @@
-import { pubSubServiceInterface } from '@ohif/core';
-
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export type StageTimingMeta = {
@@ -45,9 +43,21 @@ class CardiacSyncService {
   static EVENTS = EVENTS;
   readonly EVENTS = EVENTS;
 
-  // Injected by pubSubServiceInterface mixin
-  subscribe!: (event: string, cb: (data: unknown) => void) => { unsubscribe: () => void };
-  _broadcastEvent!: (event: string, data: unknown) => void;
+  private _listeners: Map<string, Set<Function>> = new Map();
+
+  subscribe(event: string, cb: (data: unknown) => void): { unsubscribe: () => void } {
+    if (!this._listeners.has(event)) this._listeners.set(event, new Set());
+    this._listeners.get(event)!.add(cb);
+    return { unsubscribe: () => this._listeners.get(event)?.delete(cb) };
+  }
+
+  _broadcastEvent(event: string, data: unknown): void {
+    this._listeners.get(event)?.forEach(cb => {
+      try {
+        cb(data);
+      } catch {}
+    });
+  }
 
   private stages = new Map<string, StageInfo>();
   private cyclePosition = 0; // 0.0 → 1.0 within one cardiac cycle
@@ -56,6 +66,7 @@ class CardiacSyncService {
   private lastTimestamp: number | null = null;
   private _isPlaying = false;
   private _isSyncEnabled = false;
+  private _subscribers: Record<string, any> = {};
 
   private cornerstoneViewportService: any;
   private cineService: any;
@@ -63,8 +74,6 @@ class CardiacSyncService {
   constructor({ servicesManager }: { servicesManager: any }) {
     this.cornerstoneViewportService = servicesManager.services.cornerstoneViewportService;
     this.cineService = servicesManager.services.cineService;
-
-    Object.assign(this, pubSubServiceInterface);
   }
 
   // ── Public: Registration ───────────────────────────────────────────────────
@@ -105,6 +114,10 @@ class CardiacSyncService {
     this.stages.set(viewportId, info);
     this._recalculateTargetRR();
 
+    if (this._isSyncEnabled) {
+      this._suppressBuiltInCine(viewportId);
+    }
+
     console.info(
       `[CardiacSyncService] Registered ${info.stageName} / ${info.viewName}` +
         ` — ${heartRate} BPM, ${framesPerCycle} frames/cycle, RR=${rrIntervalMs.toFixed(0)}ms` +
@@ -112,6 +125,11 @@ class CardiacSyncService {
     );
 
     this._broadcastEvent(EVENTS.STAGE_REGISTERED, { viewportId, info });
+    this._broadcastEvent(EVENTS.SYNC_STATE_CHANGED, this._getState());
+  }
+  clearStages(): void {
+    this.stages.clear();
+    this._recalculateTargetRR();
     this._broadcastEvent(EVENTS.SYNC_STATE_CHANGED, this._getState());
   }
 
@@ -143,6 +161,7 @@ class CardiacSyncService {
   }
 
   togglePlayPause(): void {
+    if (!this._isSyncEnabled) this.setSyncEnabled(true);
     this._isPlaying ? this.pause() : this.play();
   }
 
@@ -177,7 +196,9 @@ class CardiacSyncService {
     this.pause();
     this.stages.clear();
     this._isSyncEnabled = false;
+    this._isPlaying = false;
     this.cyclePosition = 0;
+    this.lastTimestamp = null;
   }
 
   // ── Private ────────────────────────────────────────────────────────────────
