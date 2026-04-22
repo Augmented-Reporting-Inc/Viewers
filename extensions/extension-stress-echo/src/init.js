@@ -20,23 +20,6 @@ export default function init({ servicesManager, extensionManager }) {
     );
   }
 
-  // ── Intercept cine auto-play the moment it fires ──────────────────────────
-  const cineSvc = servicesManager.services.cineService;
-  if (cineSvc?.subscribe) {
-    cineSvc.subscribe('event::cineStateChanged', () => {
-      cineSvc.startedClips?.forEach(clipData => {
-        try {
-          cineSvc.setCine({ id: clipData.viewportId, isPlaying: false });
-        } catch {}
-      });
-    });
-  }
-
-  // Inject CSS to hide the cine player bar
-  const styleEl = document.createElement('style');
-  styleEl.textContent = '.top-10.z-50.left-1\\/2 { display: none !important; }';
-  document.head.appendChild(styleEl);
-
   // ── Register/re-register stages ───────────────────────────────────────────
   const _registerStages = () => {
     try {

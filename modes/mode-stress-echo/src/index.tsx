@@ -53,8 +53,13 @@ function modeFactory({ modeConfiguration }) {
      * Services and other resources.
      */
     onModeEnter: function ({ servicesManager, extensionManager, commandsManager }: withAppTypes) {
-      const { measurementService, toolbarService, toolGroupService, customizationService } =
-        servicesManager.services;
+      const {
+        measurementService,
+        toolbarService,
+        toolGroupService,
+        customizationService,
+        cineService,
+      } = servicesManager.services;
 
       measurementService.clearMeasurements();
 
@@ -175,11 +180,10 @@ function modeFactory({ modeConfiguration }) {
         'panelSegmentation.disableEditing': {
           $set: true,
         },
-        // Hide the auto-play cine bar for stress echo — sync service drives playback instead
-        'cinePlayer.enabled': {
-          $set: false,
-        },
       });
+
+      // Disable autoPlayCine so WrappedCinePlayer doesn't re-enable isCineEnabled
+      cineService.setIsCineEnabled(false);
 
       // // ActivatePanel event trigger for when a segmentation or measurement is added.
       // // Do not force activation so as to respect the state the user may have left the UI in.
@@ -219,6 +223,7 @@ function modeFactory({ modeConfiguration }) {
         uiDialogService,
         uiModalService,
         cardiacSyncService,
+        customizationService,
       } = servicesManager.services;
 
       uiDialogService.hideAll();

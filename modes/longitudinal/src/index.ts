@@ -82,8 +82,14 @@ function modeFactory({ modeConfiguration }) {
      * Lifecycle hooks
      */
     onModeEnter: function ({ servicesManager, extensionManager, commandsManager }: withAppTypes) {
-      const { measurementService, toolbarService, toolGroupService, customizationService } =
-        servicesManager.services;
+      const {
+        measurementService,
+        toolbarService,
+        toolGroupService,
+        customizationService,
+        cineService,
+        viewportGridService,
+      } = servicesManager.services;
 
       measurementService.clearMeasurements();
 
@@ -172,6 +178,9 @@ function modeFactory({ modeConfiguration }) {
           $set: true,
         },
       });
+
+      // Start with cine enabled so autoPlayCine triggers when display sets load
+      cineService.setIsCineEnabled(true);
 
       // // ActivatePanel event trigger for when a segmentation or measurement is added.
       // // Do not force activation so as to respect the state the user may have left the UI in.

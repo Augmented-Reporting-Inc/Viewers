@@ -44,6 +44,16 @@ function WrappedCinePlayer({
       const displaySet = displaySetService.getDisplaySetByUID(displaySetInstanceUID);
 
       const EffectiveFrameRate = displaySet.numImageFrames / displaySet.EffectiveDuration;
+      console.log(
+        '[cine] displaySet check - FrameRate:',
+        displaySet.FrameRate,
+        'numImageFrames:',
+        displaySet.numImageFrames,
+        'EffectiveDuration:',
+        displaySet.EffectiveDuration,
+        'EffectiveFrameRate:',
+        EffectiveFrameRate
+      );
       if (displaySet.FrameRate || EffectiveFrameRate) {
         // displaySet.FrameRate corresponds to DICOM tag (0018,1063) which is defined as the the frame time in milliseconds
         // So a bit of math to get the actual frame rate.
@@ -52,6 +62,9 @@ function WrappedCinePlayer({
           ? Math.round(1000 / displaySet.FrameRate)
           : Math.round(EffectiveFrameRate);
         isPlaying ||= !!appConfig.autoPlayCine;
+      } else if (appConfig.autoPlayCine && displaySet.numImageFrames > 1) {
+        // Multiframe display set without explicit frame rate metadata — still autoplay
+        isPlaying = true;
       }
 
       // check if the displaySet is dynamic and set the dynamic info
@@ -103,6 +116,8 @@ function WrappedCinePlayer({
     if (!enabledVPElement) {
       return;
     }
+
+    newDisplaySetHandler();
 
     enabledVPElement.addEventListener(Enums.Events.VIEWPORT_NEW_IMAGE_SET, newDisplaySetHandler);
     // this doesn't makes sense that we are listening to this event on viewport element

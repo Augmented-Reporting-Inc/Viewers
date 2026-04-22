@@ -333,7 +333,7 @@ const toolbarButtons: Button[] = [
       tooltip: 'Cine',
       commands: 'toggleCine',
       evaluate: [
-        'evaluate.cine',
+        'evaluate.action',
         {
           name: 'evaluate.viewport.supported',
           unsupportedViewportTypes: ['volume3d'],
