@@ -97,7 +97,6 @@ const makeDisplaySet = instances => {
     const middleTimePointImageIds = timePoints[middleIndex];
     imageId = middleTimePointImageIds[Math.floor(middleTimePointImageIds.length / 2)];
   }
-
   imageSet.setAttributes({
     volumeLoaderSchema,
     displaySetInstanceUID: imageSet.uid, // create a local alias for the imageSet UID
@@ -108,6 +107,10 @@ const makeDisplaySet = instances => {
     SeriesNumber: instance.SeriesNumber || 0,
     InstanceNumber: instance.InstanceNumber,
     FrameRate: instance.FrameTime,
+    EffectiveDuration:
+      instance.FrameTime && instance.NumberOfFrames
+        ? (instance.FrameTime * instance.NumberOfFrames) / 1000
+        : undefined,
     SOPClassUID: instance.SOPClassUID,
     SeriesDescription: instance.SeriesDescription || '',
     Modality: instance.Modality,

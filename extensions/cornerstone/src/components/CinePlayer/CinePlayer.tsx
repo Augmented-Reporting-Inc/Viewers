@@ -1,8 +1,107 @@
 import React, { useCallback, useEffect, useState, useRef } from 'react';
 import { useCine } from '@ohif/ui-next';
-import { Enums, eventTarget, cache } from '@cornerstonejs/core';
+import { Enums, eventTarget, cache, imageLoader } from '@cornerstonejs/core';
 import { useAppConfig } from '@state';
 
+// ---------------------------------------------------------------------------
+// Instance prefetch utility
+// Prefetches frames for the next WINDOW_SIZE displaySets in the same series,
+// using a low-concurrency background queue so it doesn't compete with the
+// active viewport's loading.
+// ---------------------------------------------------------------------------
+const PREFETCH_WINDOW = 3; // how many instances ahead to prefetch
+const PREFETCH_CONCURRENCY = 20; // max parallel background requests
+
+const activeBackgroundRequests = new Set<string>();
+
+function getImageIds(displaySet): string[] {
+  const ids = displaySet.imageIds ?? displaySet.images?.map(img => img.imageId ?? img.url) ?? [];
+
+  // Multiframe: single imageId ending in /frames/1 — expand to all frames
+  if (ids.length === 1 && displaySet.numImageFrames > 1) {
+    const baseId = ids[0];
+    const frameBase = baseId.replace(/\/frames\/\d+$/, '');
+    return Array.from(
+      { length: displaySet.numImageFrames },
+      (_, i) => `${frameBase}/frames/${i + 1}`
+    );
+  }
+
+  return ids;
+}
+
+function isDisplaySetFullyCached(displaySet): boolean {
+  const imageIds = getImageIds(displaySet);
+  return imageIds.length > 0 && imageIds.every(id => cache.isLoaded(id));
+}
+
+async function prefetchDisplaySetFrames(displaySet): Promise<void> {
+  const imageIds = getImageIds(displaySet);
+  if (!imageIds.length) return;
+
+  // Fire in batches of PREFETCH_CONCURRENCY
+  for (let i = 0; i < imageIds.length; i += PREFETCH_CONCURRENCY) {
+    const batch = imageIds
+      .slice(i, i + PREFETCH_CONCURRENCY)
+      .filter(id => !cache.isLoaded(id) && !activeBackgroundRequests.has(id));
+    if (!batch.length) continue;
+
+    batch.forEach(id => activeBackgroundRequests.add(id));
+    await Promise.all(
+      batch.map(id =>
+        imageLoader
+          .loadAndCacheImage(id, {})
+          .catch(() => {})
+          .finally(() => activeBackgroundRequests.delete(id))
+      )
+    );
+  }
+}
+
+function prefetchAheadInstances(
+  currentDisplaySetUID: string,
+  displaySetService,
+  viewportGridService,
+  viewportId: string
+): void {
+  // Get all displaySets in the study, ordered by series/instance number
+  const allDisplaySets = (displaySetService.activeDisplaySets ?? [])
+    .filter(ds => ds.numImageFrames > 1) // only multiframe instances
+    .sort((a, b) => {
+      // Sort by InstanceNumber if available, else by displaySetInstanceUID
+      const aNum = a.InstanceNumber ?? a.displaySetInstanceUID;
+      const bNum = b.InstanceNumber ?? b.displaySetInstanceUID;
+      return aNum < bNum ? -1 : aNum > bNum ? 1 : 0;
+    });
+
+  const currentIdx = allDisplaySets.findIndex(
+    ds => ds.displaySetInstanceUID === currentDisplaySetUID
+  );
+
+  if (currentIdx === -1) return;
+
+  const toPreetch = allDisplaySets
+    .slice(currentIdx + 1, currentIdx + 1 + PREFETCH_WINDOW)
+    .filter(ds => !isDisplaySetFullyCached(ds));
+
+  if (toPreetch.length) {
+    console.log(
+      `[cine] prefetching ${toPreetch.length} ahead instances:`,
+      toPreetch.map(ds => ds.displaySetInstanceUID)
+    );
+  }
+
+  // Process instances sequentially so early instances don't starve later ones
+  (async () => {
+    for (const ds of toPreetch) {
+      await prefetchDisplaySetFrames(ds);
+    }
+  })();
+}
+
+// ---------------------------------------------------------------------------
+// WrappedCinePlayer
+// ---------------------------------------------------------------------------
 function WrappedCinePlayer({
   enabledVPElement,
   viewportId,
@@ -16,20 +115,77 @@ function WrappedCinePlayer({
   const [newStackFrameRate, setNewStackFrameRate] = useState(24);
   const [dynamicInfo, setDynamicInfo] = useState(null);
   const [appConfig] = useAppConfig();
-  const isMountedRef = useRef(null);
+  const isMountedRef = useRef(true);
+  const prefetchListenerRef = useRef(null);
+  const fallbackTimerRef = useRef(null);
+  const cinesRef = useRef(cines);
 
-  const cineHandler = () => {
-    if (!cines?.[viewportId] || !enabledVPElement) {
-      return;
+  // Cleanup pending play-on-prefetch listeners
+  const cancelPendingPlay = useCallback(() => {
+    if (fallbackTimerRef.current) {
+      clearTimeout(fallbackTimerRef.current);
+      fallbackTimerRef.current = null;
     }
+    if (prefetchListenerRef.current) {
+      eventTarget.removeEventListener(
+        'CORNERSTONE_TOOLS_STACK_PREFETCH_COMPLETE',
+        prefetchListenerRef.current
+      );
+      prefetchListenerRef.current = null;
+    }
+  }, []);
 
-    const { isPlaying = false, frameRate = 24 } = cines[viewportId];
-    const validFrameRate = Math.max(frameRate, 1);
+  const startPlayWhenReady = useCallback(
+    (frameRate: number) => {
+      cancelPendingPlay();
+      const startPlay = () => {
+        if (!isMountedRef.current) return;
+        cancelPendingPlay();
+        cineService.setCine({ id: viewportId, isPlaying: true, frameRate });
+      };
 
-    return isPlaying
-      ? cineService.playClip(enabledVPElement, { framesPerSecond: validFrameRate, viewportId })
-      : cineService.stopClip(enabledVPElement);
-  };
+      // If already fully cached from background prefetch, play immediately
+      const { viewports } = viewportGridService.getState();
+      const viewport = viewports.get(viewportId);
+      if (viewport) {
+        const allCached = viewport.displaySetInstanceUIDs.every(uid => {
+          const ds = displaySetService.getDisplaySetByUID(uid);
+          return ds && isDisplaySetFullyCached(ds);
+        });
+        if (allCached) {
+          console.log('[cine] already cached, playing immediately');
+          startPlay();
+          return;
+        }
+      }
+
+      // Wait for Cornerstone's stack prefetch to complete before starting.
+      // Fallback fires if the prefetch event never arrives (e.g. already cached).
+      fallbackTimerRef.current = setTimeout(startPlay, 3000);
+
+      const onPrefetchComplete = evt => {
+        // Accept events with no element detail (some prefetchers omit it)
+        if (evt.detail?.element && evt.detail.element !== enabledVPElement) return;
+        console.log('[cine] prefetch complete, starting play');
+        startPlay();
+      };
+      prefetchListenerRef.current = onPrefetchComplete;
+      eventTarget.addEventListener('CORNERSTONE_TOOLS_STACK_PREFETCH_COMPLETE', onPrefetchComplete);
+    },
+    [
+      cancelPendingPlay,
+      cineService,
+      viewportId,
+      enabledVPElement,
+      viewportGridService,
+      displaySetService,
+    ]
+  );
+
+  const startPlayWhenReadyRef = useRef(startPlayWhenReady);
+  useEffect(() => {
+    startPlayWhenReadyRef.current = startPlayWhenReady;
+  }, [startPlayWhenReady]);
 
   const newDisplaySetHandler = useCallback(() => {
     if (!enabledVPElement || !isCineEnabled) {
@@ -39,96 +195,120 @@ function WrappedCinePlayer({
     const { viewports } = viewportGridService.getState();
     const { displaySetInstanceUIDs } = viewports.get(viewportId);
     let frameRate = 24;
-    let isPlaying = cines[viewportId]?.isPlaying || false;
+    let isPlaying = cinesRef.current[viewportId]?.isPlaying || false;
+    let shouldAutoPlay = false;
+
     displaySetInstanceUIDs.forEach(displaySetInstanceUID => {
       const displaySet = displaySetService.getDisplaySetByUID(displaySetInstanceUID);
+      const EffectiveFrameRate =
+        displaySet.numImageFrames && displaySet.EffectiveDuration
+          ? displaySet.numImageFrames / displaySet.EffectiveDuration
+          : null;
 
-      const EffectiveFrameRate = displaySet.numImageFrames / displaySet.EffectiveDuration;
-      console.log(
-        '[cine] displaySet check - FrameRate:',
-        displaySet.FrameRate,
-        'numImageFrames:',
-        displaySet.numImageFrames,
-        'EffectiveDuration:',
-        displaySet.EffectiveDuration,
-        'EffectiveFrameRate:',
-        EffectiveFrameRate
-      );
       if (displaySet.FrameRate || EffectiveFrameRate) {
-        // displaySet.FrameRate corresponds to DICOM tag (0018,1063) which is defined as the the frame time in milliseconds
-        // So a bit of math to get the actual frame rate.
-        // according to DICOM spec, Effective Duration is entire multiframe image in seconds.
         frameRate = displaySet.FrameRate
           ? Math.round(1000 / displaySet.FrameRate)
           : Math.round(EffectiveFrameRate);
+        if (appConfig.autoPlayCine) shouldAutoPlay = true;
         isPlaying ||= !!appConfig.autoPlayCine;
       } else if (appConfig.autoPlayCine && displaySet.numImageFrames > 1) {
-        // Multiframe display set without explicit frame rate metadata — still autoplay
         isPlaying = true;
+        shouldAutoPlay = true;
       }
 
-      // check if the displaySet is dynamic and set the dynamic info
       if (displaySet.isDynamicVolume) {
         const { dynamicVolumeInfo } = displaySet;
-        const numDimensionGroups = dynamicVolumeInfo.timePoints.length;
-        const label = dynamicVolumeInfo.splittingTag;
-        const dimensionGroupNumber = dynamicVolumeInfo.dimensionGroupNumber || 1;
         setDynamicInfo({
           volumeId: displaySet.displaySetInstanceUID,
-          dimensionGroupNumber,
-          numDimensionGroups,
-          label,
+          dimensionGroupNumber: dynamicVolumeInfo.dimensionGroupNumber || 1,
+          numDimensionGroups: dynamicVolumeInfo.timePoints.length,
+          label: dynamicVolumeInfo.splittingTag,
         });
       } else {
         setDynamicInfo(null);
       }
+
+      // Prefetch frames for the next PREFETCH_WINDOW instances in the background
+      // Delay to avoid competing with active viewport loading
+      setTimeout(() => {
+        prefetchAheadInstances(
+          displaySetInstanceUID,
+          displaySetService,
+          viewportGridService,
+          viewportId
+        );
+      }, 2000);
     });
+
+    setNewStackFrameRate(frameRate);
+    cineService.setIsCineEnabled(true);
+
+    if (shouldAutoPlay && isPlaying) {
+      // Set paused first, then defer until prefetch completes
+      cineService.setCine({ id: viewportId, isPlaying: false, frameRate });
+      startPlayWhenReadyRef.current(frameRate);
+      return;
+    }
 
     if (isPlaying) {
       cineService.setIsCineEnabled(isPlaying);
     }
     cineService.setCine({ id: viewportId, isPlaying, frameRate });
-    setNewStackFrameRate(frameRate);
-  }, [displaySetService, viewportId, viewportGridService, cines, isCineEnabled, enabledVPElement]);
+  }, [
+    displaySetService,
+    viewportId,
+    viewportGridService,
+    isCineEnabled,
+    enabledVPElement,
+    appConfig,
+  ]);
+
+  useEffect(() => {
+    cinesRef.current = cines;
+  }, [cines]);
 
   useEffect(() => {
     isMountedRef.current = true;
-
     newDisplaySetHandler();
-
     return () => {
-      isMountedRef.current = false;
+      cancelPendingPlay();
     };
-  }, [isCineEnabled, newDisplaySetHandler]);
+  }, [isCineEnabled, newDisplaySetHandler, cancelPendingPlay]);
 
   useEffect(() => {
-    if (!isCineEnabled) {
+    if (!isCineEnabled || !cinesRef.current?.[viewportId] || !enabledVPElement) {
       return;
     }
+    const { isPlaying = false, frameRate = 24 } = cinesRef.current[viewportId];
+    const validFrameRate = Math.max(frameRate, 1);
+    if (isPlaying) {
+      try {
+        cineService.playClip(enabledVPElement, { framesPerSecond: validFrameRate, viewportId });
+      } catch (e) {
+        // viewport destroyed
+      }
+    } else {
+      cineService.stopClip(enabledVPElement);
+    }
+  }, [isCineEnabled, enabledVPElement]);
 
-    cineHandler();
-  }, [isCineEnabled, cineHandler, enabledVPElement]);
-
-  /**
-   * Use effect for handling new display set
-   */
   useEffect(() => {
     if (!enabledVPElement) {
       return;
     }
 
     newDisplaySetHandler();
-
     enabledVPElement.addEventListener(Enums.Events.VIEWPORT_NEW_IMAGE_SET, newDisplaySetHandler);
-    // this doesn't makes sense that we are listening to this event on viewport element
     enabledVPElement.addEventListener(
       Enums.Events.VOLUME_VIEWPORT_NEW_VOLUME,
       newDisplaySetHandler
     );
 
     return () => {
+      cancelPendingPlay();
+      cineService.stopClip(enabledVPElement);
+      isMountedRef.current = false;
       cineService.setCine({ id: viewportId, isPlaying: false });
-
       enabledVPElement.removeEventListener(
         Enums.Events.VIEWPORT_NEW_IMAGE_SET,
         newDisplaySetHandler
@@ -138,19 +318,29 @@ function WrappedCinePlayer({
         newDisplaySetHandler
       );
     };
-  }, [enabledVPElement, newDisplaySetHandler, viewportId]);
+  }, [enabledVPElement, newDisplaySetHandler, viewportId, cancelPendingPlay]);
 
   useEffect(() => {
     if (!cines || !cines[viewportId] || !enabledVPElement || !isMountedRef.current) {
       return;
     }
 
-    cineHandler();
+    const { isPlaying = false, frameRate = 24 } = cines[viewportId];
+    const validFrameRate = Math.max(frameRate, 1);
+    if (isPlaying) {
+      try {
+        cineService.playClip(enabledVPElement, { framesPerSecond: validFrameRate, viewportId });
+      } catch (e) {
+        // viewport was destroyed before playClip could run
+      }
+    } else {
+      cineService.stopClip(enabledVPElement);
+    }
 
     return () => {
       cineService.stopClip(enabledVPElement, { viewportId });
     };
-  }, [cines, viewportId, cineService, enabledVPElement, cineHandler]);
+  }, [cines, viewportId, cineService, enabledVPElement]);
 
   if (!isCineEnabled) {
     return null;
@@ -171,6 +361,9 @@ function WrappedCinePlayer({
   );
 }
 
+// ---------------------------------------------------------------------------
+// RenderCinePlayer
+// ---------------------------------------------------------------------------
 function RenderCinePlayer({
   viewportId,
   cineService,
@@ -187,9 +380,6 @@ function RenderCinePlayer({
     setDynamicInfo(dynamicInfoProp);
   }, [dynamicInfoProp]);
 
-  /**
-   * Use effect for handling 4D time index changed
-   */
   useEffect(() => {
     if (!dynamicInfo) {
       return;
@@ -237,7 +427,6 @@ function RenderCinePlayer({
       frameRate={newStackFrameRate}
       isPlaying={isPlaying}
       onClose={() => {
-        // also stop the clip
         cineService.setCine({
           id: viewportId,
           isPlaying: false,

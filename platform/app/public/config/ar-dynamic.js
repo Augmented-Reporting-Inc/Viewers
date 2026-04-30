@@ -29,7 +29,7 @@ window.config = () => {
       supportsFuzzyMatching: true,
       supportsWildcard: false,
       staticWado: true,
-      singlepart: 'thumbnail',
+      singlepart: 'thumbnail,bulkdata',
       onConfiguration: cfg => {
         // Resolves to /<clinicName> for QIDO/WADO roots (CloudFront behaviors handle routing)
         // NOTE: ensure ?clinicName is provided on CloudFront links
@@ -95,10 +95,7 @@ window.config = () => {
     autoPlayCine: true,
     investigationalUseDialog: { option: 'never' },
     studyPrefetcher: {
-      enabled: true,
-      displaySetCount: 200,
-      maxNumPrefetchRequests: 1000,
-      order: 'closest',
+      enabled: false,
     },
     defaultDataSourceName: 'dicomweb',
     dataSources: [chosenSource],
