@@ -123,7 +123,7 @@ function WrappedCinePlayer({
   // Cleanup pending play-on-prefetch listeners
   const cancelPendingPlay = useCallback(() => {
     if (fallbackTimerRef.current) {
-      clearTimeout(fallbackTimerRef.current);
+      clearInterval(fallbackTimerRef.current); // works for both timeout and interval
       fallbackTimerRef.current = null;
     }
     if (prefetchListenerRef.current) {
@@ -138,39 +138,65 @@ function WrappedCinePlayer({
   const startPlayWhenReady = useCallback(
     (frameRate: number) => {
       cancelPendingPlay();
+
       const startPlay = () => {
         if (!isMountedRef.current) return;
         cancelPendingPlay();
         cineService.setCine({ id: viewportId, isPlaying: true, frameRate });
+
+        // Kick off background prefetch of next instances now that active VP is playing
+        const { viewports } = viewportGridService.getState();
+        const vp = viewports.get(viewportId);
+        if (vp) {
+          vp.displaySetInstanceUIDs.forEach(uid => {
+            prefetchAheadInstances(uid, displaySetService, viewportGridService, viewportId);
+          });
+        }
       };
 
-      // If already fully cached from background prefetch, play immediately
       const { viewports } = viewportGridService.getState();
       const viewport = viewports.get(viewportId);
-      if (viewport) {
-        const allCached = viewport.displaySetInstanceUIDs.every(uid => {
-          const ds = displaySetService.getDisplaySetByUID(uid);
-          return ds && isDisplaySetFullyCached(ds);
-        });
-        if (allCached) {
-          console.log('[cine] already cached, playing immediately');
-          startPlay();
-          return;
-        }
+      if (!viewport) {
+        startPlay();
+        return;
       }
 
-      // Wait for Cornerstone's stack prefetch to complete before starting.
-      // Fallback fires if the prefetch event never arrives (e.g. already cached).
-      fallbackTimerRef.current = setTimeout(startPlay, 3000);
+      const getDisplaySets = () =>
+        viewport.displaySetInstanceUIDs
+          .map(uid => displaySetService.getDisplaySetByUID(uid))
+          .filter(Boolean);
 
-      const onPrefetchComplete = evt => {
-        // Accept events with no element detail (some prefetchers omit it)
-        if (evt.detail?.element && evt.detail.element !== enabledVPElement) return;
-        console.log('[cine] prefetch complete, starting play');
+      // If already cached, play immediately
+      if (getDisplaySets().every(isDisplaySetFullyCached)) {
+        console.log('[cine] already cached, playing immediately');
         startPlay();
-      };
-      prefetchListenerRef.current = onPrefetchComplete;
-      eventTarget.addEventListener('CORNERSTONE_TOOLS_STACK_PREFETCH_COMPLETE', onPrefetchComplete);
+        return;
+      }
+
+      // Poll cache until MIN_BUFFERED_FRAMES are ready, then play
+      const MIN_BUFFERED_FRAMES = 8;
+      const POLL_INTERVAL_MS = 100;
+      const MAX_WAIT_MS = 10000;
+      let elapsed = 0;
+
+      const poll = setInterval(() => {
+        elapsed += POLL_INTERVAL_MS;
+
+        const dsets = getDisplaySets();
+        const buffered = dsets.reduce((sum, ds) => {
+          const ids = getImageIds(ds);
+          return sum + ids.filter(id => cache.isLoaded(id)).length;
+        }, 0);
+
+        console.log(`[cine] buffered ${buffered} frames`);
+
+        if (buffered >= MIN_BUFFERED_FRAMES || elapsed >= MAX_WAIT_MS) {
+          clearInterval(poll);
+          startPlay();
+        }
+      }, POLL_INTERVAL_MS);
+
+      fallbackTimerRef.current = poll as unknown as ReturnType<typeof setTimeout>;
     },
     [
       cancelPendingPlay,
@@ -227,17 +253,6 @@ function WrappedCinePlayer({
       } else {
         setDynamicInfo(null);
       }
-
-      // Prefetch frames for the next PREFETCH_WINDOW instances in the background
-      // Delay to avoid competing with active viewport loading
-      setTimeout(() => {
-        prefetchAheadInstances(
-          displaySetInstanceUID,
-          displaySetService,
-          viewportGridService,
-          viewportId
-        );
-      }, 2000);
     });
 
     setNewStackFrameRate(frameRate);

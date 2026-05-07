@@ -82,6 +82,20 @@ function modeFactory({ modeConfiguration }) {
      * Lifecycle hooks
      */
     onModeEnter: function ({ servicesManager, extensionManager, commandsManager }: withAppTypes) {
+      // Suppress repeated per-frame US region calibration warning
+      const _origWarn = console.warn.bind(console);
+      let _usRegionWarnSuppressed = false;
+      console.warn = (...args) => {
+        if (typeof args[0] === 'string' && args[0].includes('Sequence of Ultrasound Regions')) {
+          if (!_usRegionWarnSuppressed) {
+            _usRegionWarnSuppressed = true;
+            _origWarn('[once]', ...args);
+          }
+          return;
+        }
+        _origWarn(...args);
+      };
+
       const {
         measurementService,
         toolbarService,
