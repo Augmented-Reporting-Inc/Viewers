@@ -69,6 +69,10 @@
     {
       "packageName": "extension-stress-echo",
       "version": "3.11.0"
+    },
+    {
+      "packageName": "extension-iuscan",
+      "version": "0.0.1"
     }
   ],
   "modes": [
@@ -104,6 +108,10 @@
     {
       "packageName": "mode-stress-echo",
       "version": "3.11.0"
+    },
+    {
+      "packageName": "mode-iuscan",
+      "version": "0.0.1"
     }
   ],
   "public": [
