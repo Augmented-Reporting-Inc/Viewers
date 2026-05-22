@@ -9,18 +9,19 @@ const DOPPLER_OPTIONS = [
   { value: 3, label: '3' },
 ];
 const FAT_OPTIONS = [
-  { value: 0, label: '0' },
-  { value: 1, label: '1 Partial' },
-  { value: 2, label: '2 Complete' },
+  { value: 0, label: 'None' },
+  { value: 1, label: 'Partial' },
+  { value: 2, label: 'Complete' },
 ];
 const LYMPH_OPTIONS = [
-  { value: 0, label: '0 No' },
-  { value: 1, label: '1 Yes' },
+  { value: 0, label: 'No' },
+  { value: 1, label: 'Yes' },
 ];
+
 const STRAT_OPTIONS = [
-  { value: 0, label: '0' },
-  { value: 1, label: '1 Focal' },
-  { value: 2, label: '2 Complete' },
+  { value: 0, label: 'Normal' },
+  { value: 1, label: 'Focal' },
+  { value: 2, label: 'Complete' },
 ];
 
 /**
@@ -47,12 +48,21 @@ export default function SiteAccordion({
   // Resolve all filled mm values for the header summary
   function resolveSlot(slot) {
     if (slot === null) return null;
-    if (typeof slot === 'number') return slot;
-    return valueByUID[slot] ?? null;
+    if (typeof slot === 'object' && slot !== null && 'value' in slot) return slot.value;
+    const entry = valueByUID[slot];
+    return entry != null ? entry.value : null;
   }
   const allResolved = [...longSlots, ...crossSlots].map(resolveSlot).filter(v => v !== null);
   const maxBWT = allResolved.length ? Math.max(...allResolved) : null;
-  const isAbnormal = maxBWT !== null && maxBWT > 0.3;
+  // Get unit from first filled slot
+  const firstFilledSlot = [...longSlots, ...crossSlots].find(s => s !== null);
+  const unit =
+    firstFilledSlot != null
+      ? typeof firstFilledSlot === 'object' && 'unit' in firstFilledSlot
+        ? firstFilledSlot.unit
+        : (valueByUID[firstFilledSlot]?.unit ?? 'cm')
+      : 'cm';
+  const isAbnormal = maxBWT !== null && (unit === 'mm' ? maxBWT > 3.0 : maxBWT > 0.3);
 
   return (
     <div className={`gi-accordion border-b border-gray-700 ${isOpen ? 'gi-accordion--open' : ''}`}>
@@ -72,7 +82,8 @@ export default function SiteAccordion({
               ].join(' ')}
               title="Max BWT across Long + Cross"
             >
-              {maxBWT.toFixed(1)} cm{isAbnormal ? ' ⚠' : ''}
+              {maxBWT.toFixed(2)} {unit}
+              {isAbnormal ? ' ⚠' : ''}
             </span>
           )}
           {(obs.doppler != null ||

@@ -6,6 +6,9 @@
  *
  * Both commands are also wired to keyboard hotkeys in mode-iuscan/src/index.js.
  */
+
+import { annotation as csToolsAnnotation } from '@cornerstonejs/tools';
+
 export default function getCommandsModule({ servicesManager, commandsManager }) {
   const { measurementService, uiNotificationService, viewportGridService, displaySetService } =
     servicesManager.services;
@@ -20,7 +23,7 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
 
           if (!assignSvc.hasAnyAssignment()) {
             uiNotificationService.show({
-              title: 'iUSCAN',
+              title: 'Augmented Reporting',
               message: 'No measurements to export.',
               type: 'warning',
               duration: 3000,
@@ -54,6 +57,26 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
 
           const payload = assignSvc.buildReportPayload(measurementService);
 
+          // Serialize live iUSCAN Length annotations for viewport restoration
+          try {
+            const allMeasurements = measurementService.getMeasurements();
+            const iuscanAnnotations = allMeasurements
+              .filter(m => m.label && m.toolName === 'Length')
+              .map(m => ({
+                uid: m.uid,
+                label: m.label,
+                SOPInstanceUID: m.SOPInstanceUID,
+                referenceSeriesUID: m.referenceSeriesUID,
+                referencedImageId: m.referencedImageId,
+                frameNumber: m.frameNumber ?? 1,
+                points: m.points,
+              }));
+            if (iuscanAnnotations.length > 0) {
+              payload.IUScanAnnotations = JSON.stringify(iuscanAnnotations);
+            }
+          } catch (e) {
+            console.warn('[iUSCAN] Could not serialize annotations:', e.message);
+          }
           try {
             // Step 1: look up Mongo _id by StudyInstanceUID
             const seriesRes = await fetch(`/formapi/api/series/study/${studyUID}`, {
@@ -76,7 +99,7 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
             }
 
             uiNotificationService.show({
-              title: 'iUSCAN',
+              title: 'Augmented Reporting',
               message: 'Measurements saved to report.',
               type: 'success',
               duration: 3000,
@@ -84,7 +107,7 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
           } catch (err) {
             console.error('[iUSCAN] exportIUScanReport error:', err);
             uiNotificationService.show({
-              title: 'iUSCAN',
+              title: 'Augmented Reporting',
               message: `Export failed: ${err.message}`,
               type: 'error',
               duration: 5000,
@@ -99,7 +122,7 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
           assignSvc.clearAll();
           measurementService.clearMeasurements();
           uiNotificationService.show({
-            title: 'iUSCAN',
+            title: 'Augmented Reporting',
             message: 'All measurements cleared.',
             type: 'info',
             duration: 2000,

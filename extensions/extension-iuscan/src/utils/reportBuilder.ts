@@ -25,10 +25,11 @@ export function buildReportPayload(state, measurementService) {
 
     for (const axis of ['longitudinal', 'cross']) {
       const slots = siteState[axis]?.slots ?? [];
-      const mmValues = slots
+      const resolved = slots
         .map(slot => {
           if (slot === null) return null;
-          if (typeof slot === 'number') return slot;
+          if (typeof slot === 'object' && slot !== null && 'value' in slot)
+            return { value: slot.value, unit: slot.unit };
           // slot is a measurementUID
           const m = measurementService.getMeasurement(slot);
           if (!m?.data) return null;
@@ -36,27 +37,29 @@ export function buildReportPayload(state, measurementService) {
           if (!firstKey) return null;
           const { length, unit } = m.data[firstKey] ?? {};
           if (length == null) return null;
-          return length;
+          return { value: length, unit: unit ?? 'cm' };
         })
         .filter(v => v !== null);
-
+      const mmValues = resolved.map(r => (typeof r === 'number' ? r : r.value));
       if (mmValues.length === 0) continue;
 
       const avg = mmValues.reduce((a, b) => a + b, 0) / mmValues.length;
-      axisMeans[axis] = avg;
+      const unit = resolved[0]?.unit === 'cm US Region' ? 'cm' : (resolved[0]?.unit ?? 'cm');
+      axisMeans[axis] = { avg, unit };
 
       // New split fields
       const suffix = axis === 'longitudinal' ? 'BWTLong' : 'BWTCross';
       payload[`${mongoPrefix}${suffix}`] = avg.toFixed(2);
-      payload[`${mongoPrefix}${suffix}UOM`] = 'cm';
+      payload[`${mongoPrefix}${suffix}UOM`] = unit;
     }
 
     // Combined BWT = average across all filled slots from both axes
     const allMeans = Object.values(axisMeans);
     if (allMeans.length > 0) {
-      const combined = allMeans.reduce((a, b) => a + b, 0) / allMeans.length;
+      const combined = allMeans.reduce((a, b) => a + b.avg, 0) / allMeans.length;
+      const unit = allMeans[0].unit;
       payload[`${mongoPrefix}BWT`] = combined.toFixed(2);
-      payload[`${mongoPrefix}BWTUOM`] = 'cm';
+      payload[`${mongoPrefix}BWTUOM`] = unit;
     }
 
     // ── Observations ─────────────────────────────────────────────────────────
@@ -64,16 +67,19 @@ export function buildReportPayload(state, measurementService) {
     if (!obs) continue;
 
     if (obs.doppler != null) {
-      payload[`${mongoPrefix}ColorDopplerSignal`] = DOPPLER_MAP[obs.doppler] ?? '0';
+      payload[`${mongoPrefix}ColorDopplerSignal`] = DOPPLER_MAP[obs.doppler] ?? '0 Absent';
     }
     if (obs.inflammatoryFat != null) {
-      payload[`${mongoPrefix}InflammatoryMesentericFat`] = obs.inflammatoryFat > 0 ? 'Yes' : 'No';
+      const FAT_LABELS = ['None', 'Partial', 'Complete'];
+      payload[`${mongoPrefix}InflammatoryMesentericFat`] =
+        FAT_LABELS[obs.inflammatoryFat] ?? 'None';
     }
     if (obs.lymphadenopathy != null) {
       payload[`${mongoPrefix}Lymphadenopathy`] = obs.lymphadenopathy > 0 ? 'Yes' : 'No';
     }
     if (obs.stratification != null) {
-      payload[`${mongoPrefix}LossOfStratification`] = obs.stratification > 0 ? 'Yes' : 'No';
+      const STRAT_LABELS = ['Normal', 'Focal', 'Complete'];
+      payload[`${mongoPrefix}LossOfStratification`] = STRAT_LABELS[obs.stratification] ?? 'Normal';
     }
   }
 

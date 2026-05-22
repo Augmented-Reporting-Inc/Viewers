@@ -155,15 +155,17 @@ class IUScanAssignmentService extends PubSubService {
       // Longitudinal — prefer new split field, fall back to combined BWT
       const longRaw = doc[`${mongoPrefix}BWTLong`] || doc[`${mongoPrefix}BWT`] || '';
       const longVal = parseFloat(longRaw);
+      const longUnit = doc[`${mongoPrefix}BWTLongUOM`] || doc[`${mongoPrefix}BWTUOM`] || 'cm';
       if (!isNaN(longVal) && longVal > 0) {
-        this._state[key].longitudinal.slots[0] = longVal;
+        this._state[key].longitudinal.slots[0] = { value: longVal, unit: longUnit };
       }
 
       // Cross — prefer new split field only (no fall-back to combined BWT)
       const crossRaw = doc[`${mongoPrefix}BWTCross`] || '';
       const crossVal = parseFloat(crossRaw);
+      const crossUnit = doc[`${mongoPrefix}BWTCrossUOM`] || doc[`${mongoPrefix}BWTUOM`] || 'cm';
       if (!isNaN(crossVal) && crossVal > 0) {
-        this._state[key].cross.slots[0] = crossVal;
+        this._state[key].cross.slots[0] = { value: crossVal, unit: crossUnit };
       }
 
       // Observations
@@ -173,7 +175,11 @@ class IUScanAssignmentService extends PubSubService {
       }
 
       const fatStr = doc[`${mongoPrefix}InflammatoryMesentericFat`];
-      if (fatStr === 'Yes') this._state[key].observations.inflammatoryFat = 2;
+      if (fatStr === 'Complete') this._state[key].observations.inflammatoryFat = 2;
+      else if (fatStr === 'Partial') this._state[key].observations.inflammatoryFat = 1;
+      else if (fatStr === 'None') this._state[key].observations.inflammatoryFat = 0;
+      // legacy fallback
+      else if (fatStr === 'Yes') this._state[key].observations.inflammatoryFat = 2;
       else if (fatStr === 'No') this._state[key].observations.inflammatoryFat = 0;
 
       const lymphStr = doc[`${mongoPrefix}Lymphadenopathy`];
@@ -181,7 +187,11 @@ class IUScanAssignmentService extends PubSubService {
       else if (lymphStr === 'No') this._state[key].observations.lymphadenopathy = 0;
 
       const stratStr = doc[`${mongoPrefix}LossOfStratification`];
-      if (stratStr === 'Yes') this._state[key].observations.stratification = 2;
+      if (stratStr === 'Complete') this._state[key].observations.stratification = 2;
+      else if (stratStr === 'Focal') this._state[key].observations.stratification = 1;
+      else if (stratStr === 'Normal') this._state[key].observations.stratification = 0;
+      // legacy fallback
+      else if (stratStr === 'Yes') this._state[key].observations.stratification = 2;
       else if (stratStr === 'No') this._state[key].observations.stratification = 0;
     }
 

@@ -22,13 +22,26 @@ export default function MeasurementGroup({
   // Resolve display value for each slot
   const resolved = slots.map(slot => {
     if (slot === null) return null;
-    if (typeof slot === 'number') return slot; // raw hydrated value
+    if (typeof slot === 'object' && slot !== null && 'value' in slot) return slot; // hydrated { value, unit }
     return valueByUID[slot] ?? null; // live caliper value
   });
 
   const filled = resolved.filter(v => v !== null);
   const average =
-    filled.length > 0 ? (filled.reduce((a, b) => a + b, 0) / filled.length).toFixed(1) : null;
+    filled.length > 0
+      ? (
+          filled.reduce((a, b) => a + (typeof b === 'number' ? b : b.value), 0) / filled.length
+        ).toFixed(2)
+      : null;
+
+  const unit =
+    filled.length > 0
+      ? typeof filled[0] === 'number'
+        ? 'cm'
+        : filled[0].unit === 'cm US Region'
+          ? 'cm'
+          : filled[0].unit
+      : 'cm';
 
   function handleAssignNext() {
     // Collect all UIDs already assigned anywhere across all sites/axes
@@ -59,11 +72,11 @@ export default function MeasurementGroup({
   return (
     <div className="gi-measurement-group mb-2">
       <div className="mb-1 flex items-center justify-between">
-        <span className="text-xs text-gray-400">{label}</span>
+        <span className="text-xs text-gray-400">{label.replace('(cm)', `(${unit})`)}</span>
         <span className="text-xs text-gray-300">
           Avg:{' '}
           <strong className={average !== null ? 'text-primary-light' : 'text-gray-500'}>
-            {average !== null ? `${average} cm` : '—'}
+            {average !== null ? `${average} ${unit}` : '—'}
           </strong>
         </span>
       </div>
@@ -77,9 +90,6 @@ export default function MeasurementGroup({
               key={i}
               className={[
                 'gi-slot flex min-w-[52px] max-w-[64px] items-center justify-between rounded border px-2 py-1 text-xs',
-                slot !== null
-                  ? 'border-primary-light bg-primary-dark text-white'
-                  : 'border-gray-600 bg-gray-800 text-gray-500',
               ].join(' ')}
             >
               {val !== null ? (
@@ -91,7 +101,7 @@ export default function MeasurementGroup({
                       if (isUID) measurementService.jumpToMeasurement(null, slot);
                     }}
                   >
-                    {val.toFixed(1)}
+                    {(typeof val === 'number' ? val : val.value).toFixed(2)}
                   </span>
                   <button
                     className="ml-1 leading-none text-gray-400 hover:text-red-400"

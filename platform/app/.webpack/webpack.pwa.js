@@ -178,7 +178,7 @@ module.exports = (env, argv) => {
         },
         {
           context: ['/dicom-microscopy-viewer'],
-          target: 'http://localhost:3000',
+          target: 'http://localhost:3002',
           pathRewrite: {
             '^/dicom-microscopy-viewer': `/${PUBLIC_URL}/dicom-microscopy-viewer`,
           },

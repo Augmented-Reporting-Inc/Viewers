@@ -6,6 +6,7 @@ import hpIUScan from './hangingProtocols/hpIUScan';
 import getCommandsModule from './getCommandsModule';
 import getToolbarModule from './getToolbarModule';
 import getPanelModule from './panels/getPanelModule';
+import { annotation as csToolsAnnotation } from '@cornerstonejs/tools';
 
 // Measurement label list — kept in one place, referenced by both
 // onModeEnter (registration) and the assignment service label map.
@@ -33,19 +34,107 @@ let _measurementUpdatedSub = null;
 
 async function hydrateFromSeriesDoc(servicesManager, assignSvc) {
   const { viewportGridService, displaySetService } = servicesManager.services;
-  await new Promise(resolve => setTimeout(resolve, 200));
-  const gridState = viewportGridService.getState();
-  const { activeViewportId, viewports } = gridState;
-  const activeVP = viewports?.get?.(activeViewportId) ?? viewports?.[activeViewportId];
-  const dsUID = activeVP?.displaySetInstanceUIDs?.[0];
-  if (!dsUID) return;
+
+  // Poll for active viewport — it takes a few frames after onModeEnter
+  // for the viewport grid to be populated. Poll up to 20 times at 100ms intervals.
+  let dsUID = null;
+  for (let i = 0; i < 20; i++) {
+    await new Promise(resolve => setTimeout(resolve, 100));
+    const { activeViewportId, viewports } = viewportGridService.getState();
+    const activeVP = viewports?.get?.(activeViewportId) ?? viewports?.[activeViewportId];
+    dsUID = activeVP?.displaySetInstanceUIDs?.[0];
+    if (dsUID) break;
+  }
+  if (!dsUID) {
+    console.warn('[iUSCAN] hydrateFromSeriesDoc: no active viewport after polling');
+    return;
+  }
+
   const ds = displaySetService.getDisplaySetByUID(dsUID);
   const studyUID = ds?.StudyInstanceUID;
   if (!studyUID) return;
+
   const res = await fetch(`/formapi/api/series/study/${studyUID}`, { credentials: 'include' });
   if (!res.ok) return;
   const doc = await res.json();
-  assignSvc.hydrateFromSeriesDoc(doc);
+
+  // If full annotation state is stored, restore it — gives per-caliper restoration
+  // with live UIDs, click-to-jump, and all 3 slots independently.
+  // Fall back to BWT average hydration for older documents.
+  if (doc.IUScanAnnotations) {
+    // Always hydrate observations and BWT averages for all sites first
+    assignSvc.hydrateFromSeriesDoc(doc);
+    try {
+      // Then restore full caliper annotations on top — this overwrites the
+      // slot[0] average values with live UIDs for annotated sites
+      await restoreAnnotations(doc.IUScanAnnotations, servicesManager, assignSvc);
+    } catch (e) {
+      console.warn('[iUSCAN] annotation restore failed, falling back to BWT hydration:', e.message);
+    }
+  } else {
+    assignSvc.hydrateFromSeriesDoc(doc);
+  }
+}
+
+async function restoreAnnotations(annotationsJson, servicesManager, assignSvc) {
+  const { measurementService, displaySetService } = servicesManager.services;
+  const saved = JSON.parse(annotationsJson);
+  if (!Array.isArray(saved) || saved.length === 0) return;
+
+  for (const ann of saved) {
+    if (!ann.referencedImageId || !ann.points?.length) continue;
+
+    // Build a Cornerstone Length annotation object
+    const csAnnotation = {
+      annotationUID: ann.uid,
+      metadata: {
+        toolName: 'Length',
+        referencedImageId: ann.referencedImageId,
+        FrameOfReferenceUID: undefined,
+      },
+      data: {
+        label: ann.label,
+        handles: {
+          points: ann.points,
+          activeHandleIndex: null,
+          textBox: { hasMoved: false, worldPosition: [0, 0, 0], worldBoundingBox: null },
+        },
+        cachedStats: {},
+      },
+      highlighted: false,
+      invalidated: true,
+      isLocked: false,
+      isVisible: true,
+    };
+
+    // Add to Cornerstone annotation state — keyed by referencedImageId
+    csToolsAnnotation.state.addAnnotation(csAnnotation, ann.referencedImageId);
+
+    // Trigger MeasurementService to pick up the annotation
+    // by dispatching MEASUREMENT_ADDED via the existing subscriber
+    // Small delay to let Cornerstone process the annotation
+    await new Promise(resolve => setTimeout(resolve, 10));
+
+    // Force MeasurementService to convert the CS annotation to a measurement
+    // by triggering the annotation modified event
+    const { triggerAnnotationRenderForViewportIds } = await import(
+      '@cornerstonejs/tools/utilities'
+    );
+    try {
+      triggerAnnotationRenderForViewportIds([]);
+    } catch (_) {}
+  }
+
+  // Wait for MeasurementService to process all annotations
+  await new Promise(resolve => setTimeout(resolve, 200));
+
+  // Now auto-assign all measurements that have matching labels
+  const measurements = measurementService.getMeasurements();
+  for (const m of measurements) {
+    if (m.label && m.toolName === 'Length') {
+      assignSvc.autoAssignByLabel(m.uid, m.label);
+    }
+  }
 }
 
 const iuscanExtension = {
@@ -119,9 +208,8 @@ const iuscanExtension = {
 
     // Pre-populate panel from any existing Bowel* fields in the series doc.
     // Non-fatal: silently skipped if the study isn't yet linked to a series doc.
-    hydrateFromSeriesDoc(servicesManager, assignSvc).catch(e =>
-      console.warn('[iUSCAN] hydrateFromSeriesDoc (non-fatal):', e.message)
-    );
+    hydrateFromSeriesDoc(servicesManager, assignSvc);
+    const { hangingProtocolService } = servicesManager.services;
   },
 
   /**

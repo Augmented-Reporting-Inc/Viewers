@@ -16,6 +16,8 @@ interface ViewportDownloadFormNewProps {
   onEnableViewport: (element: HTMLElement) => void;
   onDisableViewport: () => void;
   onDownload: (filename: string, fileType: string) => void;
+  onSaveToPatientFolder?: (filename: string, fileType: string) => Promise<void>;
+  isSavingToPatientFolder?: boolean;
   warningState: { enabled: boolean; value: string };
 }
 
@@ -32,6 +34,8 @@ function ViewportDownloadFormNew({
   onEnableViewport,
   onDisableViewport,
   onDownload,
+  onSaveToPatientFolder,
+  isSavingToPatientFolder = false,
 }: ViewportDownloadFormNewProps) {
   const [viewportElement, setViewportElement] = useState<HTMLElement | null>(null);
   const [showWarningMessage, setShowWarningMessage] = useState(true);
@@ -131,13 +135,29 @@ function ViewportDownloadFormNew({
           <FooterAction className="mt-2">
             <FooterAction.Right>
               <FooterAction.Secondary onClick={onClose}>Cancel</FooterAction.Secondary>
-              <FooterAction.Primary
+
+              <FooterAction.Secondary
+                disabled={isSavingToPatientFolder}
                 onClick={() => {
                   onDownload(filename || DEFAULT_FILENAME, fileType);
+                }}
+              >
+                Download
+              </FooterAction.Secondary>
+
+              <FooterAction.Primary
+                className="whitespace-nowrap px-3"
+                disabled={!onSaveToPatientFolder || isSavingToPatientFolder}
+                onClick={async () => {
+                  if (!onSaveToPatientFolder) {
+                    return;
+                  }
+
+                  await onSaveToPatientFolder(filename || DEFAULT_FILENAME, fileType);
                   onClose();
                 }}
               >
-                Save
+                {isSavingToPatientFolder ? 'Saving...' : 'Attach to Report'}
               </FooterAction.Primary>
             </FooterAction.Right>
           </FooterAction>

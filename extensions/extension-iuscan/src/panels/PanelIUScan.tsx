@@ -55,7 +55,8 @@ export default function PanelIUScan({ servicesManager, commandsManager }) {
       const firstKey = Object.keys(m.data)[0];
       if (!firstKey) return;
       const length = m.data[firstKey]?.length;
-      if (length != null) map[m.uid] = length;
+      const unit = m.data[firstKey]?.unit;
+      if (length != null) map[m.uid] = { value: length, unit: unit ?? 'cm' };
     });
     return map;
   }, [measurements]);
