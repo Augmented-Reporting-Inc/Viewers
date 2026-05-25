@@ -1,6 +1,17 @@
 import React from 'react';
 import MeasurementGroup from './MeasurementGroup';
 import ScoreSelector from './ScoreSelector';
+import { COMPLICATION_TYPES } from '../../utils/labelMap';
+
+const HAUSTRATION_OPTIONS = [
+  { value: 1, label: 'Present' },
+  { value: 0, label: 'Absent' },
+];
+
+const COMPLICATION_OPTIONS = [
+  { value: 0, label: 'No' },
+  { value: 1, label: 'Yes' },
+];
 
 const DOPPLER_OPTIONS = [
   { value: 0, label: '0' },
@@ -48,6 +59,7 @@ export default function SiteAccordion({
   // Resolve all filled mm values for the header summary
   function resolveSlot(slot) {
     if (slot === null) return null;
+    if (typeof slot === 'number') return slot;
     if (typeof slot === 'object' && slot !== null && 'value' in slot) return slot.value;
     const entry = valueByUID[slot];
     return entry != null ? entry.value : null;
@@ -89,7 +101,12 @@ export default function SiteAccordion({
           {(obs.doppler != null ||
             obs.inflammatoryFat != null ||
             obs.lymphadenopathy != null ||
-            obs.stratification != null) && (
+            obs.stratification != null ||
+            obs.haustrations != null ||
+            String(obs.segmentLength || '').trim() !== '' ||
+            obs.complications != null ||
+            (obs.complicationTypes ?? []).length > 0 ||
+            String(obs.complicationText || '').trim() !== '') && (
             <span
               className="h-2 w-2 shrink-0 rounded-full bg-blue-500"
               title="Observations recorded"
@@ -123,7 +140,22 @@ export default function SiteAccordion({
             assignSvc={assignSvc}
             measurementService={measurementService}
           />
-
+          {site.hasSegmentLength && (
+            <div className="border-t border-gray-700 pt-2">
+              <label className="mb-1 block text-xs text-gray-400">
+                Segment length involved (cm)
+              </label>
+              <input
+                type="number"
+                min="0"
+                step="0.1"
+                className="w-full rounded border border-gray-600 bg-gray-800 px-2 py-1 text-xs text-gray-100"
+                value={obs.segmentLength ?? ''}
+                onChange={e => assignSvc.setObservation(site.key, 'segmentLength', e.target.value)}
+                placeholder="e.g. 5.0"
+              />
+            </div>
+          )}
           <div className="gi-observations space-y-1 border-t border-gray-700 pt-2">
             <p className="mb-1 text-xs uppercase tracking-wide text-gray-500">Observations</p>
             <ScoreSelector
@@ -139,18 +171,86 @@ export default function SiteAccordion({
               onChange={v => assignSvc.setObservation(site.key, 'inflammatoryFat', v)}
             />
             <ScoreSelector
-              label="Lymphadenopathy"
-              options={LYMPH_OPTIONS}
-              value={obs.lymphadenopathy ?? null}
-              onChange={v => assignSvc.setObservation(site.key, 'lymphadenopathy', v)}
-            />
-            <ScoreSelector
               label="Wall Stratification"
               options={STRAT_OPTIONS}
               value={obs.stratification ?? null}
               onChange={v => assignSvc.setObservation(site.key, 'stratification', v)}
             />
+            <ScoreSelector
+              label="Lymphadenopathy"
+              options={LYMPH_OPTIONS}
+              value={obs.lymphadenopathy ?? null}
+              onChange={v => assignSvc.setObservation(site.key, 'lymphadenopathy', v)}
+            />
+            {site.hasHaustrations && (
+              <ScoreSelector
+                label="Haustrations"
+                options={HAUSTRATION_OPTIONS}
+                value={obs.haustrations ?? null}
+                onChange={v => assignSvc.setObservation(site.key, 'haustrations', v)}
+              />
+            )}
           </div>
+          {site.hasComplications && (
+            <div className="mt-2 border-t border-gray-700 pt-2">
+              <ScoreSelector
+                label="Complications"
+                options={COMPLICATION_OPTIONS}
+                value={obs.complications ?? null}
+                onChange={v => {
+                  if (v === 0 || v == null) {
+                    assignSvc.setObservations(site.key, {
+                      complications: v,
+                      complicationTypes: [],
+                      complicationText: '',
+                    });
+                  } else {
+                    assignSvc.setObservation(site.key, 'complications', v);
+                  }
+                }}
+              />
+
+              {obs.complications === 1 && (
+                <div className="mt-2 space-y-2">
+                  <div className="flex flex-wrap gap-1">
+                    {COMPLICATION_TYPES.map(item => {
+                      const selected = (obs.complicationTypes ?? []).includes(item.value);
+                      return (
+                        <button
+                          key={item.value}
+                          type="button"
+                          className={[
+                            'rounded border px-2 py-1 text-xs transition-colors',
+                            selected
+                              ? 'bg-primary-light border-primary-light font-semibold text-black'
+                              : 'hover:border-primary-light hover:text-primary-light border-gray-600 bg-transparent text-gray-300',
+                          ].join(' ')}
+                          onClick={() => {
+                            const current = obs.complicationTypes ?? [];
+                            const next = selected
+                              ? current.filter(v => v !== item.value)
+                              : [...current, item.value];
+                            assignSvc.setObservation(site.key, 'complicationTypes', next);
+                          }}
+                        >
+                          {item.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  <textarea
+                    className="min-h-[56px] w-full rounded border border-gray-600 bg-gray-800 px-2 py-1 text-xs text-gray-100"
+                    value={obs.complicationText ?? ''}
+                    onChange={e =>
+                      assignSvc.setObservation(site.key, 'complicationText', e.target.value)
+                    }
+                    placeholder="Describe complication findings..."
+                  />
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
     </div>

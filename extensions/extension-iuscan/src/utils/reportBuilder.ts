@@ -16,7 +16,8 @@ import { SITES, DOPPLER_MAP } from './labelMap';
 export function buildReportPayload(state, measurementService) {
   const payload = {};
 
-  for (const { key, mongoPrefix } of SITES) {
+  for (const siteConfig of SITES) {
+    const { key, mongoPrefix } = siteConfig;
     const siteState = state[key];
     if (!siteState) continue;
 
@@ -28,6 +29,7 @@ export function buildReportPayload(state, measurementService) {
       const resolved = slots
         .map(slot => {
           if (slot === null) return null;
+          if (typeof slot === 'number') return { value: slot, unit: 'cm' };
           if (typeof slot === 'object' && slot !== null && 'value' in slot)
             return { value: slot.value, unit: slot.unit };
           // slot is a measurementUID
@@ -40,10 +42,10 @@ export function buildReportPayload(state, measurementService) {
           return { value: length, unit: unit ?? 'cm' };
         })
         .filter(v => v !== null);
-      const mmValues = resolved.map(r => (typeof r === 'number' ? r : r.value));
-      if (mmValues.length === 0) continue;
+      const numericValues = resolved.map(r => r.value);
+      if (numericValues.length === 0) continue;
 
-      const avg = mmValues.reduce((a, b) => a + b, 0) / mmValues.length;
+      const avg = numericValues.reduce((a, b) => a + b, 0) / numericValues.length;
       const unit = resolved[0]?.unit === 'cm US Region' ? 'cm' : (resolved[0]?.unit ?? 'cm');
       axisMeans[axis] = { avg, unit };
 
@@ -80,6 +82,30 @@ export function buildReportPayload(state, measurementService) {
     if (obs.stratification != null) {
       const STRAT_LABELS = ['Normal', 'Focal', 'Complete'];
       payload[`${mongoPrefix}LossOfStratification`] = STRAT_LABELS[obs.stratification] ?? 'Normal';
+    }
+    if (siteConfig.hasHaustrations && obs.haustrations != null) {
+      payload[`${mongoPrefix}Haustrations`] = obs.haustrations > 0 ? 'Present' : 'Absent';
+    }
+
+    if (siteConfig.hasSegmentLength) {
+      const segmentLength = String(obs.segmentLength ?? '').trim();
+
+      if (segmentLength) {
+        payload[`${mongoPrefix}SegmentLength`] = segmentLength;
+        payload[`${mongoPrefix}SegmentLengthUOM`] = 'cm';
+      }
+    }
+
+    if (siteConfig.hasComplications && obs.complications != null) {
+      const hasComplications = obs.complications > 0;
+
+      payload[`${mongoPrefix}Complications`] = hasComplications ? 'Yes' : 'No';
+      payload[`${mongoPrefix}ComplicationTypes`] = hasComplications
+        ? (obs.complicationTypes ?? []).join(', ')
+        : '';
+      payload[`${mongoPrefix}ComplicationText`] = hasComplications
+        ? String(obs.complicationText ?? '').trim()
+        : '';
     }
   }
 

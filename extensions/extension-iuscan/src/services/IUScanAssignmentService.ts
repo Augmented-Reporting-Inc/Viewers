@@ -1,5 +1,5 @@
 import { PubSubService } from '@ohif/core';
-import { SITES, LABEL_MAP, DOPPLER_REVERSE } from '../utils/labelMap';
+import { SITES, LABEL_MAP, DOPPLER_REVERSE, HAUSTRATION_REVERSE } from '../utils/labelMap';
 import { buildReportPayload } from '../utils/reportBuilder';
 
 const EVENTS = {
@@ -9,14 +9,14 @@ const EVENTS = {
 /**
  * IUScanAssignmentService
  *
- * Stores which measurementUID (or raw mm number from SR hydration) occupies
+ * Stores which measurementUID occupies
  * each (site, axis, slot) position. All live mm values remain in OHIF's
  * built-in MeasurementService — this service only tracks assignments.
  *
  * State shape (per site):
  * {
- *   longitudinal: { slots: [null|uid|number, null|uid|number, null|uid|number] },
- *   cross:        { slots: [null|uid|number, null|uid|number, null|uid|number] },
+ *   longitudinal: { slots: [null|uid, null|uid, null|uid] },
+ *   cross:        { slots: [null|uid, null|uid, null|uid] },
  *   observations: {
  *     doppler:        null|0|1|2|3,
  *     inflammatoryFat: null|0|1|2,
@@ -52,6 +52,11 @@ class IUScanAssignmentService extends PubSubService {
           inflammatoryFat: null,
           lymphadenopathy: null,
           stratification: null,
+          haustrations: null,
+          segmentLength: '',
+          complications: null,
+          complicationTypes: [],
+          complicationText: '',
         },
       };
     }
@@ -61,11 +66,11 @@ class IUScanAssignmentService extends PubSubService {
   // ── Measurement slot API ──────────────────────────────────────────────────
 
   /**
-   * Assign a measurementUID or raw mm number to a specific slot.
+   * Assign a measurementUID to a specific slot.
    * @param {string} site  - e.g. 'sigmoidColon'
    * @param {string} axis  - 'longitudinal' | 'cross'
    * @param {number} slot  - 0 | 1 | 2
-   * @param {string|number|null} value - UID string, mm number, or null
+   * @param {string|null} value - UID string or null
    */
   assign(site, axis, slot, value) {
     if (!this._state[site]) {
@@ -118,6 +123,15 @@ class IUScanAssignmentService extends PubSubService {
     this._broadcastEvent(EVENTS.ASSIGNMENT_CHANGED, { site, field });
   }
 
+  setObservations(site, patch) {
+    if (!this._state[site]) return;
+    this._state[site].observations = {
+      ...this._state[site].observations,
+      ...patch,
+    };
+    this._broadcastEvent(EVENTS.ASSIGNMENT_CHANGED, { site, fields: Object.keys(patch) });
+  }
+
   getObservation(site, field) {
     return this._state[site]?.observations?.[field] ?? null;
   }
@@ -125,8 +139,29 @@ class IUScanAssignmentService extends PubSubService {
   // ── Query ─────────────────────────────────────────────────────────────────
 
   hasAnyAssignment() {
-    return SITES.some(({ key }) =>
-      ['longitudinal', 'cross'].some(axis => this._state[key][axis].slots.some(s => s !== null))
+    return SITES.some(({ key }) => this.siteHasReportableData(key));
+  }
+
+  siteHasReportableData(siteKey) {
+    const siteState = this._state[siteKey];
+    if (!siteState) return false;
+
+    const hasSlots = ['longitudinal', 'cross'].some(axis =>
+      siteState[axis].slots.some(s => s !== null)
+    );
+    if (hasSlots) return true;
+
+    const obs = siteState.observations ?? {};
+    return (
+      obs.doppler != null ||
+      obs.inflammatoryFat != null ||
+      obs.lymphadenopathy != null ||
+      obs.stratification != null ||
+      obs.haustrations != null ||
+      String(obs.segmentLength || '').trim() !== '' ||
+      obs.complications != null ||
+      (Array.isArray(obs.complicationTypes) && obs.complicationTypes.length > 0) ||
+      String(obs.complicationText || '').trim() !== ''
     );
   }
 
@@ -137,37 +172,28 @@ class IUScanAssignmentService extends PubSubService {
       copy[key] = {
         longitudinal: { slots: [...this._state[key].longitudinal.slots] },
         cross: { slots: [...this._state[key].cross.slots] },
-        observations: { ...this._state[key].observations },
+        observations: {
+          ...this._state[key].observations,
+          complicationTypes: [...(this._state[key].observations.complicationTypes ?? [])],
+        },
       };
     }
     return copy;
   }
 
   // ── Hydration from existing Mongo series document ─────────────────────────
-
   /**
-   * Pre-populates slots with raw mm numbers from SR-extracted Bowel* fields
-   * already stored in the Mongo Series document.
-   * These are stored as slot values of type `number` (not UID strings).
+   * Hydrates observation fields from an existing Mongo Series document.
+   *
+   * Important:
+   * Do not hydrate BWT/BWTLong/BWTCross values into assignment slots.
+   * Slots represent actual caliper annotations only and should be filled
+   * exclusively by restoreAnnotations().
    */
   hydrateFromSeriesDoc(doc) {
+    if (!doc) return;
+
     for (const { key, mongoPrefix } of SITES) {
-      // Longitudinal — prefer new split field, fall back to combined BWT
-      const longRaw = doc[`${mongoPrefix}BWTLong`] || doc[`${mongoPrefix}BWT`] || '';
-      const longVal = parseFloat(longRaw);
-      const longUnit = doc[`${mongoPrefix}BWTLongUOM`] || doc[`${mongoPrefix}BWTUOM`] || 'cm';
-      if (!isNaN(longVal) && longVal > 0) {
-        this._state[key].longitudinal.slots[0] = { value: longVal, unit: longUnit };
-      }
-
-      // Cross — prefer new split field only (no fall-back to combined BWT)
-      const crossRaw = doc[`${mongoPrefix}BWTCross`] || '';
-      const crossVal = parseFloat(crossRaw);
-      const crossUnit = doc[`${mongoPrefix}BWTCrossUOM`] || doc[`${mongoPrefix}BWTUOM`] || 'cm';
-      if (!isNaN(crossVal) && crossVal > 0) {
-        this._state[key].cross.slots[0] = { value: crossVal, unit: crossUnit };
-      }
-
       // Observations
       const dopplerStr = doc[`${mongoPrefix}ColorDopplerSignal`];
       if (dopplerStr != null && DOPPLER_REVERSE[dopplerStr] !== undefined) {
@@ -175,9 +201,12 @@ class IUScanAssignmentService extends PubSubService {
       }
 
       const fatStr = doc[`${mongoPrefix}InflammatoryMesentericFat`];
-      if (fatStr === 'Complete') this._state[key].observations.inflammatoryFat = 2;
-      else if (fatStr === 'Partial') this._state[key].observations.inflammatoryFat = 1;
-      else if (fatStr === 'None') this._state[key].observations.inflammatoryFat = 0;
+      if (fatStr === '2' || fatStr === 2 || fatStr === 'Complete')
+        this._state[key].observations.inflammatoryFat = 2;
+      else if (fatStr === '1' || fatStr === 1 || fatStr === 'Partial')
+        this._state[key].observations.inflammatoryFat = 1;
+      else if (fatStr === '0' || fatStr === 0 || fatStr === 'None')
+        this._state[key].observations.inflammatoryFat = 0;
       // legacy fallback
       else if (fatStr === 'Yes') this._state[key].observations.inflammatoryFat = 2;
       else if (fatStr === 'No') this._state[key].observations.inflammatoryFat = 0;
@@ -187,12 +216,54 @@ class IUScanAssignmentService extends PubSubService {
       else if (lymphStr === 'No') this._state[key].observations.lymphadenopathy = 0;
 
       const stratStr = doc[`${mongoPrefix}LossOfStratification`];
-      if (stratStr === 'Complete') this._state[key].observations.stratification = 2;
-      else if (stratStr === 'Focal') this._state[key].observations.stratification = 1;
-      else if (stratStr === 'Normal') this._state[key].observations.stratification = 0;
+      if (
+        stratStr === '2' ||
+        stratStr === 2 ||
+        stratStr === 'Complete' ||
+        stratStr === 'Extensive disruption'
+      )
+        this._state[key].observations.stratification = 2;
+      else if (
+        stratStr === '1' ||
+        stratStr === 1 ||
+        stratStr === 'Focal' ||
+        stratStr === 'Focal disruption'
+      )
+        this._state[key].observations.stratification = 1;
+      else if (stratStr === '0' || stratStr === 0 || stratStr === 'Normal')
+        this._state[key].observations.stratification = 0;
       // legacy fallback
       else if (stratStr === 'Yes') this._state[key].observations.stratification = 2;
       else if (stratStr === 'No') this._state[key].observations.stratification = 0;
+
+      const haustrationsStr = doc[`${mongoPrefix}Haustrations`];
+      if (HAUSTRATION_REVERSE[haustrationsStr] !== undefined) {
+        this._state[key].observations.haustrations = HAUSTRATION_REVERSE[haustrationsStr];
+      }
+
+      const segmentLength = doc[`${mongoPrefix}SegmentLength`];
+      if (segmentLength != null && String(segmentLength).trim() !== '') {
+        this._state[key].observations.segmentLength = String(segmentLength);
+      }
+
+      const complicationsStr = doc[`${mongoPrefix}Complications`];
+      if (complicationsStr === 'Yes') this._state[key].observations.complications = 1;
+      else if (complicationsStr === 'No') this._state[key].observations.complications = 0;
+
+      const complicationTypes = doc[`${mongoPrefix}ComplicationTypes`];
+      if (Array.isArray(complicationTypes)) {
+        this._state[key].observations.complicationTypes = complicationTypes;
+      } else if (typeof complicationTypes === 'string' && complicationTypes.trim()) {
+        this._state[key].observations.complicationTypes = complicationTypes
+          .split(',')
+          .map(s => s.trim())
+          .filter(Boolean);
+      }
+
+      const complicationText = doc[`${mongoPrefix}ComplicationText`];
+      if (complicationText != null) {
+        this._state[key].observations.complicationText = String(complicationText);
+      }
     }
 
     this._broadcastEvent(EVENTS.ASSIGNMENT_CHANGED, { source: 'hydration' });

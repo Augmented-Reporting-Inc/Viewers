@@ -63,7 +63,7 @@ COPY --link --exclude=yarn.lock --exclude=package.json --exclude=Dockerfile . .
 ENV QUICK_BUILD true
 # ENV GENERATE_SOURCEMAP=false
 ARG APP_CONFIG=config/default.js
-ARG PUBLIC_URL=/bviewer/
+ARG PUBLIC_URL=/pviewer/
 ENV PUBLIC_URL=${PUBLIC_URL}
 
 RUN yarn run show:config

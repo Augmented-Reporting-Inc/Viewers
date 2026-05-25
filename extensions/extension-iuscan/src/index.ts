@@ -7,25 +7,7 @@ import getCommandsModule from './getCommandsModule';
 import getToolbarModule from './getToolbarModule';
 import getPanelModule from './panels/getPanelModule';
 import { annotation as csToolsAnnotation } from '@cornerstonejs/tools';
-
-// Measurement label list — kept in one place, referenced by both
-// onModeEnter (registration) and the assignment service label map.
-const MEASUREMENT_LABELS = [
-  { value: 'SC-Long', label: 'Sigmoid Colon – Long' },
-  { value: 'SC-Cross', label: 'Sigmoid Colon – Cross' },
-  { value: 'DC-Long', label: 'Descending Colon – Long' },
-  { value: 'DC-Cross', label: 'Descending Colon – Cross' },
-  { value: 'TC-Long', label: 'Transverse Colon – Long' },
-  { value: 'TC-Cross', label: 'Transverse Colon – Cross' },
-  { value: 'AC-Long', label: 'Ascending Colon – Long' },
-  { value: 'AC-Cross', label: 'Ascending Colon – Cross' },
-  { value: 'TI-Long', label: 'Terminal Ileum – Long' },
-  { value: 'TI-Cross', label: 'Terminal Ileum – Cross' },
-  { value: 'ICA-Long', label: 'Ileocolic Anastomosis – Long' },
-  { value: 'ICA-Cross', label: 'Ileocolic Anastomosis – Cross' },
-  { value: 'NTI-Long', label: 'Neo-terminal Ileum – Long' },
-  { value: 'NTI-Cross', label: 'Neo-terminal Ileum – Cross' },
-];
+import { MEASUREMENT_LABELS } from './utils/labelMap';
 
 // Module-level subscription reference — survives between onModeEnter/onModeExit
 // without relying on `this` binding (OHIF calls lifecycle methods unbound)
@@ -58,21 +40,19 @@ async function hydrateFromSeriesDoc(servicesManager, assignSvc) {
   if (!res.ok) return;
   const doc = await res.json();
 
+  // Hydrate observation fields from Mongo first.
+  // Do not hydrate saved BWT/BWTLong/BWTCross averages into assignment slots.
+  // Slots should represent actual restored caliper annotations only.
+  assignSvc.hydrateFromSeriesDoc(doc);
+
   // If full annotation state is stored, restore it — gives per-caliper restoration
   // with live UIDs, click-to-jump, and all 3 slots independently.
-  // Fall back to BWT average hydration for older documents.
   if (doc.IUScanAnnotations) {
-    // Always hydrate observations and BWT averages for all sites first
-    assignSvc.hydrateFromSeriesDoc(doc);
     try {
-      // Then restore full caliper annotations on top — this overwrites the
-      // slot[0] average values with live UIDs for annotated sites
       await restoreAnnotations(doc.IUScanAnnotations, servicesManager, assignSvc);
     } catch (e) {
-      console.warn('[iUSCAN] annotation restore failed, falling back to BWT hydration:', e.message);
+      console.warn('[iUSCAN] annotation restore failed:', e?.message || e);
     }
-  } else {
-    assignSvc.hydrateFromSeriesDoc(doc);
   }
 }
 
@@ -160,6 +140,12 @@ const iuscanExtension = {
     const { measurementService, customizationService } = servicesManager.services;
     const assignSvc = servicesManager.services.iuscanAssignmentService;
 
+    _measurementAddedSub?.unsubscribe?.();
+    _measurementAddedSub = null;
+
+    _measurementUpdatedSub?.unsubscribe?.();
+    _measurementUpdatedSub = null;
+
     // Clear previous study's state
     assignSvc.clearAll();
 
@@ -208,8 +194,9 @@ const iuscanExtension = {
 
     // Pre-populate panel from any existing Bowel* fields in the series doc.
     // Non-fatal: silently skipped if the study isn't yet linked to a series doc.
-    hydrateFromSeriesDoc(servicesManager, assignSvc);
-    const { hangingProtocolService } = servicesManager.services;
+    hydrateFromSeriesDoc(servicesManager, assignSvc).catch(e => {
+      console.warn('[iUSCAN] hydrateFromSeriesDoc failed:', e?.message || e);
+    });
   },
 
   /**

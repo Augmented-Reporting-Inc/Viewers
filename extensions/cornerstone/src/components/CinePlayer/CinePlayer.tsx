@@ -9,8 +9,8 @@ import { useAppConfig } from '@state';
 // using a low-concurrency background queue so it doesn't compete with the
 // active viewport's loading.
 // ---------------------------------------------------------------------------
-const PREFETCH_WINDOW = 3; // how many instances ahead to prefetch
-const PREFETCH_CONCURRENCY = 20; // max parallel background requests
+const PREFETCH_WINDOW = 0; // how many instances ahead to prefetch - 1 for echo, 0 for bowel
+const PREFETCH_CONCURRENCY = 4; // max parallel background requests - 20 for echo, 4 for bowel
 
 const activeBackgroundRequests = new Set<string>();
 
@@ -119,12 +119,23 @@ function WrappedCinePlayer({
   const prefetchListenerRef = useRef(null);
   const fallbackTimerRef = useRef(null);
   const cinesRef = useRef(cines);
+  const [bufferingProgress, setBufferingProgress] = useState<{
+    buffered: number;
+    total: number;
+  } | null>(null);
+  const originalFrameRateRef = useRef<number>(24);
+  const cacheMonitorRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const currentRateRef = useRef<number>(24);
 
   // Cleanup pending play-on-prefetch listeners
   const cancelPendingPlay = useCallback(() => {
     if (fallbackTimerRef.current) {
-      clearInterval(fallbackTimerRef.current); // works for both timeout and interval
+      clearInterval(fallbackTimerRef.current);
       fallbackTimerRef.current = null;
+    }
+    if (cacheMonitorRef.current) {
+      clearInterval(cacheMonitorRef.current);
+      cacheMonitorRef.current = null;
     }
     if (prefetchListenerRef.current) {
       eventTarget.removeEventListener(
@@ -139,12 +150,62 @@ function WrappedCinePlayer({
     (frameRate: number) => {
       cancelPendingPlay();
 
-      const startPlay = () => {
+      const startPlay = (playFrameRate: number = frameRate) => {
         if (!isMountedRef.current) return;
         cancelPendingPlay();
-        cineService.setCine({ id: viewportId, isPlaying: true, frameRate });
 
-        // Kick off background prefetch of next instances now that active VP is playing
+        currentRateRef.current = playFrameRate;
+
+        // Monitor cache — clear pill and restore frame rate when fully loaded.
+        // Started unconditionally so the pill persists until all frames are cached
+        // regardless of whether the frame rate was capped.
+        originalFrameRateRef.current = frameRate;
+        if (cacheMonitorRef.current) clearInterval(cacheMonitorRef.current);
+
+        cacheMonitorRef.current = setInterval(() => {
+          const dsets = getDisplaySets();
+          if (!dsets.length) return;
+
+          const totalCached = dsets.reduce((sum, ds) => {
+            const ids = getImageIds(ds);
+            return sum + ids.filter(id => cache.isLoaded(id)).length;
+          }, 0);
+          const totalFrames = dsets.reduce((sum, ds) => sum + getImageIds(ds).length, 0);
+
+          // Update buffering pill
+          setBufferingProgress({ buffered: totalCached, total: totalFrames });
+
+          // Ramp frame rate based on cache fill fraction
+          const cachedFraction = totalFrames > 0 ? totalCached / totalFrames : 0;
+          const rampedRate = Math.floor(
+            playFrameRate + (frameRate - playFrameRate) * Math.pow(cachedFraction, 0.7)
+          );
+          const newRate = Math.min(frameRate, Math.max(playFrameRate, rampedRate));
+
+          // Only update if rate has meaningfully changed (avoid thrashing on tiny increments)
+          if (newRate > playFrameRate && newRate !== currentRateRef.current) {
+            currentRateRef.current = newRate;
+            setNewStackFrameRate(newRate);
+            cineService.setCine({ id: viewportId, isPlaying: true, frameRate: newRate });
+            console.log(
+              `[cine] cache ${Math.round(cachedFraction * 100)}%, ramping to ${newRate}fps`
+            );
+          }
+
+          if (dsets.every(isDisplaySetFullyCached)) {
+            clearInterval(cacheMonitorRef.current!);
+            cacheMonitorRef.current = null;
+            if (!isMountedRef.current) return;
+            setBufferingProgress(null);
+            // Ensure final rate is exactly the DICOM rate
+            setNewStackFrameRate(frameRate);
+            cineService.setCine({ id: viewportId, isPlaying: true, frameRate });
+            console.log(`[cine] fully cached, final frame rate ${frameRate}fps`);
+          }
+        }, 500);
+
+        setNewStackFrameRate(playFrameRate);
+        cineService.setCine({ id: viewportId, isPlaying: true, frameRate: playFrameRate });
         const { viewports } = viewportGridService.getState();
         const vp = viewports.get(viewportId);
         if (vp) {
@@ -155,16 +216,19 @@ function WrappedCinePlayer({
       };
 
       const { viewports } = viewportGridService.getState();
-      const viewport = viewports.get(viewportId);
-      if (!viewport) {
+      if (!viewports.get(viewportId)) {
         startPlay();
         return;
       }
 
-      const getDisplaySets = () =>
-        viewport.displaySetInstanceUIDs
+      const getDisplaySets = () => {
+        const { viewports } = viewportGridService.getState();
+        const vp = viewports.get(viewportId);
+        if (!vp) return [];
+        return vp.displaySetInstanceUIDs
           .map(uid => displaySetService.getDisplaySetByUID(uid))
           .filter(Boolean);
+      };
 
       // If already cached, play immediately
       if (getDisplaySets().every(isDisplaySetFullyCached)) {
@@ -173,26 +237,45 @@ function WrappedCinePlayer({
         return;
       }
 
-      // Poll cache until MIN_BUFFERED_FRAMES are ready, then play
-      const MIN_BUFFERED_FRAMES = 8;
+      // Poll cache until enough frames are buffered, then play
+      const dsets = getDisplaySets();
+      const totalFrames = dsets.reduce((sum, ds) => sum + getImageIds(ds).length, 0);
+      const MIN_BUFFERED_FRAMES = 3; // just enough to start — overlay covers the wait
       const POLL_INTERVAL_MS = 100;
-      const MAX_WAIT_MS = 10000;
+      const MAX_WAIT_MS = 20000;
       let elapsed = 0;
+      let firstFrameTime: number | null = null;
 
       const poll = setInterval(() => {
         elapsed += POLL_INTERVAL_MS;
 
-        const dsets = getDisplaySets();
-        const buffered = dsets.reduce((sum, ds) => {
+        const currentDsets = getDisplaySets();
+        const buffered = currentDsets.reduce((sum, ds) => {
           const ids = getImageIds(ds);
           return sum + ids.filter(id => cache.isLoaded(id)).length;
         }, 0);
 
-        console.log(`[cine] buffered ${buffered} frames`);
+        if (buffered > 0 && firstFrameTime === null) {
+          firstFrameTime = elapsed;
+        }
+
+        setBufferingProgress({ buffered, total: totalFrames });
+        console.log(`[cine] buffered ${buffered}/${totalFrames} frames`);
 
         if (buffered >= MIN_BUFFERED_FRAMES || elapsed >= MAX_WAIT_MS) {
           clearInterval(poll);
-          startPlay();
+
+          // Estimate load rate from when first frame arrived, not from poll start,
+          // to avoid inflating elapsed with initial Orthanc response latency
+          const loadElapsed =
+            firstFrameTime !== null ? (elapsed - firstFrameTime) / 1000 : elapsed / 1000;
+          const observedLoadFps = loadElapsed > 0 ? buffered / loadElapsed : frameRate;
+          const safeFrameRate = Math.min(frameRate, Math.max(8, Math.floor(observedLoadFps * 0.9)));
+          console.log(
+            `[cine] load rate ~${observedLoadFps.toFixed(1)}fps, playing at ${safeFrameRate}fps`
+          );
+
+          startPlay(safeFrameRate);
         }
       }, POLL_INTERVAL_MS);
 
@@ -365,14 +448,39 @@ function WrappedCinePlayer({
   const isPlaying = cine?.isPlaying || false;
 
   return (
-    <RenderCinePlayer
-      viewportId={viewportId}
-      cineService={cineService}
-      newStackFrameRate={newStackFrameRate}
-      isPlaying={isPlaying}
-      dynamicInfo={dynamicInfo}
-      customizationService={customizationService}
-    />
+    <>
+      {bufferingProgress && (
+        <div
+          className="pointer-events-none absolute left-1/2 -translate-x-1/2"
+          style={{ top: '140px' }}
+        >
+          <div className="flex items-center gap-2 rounded-full bg-black/70 px-3 py-1 text-xs text-white/80">
+            <span
+              className="inline-block h-1.5 w-1.5 rounded-full bg-orange-400"
+              style={{ animation: 'cinePulse 1.5s cubic-bezier(0.4,0,0.6,1) infinite' }}
+            />
+            <span>
+              Buffering {bufferingProgress.buffered} / {bufferingProgress.total} frames
+              &nbsp;·&nbsp; 1st cycle warm-up
+            </span>
+          </div>
+          <style>{`
+      @keyframes cinePulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.2; }
+      }
+    `}</style>
+        </div>
+      )}
+      <RenderCinePlayer
+        viewportId={viewportId}
+        cineService={cineService}
+        newStackFrameRate={newStackFrameRate}
+        isPlaying={isPlaying}
+        dynamicInfo={dynamicInfo}
+        customizationService={customizationService}
+      />
+    </>
   );
 }
 

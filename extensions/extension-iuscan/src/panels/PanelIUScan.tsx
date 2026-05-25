@@ -22,8 +22,8 @@ export default function PanelIUScan({ servicesManager, commandsManager }) {
   const [openSite, setOpenSite] = useState(() => {
     // Open the first site that has any assignment, otherwise default to terminalIleum
     const state = assignSvc.getFullState();
-    const assignedSite = Object.entries(state).find(([, siteState]) =>
-      ['longitudinal', 'cross'].some(axis => siteState[axis].slots.some(s => s !== null))
+    const assignedSite = Object.entries(state).find(([siteKey]) =>
+      assignSvc.siteHasReportableData(siteKey)
     );
     return assignedSite?.[0] ?? 'terminalIleum';
   });
