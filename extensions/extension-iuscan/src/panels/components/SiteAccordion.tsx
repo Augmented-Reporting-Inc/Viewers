@@ -35,6 +35,32 @@ const STRAT_OPTIONS = [
   { value: 2, label: 'Complete' },
 ];
 
+const STRICTURE_FIELDS = [
+  {
+    key: 'strictureMaxBWT',
+    label: 'Maximum bowel wall thickness (cm)',
+    placeholder: 'e.g. 0.45',
+  },
+  {
+    key: 'strictureMinimalLuminalDiameter',
+    label: 'Minimal luminal diameter (cm)',
+    placeholder: 'e.g. 0.8',
+  },
+  {
+    key: 'strictureLength',
+    label: 'Stricture length (cm)',
+    placeholder: 'e.g. 3.5',
+  },
+  {
+    key: 'strictureUpstreamDilation',
+    label: 'Upstream dilation (cm)',
+    placeholder: 'e.g. 2.1',
+  },
+];
+
+const hasStrictureSelected = obs =>
+  Array.isArray(obs?.complicationTypes) && obs.complicationTypes.includes('stricture');
+
 /**
  * Accordion section for a single anatomical site.
  * Renders two MeasurementGroups (Long + Cross) and four ScoreSelectors.
@@ -106,7 +132,11 @@ export default function SiteAccordion({
             String(obs.segmentLength || '').trim() !== '' ||
             obs.complications != null ||
             (obs.complicationTypes ?? []).length > 0 ||
-            String(obs.complicationText || '').trim() !== '') && (
+            String(obs.complicationText || '').trim() !== '' ||
+            String(obs.strictureMaxBWT || '').trim() !== '' ||
+            String(obs.strictureMinimalLuminalDiameter || '').trim() !== '' ||
+            String(obs.strictureLength || '').trim() !== '' ||
+            String(obs.strictureUpstreamDilation || '').trim() !== '') && (
             <span
               className="h-2 w-2 shrink-0 rounded-full bg-blue-500"
               title="Observations recorded"
@@ -203,6 +233,10 @@ export default function SiteAccordion({
                       complications: v,
                       complicationTypes: [],
                       complicationText: '',
+                      strictureMaxBWT: '',
+                      strictureMinimalLuminalDiameter: '',
+                      strictureLength: '',
+                      strictureUpstreamDilation: '',
                     });
                   } else {
                     assignSvc.setObservation(site.key, 'complications', v);
@@ -230,7 +264,17 @@ export default function SiteAccordion({
                             const next = selected
                               ? current.filter(v => v !== item.value)
                               : [...current, item.value];
-                            assignSvc.setObservation(site.key, 'complicationTypes', next);
+                            if (selected && item.value === 'stricture') {
+                              assignSvc.setObservations(site.key, {
+                                complicationTypes: next,
+                                strictureMaxBWT: '',
+                                strictureMinimalLuminalDiameter: '',
+                                strictureLength: '',
+                                strictureUpstreamDilation: '',
+                              });
+                            } else {
+                              assignSvc.setObservation(site.key, 'complicationTypes', next);
+                            }
                           }}
                         >
                           {item.label}
@@ -238,6 +282,32 @@ export default function SiteAccordion({
                       );
                     })}
                   </div>
+
+                  {hasStrictureSelected(obs) && (
+                    <div className="bg-gray-950/40 rounded border border-gray-700 p-2">
+                      <div className="mb-2 text-xs font-semibold text-gray-300">
+                        Stricture measurements
+                      </div>
+                      <div className="grid grid-cols-1 gap-2">
+                        {STRICTURE_FIELDS.map(field => (
+                          <label key={field.key} className="block">
+                            <span className="mb-1 block text-xs text-gray-400">{field.label}</span>
+                            <input
+                              type="number"
+                              min="0"
+                              step="0.1"
+                              className="w-full rounded border border-gray-600 bg-gray-800 px-2 py-1 text-xs text-gray-100"
+                              value={obs[field.key] ?? ''}
+                              onChange={e =>
+                                assignSvc.setObservation(site.key, field.key, e.target.value)
+                              }
+                              placeholder={field.placeholder}
+                            />
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  )}
 
                   <textarea
                     className="min-h-[56px] w-full rounded border border-gray-600 bg-gray-800 px-2 py-1 text-xs text-gray-100"

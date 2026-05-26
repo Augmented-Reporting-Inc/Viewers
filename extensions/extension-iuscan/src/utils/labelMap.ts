@@ -10,6 +10,7 @@ const AXES = [
   { axis: 'cross', suffix: 'Cross', label: 'Cross' },
 ];
 
+const LABEL_MODAL_BOTTOM_SITE_KEYS = new Set(['rectum', 'ileocecalValve']);
 /**
  * Ordered list of anatomical sites.
  * Order determines accordion display order in the panel.
@@ -90,7 +91,12 @@ export const SITES = [
   },
 ];
 
-export const MEASUREMENT_LABELS = SITES.flatMap(site => {
+const MEASUREMENT_LABEL_SITE_ORDER = [
+  ...SITES.filter(site => !LABEL_MODAL_BOTTOM_SITE_KEYS.has(site.key)),
+  ...SITES.filter(site => LABEL_MODAL_BOTTOM_SITE_KEYS.has(site.key)),
+];
+
+export const MEASUREMENT_LABELS = MEASUREMENT_LABEL_SITE_ORDER.flatMap(site => {
   if (site.hasMeasurements === false) return [];
 
   return AXES.map(({ suffix, label }) => ({

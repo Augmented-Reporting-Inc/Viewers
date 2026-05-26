@@ -98,6 +98,14 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
               throw new Error(`Save failed: ${putRes.status}`);
             }
 
+            const updatedSeries = await putRes.json().catch(() => null);
+
+            assignSvc.notifyArMeasurementsUpdated?.({
+              seriesDoc,
+              payload,
+              updatedSeries,
+            });
+
             uiNotificationService.show({
               title: 'Augmented Reporting',
               message: 'Measurements saved to report.',

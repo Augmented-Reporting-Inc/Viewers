@@ -1,5 +1,8 @@
 import { SITES, DOPPLER_MAP } from './labelMap';
 
+const hasStrictureSelected = obs =>
+  Array.isArray(obs?.complicationTypes) && obs.complicationTypes.includes('stricture');
+
 /**
  * Builds the PUT body for /formapi/api/series/:id from the full
  * IUScanAssignmentService state.
@@ -106,6 +109,20 @@ export function buildReportPayload(state, measurementService) {
       payload[`${mongoPrefix}ComplicationText`] = hasComplications
         ? String(obs.complicationText ?? '').trim()
         : '';
+
+      const shouldWriteStrictureDetails = hasComplications && hasStrictureSelected(obs);
+
+      const writeStrictureField = (suffix, value) => {
+        const normalized = String(value ?? '').trim();
+        payload[`${mongoPrefix}${suffix}`] = shouldWriteStrictureDetails ? normalized : '';
+        payload[`${mongoPrefix}${suffix}UOM`] =
+          shouldWriteStrictureDetails && normalized ? 'cm' : '';
+      };
+
+      writeStrictureField('StrictureMaxBWT', obs.strictureMaxBWT);
+      writeStrictureField('StrictureMinimalLuminalDiameter', obs.strictureMinimalLuminalDiameter);
+      writeStrictureField('StrictureLength', obs.strictureLength);
+      writeStrictureField('StrictureUpstreamDilation', obs.strictureUpstreamDilation);
     }
   }
 

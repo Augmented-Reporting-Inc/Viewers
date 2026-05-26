@@ -57,6 +57,10 @@ class IUScanAssignmentService extends PubSubService {
           complications: null,
           complicationTypes: [],
           complicationText: '',
+          strictureMaxBWT: '',
+          strictureMinimalLuminalDiameter: '',
+          strictureLength: '',
+          strictureUpstreamDilation: '',
         },
       };
     }
@@ -161,7 +165,11 @@ class IUScanAssignmentService extends PubSubService {
       String(obs.segmentLength || '').trim() !== '' ||
       obs.complications != null ||
       (Array.isArray(obs.complicationTypes) && obs.complicationTypes.length > 0) ||
-      String(obs.complicationText || '').trim() !== ''
+      String(obs.complicationText || '').trim() !== '' ||
+      String(obs.strictureMaxBWT || '').trim() !== '' ||
+      String(obs.strictureMinimalLuminalDiameter || '').trim() !== '' ||
+      String(obs.strictureLength || '').trim() !== '' ||
+      String(obs.strictureUpstreamDilation || '').trim() !== ''
     );
   }
 
@@ -264,6 +272,31 @@ class IUScanAssignmentService extends PubSubService {
       if (complicationText != null) {
         this._state[key].observations.complicationText = String(complicationText);
       }
+
+      const strictureMaxBWT = doc[`${mongoPrefix}StrictureMaxBWT`];
+      if (strictureMaxBWT != null && String(strictureMaxBWT).trim() !== '') {
+        this._state[key].observations.strictureMaxBWT = String(strictureMaxBWT);
+      }
+
+      const strictureMinimalLuminalDiameter = doc[`${mongoPrefix}StrictureMinimalLuminalDiameter`];
+      if (
+        strictureMinimalLuminalDiameter != null &&
+        String(strictureMinimalLuminalDiameter).trim() !== ''
+      ) {
+        this._state[key].observations.strictureMinimalLuminalDiameter = String(
+          strictureMinimalLuminalDiameter
+        );
+      }
+
+      const strictureLength = doc[`${mongoPrefix}StrictureLength`];
+      if (strictureLength != null && String(strictureLength).trim() !== '') {
+        this._state[key].observations.strictureLength = String(strictureLength);
+      }
+
+      const strictureUpstreamDilation = doc[`${mongoPrefix}StrictureUpstreamDilation`];
+      if (strictureUpstreamDilation != null && String(strictureUpstreamDilation).trim() !== '') {
+        this._state[key].observations.strictureUpstreamDilation = String(strictureUpstreamDilation);
+      }
     }
 
     this._broadcastEvent(EVENTS.ASSIGNMENT_CHANGED, { source: 'hydration' });
@@ -273,6 +306,72 @@ class IUScanAssignmentService extends PubSubService {
 
   buildReportPayload(measurementService) {
     return buildReportPayload(this._state, measurementService);
+  }
+
+  getUpdatedMeasurementFieldNames(payload = {}) {
+    return Object.keys(payload || {}).filter(fieldName => fieldName !== 'accessType');
+  }
+
+  buildUpdatedMeasurementFields({ payload = {}, updatedSeries = null, fieldNames = [] }) {
+    return fieldNames.reduce((acc, fieldName) => {
+      if (updatedSeries && Object.prototype.hasOwnProperty.call(updatedSeries, fieldName)) {
+        acc[fieldName] = updatedSeries[fieldName];
+        return acc;
+      }
+
+      if (Object.prototype.hasOwnProperty.call(payload, fieldName)) {
+        acc[fieldName] = payload[fieldName];
+      }
+
+      return acc;
+    }, {});
+  }
+
+  postReportMessage(message, warningLabel) {
+    try {
+      window.opener?.postMessage(message, '*');
+      window.parent?.postMessage(message, '*');
+    } catch (messageError) {
+      console.warn(warningLabel, messageError);
+    }
+  }
+
+  notifyArMeasurementsUpdated({ seriesDoc, payload, updatedSeries = null }) {
+    const fieldNames = this.getUpdatedMeasurementFieldNames(payload);
+    if (!fieldNames.length) return;
+
+    const sourceSeries = updatedSeries || seriesDoc || {};
+    const updatedFields = this.buildUpdatedMeasurementFields({
+      payload,
+      updatedSeries,
+      fieldNames,
+    });
+
+    console.log('[AR] posting measurement update to report page', {
+      seriesKey: String(sourceSeries?._id || seriesDoc?._id || ''),
+      fieldNames,
+      updatedFields,
+      updatedAt: sourceSeries?.updatedAt || '',
+      hasOpener: !!window.opener,
+      parentIsSelf: window.parent === window,
+    });
+
+    this.postReportMessage(
+      {
+        type: 'AR_REPORT_MEASUREMENTS_UPDATED',
+        seriesKey: String(sourceSeries?._id || seriesDoc?._id || ''),
+        StudyInstanceUID: String(
+          sourceSeries?.StudyInstanceUID || seriesDoc?.StudyInstanceUID || ''
+        ),
+        SeriesInstanceUID: String(
+          sourceSeries?.SeriesInstanceUID || seriesDoc?.SeriesInstanceUID || ''
+        ),
+        fieldNames,
+        updatedFields,
+        updatedAt: sourceSeries?.updatedAt || '',
+      },
+      '[AR] unable to notify report page of measurement update:'
+    );
   }
 
   // ── Lifecycle ─────────────────────────────────────────────────────────────
