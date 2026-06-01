@@ -38,53 +38,6 @@ export type UpdateViewportDisplaySetParams = {
   excludeNonImageModalities?: boolean;
 };
 
-const NON_IMAGE_MODALITIES = ['SR', 'SEG', 'SM', 'RTSTRUCT', 'RTPLAN', 'RTDOSE'];
-
-function getViewportDisplaySetIds(viewport): string[] {
-  const displaySetIds =
-    viewport?.displaySetInstanceUIDs ??
-    (viewport?.displaySetInstanceUID ? [viewport.displaySetInstanceUID] : []);
-
-  return Array.isArray(displaySetIds) ? displaySetIds : [displaySetIds];
-}
-
-function getDisplaySetIndexForViewport(viewport, displaySets): number {
-  const displaySetIds = getViewportDisplaySetIds(viewport);
-
-  return displaySets.findIndex(displaySet =>
-    displaySetIds.includes(displaySet.displaySetInstanceUID)
-  );
-}
-
-function findNavigatedDisplaySetIndex({
-  displaySets,
-  startIndex,
-  direction,
-  excludeNonImageModalities,
-}: {
-  displaySets: any[];
-  startIndex: number;
-  direction: number;
-  excludeNonImageModalities?: boolean;
-}): number {
-  for (
-    let candidateIndex = startIndex + direction;
-    candidateIndex > -1 && candidateIndex < displaySets.length;
-    candidateIndex += direction
-  ) {
-    const candidateDisplaySet = displaySets[candidateIndex];
-
-    if (
-      !excludeNonImageModalities ||
-      !NON_IMAGE_MODALITIES.includes(candidateDisplaySet.Modality)
-    ) {
-      return candidateIndex;
-    }
-  }
-
-  return -1;
-}
-
 const commandsModule = ({
   servicesManager,
   commandsManager,
@@ -746,53 +699,46 @@ const commandsModule = ({
       direction,
       excludeNonImageModalities,
     }: UpdateViewportDisplaySetParams) => {
-      const currentDisplaySets = [...displaySetService.activeDisplaySets];
+      const nonImageModalities = ['SR', 'SEG', 'SM', 'RTSTRUCT', 'RTPLAN', 'RTDOSE'];
 
-      if (!currentDisplaySets.length) {
-        return;
-      }
+      const currentDisplaySets = [...displaySetService.activeDisplaySets];
 
       const { activeViewportId, viewports, isHangingProtocolLayout } =
         viewportGridService.getState();
 
-      if (!viewports?.size) {
-        return;
-      }
+      const { displaySetInstanceUIDs } = viewports.get(activeViewportId);
 
-      const activeViewport = viewports.get(activeViewportId);
-
-      if (!activeViewport) {
-        return;
-      }
-
-      const activeDisplaySetIndex = getDisplaySetIndexForViewport(
-        activeViewport,
-        currentDisplaySets
+      const activeDisplaySetIndex = currentDisplaySets.findIndex(displaySet =>
+        displaySetInstanceUIDs.includes(displaySet.displaySetInstanceUID)
       );
 
-      if (activeDisplaySetIndex === -1) {
+      let displaySetIndexToShow: number;
+
+      for (
+        displaySetIndexToShow = activeDisplaySetIndex + direction;
+        displaySetIndexToShow > -1 && displaySetIndexToShow < currentDisplaySets.length;
+        displaySetIndexToShow += direction
+      ) {
+        if (
+          !excludeNonImageModalities ||
+          !nonImageModalities.includes(currentDisplaySets[displaySetIndexToShow].Modality)
+        ) {
+          break;
+        }
+      }
+
+      if (displaySetIndexToShow < 0 || displaySetIndexToShow >= currentDisplaySets.length) {
         return;
       }
 
-      const displaySetIndexToShow = findNavigatedDisplaySetIndex({
-        displaySets: currentDisplaySets,
-        startIndex: activeDisplaySetIndex,
-        direction,
-        excludeNonImageModalities,
-      });
-
-      if (displaySetIndexToShow === -1) {
-        return;
-      }
-
-      const displaySetIdToShow = currentDisplaySets[displaySetIndexToShow].displaySetInstanceUID;
+      const { displaySetInstanceUID } = currentDisplaySets[displaySetIndexToShow];
 
       let updatedViewports = [];
 
       try {
         updatedViewports = hangingProtocolService.getViewportsRequireUpdate(
           activeViewportId,
-          displaySetIdToShow,
+          displaySetInstanceUID,
           isHangingProtocolLayout
         );
       } catch (error) {
@@ -806,92 +752,7 @@ const commandsModule = ({
         });
       }
 
-      viewportGridService.setDisplaySetsForViewports(updatedViewports);
-
-      setTimeout(() => actions.scrollActiveThumbnailIntoView(), 0);
-    },
-
-    updateAllViewportDisplaySets: ({
-      direction,
-      excludeNonImageModalities,
-    }: UpdateViewportDisplaySetParams) => {
-      const currentDisplaySets = [...displaySetService.activeDisplaySets];
-
-      if (!currentDisplaySets.length) {
-        return;
-      }
-
-      const { viewports, isHangingProtocolLayout } = viewportGridService.getState();
-
-      if (!viewports?.size) {
-        return;
-      }
-
-      const viewportUpdatesById = new Map<string, any>();
-      let hadHangingProtocolMismatch = false;
-
-      [...viewports.entries()].forEach(([viewportId, viewport]) => {
-        const currentDisplaySetIndex = getDisplaySetIndexForViewport(viewport, currentDisplaySets);
-
-        if (currentDisplaySetIndex === -1) {
-          return;
-        }
-
-        const displaySetIndexToShow = findNavigatedDisplaySetIndex({
-          displaySets: currentDisplaySets,
-          startIndex: currentDisplaySetIndex,
-          direction,
-          excludeNonImageModalities,
-        });
-
-        if (displaySetIndexToShow === -1) {
-          return;
-        }
-
-        const displaySetIdToShow = currentDisplaySets[displaySetIndexToShow].displaySetInstanceUID;
-
-        try {
-          const viewportUpdates = hangingProtocolService.getViewportsRequireUpdate(
-            viewportId,
-            displaySetIdToShow,
-            isHangingProtocolLayout
-          );
-
-          viewportUpdates.forEach(viewportUpdate => {
-            if (viewportUpdate?.viewportId) {
-              viewportUpdatesById.set(viewportUpdate.viewportId, viewportUpdate);
-            }
-          });
-        } catch (error) {
-          hadHangingProtocolMismatch = true;
-          console.warn(error);
-        }
-      });
-
-      const updatedViewports = [...viewportUpdatesById.values()];
-
-      console.debug('[updateAllViewportDisplaySets]', {
-        direction,
-        viewportCount: viewports.size,
-        updateCount: updatedViewports.length,
-        updatedViewports,
-      });
-
-      if (!updatedViewports.length) {
-        return;
-      }
-
-      if (hadHangingProtocolMismatch) {
-        uiNotificationService.show({
-          title: 'Navigate Viewport Display Set',
-          message:
-            'One or more display sets could not be added to a viewport due to a mismatch in the Hanging Protocol rules.',
-          type: 'info',
-          duration: 3000,
-        });
-      }
-
-      viewportGridService.setDisplaySetsForViewports(updatedViewports);
+      commandsManager.run('setDisplaySetsForViewports', { viewportsToUpdate: updatedViewports });
 
       setTimeout(() => actions.scrollActiveThumbnailIntoView(), 0);
     },
@@ -920,7 +781,6 @@ const commandsModule = ({
     toggleOneUp: actions.toggleOneUp,
     openDICOMTagViewer: actions.openDICOMTagViewer,
     updateViewportDisplaySet: actions.updateViewportDisplaySet,
-    updateAllViewportDisplaySets: actions.updateAllViewportDisplaySets,
     scrollActiveThumbnailIntoView: actions.scrollActiveThumbnailIntoView,
     addDisplaySetAsLayer: actions.addDisplaySetAsLayer,
     removeDisplaySetLayer: actions.removeDisplaySetLayer,

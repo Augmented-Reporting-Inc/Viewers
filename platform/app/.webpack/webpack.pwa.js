@@ -81,6 +81,8 @@ module.exports = (env, argv) => {
         SRC_DIR,
         path.resolve(__dirname, 'modes/mode-iuscan/node_modules'),
         path.resolve(__dirname, 'extensions/extension-iuscan/node_modules'),
+        path.resolve(__dirname, 'modes/mode-dobutamine/node_modules'),
+        path.resolve(__dirname, 'extensions/extension-dobutamine/node_modules'),
       ],
     },
     plugins: [

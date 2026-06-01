@@ -1,0 +1,20 @@
+diff --git a/node_modules/@cornerstonejs/dicom-image-loader/dist/esm/imageLoader/decodeImageFrame.js b/node_modules/@cornerstonejs/dicom-image-loader/dist/esm/imageLoader/decodeImageFrame.js
+index e7b3877..f522a06 100644
+--- a/node_modules/@cornerstonejs/dicom-image-loader/dist/esm/imageLoader/decodeImageFrame.js
++++ b/node_modules/@cornerstonejs/dicom-image-loader/dist/esm/imageLoader/decodeImageFrame.js
+@@ -1,4 +1,3 @@
+-import decodeJPEGBaseline8BitColor from './decodeJPEGBaseline8BitColor';
+ import { getWebWorkerManager } from '@cornerstonejs/core';
+ function processDecodeTask(imageFrame, transferSyntax, pixelData, srcOptions, decodeConfig) {
+     const options = { ...srcOptions };
+@@ -33,10 +32,6 @@ function decodeImageFrame(imageFrame, transferSyntax, pixelData, canvas, options
+         case '1.2.840.10008.1.2.5':
+             return processDecodeTask(imageFrame, transferSyntax, pixelData, options, decodeConfig);
+         case '1.2.840.10008.1.2.4.50':
+-            if (imageFrame.bitsAllocated === 8 &&
+-                (imageFrame.samplesPerPixel === 3 || imageFrame.samplesPerPixel === 4)) {
+-                return decodeJPEGBaseline8BitColor(imageFrame, pixelData, canvas);
+-            }
+             return processDecodeTask(imageFrame, transferSyntax, pixelData, options, decodeConfig);
+         case '1.2.840.10008.1.2.4.51':
+             return processDecodeTask(imageFrame, transferSyntax, pixelData, options, decodeConfig);

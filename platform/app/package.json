@@ -109,6 +109,7 @@
     "@babel/plugin-transform-private-methods": "^7.27.1",
     "@types/node": "^20.12.12",
     "identity-obj-proxy": "3.0.x",
+    "patch-package": "^8.0.1",
     "tailwindcss": "3.2.4"
   }
 }

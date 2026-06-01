@@ -72,7 +72,8 @@
     "lerna:cache": "./netlify-lerna-cache.sh",
     "lerna:restore": "./netlify-lerna-restore.sh",
     "lerna:customVersion": "node version.mjs",
-    "link-list": "npm ls --depth=0 --link=true"
+    "link-list": "npm ls --depth=0 --link=true",
+    "postinstall": "patch-package --use-yarn"
   },
   "dependencies": {
     "@radix-ui/react-hover-card": "^1.1.15",

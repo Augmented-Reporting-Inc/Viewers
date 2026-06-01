@@ -73,6 +73,10 @@
     {
       "packageName": "extension-iuscan",
       "version": "0.0.1"
+    },
+    {
+      "packageName": "extension-dobutamine",
+      "version": "0.0.1"
     }
   ],
   "modes": [
@@ -111,6 +115,10 @@
     },
     {
       "packageName": "mode-iuscan",
+      "version": "0.0.1"
+    },
+    {
+      "packageName": "mode-dobutamine",
       "version": "0.0.1"
     }
   ],

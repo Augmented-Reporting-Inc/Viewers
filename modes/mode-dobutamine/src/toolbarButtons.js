@@ -333,7 +333,7 @@ const toolbarButtons: Button[] = [
       tooltip: 'Cine',
       commands: 'toggleCine',
       evaluate: [
-        'evaluate.action',
+        'evaluate.cine',
         {
           name: 'evaluate.viewport.supported',
           unsupportedViewportTypes: ['volume3d'],
@@ -348,7 +348,7 @@ const toolbarButtons: Button[] = [
       icon: 'ChevronLeft',
       label: 'Previous',
       commands: {
-        commandName: 'updateAllViewportDisplaySets',
+        commandName: 'updateViewportDisplaySet',
         commandOptions: {
           direction: -1,
         },
@@ -362,7 +362,7 @@ const toolbarButtons: Button[] = [
       icon: 'ChevronRight',
       label: 'Next',
       commands: {
-        commandName: 'updateAllViewportDisplaySets',
+        commandName: 'updateViewportDisplaySet',
         commandOptions: {
           direction: 1,
         },
@@ -698,12 +698,6 @@ const toolbarButtons: Button[] = [
       label: 'Segment Label Display',
       tooltip: 'Click to show or hide segment labels when hovering with your mouse.',
       commands: { commandName: 'toggleSegmentLabel' },
-      evaluate: [
-        'evaluate.cornerstoneTool.toggle',
-        {
-          name: 'evaluate.cornerstone.hasSegmentation',
-        },
-      ],
     },
   },
   // {

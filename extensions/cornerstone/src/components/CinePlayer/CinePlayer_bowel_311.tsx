@@ -4,38 +4,13 @@ import { Enums, eventTarget, cache, imageLoader } from '@cornerstonejs/core';
 import { useAppConfig } from '@state';
 
 // ---------------------------------------------------------------------------
-// Build/version marker — logged once on mount so the running build is
-// identifiable from the console. Bump this when you rebuild so you can confirm
-// from logs which CinePlayer + whether the decode patch is included.
-// ---------------------------------------------------------------------------
-const CINE_PLAYER_VERSION =
-  'rviewer bviewer adaptive-prefetch-100 + 2-stage-rate + echo-immediate + jpeg-decode-patch v3';
-
-// ---------------------------------------------------------------------------
 // Instance prefetch utility
-// Prefetches frames for an adaptive number of upcoming displaySets in the same
-// series, using a concurrency level based on the current instance frame count.
-// <=100 frames is treated as small/echo-style. Anything >100 is treated as large.
+// Prefetches frames for the next WINDOW_SIZE displaySets in the same series,
+// using a low-concurrency background queue so it doesn't compete with the
+// active viewport's loading.
 // ---------------------------------------------------------------------------
-const SMALL_CINE_MAX_FRAMES_PER_DISPLAY_SET = 100;
-
-type PrefetchConfig = {
-  label: string;
-  window: number;
-  concurrency: number;
-};
-
-const SMALL_CINE_PREFETCH: PrefetchConfig = {
-  label: 'small-cine',
-  window: 3,
-  concurrency: 20,
-};
-
-const LARGE_CINE_PREFETCH: PrefetchConfig = {
-  label: 'large-cine',
-  window: 0,
-  concurrency: 4,
-};
+const PREFETCH_WINDOW = 0; // how many instances ahead to prefetch - 1 for echo, 0 for bowel
+const PREFETCH_CONCURRENCY = 4; // max parallel background requests - 20 for echo, 4 for bowel
 
 const activeBackgroundRequests = new Set<string>();
 
@@ -55,50 +30,21 @@ function getImageIds(displaySet): string[] {
   return ids;
 }
 
-function getDisplaySetFrameCount(displaySet): number {
-  return getImageIds(displaySet).length || Number(displaySet.numImageFrames) || 0;
-}
-
-function getPrefetchConfigForDisplaySet(displaySet): PrefetchConfig {
-  const frameCount = getDisplaySetFrameCount(displaySet);
-
-  if (frameCount > 0 && frameCount <= SMALL_CINE_MAX_FRAMES_PER_DISPLAY_SET) {
-    return SMALL_CINE_PREFETCH;
-  }
-
-  return LARGE_CINE_PREFETCH;
-}
-
-function shouldPlayImmediately(displaySets): boolean {
-  return (
-    displaySets.length > 0 &&
-    displaySets.every(displaySet => {
-      const frameCount = getDisplaySetFrameCount(displaySet);
-      return frameCount > 0 && frameCount <= SMALL_CINE_MAX_FRAMES_PER_DISPLAY_SET;
-    })
-  );
-}
-
 function isDisplaySetFullyCached(displaySet): boolean {
   const imageIds = getImageIds(displaySet);
   return imageIds.length > 0 && imageIds.every(id => cache.isLoaded(id));
 }
 
-async function prefetchDisplaySetFrames(displaySet, concurrency: number): Promise<void> {
+async function prefetchDisplaySetFrames(displaySet): Promise<void> {
   const imageIds = getImageIds(displaySet);
-  if (!imageIds.length) {
-    return;
-  }
+  if (!imageIds.length) return;
 
-  const batchSize = Math.max(1, concurrency);
-
-  for (let i = 0; i < imageIds.length; i += batchSize) {
+  // Fire in batches of PREFETCH_CONCURRENCY
+  for (let i = 0; i < imageIds.length; i += PREFETCH_CONCURRENCY) {
     const batch = imageIds
-      .slice(i, i + batchSize)
+      .slice(i, i + PREFETCH_CONCURRENCY)
       .filter(id => !cache.isLoaded(id) && !activeBackgroundRequests.has(id));
-    if (!batch.length) {
-      continue;
-    }
+    if (!batch.length) continue;
 
     batch.forEach(id => activeBackgroundRequests.add(id));
     await Promise.all(
@@ -112,80 +58,49 @@ async function prefetchDisplaySetFrames(displaySet, concurrency: number): Promis
   }
 }
 
-function prefetchAheadInstances(currentDisplaySetInstanceId: string, displaySetService): void {
-  const activeDisplaySets = (displaySetService.activeDisplaySets ?? []).filter(
-    displaySet => displaySet.numImageFrames > 1
-  );
-
-  const currentDisplaySet = activeDisplaySets.find(
-    displaySet => displaySet.displaySetInstanceUID === currentDisplaySetInstanceId
-  );
-
-  if (!currentDisplaySet) {
-    return;
-  }
-
-  const prefetchConfig = getPrefetchConfigForDisplaySet(currentDisplaySet);
-
-  if (prefetchConfig.window <= 0) {
-    return;
-  }
-
-  const currentSeriesInstanceId = currentDisplaySet.SeriesInstanceUID;
-
-  const allDisplaySets = activeDisplaySets
-    .filter(
-      displaySet =>
-        !currentSeriesInstanceId || displaySet.SeriesInstanceUID === currentSeriesInstanceId
-    )
+function prefetchAheadInstances(
+  currentDisplaySetUID: string,
+  displaySetService,
+  viewportGridService,
+  viewportId: string
+): void {
+  // Get all displaySets in the study, ordered by series/instance number
+  const allDisplaySets = (displaySetService.activeDisplaySets ?? [])
+    .filter(ds => ds.numImageFrames > 1) // only multiframe instances
     .sort((a, b) => {
-      const aNum = Number(a.InstanceNumber);
-      const bNum = Number(b.InstanceNumber);
-
-      if (Number.isFinite(aNum) && Number.isFinite(bNum)) {
-        return aNum - bNum;
-      }
-
-      const aKey = String(a.InstanceNumber ?? a.displaySetInstanceUID);
-      const bKey = String(b.InstanceNumber ?? b.displaySetInstanceUID);
-      return aKey.localeCompare(bKey);
+      // Sort by InstanceNumber if available, else by displaySetInstanceUID
+      const aNum = a.InstanceNumber ?? a.displaySetInstanceUID;
+      const bNum = b.InstanceNumber ?? b.displaySetInstanceUID;
+      return aNum < bNum ? -1 : aNum > bNum ? 1 : 0;
     });
 
   const currentIdx = allDisplaySets.findIndex(
-    displaySet => displaySet.displaySetInstanceUID === currentDisplaySetInstanceId
+    ds => ds.displaySetInstanceUID === currentDisplaySetUID
   );
-  if (currentIdx === -1) {
-    return;
-  }
 
-  const toPrefetch = allDisplaySets
-    .slice(currentIdx + 1, currentIdx + 1 + prefetchConfig.window)
-    .filter(displaySet => !isDisplaySetFullyCached(displaySet));
+  if (currentIdx === -1) return;
 
-  if (toPrefetch.length) {
+  const toPreetch = allDisplaySets
+    .slice(currentIdx + 1, currentIdx + 1 + PREFETCH_WINDOW)
+    .filter(ds => !isDisplaySetFullyCached(ds));
+
+  if (toPreetch.length) {
     console.log(
-      `[cine] ${prefetchConfig.label} prefetching ${toPrefetch.length} ahead instance(s), concurrency ${prefetchConfig.concurrency}:`,
-      toPrefetch.map(displaySet => displaySet.displaySetInstanceUID)
+      `[cine] prefetching ${toPreetch.length} ahead instances:`,
+      toPreetch.map(ds => ds.displaySetInstanceUID)
     );
   }
 
+  // Process instances sequentially so early instances don't starve later ones
   (async () => {
-    for (const displaySet of toPrefetch) {
-      await prefetchDisplaySetFrames(displaySet, prefetchConfig.concurrency);
+    for (const ds of toPreetch) {
+      await prefetchDisplaySetFrames(ds);
     }
   })();
 }
 
 // ---------------------------------------------------------------------------
 // WrappedCinePlayer
-//
-// Two-stage frame rate (no ramp):
-//   Stage 1 — play at a SAFE rate below the measured frame-load rate, so the
-//             playhead can't outrun the frames still being decoded.
-//   Stage 2 — the moment ALL frames are cached, jump straight to the DICOM
-//             metadata frame rate. No intermediate ramping (the ramp gained
-//             nothing because load throughput doesn't rise as more frames
-//             arrive — it's gated by decode/network, not by progress).
 // ---------------------------------------------------------------------------
 function WrappedCinePlayer({
   enabledVPElement,
@@ -201,18 +116,18 @@ function WrappedCinePlayer({
   const [dynamicInfo, setDynamicInfo] = useState(null);
   const [appConfig] = useAppConfig();
   const isMountedRef = useRef(true);
-  const fallbackTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const prefetchListenerRef = useRef(null);
+  const fallbackTimerRef = useRef(null);
   const cinesRef = useRef(cines);
   const [bufferingProgress, setBufferingProgress] = useState<{
     buffered: number;
     total: number;
   } | null>(null);
+  const originalFrameRateRef = useRef<number>(24);
   const cacheMonitorRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const currentRateRef = useRef<number>(24);
 
-  useEffect(() => {
-    console.log(`[cine] ${CINE_PLAYER_VERSION}`);
-  }, []);
-
+  // Cleanup pending play-on-prefetch listeners
   const cancelPendingPlay = useCallback(() => {
     if (fallbackTimerRef.current) {
       clearInterval(fallbackTimerRef.current);
@@ -222,109 +137,110 @@ function WrappedCinePlayer({
       clearInterval(cacheMonitorRef.current);
       cacheMonitorRef.current = null;
     }
+    if (prefetchListenerRef.current) {
+      eventTarget.removeEventListener(
+        'CORNERSTONE_TOOLS_STACK_PREFETCH_COMPLETE',
+        prefetchListenerRef.current
+      );
+      prefetchListenerRef.current = null;
+    }
   }, []);
 
   const startPlayWhenReady = useCallback(
     (frameRate: number) => {
       cancelPendingPlay();
 
-      const getDisplaySets = () => {
-        const { viewports } = viewportGridService.getState();
-        const vp = viewports.get(viewportId);
-        if (!vp) {
-          return [];
-        }
-        return vp.displaySetInstanceUIDs
-          .map(uid => displaySetService.getDisplaySetByUID(uid))
-          .filter(Boolean);
-      };
-
-      // ── startPlay: begin at `playFrameRate` (stage 1), then watch the cache
-      //    and jump to the DICOM `frameRate` once fully cached (stage 2). ──
-      const startPlay = (
-        playFrameRate: number = frameRate,
-        options: { monitorCache?: boolean } = {}
-      ) => {
-        if (!isMountedRef.current) {
-          return;
-        }
+      const startPlay = (playFrameRate: number = frameRate) => {
+        if (!isMountedRef.current) return;
         cancelPendingPlay();
 
-        const { monitorCache = true } = options;
+        currentRateRef.current = playFrameRate;
 
-        if (monitorCache) {
-          cacheMonitorRef.current = setInterval(() => {
-            const dsets = getDisplaySets();
-            if (!dsets.length) {
-              return;
-            }
+        // Monitor cache — clear pill and restore frame rate when fully loaded.
+        // Started unconditionally so the pill persists until all frames are cached
+        // regardless of whether the frame rate was capped.
+        originalFrameRateRef.current = frameRate;
+        if (cacheMonitorRef.current) clearInterval(cacheMonitorRef.current);
 
-            const totalCached = dsets.reduce((sum, ds) => {
-              const ids = getImageIds(ds);
-              return sum + ids.filter(id => cache.isLoaded(id)).length;
-            }, 0);
+        cacheMonitorRef.current = setInterval(() => {
+          const dsets = getDisplaySets();
+          if (!dsets.length) return;
 
-            const totalFrames = dsets.reduce((sum, ds) => sum + getImageIds(ds).length, 0);
+          const totalCached = dsets.reduce((sum, ds) => {
+            const ids = getImageIds(ds);
+            return sum + ids.filter(id => cache.isLoaded(id)).length;
+          }, 0);
+          const totalFrames = dsets.reduce((sum, ds) => sum + getImageIds(ds).length, 0);
 
-            setBufferingProgress({ buffered: totalCached, total: totalFrames });
+          // Update buffering pill
+          setBufferingProgress({ buffered: totalCached, total: totalFrames });
 
-            if (dsets.every(isDisplaySetFullyCached)) {
-              clearInterval(cacheMonitorRef.current!);
-              cacheMonitorRef.current = null;
-              if (!isMountedRef.current) {
-                return;
-              }
+          // Ramp frame rate based on cache fill fraction
+          const cachedFraction = totalFrames > 0 ? totalCached / totalFrames : 0;
+          const rampedRate = Math.floor(
+            playFrameRate + (frameRate - playFrameRate) * Math.pow(cachedFraction, 0.7)
+          );
+          const newRate = Math.min(frameRate, Math.max(playFrameRate, rampedRate));
 
-              setBufferingProgress(null);
-              setNewStackFrameRate(frameRate);
-              cineService.setCine({ id: viewportId, isPlaying: true, frameRate });
-              console.log(`[cine] fully cached → DICOM rate ${frameRate}fps`);
-            }
-          }, 500);
-        } else {
-          setBufferingProgress(null);
-        }
+          // Only update if rate has meaningfully changed (avoid thrashing on tiny increments)
+          if (newRate > playFrameRate && newRate !== currentRateRef.current) {
+            currentRateRef.current = newRate;
+            setNewStackFrameRate(newRate);
+            cineService.setCine({ id: viewportId, isPlaying: true, frameRate: newRate });
+            console.log(
+              `[cine] cache ${Math.round(cachedFraction * 100)}%, ramping to ${newRate}fps`
+            );
+          }
+
+          if (dsets.every(isDisplaySetFullyCached)) {
+            clearInterval(cacheMonitorRef.current!);
+            cacheMonitorRef.current = null;
+            if (!isMountedRef.current) return;
+            setBufferingProgress(null);
+            // Ensure final rate is exactly the DICOM rate
+            setNewStackFrameRate(frameRate);
+            cineService.setCine({ id: viewportId, isPlaying: true, frameRate });
+            console.log(`[cine] fully cached, final frame rate ${frameRate}fps`);
+          }
+        }, 500);
 
         setNewStackFrameRate(playFrameRate);
         cineService.setCine({ id: viewportId, isPlaying: true, frameRate: playFrameRate });
-
         const { viewports } = viewportGridService.getState();
         const vp = viewports.get(viewportId);
         if (vp) {
-          vp.displaySetInstanceUIDs.forEach(displaySetInstanceId => {
-            prefetchAheadInstances(displaySetInstanceId, displaySetService);
+          vp.displaySetInstanceUIDs.forEach(uid => {
+            prefetchAheadInstances(uid, displaySetService, viewportGridService, viewportId);
           });
         }
       };
 
       const { viewports } = viewportGridService.getState();
       if (!viewports.get(viewportId)) {
-        startPlay(frameRate, { monitorCache: false });
+        startPlay();
         return;
       }
 
+      const getDisplaySets = () => {
+        const { viewports } = viewportGridService.getState();
+        const vp = viewports.get(viewportId);
+        if (!vp) return [];
+        return vp.displaySetInstanceUIDs
+          .map(uid => displaySetService.getDisplaySetByUID(uid))
+          .filter(Boolean);
+      };
+
+      // If already cached, play immediately
+      if (getDisplaySets().every(isDisplaySetFullyCached)) {
+        console.log('[cine] already cached, playing immediately');
+        startPlay();
+        return;
+      }
+
+      // Poll cache until enough frames are buffered, then play
       const dsets = getDisplaySets();
-
-      // Return navigation / already cached → straight to DICOM rate.
-      if (!dsets.length || dsets.every(isDisplaySetFullyCached)) {
-        console.log('[cine] already cached, playing immediately at DICOM rate');
-        startPlay(frameRate, { monitorCache: false });
-        return;
-      }
-
-      if (shouldPlayImmediately(dsets)) {
-        console.log(
-          `[cine] small cine (${dsets.map(getDisplaySetFrameCount).join(',')} frames) → immediate ${frameRate}fps`
-        );
-        startPlay(frameRate, { monitorCache: false });
-        return;
-      }
-
-      // ── Measure the frame-load rate over an initial window, then pick a
-      //    safe stage-1 rate strictly below it. A longer window than a couple
-      //    frames gives a stable estimate so stage 1 doesn't outrun loading. ──
       const totalFrames = dsets.reduce((sum, ds) => sum + getImageIds(ds).length, 0);
-      const MIN_BUFFERED_FRAMES = 12; // sample enough frames for a stable rate
+      const MIN_BUFFERED_FRAMES = 3; // just enough to start — overlay covers the wait
       const POLL_INTERVAL_MS = 100;
       const MAX_WAIT_MS = 20000;
       let elapsed = 0;
@@ -344,27 +260,26 @@ function WrappedCinePlayer({
         }
 
         setBufferingProgress({ buffered, total: totalFrames });
+        console.log(`[cine] buffered ${buffered}/${totalFrames} frames`);
 
         if (buffered >= MIN_BUFFERED_FRAMES || elapsed >= MAX_WAIT_MS) {
           clearInterval(poll);
 
-          // Rate measured from first-frame arrival (excludes initial latency).
+          // Estimate load rate from when first frame arrived, not from poll start,
+          // to avoid inflating elapsed with initial Orthanc response latency
           const loadElapsed =
             firstFrameTime !== null ? (elapsed - firstFrameTime) / 1000 : elapsed / 1000;
           const observedLoadFps = loadElapsed > 0 ? buffered / loadElapsed : frameRate;
-
-          // Safe rate: strictly below the load rate (0.8x), floored at 2fps so
-          // it stays watchable, capped at the DICOM rate (never exceed it).
-          const safeFrameRate = Math.min(frameRate, Math.max(2, Math.floor(observedLoadFps * 0.8)));
+          const safeFrameRate = Math.min(frameRate, Math.max(8, Math.floor(observedLoadFps * 0.9)));
           console.log(
-            `[cine] load rate ~${observedLoadFps.toFixed(1)}fps → stage 1 at ${safeFrameRate}fps`
+            `[cine] load rate ~${observedLoadFps.toFixed(1)}fps, playing at ${safeFrameRate}fps`
           );
 
           startPlay(safeFrameRate);
         }
       }, POLL_INTERVAL_MS);
 
-      fallbackTimerRef.current = poll;
+      fallbackTimerRef.current = poll as unknown as ReturnType<typeof setTimeout>;
     },
     [
       cancelPendingPlay,
@@ -403,9 +318,7 @@ function WrappedCinePlayer({
         frameRate = displaySet.FrameRate
           ? Math.round(1000 / displaySet.FrameRate)
           : Math.round(EffectiveFrameRate);
-        if (appConfig.autoPlayCine) {
-          shouldAutoPlay = true;
-        }
+        if (appConfig.autoPlayCine) shouldAutoPlay = true;
         isPlaying ||= !!appConfig.autoPlayCine;
       } else if (appConfig.autoPlayCine && displaySet.numImageFrames > 1) {
         isPlaying = true;
@@ -429,7 +342,7 @@ function WrappedCinePlayer({
     cineService.setIsCineEnabled(true);
 
     if (shouldAutoPlay && isPlaying) {
-      // Pause first, then defer to the two-stage starter
+      // Set paused first, then defer until prefetch completes
       cineService.setCine({ id: viewportId, isPlaying: false, frameRate });
       startPlayWhenReadyRef.current(frameRate);
       return;
@@ -548,6 +461,7 @@ function WrappedCinePlayer({
             />
             <span>
               Buffering {bufferingProgress.buffered} / {bufferingProgress.total} frames
+              &nbsp;·&nbsp; 1st cycle warm-up
             </span>
           </div>
           <style>{`

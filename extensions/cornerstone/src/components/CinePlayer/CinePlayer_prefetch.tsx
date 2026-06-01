@@ -4,21 +4,40 @@ import { Enums, eventTarget, cache, imageLoader } from '@cornerstonejs/core';
 import { useAppConfig } from '@state';
 
 // ---------------------------------------------------------------------------
-// Certification viewer: prefetch ALL instances on load before playing anything.
-// The reader does not interact with the viewer until the study is fully cached.
+// WrappedCinePlayer — pviewer/iuscan build
+//
+// Per-instance "decode-and-wait" strategy:
+//   When a clip is about to autoplay, ACTIVELY decode every frame of the
+//   CURRENT instance, show a "Loading clip" indicator, then play at the full
+//   DICOM frame rate once all frames are in the cache.
+//
+//   We drive the loading ourselves via imageLoader.loadAndCacheImage rather
+//   than relying on Cornerstone's stack prefetcher: while a viewport is idle
+//   (paused at frame 0), the stack prefetcher only loads a WINDOW of frames
+//   around the current index and then stalls. Passive polling of cache state
+//   therefore never completes for a large instance — playback would time out
+//   and start mid-load, stuttering as the playhead hits undecoded frames.
+//
+//   - First visit to an instance: waits while its frames decode, then plays
+//     perfectly smoothly at full rate (no ramp). Wait length scales with frame
+//     count and decode throughput.
+//   - Return visit: frames already cached (or instantly re-decoded from the
+//     browser's HTTP byte cache), so playback starts immediately.
+//   - Memory stays bounded — only the current instance is ever decoded;
+//     Cornerstone's LRU cache evicts older instances while the browser retains
+//     their compressed bytes for fast re-decode on return.
 // ---------------------------------------------------------------------------
-const PREFETCH_CONCURRENCY = 12; // fills idle Orthanc threads (32 total - 20 interaction = 12)
 
-const STUDY_PREFETCH_PROGRESS_EVENT = 'cine:studyPrefetchProgress';
+// Parallel frame loads while waiting. Matches the request-pool ceiling; the
+// real limiter is the web-worker decode pool (maxNumberOfWebWorkers).
+const LOAD_CONCURRENCY = 16;
 
-const activeBackgroundRequests = new Set<string>();
-
-// Module-level state — survives React re-renders, resets on true unmount only.
-let studyPrefetchInProgress = false;
-let onStudyFullyCached: (() => void) | null = null;
+// ── Frame-id helpers (self-contained, no service dependency) ───────────────
 
 function getImageIds(displaySet): string[] {
   const ids = displaySet.imageIds ?? displaySet.images?.map(img => img.imageId ?? img.url) ?? [];
+
+  // Multiframe: single imageId ending in /frames/1 — expand to all frames
   if (ids.length === 1 && displaySet.numImageFrames > 1) {
     const baseId = ids[0];
     const frameBase = baseId.replace(/\/frames\/\d+$/, '');
@@ -27,111 +46,13 @@ function getImageIds(displaySet): string[] {
       (_, i) => `${frameBase}/frames/${i + 1}`
     );
   }
+
   return ids;
 }
 
 function isDisplaySetFullyCached(displaySet): boolean {
   const imageIds = getImageIds(displaySet);
   return imageIds.length > 0 && imageIds.every(id => cache.isLoaded(id));
-}
-
-async function prefetchDisplaySetFrames(displaySet, onFrameCached?: () => void): Promise<void> {
-  const imageIds = getImageIds(displaySet);
-  if (!imageIds.length) return;
-
-  for (let i = 0; i < imageIds.length; i += PREFETCH_CONCURRENCY) {
-    const batch = imageIds
-      .slice(i, i + PREFETCH_CONCURRENCY)
-      .filter(id => !cache.isLoaded(id) && !activeBackgroundRequests.has(id));
-
-    if (!batch.length) {
-      onFrameCached && imageIds.slice(i, i + PREFETCH_CONCURRENCY).forEach(() => onFrameCached());
-      continue;
-    }
-
-    batch.forEach(id => activeBackgroundRequests.add(id));
-    await Promise.all(
-      batch.map(id =>
-        imageLoader
-          .loadAndCacheImage(id, {})
-          .catch(() => {})
-          .finally(() => {
-            activeBackgroundRequests.delete(id);
-            onFrameCached && onFrameCached();
-          })
-      )
-    );
-  }
-}
-
-function prefetchEntireStudy(displaySetService): void {
-  if (studyPrefetchInProgress) return;
-
-  const allDisplaySets = (displaySetService.activeDisplaySets ?? [])
-    .filter(ds => ds.numImageFrames > 1)
-    .sort((a, b) => {
-      const aNum = a.InstanceNumber ?? a.displaySetInstanceUID;
-      const bNum = b.InstanceNumber ?? b.displaySetInstanceUID;
-      return aNum < bNum ? -1 : aNum > bNum ? 1 : 0;
-    });
-
-  const toPrefetch = allDisplaySets.filter(ds => !isDisplaySetFullyCached(ds));
-
-  if (!toPrefetch.length) {
-    console.log('[cine] entire study already cached');
-    window.dispatchEvent(
-      new CustomEvent(STUDY_PREFETCH_PROGRESS_EVENT, {
-        detail: { cached: 0, total: 0, done: true },
-      })
-    );
-    onStudyFullyCached?.();
-    return;
-  }
-
-  const totalFrames = toPrefetch.reduce((sum, ds) => sum + getImageIds(ds).length, 0);
-  let cachedFrames = 0;
-
-  console.log(
-    `[cine] prefetching entire study: ${toPrefetch.length} instances, ${totalFrames} frames`
-  );
-
-  window.dispatchEvent(
-    new CustomEvent(STUDY_PREFETCH_PROGRESS_EVENT, {
-      detail: { cached: 0, total: totalFrames, done: false },
-    })
-  );
-
-  studyPrefetchInProgress = true;
-
-  (async () => {
-    for (const ds of toPrefetch) {
-      await prefetchDisplaySetFrames(ds, () => {
-        cachedFrames++;
-        if (cachedFrames % 50 === 0 || cachedFrames === totalFrames) {
-          window.dispatchEvent(
-            new CustomEvent(STUDY_PREFETCH_PROGRESS_EVENT, {
-              detail: {
-                cached: cachedFrames,
-                total: totalFrames,
-                done: cachedFrames >= totalFrames,
-              },
-            })
-          );
-        }
-      });
-    }
-
-    studyPrefetchInProgress = false;
-    console.log(`[cine] study fully prefetched: ${cachedFrames}/${totalFrames} frames`);
-
-    window.dispatchEvent(
-      new CustomEvent(STUDY_PREFETCH_PROGRESS_EVENT, {
-        detail: { cached: totalFrames, total: totalFrames, done: true },
-      })
-    );
-
-    onStudyFullyCached?.();
-  })();
 }
 
 // ---------------------------------------------------------------------------
@@ -150,88 +71,163 @@ function WrappedCinePlayer({
   const [newStackFrameRate, setNewStackFrameRate] = useState(24);
   const [dynamicInfo, setDynamicInfo] = useState(null);
   const [appConfig] = useAppConfig();
+
   const isMountedRef = useRef(true);
   const cinesRef = useRef(cines);
-  const studyReadyRef = useRef(false);
-  const pendingFrameRateRef = useRef<number>(24);
+  const abortLoadRef = useRef(false);
 
-  const [studyPrefetchProgress, setStudyPrefetchProgress] = useState<{
-    cached: number;
+  // "Loading clip" progress pill — scoped to the current instance
+  const [bufferingProgress, setBufferingProgress] = useState<{
+    buffered: number;
     total: number;
   } | null>(null);
 
-  // Keep cinesRef current without triggering re-renders
-  useEffect(() => {
-    cinesRef.current = cines;
-  }, [cines]);
+  // ── Cleanup ───────────────────────────────────────────────────────────────
 
-  // ---------------------------------------------------------------------------
-  // Play current instance — only called after study is fully cached
-  // ---------------------------------------------------------------------------
-  const playCurrentInstance = useCallback(
+  const cancelPendingPlay = useCallback(() => {
+    // Signals the active-load worker pool to stop pulling new frames
+    abortLoadRef.current = true;
+  }, []);
+
+  // ── Helpers that read live viewport state ──────────────────────────────────
+
+  const getDisplaySets = useCallback(() => {
+    const { viewports } = viewportGridService.getState();
+    const vp = viewports.get(viewportId);
+    if (!vp) return [];
+    return vp.displaySetInstanceUIDs
+      .map(uid => displaySetService.getDisplaySetByUID(uid))
+      .filter(Boolean);
+  }, [viewportGridService, viewportId, displaySetService]);
+
+  const isViewportAlive = useCallback(() => {
+    const { viewports } = viewportGridService.getState();
+    return !!viewports.get(viewportId);
+  }, [viewportGridService, viewportId]);
+
+  // ── Core play logic ─────────────────────────────────────────────────────────
+
+  /**
+   * Starts playback at the full DICOM frame rate. Re-checks that the viewport
+   * is still alive at call time (it may have been destroyed/recreated while we
+   * were decoding frames — the captured enabledVPElement could be stale, so we
+   * verify against the live grid state).
+   */
+  const startPlay = useCallback(
     (frameRate: number) => {
       if (!isMountedRef.current) return;
+      setBufferingProgress(null);
+
+      // Guard against the destroyed-viewport race
+      if (!isViewportAlive()) {
+        return;
+      }
+
       setNewStackFrameRate(frameRate);
       cineService.setCine({ id: viewportId, isPlaying: true, frameRate });
+      console.log(`[cine] playing at full rate ${frameRate}fps`);
     },
-    [cineService, viewportId]
+    [cineService, viewportId, isViewportAlive]
   );
 
-  // ---------------------------------------------------------------------------
-  // Study prefetch progress listener
-  // ---------------------------------------------------------------------------
-  useEffect(() => {
-    const handler = (evt: CustomEvent) => {
-      if (!isMountedRef.current) return;
-      const { cached, total, done } = evt.detail;
-      if (done || total === 0) {
-        setStudyPrefetchProgress(null);
-      } else {
-        setStudyPrefetchProgress({ cached, total });
+  /**
+   * Actively decodes every frame of the CURRENT instance via a continuous
+   * worker pool, then plays. If already fully cached (return navigation),
+   * plays immediately.
+   */
+  const startPlayWhenReady = useCallback(
+    (frameRate: number) => {
+      // Stop any in-flight load from a previous instance, then re-arm
+      abortLoadRef.current = true;
+      abortLoadRef.current = false;
+
+      if (!isViewportAlive()) return;
+
+      const dsets = getDisplaySets();
+
+      // Fast path — current instance already fully cached
+      if (dsets.length && dsets.every(isDisplaySetFullyCached)) {
+        console.log('[cine] instance already cached, playing immediately');
+        startPlay(frameRate);
+        return;
       }
-    };
-    window.addEventListener(STUDY_PREFETCH_PROGRESS_EVENT, handler as EventListener);
-    return () =>
-      window.removeEventListener(STUDY_PREFETCH_PROGRESS_EVENT, handler as EventListener);
-  }, []); // empty deps — register once only
 
-  // ---------------------------------------------------------------------------
-  // Core display set handler — called on mount and on VIEWPORT_NEW_IMAGE_SET
-  // Uses refs for everything to avoid stale closures without re-creating the fn
-  // ---------------------------------------------------------------------------
-  const displaySetServiceRef = useRef(displaySetService);
-  const viewportGridServiceRef = useRef(viewportGridService);
-  const cineServiceRef = useRef(cineService);
-  const playCurrentInstanceRef = useRef(playCurrentInstance);
+      const imageIds = dsets.flatMap(ds => getImageIds(ds));
+      const total = imageIds.length;
+      const toLoad = imageIds.filter(id => !cache.isLoaded(id));
+      let done = total - toLoad.length;
+      let nextIndex = 0;
+      const t0 = performance.now();
 
-  useEffect(() => {
-    displaySetServiceRef.current = displaySetService;
-  }, [displaySetService]);
-  useEffect(() => {
-    viewportGridServiceRef.current = viewportGridService;
-  }, [viewportGridService]);
-  useEffect(() => {
-    cineServiceRef.current = cineService;
-  }, [cineService]);
-  useEffect(() => {
-    playCurrentInstanceRef.current = playCurrentInstance;
-  }, [playCurrentInstance]);
+      setBufferingProgress({ buffered: done, total });
 
-  // Stable handler — no deps that change, uses refs internally
+      // Continuous worker pool: each worker pulls the next uncached frame and
+      // decodes it. loadAndCacheImage de-dupes against any in-flight load from
+      // Cornerstone's own prefetcher, so there is no double-fetching.
+      const worker = async (): Promise<void> => {
+        while (nextIndex < toLoad.length && !abortLoadRef.current) {
+          const id = toLoad[nextIndex++];
+          try {
+            await imageLoader.loadAndCacheImage(id, {});
+          } catch {
+            // Non-fatal — skip and keep going so the wait can't hang on one frame
+          }
+          done++;
+          if (isMountedRef.current && !abortLoadRef.current) {
+            setBufferingProgress({ buffered: done, total });
+          }
+        }
+      };
+
+      Promise.all(Array.from({ length: LOAD_CONCURRENCY }, () => worker())).then(() => {
+        if (!isMountedRef.current || abortLoadRef.current) return;
+
+        const secs = ((performance.now() - t0) / 1000).toFixed(1);
+        const dsetsNow = getDisplaySets();
+        const fullyCached = dsetsNow.length > 0 && dsetsNow.every(isDisplaySetFullyCached);
+
+        if (!fullyCached) {
+          // All frames were loaded, but some no longer remain cached → the
+          // cache evicted them mid-load, meaning it can't hold one full
+          // instance. Playback will stutter; raise cache.setMaxCacheSize.
+          try {
+            const used = (cache.getCacheSize() / 1e9).toFixed(2);
+            const max = (cache.getMaxCacheSize() / 1e9).toFixed(2);
+            console.warn(
+              `[cine] decoded ${total} frames in ${secs}s but cache evicted some ` +
+                `(${used}GB / ${max}GB) — increase maxCacheSize to hold one instance.`
+            );
+          } catch {
+            console.warn(`[cine] decoded ${total} frames in ${secs}s but some were evicted.`);
+          }
+        } else {
+          console.log(`[cine] instance fully decoded in ${secs}s (${total} frames)`);
+        }
+
+        startPlay(frameRate);
+      });
+    },
+    [getDisplaySets, isViewportAlive, startPlay]
+  );
+
+  const startPlayWhenReadyRef = useRef(startPlayWhenReady);
+  useEffect(() => {
+    startPlayWhenReadyRef.current = startPlayWhenReady;
+  }, [startPlayWhenReady]);
+
+  // ── Display set handler ───────────────────────────────────────────────────
+
   const newDisplaySetHandler = useCallback(() => {
     if (!enabledVPElement || !isCineEnabled) return;
 
-    const { viewports } = viewportGridServiceRef.current.getState();
-    const viewport = viewports.get(viewportId);
-    if (!viewport) return;
-
-    const { displaySetInstanceUIDs } = viewport;
+    const { viewports } = viewportGridService.getState();
+    const { displaySetInstanceUIDs } = viewports.get(viewportId);
     let frameRate = 24;
+    let isPlaying = cinesRef.current[viewportId]?.isPlaying || false;
+    let shouldAutoPlay = false;
 
-    displaySetInstanceUIDs.forEach(uid => {
-      const displaySet = displaySetServiceRef.current.getDisplaySetByUID(uid);
-      if (!displaySet) return;
-
+    displaySetInstanceUIDs.forEach(displaySetInstanceUID => {
+      const displaySet = displaySetService.getDisplaySetByUID(displaySetInstanceUID);
       const EffectiveFrameRate =
         displaySet.numImageFrames && displaySet.EffectiveDuration
           ? displaySet.numImageFrames / displaySet.EffectiveDuration
@@ -241,6 +237,11 @@ function WrappedCinePlayer({
         frameRate = displaySet.FrameRate
           ? Math.round(1000 / displaySet.FrameRate)
           : Math.round(EffectiveFrameRate);
+        if (appConfig.autoPlayCine) shouldAutoPlay = true;
+        isPlaying ||= !!appConfig.autoPlayCine;
+      } else if (appConfig.autoPlayCine && displaySet.numImageFrames > 1) {
+        isPlaying = true;
+        shouldAutoPlay = true;
       }
 
       if (displaySet.isDynamicVolume) {
@@ -257,41 +258,61 @@ function WrappedCinePlayer({
     });
 
     setNewStackFrameRate(frameRate);
-    pendingFrameRateRef.current = frameRate;
-    cineServiceRef.current.setIsCineEnabled(true);
+    cineService.setIsCineEnabled(true);
 
-    if (studyReadyRef.current) {
-      // Study already cached — play immediately
-      playCurrentInstanceRef.current(frameRate);
-    } else {
-      // Keep paused — wait for study prefetch to complete
-      cineServiceRef.current.setCine({ id: viewportId, isPlaying: false, frameRate });
-
-      // Register callback for when prefetch completes
-      onStudyFullyCached = () => {
-        if (!isMountedRef.current) return;
-        studyReadyRef.current = true;
-        setStudyPrefetchProgress(null);
-        console.log('[cine] study ready — starting playback');
-        playCurrentInstanceRef.current(pendingFrameRateRef.current);
-      };
-
-      // Start prefetch — guard prevents restarts on repeated calls
-      prefetchEntireStudy(displaySetServiceRef.current);
+    if (shouldAutoPlay && isPlaying) {
+      // Pause first, then defer until the current instance is fully decoded
+      cineService.setCine({ id: viewportId, isPlaying: false, frameRate });
+      startPlayWhenReadyRef.current(frameRate);
+      return;
     }
-    // Intentionally minimal deps — viewportId and isCineEnabled are the only
-    // true triggers; everything else accessed via stable refs
-  }, [viewportId, isCineEnabled, enabledVPElement]);
 
-  // ---------------------------------------------------------------------------
-  // Mount / unmount
-  // ---------------------------------------------------------------------------
+    if (isPlaying) {
+      cineService.setIsCineEnabled(isPlaying);
+    }
+    cineService.setCine({ id: viewportId, isPlaying, frameRate });
+  }, [
+    displaySetService,
+    viewportId,
+    viewportGridService,
+    isCineEnabled,
+    enabledVPElement,
+    appConfig,
+  ]);
+
+  // ── Effects ───────────────────────────────────────────────────────────────
+
+  useEffect(() => {
+    cinesRef.current = cines;
+  }, [cines]);
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    newDisplaySetHandler();
+    return () => {
+      cancelPendingPlay();
+    };
+  }, [isCineEnabled, newDisplaySetHandler, cancelPendingPlay]);
+
+  useEffect(() => {
+    if (!isCineEnabled || !cinesRef.current?.[viewportId] || !enabledVPElement) return;
+    const { isPlaying = false, frameRate = 24 } = cinesRef.current[viewportId];
+    const validFrameRate = Math.max(frameRate, 1);
+    if (isPlaying) {
+      try {
+        cineService.playClip(enabledVPElement, { framesPerSecond: validFrameRate, viewportId });
+      } catch {
+        // viewport destroyed
+      }
+    } else {
+      cineService.stopClip(enabledVPElement);
+    }
+  }, [isCineEnabled, enabledVPElement]);
+
   useEffect(() => {
     if (!enabledVPElement) return;
 
-    isMountedRef.current = true;
     newDisplaySetHandler();
-
     enabledVPElement.addEventListener(Enums.Events.VIEWPORT_NEW_IMAGE_SET, newDisplaySetHandler);
     enabledVPElement.addEventListener(
       Enums.Events.VOLUME_VIEWPORT_NEW_VOLUME,
@@ -299,13 +320,9 @@ function WrappedCinePlayer({
     );
 
     return () => {
-      // True unmount — reset all module-level state
-      studyPrefetchInProgress = false;
-      onStudyFullyCached = null;
-      studyReadyRef.current = false;
-      isMountedRef.current = false;
-
+      cancelPendingPlay();
       cineService.stopClip(enabledVPElement);
+      isMountedRef.current = false;
       cineService.setCine({ id: viewportId, isPlaying: false });
       enabledVPElement.removeEventListener(
         Enums.Events.VIEWPORT_NEW_IMAGE_SET,
@@ -316,11 +333,8 @@ function WrappedCinePlayer({
         newDisplaySetHandler
       );
     };
-  }, [enabledVPElement, newDisplaySetHandler, viewportId, cineService]);
+  }, [enabledVPElement, newDisplaySetHandler, viewportId, cancelPendingPlay]);
 
-  // ---------------------------------------------------------------------------
-  // Respond to cine state changes (play/pause from UI controls)
-  // ---------------------------------------------------------------------------
   useEffect(() => {
     if (!cines || !cines[viewportId] || !enabledVPElement || !isMountedRef.current) return;
 
@@ -329,8 +343,8 @@ function WrappedCinePlayer({
     if (isPlaying) {
       try {
         cineService.playClip(enabledVPElement, { framesPerSecond: validFrameRate, viewportId });
-      } catch (e) {
-        // viewport destroyed
+      } catch {
+        // viewport was destroyed before playClip could run
       }
     } else {
       cineService.stopClip(enabledVPElement);
@@ -341,54 +355,38 @@ function WrappedCinePlayer({
     };
   }, [cines, viewportId, cineService, enabledVPElement]);
 
+  // ── Render ────────────────────────────────────────────────────────────────
+
   if (!isCineEnabled) return null;
 
   const cine = cines[viewportId];
   const isPlaying = cine?.isPlaying || false;
 
-  const studyPct = studyPrefetchProgress
-    ? Math.round((studyPrefetchProgress.cached / studyPrefetchProgress.total) * 100)
-    : null;
-
   return (
     <>
-      {studyPrefetchProgress && studyPct !== null && (
+      {bufferingProgress && (
         <div
           className="pointer-events-none absolute left-1/2 -translate-x-1/2"
-          style={{ top: '140px', width: '280px' }}
+          style={{ top: '140px' }}
         >
-          <div className="rounded-lg bg-black/80 px-4 py-3">
-            <div className="mb-2 flex items-center justify-between text-xs text-white/90">
-              <span className="flex items-center gap-1.5 font-medium">
-                <span
-                  className="inline-block h-2 w-2 rounded-full bg-blue-400"
-                  style={{ animation: 'cinePulse 1.5s cubic-bezier(0.4,0,0.6,1) infinite' }}
-                />
-                Loading study for playback
-              </span>
-              <span className="font-mono text-white/70">{studyPct}%</span>
-            </div>
-            <div className="h-1.5 w-full overflow-hidden rounded-full bg-white/20">
-              <div
-                className="h-full rounded-full bg-blue-400 transition-all duration-500"
-                style={{ width: `${studyPct}%` }}
-              />
-            </div>
-            <div className="mt-1.5 text-center text-xs text-white/40">
-              {studyPrefetchProgress.cached.toLocaleString()} /{' '}
-              {studyPrefetchProgress.total.toLocaleString()} frames &nbsp;·&nbsp; playback starts
-              when complete
-            </div>
+          <div className="flex items-center gap-2 rounded-full bg-black/70 px-3 py-1 text-xs text-white/80">
+            <span
+              className="inline-block h-1.5 w-1.5 rounded-full bg-orange-400"
+              style={{ animation: 'cinePulse 1.5s cubic-bezier(0.4,0,0.6,1) infinite' }}
+            />
+            <span>
+              Loading clip&nbsp;·&nbsp;
+              {bufferingProgress.buffered}&nbsp;/&nbsp;{bufferingProgress.total} frames
+            </span>
           </div>
           <style>{`
             @keyframes cinePulse {
               0%, 100% { opacity: 1; }
-              50% { opacity: 0.2; }
+              50%       { opacity: 0.2; }
             }
           `}</style>
         </div>
       )}
-
       <RenderCinePlayer
         viewportId={viewportId}
         cineService={cineService}
@@ -429,11 +427,12 @@ function RenderCinePlayer({
       Enums.Events.DYNAMIC_VOLUME_DIMENSION_GROUP_CHANGED,
       handleDimensionGroupChange
     );
-    return () =>
+    return () => {
       eventTarget.removeEventListener(
         Enums.Events.DYNAMIC_VOLUME_DIMENSION_GROUP_CHANGED,
         handleDimensionGroupChange
       );
+    };
   }, [dynamicInfo]);
 
   useEffect(() => {
@@ -460,8 +459,12 @@ function RenderCinePlayer({
         cineService.setIsCineEnabled(false);
         cineService.setViewportCineClosed(viewportId);
       }}
-      onPlayPauseChange={isPlaying => cineService.setCine({ id: viewportId, isPlaying })}
-      onFrameRateChange={frameRate => cineService.setCine({ id: viewportId, frameRate })}
+      onPlayPauseChange={isPlaying => {
+        cineService.setCine({ id: viewportId, isPlaying });
+      }}
+      onFrameRateChange={frameRate => {
+        cineService.setCine({ id: viewportId, frameRate });
+      }}
       dynamicInfo={dynamicInfo}
       updateDynamicInfo={updateDynamicInfo}
     />

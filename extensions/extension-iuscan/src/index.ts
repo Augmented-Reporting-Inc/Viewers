@@ -1,6 +1,7 @@
 import { Types } from '@ohif/core';
 import { id } from './id';
 import IUScanAssignmentService from './services/IUScanAssignmentService';
+import StudyPrefetchService from './services/StudyPrefetchService/StudyPrefetchService';
 import getSopClassHandlerModule from './sopClassHandler/getSopClassHandlerModule';
 import hpIUScan from './hangingProtocols/hpIUScan';
 import getCommandsModule from './getCommandsModule';
@@ -129,6 +130,12 @@ const iuscanExtension = {
    */
   preRegistration({ servicesManager }) {
     servicesManager.registerService(IUScanAssignmentService.REGISTRATION);
+
+    // Register StudyPrefetchService — used by pviewer/iuscan build to prefetch
+    // all study frames before playback begins, guaranteeing stutter-free first cycle
+    if (!servicesManager.services.studyPrefetchService) {
+      servicesManager.services.studyPrefetchService = new StudyPrefetchService({ servicesManager });
+    }
   },
 
   /**
