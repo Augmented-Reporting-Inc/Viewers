@@ -4,6 +4,7 @@ import { getEnabledElement, StackViewport, BaseVolumeViewport } from '@cornersto
 import { ToolGroupManager, segmentation, Enums } from '@cornerstonejs/tools';
 import { getEnabledElement as OHIFgetEnabledElement } from '../state';
 import { useSystem } from '@ohif/core/src';
+import { buildFormApiUrl } from './formApi';
 
 const DEFAULT_SIZE = 512;
 const MAX_TEXTURE_SIZE = 10000;
@@ -62,7 +63,6 @@ const CornerstoneViewportDownloadForm = ({
     customizationService,
     cornerstoneViewportService,
     displaySetService,
-    measurementService,
     viewportGridService,
     uiNotificationService,
   } = servicesManager.services;
@@ -325,9 +325,8 @@ const CornerstoneViewportDownloadForm = ({
       throw new Error('Cannot determine active study.');
     }
 
-    // Same lookup pattern as extension-iuscan.
     const studyResponse = await fetch(
-      `/formapi/api/series/study/${encodeURIComponent(studyInstanceId)}`,
+      buildFormApiUrl(`series/study/${encodeURIComponent(studyInstanceId)}`),
       { credentials: 'include' }
     );
 
@@ -339,7 +338,7 @@ const CornerstoneViewportDownloadForm = ({
     // but StudyInstanceUID does not match for some legacy/anonymized edge case.
     if (seriesInstanceId) {
       const seriesResponse = await fetch(
-        `/formapi/api/series/siuid/${encodeURIComponent(seriesInstanceId)}`,
+        buildFormApiUrl(`series/siuid/${encodeURIComponent(seriesInstanceId)}`),
         { credentials: 'include' }
       );
 
@@ -351,74 +350,6 @@ const CornerstoneViewportDownloadForm = ({
     throw new Error(
       `Series lookup failed: study=${studyResponse.status}, StudyInstanceUID=${studyInstanceId}, SeriesInstanceUID=${seriesInstanceId || ''}`
     );
-  };
-
-  const serializeLengthAnnotations = () => {
-    try {
-      const allMeasurements = measurementService?.getMeasurements?.() || [];
-
-      return allMeasurements
-        .filter(measurement => measurement?.toolName === 'Length')
-        .map(measurement => ({
-          uid: measurement.uid,
-          label: measurement.label || '',
-          SOPInstanceUID: measurement.SOPInstanceUID,
-          referenceSeriesUID: measurement.referenceSeriesUID,
-          referencedImageId: measurement.referencedImageId,
-          frameNumber: measurement.frameNumber ?? 1,
-          points: measurement.points,
-        }))
-        .filter(annotation => annotation.referencedImageId || annotation.points?.length);
-    } catch (error) {
-      console.warn('[AR] Could not serialize Length annotations:', getErrorMessage(error));
-      return [];
-    }
-  };
-
-  const buildCaliperReportPayload = () => {
-    const assignSvc = servicesManager.services.iuscanAssignmentService;
-    const hasAssignments = assignSvc?.hasAnyAssignment?.() === true;
-
-    const payload =
-      hasAssignments && typeof assignSvc.buildReportPayload === 'function'
-        ? assignSvc.buildReportPayload(measurementService)
-        : { accessType: 'update' };
-
-    const lengthAnnotations = serializeLengthAnnotations();
-    if (lengthAnnotations.length > 0) {
-      payload.IUScanAnnotations = JSON.stringify(lengthAnnotations);
-    }
-
-    if (!hasAssignments && lengthAnnotations.length === 0) {
-      return null;
-    }
-
-    payload.accessType = payload.accessType || 'update';
-    return payload;
-  };
-
-  const saveCalipersToSeriesDocument = async seriesDoc => {
-    if (!seriesDoc?._id) {
-      return false;
-    }
-
-    const payload = buildCaliperReportPayload();
-    if (!payload) {
-      return false;
-    }
-
-    const response = await fetch(`/formapi/api/series/${seriesDoc._id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
-      body: JSON.stringify(payload),
-    });
-
-    if (!response.ok) {
-      throw new Error(`Caliper save failed: ${response.status}`);
-    }
-
-    return true;
   };
 
   const handleDownload = async (filename: string, fileType: string) => {
@@ -459,7 +390,7 @@ const CornerstoneViewportDownloadForm = ({
         })
       );
 
-      const uploadResponse = await fetch(`/formapi/api/series/${seriesDoc._id}/captures`, {
+      const uploadResponse = await fetch(buildFormApiUrl(`series/${seriesDoc._id}/captures`), {
         method: 'POST',
         credentials: 'include',
         body: formData,
@@ -470,7 +401,6 @@ const CornerstoneViewportDownloadForm = ({
       }
 
       const uploadResult = await uploadResponse.json().catch(() => null);
-      const calipersSaved = await saveCalipersToSeriesDocument(seriesDoc);
 
       const attachmentMessage = {
         type: 'AR_REPORT_ATTACHMENT_UPDATED',
@@ -488,9 +418,7 @@ const CornerstoneViewportDownloadForm = ({
 
       uiNotificationService.show({
         title: 'Augmented Reporting',
-        message: calipersSaved
-          ? 'Image and measurements attached to report.'
-          : 'Image attached to report.',
+        message: 'Image attached to report.',
         type: 'success',
         duration: 3000,
       });

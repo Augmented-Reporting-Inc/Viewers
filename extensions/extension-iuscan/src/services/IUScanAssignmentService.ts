@@ -106,29 +106,165 @@ class IUScanAssignmentService extends PubSubService {
    */
   autoAssignByLabel(measurementUID, label) {
     const mapped = LABEL_MAP[label];
-    if (!mapped) return false;
+    if (!mapped) {
+      return false;
+    }
 
     const { site, axis } = mapped;
     const slots = this._state[site]?.[axis]?.slots;
-    if (!slots) return false;
+    if (!slots) {
+      return false;
+    }
 
     const nextEmpty = slots.findIndex(s => s === null);
-    if (nextEmpty === -1) return false; // all 3 slots full — don't overwrite
+    if (nextEmpty === -1) {
+      return false;
+    } // all 3 slots full — don't overwrite
 
     this.assign(site, axis, nextEmpty, measurementUID);
     return true;
   }
 
+  getCanonicalRepeatedMeasurementValue(annotation) {
+    const measurements = annotation?.measurements || {};
+    const value = Number(measurements.length ?? measurements.value ?? annotation?.value);
+
+    if (!Number.isFinite(value)) {
+      return null;
+    }
+
+    const measurementId = annotation.uid || annotation.annotationId;
+    const label = annotation.label || annotation.measurementRole || annotation.role || '';
+
+    return {
+      annotationId: annotation.annotationId || measurementId,
+      uid: measurementId,
+      workflow: 'viewerMeasurements',
+
+      domain: 'iuscan',
+      mode: 'repeated',
+      role: label,
+      label,
+      measurementRole: label,
+      toolName: annotation.toolName || 'Length',
+
+      repeatedMeasurement: annotation.repeatedMeasurement || null,
+
+      StudyInstanceUID: annotation.StudyInstanceUID || '',
+      SeriesInstanceUID: annotation.SeriesInstanceUID || annotation.referenceSeriesUID || '',
+      referenceSeriesUID: annotation.referenceSeriesUID || annotation.SeriesInstanceUID || '',
+      SOPInstanceUID: annotation.SOPInstanceUID || '',
+      FrameOfReferenceUID: annotation.FrameOfReferenceUID || '',
+      displaySetInstanceUID: annotation.displaySetInstanceUID || '',
+      referencedImageId: annotation.referencedImageId || '',
+      frameNumber: annotation.frameNumber || 1,
+      points: annotation.points || [],
+
+      value,
+      unit: measurements.lengthUnit || measurements.unit || annotation.unit || 'cm',
+      measurements: {
+        displayText: measurements.displayText || annotation.displayText || [],
+        value,
+        unit: measurements.lengthUnit || measurements.unit || annotation.unit || 'cm',
+        length: value,
+        lengthUnit: measurements.lengthUnit || measurements.unit || annotation.unit || 'cm',
+      },
+      displayText: annotation.displayText || measurements.displayText || [],
+    };
+  }
+
+  assignCanonicalRepeatedAnnotation(annotation) {
+    if (
+      annotation?.workflow !== 'viewerMeasurements' ||
+      annotation?.domain !== 'iuscan' ||
+      annotation?.mode !== 'repeated' ||
+      !annotation?.repeatedMeasurement
+    ) {
+      return false;
+    }
+
+    const label = annotation.label || annotation.measurementRole || annotation.role;
+    const mapped = LABEL_MAP[label];
+
+    if (!mapped) {
+      return false;
+    }
+
+    const slotValue = this.getCanonicalRepeatedMeasurementValue(annotation);
+
+    if (!slotValue) {
+      return false;
+    }
+
+    const { site, axis } = mapped;
+    const slots = this._state[site]?.[axis]?.slots;
+
+    if (!slots) {
+      return false;
+    }
+
+    const alreadyAssigned = slots.some(slot => {
+      if (!slot) {
+        return false;
+      }
+
+      if (slot === slotValue.uid || slot === slotValue.annotationId) {
+        return true;
+      }
+
+      return (
+        typeof slot === 'object' &&
+        (slot.uid === slotValue.uid || slot.annotationId === slotValue.annotationId)
+      );
+    });
+
+    if (alreadyAssigned) {
+      return false;
+    }
+
+    const nextEmpty = slots.findIndex(slot => slot === null);
+
+    if (nextEmpty === -1) {
+      return false;
+    }
+
+    this.assign(site, axis, nextEmpty, slotValue);
+    return true;
+  }
+
+  hydrateCanonicalRepeatedAnnotations(annotations = []) {
+    let assignedCount = 0;
+
+    for (const annotation of annotations) {
+      if (this.assignCanonicalRepeatedAnnotation(annotation)) {
+        assignedCount++;
+      }
+    }
+
+    if (assignedCount > 0) {
+      this._broadcastEvent(EVENTS.ASSIGNMENT_CHANGED, {
+        source: 'canonical-repeated-annotations',
+        assignedCount,
+      });
+    }
+
+    return assignedCount;
+  }
+
   // ── Observation API ───────────────────────────────────────────────────────
 
   setObservation(site, field, value) {
-    if (!this._state[site]) return;
+    if (!this._state[site]) {
+      return;
+    }
     this._state[site].observations[field] = value;
     this._broadcastEvent(EVENTS.ASSIGNMENT_CHANGED, { site, field });
   }
 
   setObservations(site, patch) {
-    if (!this._state[site]) return;
+    if (!this._state[site]) {
+      return;
+    }
     this._state[site].observations = {
       ...this._state[site].observations,
       ...patch,
@@ -148,12 +284,16 @@ class IUScanAssignmentService extends PubSubService {
 
   siteHasReportableData(siteKey) {
     const siteState = this._state[siteKey];
-    if (!siteState) return false;
+    if (!siteState) {
+      return false;
+    }
 
     const hasSlots = ['longitudinal', 'cross'].some(axis =>
       siteState[axis].slots.some(s => s !== null)
     );
-    if (hasSlots) return true;
+    if (hasSlots) {
+      return true;
+    }
 
     const obs = siteState.observations ?? {};
     return (
@@ -199,7 +339,9 @@ class IUScanAssignmentService extends PubSubService {
    * exclusively by restoreAnnotations().
    */
   hydrateFromSeriesDoc(doc) {
-    if (!doc) return;
+    if (!doc) {
+      return;
+    }
 
     for (const { key, mongoPrefix } of SITES) {
       // Observations
@@ -209,19 +351,26 @@ class IUScanAssignmentService extends PubSubService {
       }
 
       const fatStr = doc[`${mongoPrefix}InflammatoryMesentericFat`];
-      if (fatStr === '2' || fatStr === 2 || fatStr === 'Complete')
+      if (fatStr === '2' || fatStr === 2 || fatStr === 'Complete') {
         this._state[key].observations.inflammatoryFat = 2;
-      else if (fatStr === '1' || fatStr === 1 || fatStr === 'Partial')
+      } else if (fatStr === '1' || fatStr === 1 || fatStr === 'Partial') {
         this._state[key].observations.inflammatoryFat = 1;
-      else if (fatStr === '0' || fatStr === 0 || fatStr === 'None')
+      } else if (fatStr === '0' || fatStr === 0 || fatStr === 'None') {
         this._state[key].observations.inflammatoryFat = 0;
+      }
       // legacy fallback
-      else if (fatStr === 'Yes') this._state[key].observations.inflammatoryFat = 2;
-      else if (fatStr === 'No') this._state[key].observations.inflammatoryFat = 0;
+      else if (fatStr === 'Yes') {
+        this._state[key].observations.inflammatoryFat = 2;
+      } else if (fatStr === 'No') {
+        this._state[key].observations.inflammatoryFat = 0;
+      }
 
       const lymphStr = doc[`${mongoPrefix}Lymphadenopathy`];
-      if (lymphStr === 'Yes') this._state[key].observations.lymphadenopathy = 1;
-      else if (lymphStr === 'No') this._state[key].observations.lymphadenopathy = 0;
+      if (lymphStr === 'Yes') {
+        this._state[key].observations.lymphadenopathy = 1;
+      } else if (lymphStr === 'No') {
+        this._state[key].observations.lymphadenopathy = 0;
+      }
 
       const stratStr = doc[`${mongoPrefix}LossOfStratification`];
       if (
@@ -229,20 +378,24 @@ class IUScanAssignmentService extends PubSubService {
         stratStr === 2 ||
         stratStr === 'Complete' ||
         stratStr === 'Extensive disruption'
-      )
+      ) {
         this._state[key].observations.stratification = 2;
-      else if (
+      } else if (
         stratStr === '1' ||
         stratStr === 1 ||
         stratStr === 'Focal' ||
         stratStr === 'Focal disruption'
-      )
+      ) {
         this._state[key].observations.stratification = 1;
-      else if (stratStr === '0' || stratStr === 0 || stratStr === 'Normal')
+      } else if (stratStr === '0' || stratStr === 0 || stratStr === 'Normal') {
         this._state[key].observations.stratification = 0;
+      }
       // legacy fallback
-      else if (stratStr === 'Yes') this._state[key].observations.stratification = 2;
-      else if (stratStr === 'No') this._state[key].observations.stratification = 0;
+      else if (stratStr === 'Yes') {
+        this._state[key].observations.stratification = 2;
+      } else if (stratStr === 'No') {
+        this._state[key].observations.stratification = 0;
+      }
 
       const haustrationsStr = doc[`${mongoPrefix}Haustrations`];
       if (HAUSTRATION_REVERSE[haustrationsStr] !== undefined) {
@@ -255,8 +408,11 @@ class IUScanAssignmentService extends PubSubService {
       }
 
       const complicationsStr = doc[`${mongoPrefix}Complications`];
-      if (complicationsStr === 'Yes') this._state[key].observations.complications = 1;
-      else if (complicationsStr === 'No') this._state[key].observations.complications = 0;
+      if (complicationsStr === 'Yes') {
+        this._state[key].observations.complications = 1;
+      } else if (complicationsStr === 'No') {
+        this._state[key].observations.complications = 0;
+      }
 
       const complicationTypes = doc[`${mongoPrefix}ComplicationTypes`];
       if (Array.isArray(complicationTypes)) {
@@ -338,7 +494,9 @@ class IUScanAssignmentService extends PubSubService {
 
   notifyArMeasurementsUpdated({ seriesDoc, payload, updatedSeries = null }) {
     const fieldNames = this.getUpdatedMeasurementFieldNames(payload);
-    if (!fieldNames.length) return;
+    if (!fieldNames.length) {
+      return;
+    }
 
     const sourceSeries = updatedSeries || seriesDoc || {};
     const updatedFields = this.buildUpdatedMeasurementFields({

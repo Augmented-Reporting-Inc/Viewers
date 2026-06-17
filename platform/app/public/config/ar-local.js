@@ -11,7 +11,7 @@ window.config = {
   maxNumberOfWebWorkers: 4,
   showWarningMessageForCrossOrigin: true,
   showCPUFallbackMessage: true,
-  showLoadingIndicator: true,
+  showLoadingIndicator: false,
   strictZSpacingForVolumeViewport: true,
   maxNumRequests: {
     interaction: 100,
@@ -30,7 +30,7 @@ window.config = {
       namespace: '@ohif/extension-default.dataSourcesModule.dicomweb',
       sourceName: 'dicomweb',
       configuration: {
-        friendlyName: 'primebe orthanc',
+        friendlyName: 'dragonfoot orthanc',
         name: 'dicomweb',
         wadoUriRoot: '/orthanc/wado',
         qidoRoot: '/orthanc/dicom-web',

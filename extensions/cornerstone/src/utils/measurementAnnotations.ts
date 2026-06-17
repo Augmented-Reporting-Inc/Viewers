@@ -1,0 +1,140 @@
+export const VIEWER_MEASUREMENTS_WORKFLOW = 'viewerMeasurements';
+
+export type ViewerMeasurementDomain = 'echo' | 'bowel' | 'iuscan' | 'generic';
+export type ViewerMeasurementMode = 'single' | 'repeated';
+
+export function parseMeasurementAnnotations(raw: unknown) {
+  if (!raw) {
+    return { version: 1, workflows: {} };
+  }
+
+  if (typeof raw === 'object' && !Array.isArray(raw)) {
+    const parsed = raw as any;
+    return {
+      version: parsed.version || 1,
+      workflows: parsed.workflows || {},
+    };
+  }
+
+  try {
+    const parsed = JSON.parse(String(raw));
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return {
+        version: parsed.version || 1,
+        workflows: parsed.workflows || {},
+      };
+    }
+  } catch {
+    // fall through
+  }
+
+  return { version: 1, workflows: {} };
+}
+
+export function getWorkflowAnnotations(raw: unknown, workflow: string) {
+  const parsed = parseMeasurementAnnotations(raw);
+  const workflowPayload = parsed.workflows?.[workflow];
+
+  return Array.isArray(workflowPayload?.annotations) ? workflowPayload.annotations : [];
+}
+
+export function getAllWorkflowAnnotations(raw: unknown) {
+  const parsed = parseMeasurementAnnotations(raw);
+  const workflows = parsed.workflows || {};
+
+  return Object.entries(workflows).flatMap(([workflow, payload]: [string, any]) => {
+    const annotations = Array.isArray(payload?.annotations) ? payload.annotations : [];
+
+    return annotations.map(annotation => ({
+      ...annotation,
+      workflow: annotation.workflow || workflow,
+      workflowSource: payload?.source || '',
+      workflowSavedAt: payload?.savedAt || '',
+    }));
+  });
+}
+
+export function getRequestedWorkflowAnnotations(raw: unknown, workflows?: string[]) {
+  if (!Array.isArray(workflows) || workflows.length === 0) {
+    return getAllWorkflowAnnotations(raw);
+  }
+
+  return workflows.flatMap(workflow =>
+    getWorkflowAnnotations(raw, workflow).map(annotation => ({
+      ...annotation,
+      workflow: annotation.workflow || workflow,
+    }))
+  );
+}
+
+function getAnnotationKey(annotation: any) {
+  return (
+    annotation?.annotationId ||
+    annotation?.uid ||
+    [
+      annotation?.toolName || '',
+      annotation?.label || '',
+      annotation?.domain || '',
+      annotation?.referencedImageId || '',
+      JSON.stringify(annotation?.points || []),
+    ].join('|')
+  );
+}
+
+export function upsertViewerMeasurementAnnotations({
+  existingRaw,
+  source,
+  annotations,
+  replaceDomains = [],
+  replaceFilter,
+  extra = {},
+}: {
+  existingRaw?: unknown;
+  source: string;
+  annotations: any[];
+  replaceDomains?: string[];
+  replaceFilter?: (annotation: any) => boolean;
+  extra?: Record<string, unknown>;
+}) {
+  const existing = parseMeasurementAnnotations(existingRaw);
+  const workflows = existing.workflows || {};
+  const currentWorkflow = workflows[VIEWER_MEASUREMENTS_WORKFLOW] || {};
+
+  const currentAnnotations = Array.isArray(currentWorkflow.annotations)
+    ? currentWorkflow.annotations
+    : [];
+
+  const domainSet = new Set(replaceDomains.filter(Boolean));
+
+  const shouldReplace =
+    replaceFilter || ((annotation: any) => domainSet.size > 0 && domainSet.has(annotation?.domain));
+
+  const keptAnnotations = currentAnnotations.filter(annotation => !shouldReplace(annotation));
+
+  const mergedByKey = new Map();
+
+  for (const annotation of keptAnnotations) {
+    mergedByKey.set(getAnnotationKey(annotation), annotation);
+  }
+
+  for (const annotation of annotations || []) {
+    mergedByKey.set(getAnnotationKey(annotation), {
+      ...annotation,
+      workflow: VIEWER_MEASUREMENTS_WORKFLOW,
+    });
+  }
+
+  return JSON.stringify({
+    version: existing.version || 1,
+    workflows: {
+      ...workflows,
+      [VIEWER_MEASUREMENTS_WORKFLOW]: {
+        ...currentWorkflow,
+        source,
+        savedAt: new Date().toISOString(),
+        annotations: Array.from(mergedByKey.values()),
+        ...extra,
+      },
+    },
+  });
+}

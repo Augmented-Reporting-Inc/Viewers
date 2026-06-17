@@ -7,7 +7,6 @@ import hpIUScan from './hangingProtocols/hpIUScan';
 import getCommandsModule from './getCommandsModule';
 import getToolbarModule from './getToolbarModule';
 import getPanelModule from './panels/getPanelModule';
-import { annotation as csToolsAnnotation } from '@cornerstonejs/tools';
 import { MEASUREMENT_LABELS } from './utils/labelMap';
 
 // Module-level subscription reference — survives between onModeEnter/onModeExit
@@ -15,107 +14,64 @@ import { MEASUREMENT_LABELS } from './utils/labelMap';
 let _measurementAddedSub = null;
 let _measurementUpdatedSub = null;
 
-async function hydrateFromSeriesDoc(servicesManager, assignSvc) {
-  const { viewportGridService, displaySetService } = servicesManager.services;
+async function hydrateFromSeriesDoc(servicesManager, commandsManager, assignSvc) {
+  let result = null;
 
-  // Poll for active viewport — it takes a few frames after onModeEnter
-  // for the viewport grid to be populated. Poll up to 20 times at 100ms intervals.
-  let dsUID = null;
-  for (let i = 0; i < 20; i++) {
-    await new Promise(resolve => setTimeout(resolve, 100));
-    const { activeViewportId, viewports } = viewportGridService.getState();
-    const activeVP = viewports?.get?.(activeViewportId) ?? viewports?.[activeViewportId];
-    dsUID = activeVP?.displaySetInstanceUIDs?.[0];
-    if (dsUID) break;
-  }
-  if (!dsUID) {
-    console.warn('[iUSCAN] hydrateFromSeriesDoc: no active viewport after polling');
+  try {
+    result = await commandsManager.runCommand('hydrateMeasurementAnnotationsForActiveStudy', {
+      workflows: ['viewerMeasurements'],
+      domains: ['iuscan'],
+      notify: false,
+    });
+  } catch (error) {
+    console.warn(
+      '[iUSCAN] generic MeasurementAnnotations hydration threw:',
+      error?.message || error
+    );
     return;
   }
 
-  const ds = displaySetService.getDisplaySetByUID(dsUID);
-  const studyUID = ds?.StudyInstanceUID;
-  if (!studyUID) return;
+  if (result?.error || !result?.seriesDoc) {
+    console.warn('[iUSCAN] hydration skipped: no series document resolved', {
+      restoredCount: result?.restoredCount || 0,
+      skippedCount: result?.skippedCount || 0,
+      hasSeriesDoc: !!result?.seriesDoc,
+      error: result?.error?.message || result?.error || '',
+    });
+    return;
+  }
 
-  const res = await fetch(`/formapi/api/series/study/${studyUID}`, { credentials: 'include' });
-  if (!res.ok) return;
-  const doc = await res.json();
+  const doc = result.seriesDoc;
 
-  // Hydrate observation fields from Mongo first.
-  // Do not hydrate saved BWT/BWTLong/BWTCross averages into assignment slots.
-  // Slots should represent actual restored caliper annotations only.
+  // Hydrate observation fields from Mongo.
+  // Do not hydrate saved BWT/BWTLong/BWTCross averages into slots.
   assignSvc.hydrateFromSeriesDoc(doc);
 
-  // If full annotation state is stored, restore it — gives per-caliper restoration
-  // with live UIDs, click-to-jump, and all 3 slots independently.
-  if (doc.IUScanAnnotations) {
-    try {
-      await restoreAnnotations(doc.IUScanAnnotations, servicesManager, assignSvc);
-    } catch (e) {
-      console.warn('[iUSCAN] annotation restore failed:', e?.message || e);
-    }
-  }
-}
-
-async function restoreAnnotations(annotationsJson, servicesManager, assignSvc) {
-  const { measurementService, displaySetService } = servicesManager.services;
-  const saved = JSON.parse(annotationsJson);
-  if (!Array.isArray(saved) || saved.length === 0) return;
-
-  for (const ann of saved) {
-    if (!ann.referencedImageId || !ann.points?.length) continue;
-
-    // Build a Cornerstone Length annotation object
-    const csAnnotation = {
-      annotationUID: ann.uid,
-      metadata: {
-        toolName: 'Length',
-        referencedImageId: ann.referencedImageId,
-        FrameOfReferenceUID: undefined,
-      },
-      data: {
-        label: ann.label,
-        handles: {
-          points: ann.points,
-          activeHandleIndex: null,
-          textBox: { hasMoved: false, worldPosition: [0, 0, 0], worldBoundingBox: null },
-        },
-        cachedStats: {},
-      },
-      highlighted: false,
-      invalidated: true,
-      isLocked: false,
-      isVisible: true,
-    };
-
-    // Add to Cornerstone annotation state — keyed by referencedImageId
-    csToolsAnnotation.state.addAnnotation(csAnnotation, ann.referencedImageId);
-
-    // Trigger MeasurementService to pick up the annotation
-    // by dispatching MEASUREMENT_ADDED via the existing subscriber
-    // Small delay to let Cornerstone process the annotation
-    await new Promise(resolve => setTimeout(resolve, 10));
-
-    // Force MeasurementService to convert the CS annotation to a measurement
-    // by triggering the annotation modified event
-    const { triggerAnnotationRenderForViewportIds } = await import(
-      '@cornerstonejs/tools/utilities'
+  const canonicalRepeatedAnnotations = (
+    result?.processedAnnotations ||
+    result?.restoredAnnotations ||
+    []
+  ).filter(annotation => {
+    return (
+      annotation?.workflow === 'viewerMeasurements' &&
+      annotation?.domain === 'iuscan' &&
+      annotation?.mode === 'repeated' &&
+      annotation?.repeatedMeasurement
     );
-    try {
-      triggerAnnotationRenderForViewportIds([]);
-    } catch (_) {}
-  }
+  });
 
-  // Wait for MeasurementService to process all annotations
-  await new Promise(resolve => setTimeout(resolve, 200));
+  const assignedLengthMeasurements = assignSvc.hydrateCanonicalRepeatedAnnotations(
+    canonicalRepeatedAnnotations
+  );
 
-  // Now auto-assign all measurements that have matching labels
-  const measurements = measurementService.getMeasurements();
-  for (const m of measurements) {
-    if (m.label && m.toolName === 'Length') {
-      assignSvc.autoAssignByLabel(m.uid, m.label);
-    }
-  }
+  console.info('[iUSCAN] hydration complete', {
+    restoredCount: result.restoredCount || 0,
+    skippedCount: result.skippedCount || 0,
+    processedCount: result.processedAnnotations?.length || 0,
+    canonicalRepeatedCount: canonicalRepeatedAnnotations.length,
+    hasSeriesDoc: true,
+    assignedLengthMeasurements,
+  });
 }
 
 const iuscanExtension = {
@@ -143,7 +99,7 @@ const iuscanExtension = {
    * switches). Wires up measurement label customizations and the
    * auto-assignment subscriber.
    */
-  onModeEnter({ servicesManager }) {
+  onModeEnter({ servicesManager, commandsManager }) {
     const { measurementService, customizationService } = servicesManager.services;
     const assignSvc = servicesManager.services.iuscanAssignmentService;
 
@@ -175,7 +131,9 @@ const iuscanExtension = {
     _measurementAddedSub = measurementService.subscribe(
       measurementService.EVENTS.MEASUREMENT_ADDED,
       ({ measurement }) => {
-        if (!measurement?.label) return;
+        if (!measurement?.label) {
+          return;
+        }
         assignSvc.autoAssignByLabel(measurement.uid, measurement.label);
       }
     );
@@ -183,11 +141,25 @@ const iuscanExtension = {
     _measurementUpdatedSub = measurementService.subscribe(
       measurementService.EVENTS.MEASUREMENT_UPDATED,
       ({ measurement }) => {
-        if (!measurement?.label) return;
+        if (!measurement?.label) {
+          return;
+        }
         // Only auto-assign if not already assigned anywhere
         const state = assignSvc.getFullState();
         const alreadyAssigned = Object.values(state).some(site =>
-          ['longitudinal', 'cross'].some(axis => site[axis].slots.some(s => s === measurement.uid))
+          ['longitudinal', 'cross'].some(axis =>
+            site[axis].slots.some(slot => {
+              if (slot === measurement.uid) {
+                return true;
+              }
+
+              return (
+                slot &&
+                typeof slot === 'object' &&
+                (slot.uid === measurement.uid || slot.annotationId === measurement.uid)
+              );
+            })
+          )
         );
 
         if (!alreadyAssigned) {
@@ -201,7 +173,7 @@ const iuscanExtension = {
 
     // Pre-populate panel from any existing Bowel* fields in the series doc.
     // Non-fatal: silently skipped if the study isn't yet linked to a series doc.
-    hydrateFromSeriesDoc(servicesManager, assignSvc).catch(e => {
+    hydrateFromSeriesDoc(servicesManager, commandsManager, assignSvc).catch(e => {
       console.warn('[iUSCAN] hydrateFromSeriesDoc failed:', e?.message || e);
     });
   },

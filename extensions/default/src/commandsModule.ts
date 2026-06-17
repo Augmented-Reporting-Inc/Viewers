@@ -85,6 +85,24 @@ function findNavigatedDisplaySetIndex({
   return -1;
 }
 
+function sanitizeDisplaySetSelectorMap(displaySetSelectorMap) {
+  if (!displaySetSelectorMap || typeof displaySetSelectorMap !== 'object') {
+    return undefined;
+  }
+
+  const sanitizedDisplaySetSelectorMap = {};
+
+  Object.entries(displaySetSelectorMap).forEach(([selectorId, displaySetInstanceUIDs]) => {
+    if (Array.isArray(displaySetInstanceUIDs)) {
+      sanitizedDisplaySetSelectorMap[selectorId] = displaySetInstanceUIDs;
+    }
+  });
+
+  return Object.keys(sanitizedDisplaySetSelectorMap).length
+    ? sanitizedDisplaySetSelectorMap
+    : undefined;
+}
+
 const commandsModule = ({
   servicesManager,
   commandsManager,
@@ -387,7 +405,9 @@ const commandsModule = ({
         const hpInfo = hangingProtocolService.getState();
         reuseCachedLayouts(state, hangingProtocolService);
         const { hangingProtocolStageIndexMap } = useHangingProtocolStageIndexStore.getState();
-        const { displaySetSelectorMap } = useDisplaySetSelectorStore.getState();
+        const { displaySetSelectorMap: rawDisplaySetSelectorMap } =
+          useDisplaySetSelectorStore.getState();
+        const displaySetSelectorMap = sanitizeDisplaySetSelectorMap(rawDisplaySetSelectorMap);
 
         if (!protocolId) {
           // Reuse the previous protocol id, and optionally stage

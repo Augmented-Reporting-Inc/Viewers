@@ -105,9 +105,9 @@ window.config = {
         /*        wadoUriRoot: 'https://d14fa38qiwhyfd.cloudfront.net/dicomweb',
         qidoRoot: 'https://d14fa38qiwhyfd.cloudfront.net/dicomweb',
         wadoRoot: 'https://d14fa38qiwhyfd.cloudfront.net/dicomweb',*/
-        wadoUriRoot: 'https://primebe.futurepacs.com/orthanc/wado',
-        qidoRoot: 'https://primebe.futurepacs.com/orthanc/dicom-web',
-        wadoRoot: 'https://primebe.futurepacs.com/orthanc/dicom-web',
+        wadoUriRoot: 'https://dragonfoot.futurepacs.com/orthanc/wado',
+        qidoRoot: 'https://dragonfoot.futurepacs.com/orthanc/dicom-web',
+        wadoRoot: 'https://dragonfoot.futurepacs.com/orthanc/dicom-web',
         /*       onConfiguration: (dicomWebConfig, options) => {
           const { query } = options;
           const gateway = query.get('gateway');

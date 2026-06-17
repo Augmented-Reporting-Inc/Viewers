@@ -46,6 +46,57 @@ const { registerColormap } = csUtilities.colormap;
 // TODO: Cypress tests are currently grabbing this from the window?
 (window as any).cornerstone = cornerstone;
 (window as any).cornerstoneTools = cornerstoneTools;
+
+let lastImageLoadFallbackWarningAt = 0;
+
+function getImageLoadFailureError(detail: any) {
+  return detail?.error || detail?.errorObject || detail?.reason || detail;
+}
+
+function warnImageLoadFailureFallback(message: string, detail: any, error?: unknown) {
+  const now = Date.now();
+
+  // Image-load failures can happen in bursts when a cine/frame request fails.
+  // Throttle fallback logging so the console remains useful.
+  if (now - lastImageLoadFallbackWarningAt < 5000) {
+    return;
+  }
+
+  lastImageLoadFallbackWarningAt = now;
+  console.warn('[cornerstone] image load failure handler fallback', {
+    message,
+    detail,
+    error,
+  });
+}
+
+function handleCornerstoneImageLoadFailure(detail: any) {
+  const imageLoadError = getImageLoadFailureError(detail);
+  let handler;
+
+  try {
+    handler = errorHandler.getHTTPErrorHandler();
+  } catch (error) {
+    warnImageLoadFailureFallback('Unable to get HTTP error handler', detail, error);
+    return;
+  }
+
+  if (typeof handler !== 'function') {
+    warnImageLoadFailureFallback('HTTP error handler is not a function', detail);
+    return;
+  }
+
+  try {
+    handler(imageLoadError);
+  } catch (error) {
+    warnImageLoadFailureFallback(
+      'HTTP error handler threw while processing image load failure',
+      detail,
+      error
+    );
+  }
+}
+
 /**
  *
  */
@@ -195,7 +246,6 @@ export default async function init({
     commandsManager.runCommand('jumpToMeasurementViewport', { measurement, annotationUID, evt });
   });
 
-
   // When a custom image load is performed, update the relevant viewports
   hangingProtocolService.subscribe(
     hangingProtocolService.EVENTS.CUSTOM_IMAGE_LOAD_PERFORMED,
@@ -240,8 +290,7 @@ export default async function init({
    * @param event
    */
   const imageLoadFailedHandler = ({ detail }) => {
-    const handler = errorHandler.getHTTPErrorHandler();
-    handler(detail.error);
+    handleCornerstoneImageLoadFailure(detail);
   };
 
   eventTarget.addEventListener(EVENTS.IMAGE_LOAD_FAILED, imageLoadFailedHandler);

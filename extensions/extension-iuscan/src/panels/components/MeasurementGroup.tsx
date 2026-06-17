@@ -18,13 +18,64 @@ export default function MeasurementGroup({
   measurements,
   assignSvc,
   measurementService,
+  commandsManager,
 }) {
   // Resolve display value for each slot
   const resolved = slots.map(slot => {
-    if (slot === null) return null;
-    if (typeof slot === 'object' && slot !== null && 'value' in slot) return slot; // hydrated { value, unit }
+    if (slot === null) {
+      return null;
+    }
+    if (typeof slot === 'object' && slot !== null && 'value' in slot) {
+      return slot;
+    } // hydrated { value, unit }
     return valueByUID[slot] ?? null; // live caliper value
   });
+
+  function getSlotMeasurementId(slot) {
+    if (!slot) {
+      return '';
+    }
+
+    if (typeof slot === 'string') {
+      return slot;
+    }
+
+    if (typeof slot === 'object') {
+      return slot.uid || slot.annotationId || '';
+    }
+
+    return '';
+  }
+
+  function isNavigableSlot(slot) {
+    if (typeof slot === 'string') {
+      return true;
+    }
+
+    return !!(
+      slot &&
+      typeof slot === 'object' &&
+      (slot.uid || slot.annotationId) &&
+      slot.referencedImageId
+    );
+  }
+
+  function jumpToSlot(slot) {
+    const measurementId = getSlotMeasurementId(slot);
+
+    if (!measurementId) {
+      return;
+    }
+
+    if (typeof slot === 'string') {
+      measurementService.jumpToMeasurement(null, measurementId);
+      return;
+    }
+
+    commandsManager?.runCommand?.('jumpToSavedViewerAnnotation', {
+      annotation: slot,
+    });
+  }
 
   const filled = resolved.filter(v => v !== null);
   const average =
@@ -49,14 +100,20 @@ export default function MeasurementGroup({
     const state = assignSvc.getFullState();
     Object.values(state).forEach(siteState => {
       ['longitudinal', 'cross'].forEach(ax => {
-        siteState[ax].slots.forEach(s => {
-          if (s && typeof s === 'string') allAssigned.add(s);
+        siteState?.[ax]?.slots?.forEach(s => {
+          const measurementId = getSlotMeasurementId(s);
+
+          if (measurementId) {
+            allAssigned.add(measurementId);
+          }
         });
       });
     });
 
     const nextSlot = slots.findIndex(s => s === null);
-    if (nextSlot === -1) return; // all slots full
+    if (nextSlot === -1) {
+      return;
+    } // all slots full
 
     // Pick the most recently added unassigned measurement
     const candidates = measurements
@@ -84,7 +141,7 @@ export default function MeasurementGroup({
       <div className="flex flex-wrap items-center gap-1 overflow-x-hidden">
         {slots.map((slot, i) => {
           const val = resolved[i];
-          const isUID = typeof slot === 'string';
+          const isNavigable = isNavigableSlot(slot);
           return (
             <div
               key={i}
@@ -95,10 +152,14 @@ export default function MeasurementGroup({
               {val !== null ? (
                 <>
                   <span
-                    className={isUID ? 'hover:text-primary-light cursor-pointer' : ''}
-                    title={isUID ? 'Click to highlight annotation' : 'Pre-populated from report'}
+                    className={isNavigable ? 'hover:text-primary-light cursor-pointer' : ''}
+                    title={
+                      isNavigable ? 'Click to jump to annotation' : 'Pre-populated from report'
+                    }
                     onClick={() => {
-                      if (isUID) measurementService.jumpToMeasurement(null, slot);
+                      if (isNavigable) {
+                        jumpToSlot(slot);
+                      }
                     }}
                   >
                     {(typeof val === 'number' ? val : val.value).toFixed(2)}

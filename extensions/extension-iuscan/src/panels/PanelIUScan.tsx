@@ -35,7 +35,9 @@ export default function PanelIUScan({ servicesManager, commandsManager }) {
     const sub = assignSvc.subscribe(assignSvc.EVENTS.ASSIGNMENT_CHANGED, ({ site }) => {
       setAssignState(assignSvc.getFullState());
       // Auto-expand the accordion for the site that just received an assignment
-      if (site) setTimeout(() => setOpenSite(site), 50);
+      if (site) {
+        setTimeout(() => setOpenSite(site), 50);
+      }
     });
     return () => sub?.unsubscribe?.();
   }, [assignSvc]);
@@ -49,14 +51,20 @@ export default function PanelIUScan({ servicesManager, commandsManager }) {
   const valueByUID = useMemo(() => {
     const map = {};
     measurements.forEach(m => {
-      if (!m.uid || !m.data) return;
+      if (!m.uid || !m.data) {
+        return;
+      }
       // Length tool stores value in data.cachedStats[targetId].length
       // MeasurementService maps data = cachedStats, so data[targetId].length
       const firstKey = Object.keys(m.data)[0];
-      if (!firstKey) return;
+      if (!firstKey) {
+        return;
+      }
       const length = m.data[firstKey]?.length;
       const unit = m.data[firstKey]?.unit;
-      if (length != null) map[m.uid] = { value: length, unit: unit ?? 'cm' };
+      if (length != null) {
+        map[m.uid] = { value: length, unit: unit ?? 'cm' };
+      }
     });
     return map;
   }, [measurements]);
@@ -109,6 +117,7 @@ export default function PanelIUScan({ servicesManager, commandsManager }) {
             measurements={measurements}
             assignSvc={assignSvc}
             measurementService={measurementService}
+            commandsManager={commandsManager}
           />
         ))}
       </div>

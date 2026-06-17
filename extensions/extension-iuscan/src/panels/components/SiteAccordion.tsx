@@ -77,6 +77,7 @@ export default function SiteAccordion({
   measurements,
   assignSvc,
   measurementService,
+  commandsManager,
 }) {
   const longSlots = siteState?.longitudinal?.slots ?? [null, null, null];
   const crossSlots = siteState?.cross?.slots ?? [null, null, null];
@@ -84,9 +85,15 @@ export default function SiteAccordion({
 
   // Resolve all filled mm values for the header summary
   function resolveSlot(slot) {
-    if (slot === null) return null;
-    if (typeof slot === 'number') return slot;
-    if (typeof slot === 'object' && slot !== null && 'value' in slot) return slot.value;
+    if (slot === null) {
+      return null;
+    }
+    if (typeof slot === 'number') {
+      return slot;
+    }
+    if (typeof slot === 'object' && slot !== null && 'value' in slot) {
+      return slot.value;
+    }
     const entry = valueByUID[slot];
     return entry != null ? entry.value : null;
   }
@@ -158,6 +165,7 @@ export default function SiteAccordion({
             measurements={measurements}
             assignSvc={assignSvc}
             measurementService={measurementService}
+            commandsManager={commandsManager}
           />
 
           <MeasurementGroup
@@ -169,6 +177,7 @@ export default function SiteAccordion({
             measurements={measurements}
             assignSvc={assignSvc}
             measurementService={measurementService}
+            commandsManager={commandsManager}
           />
           {site.hasSegmentLength && (
             <div className="border-t border-gray-700 pt-2">

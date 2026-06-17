@@ -77,6 +77,10 @@
     {
       "packageName": "extension-dobutamine",
       "version": "0.0.1"
+    },
+    {
+      "packageName": "extension-ar-measurements",
+      "version": "0.0.1"
     }
   ],
   "modes": [

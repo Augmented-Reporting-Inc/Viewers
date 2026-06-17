@@ -83,6 +83,10 @@ module.exports = (env, argv) => {
         path.resolve(__dirname, 'extensions/extension-iuscan/node_modules'),
         path.resolve(__dirname, 'modes/mode-dobutamine/node_modules'),
         path.resolve(__dirname, 'extensions/extension-dobutamine/node_modules'),
+        path.resolve(
+          __dirname,
+          'C:/Users/ot196/Downloads/Viewers/extensions/extension-ar-measurements/node_modules'
+        ),
       ],
     },
     plugins: [
@@ -157,8 +161,7 @@ module.exports = (env, argv) => {
       // gzip compression of everything served
       // Causes Cypress: `wait-on` issue in CI
       // compress: true,
-      // http2: true,
-      // https: true,
+      server: 'spdy',
       open: true,
       port: OHIF_PORT,
       client: {
@@ -167,7 +170,7 @@ module.exports = (env, argv) => {
       proxy: [
         {
           context: ['/orthanc', '/formapi'],
-          target: 'https://primebe.futurepacs.com',
+          target: 'https://dragonfoot.futurepacs.com',
           changeOrigin: true,
           secure: true,
           headers: {

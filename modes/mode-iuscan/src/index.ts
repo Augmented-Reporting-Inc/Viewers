@@ -77,7 +77,9 @@ function modeFactory({ modeConfiguration }) {
       );
       const iuscanButtons = filteredButtons.map(btn => {
         const btnStr = JSON.stringify(btn);
-        if (!btnStr.includes('setToolActiveToolbar')) return btn;
+        if (!btnStr.includes('setToolActiveToolbar')) {
+          return btn;
+        }
         return JSON.parse(
           btnStr.replace(
             /"toolGroupIds":\["default","mpr","SRToolGroup","volume3d"\]/g,
@@ -118,7 +120,9 @@ function modeFactory({ modeConfiguration }) {
       // Fire label picker after each caliper is completed
       _annotationCompletedHandler = evt => {
         const uid = evt.detail?.annotation?.annotationUID;
-        if (!uid) return;
+        if (!uid) {
+          return;
+        }
         setTimeout(() => {
           commandsManager.runCommand('setMeasurementLabel', { uid });
         }, 0);
@@ -234,8 +238,9 @@ function modeFactory({ modeConfiguration }) {
                 namespace: '@ohif/extension-cornerstone.viewportModule.cornerstone',
                 displaySetsToDisplay: [
                   // Use extension-iuscan's handler (instance-per-display-set, InstanceNumber sort)
-                  'extension-iuscan.sopClassHandlerModule.stack',
-                  'extension-iuscan.sopClassHandlerModule.not-supported-display-sets-handler',
+                  //     'extension-iuscan.sopClassHandlerModule.stack',
+                  //     'extension-iuscan.sopClassHandlerModule.not-supported-display-sets-handler',
+                  '@ohif/extension-default.sopClassHandlerModule.stack',
                 ],
               },
             ],
@@ -255,8 +260,9 @@ function modeFactory({ modeConfiguration }) {
 
     // ── SOP class handlers (order: more specific first) ───────────────────────
     sopClassHandlers: [
-      'extension-iuscan.sopClassHandlerModule.stack',
-      'extension-iuscan.sopClassHandlerModule.not-supported-display-sets-handler',
+      //      'extension-iuscan.sopClassHandlerModule.stack',
+      //      'extension-iuscan.sopClassHandlerModule.not-supported-display-sets-handler',
+      '@ohif/extension-default.sopClassHandlerModule.stack',
     ],
 
     // ── Hotkeys ───────────────────────────────────────────────────────────────

@@ -22,7 +22,9 @@ export function buildReportPayload(state, measurementService) {
   for (const siteConfig of SITES) {
     const { key, mongoPrefix } = siteConfig;
     const siteState = state[key];
-    if (!siteState) continue;
+    if (!siteState) {
+      continue;
+    }
 
     // ── Measurements ────────────────────────────────────────────────────────
     const axisMeans = {};
@@ -31,22 +33,44 @@ export function buildReportPayload(state, measurementService) {
       const slots = siteState[axis]?.slots ?? [];
       const resolved = slots
         .map(slot => {
-          if (slot === null) return null;
-          if (typeof slot === 'number') return { value: slot, unit: 'cm' };
-          if (typeof slot === 'object' && slot !== null && 'value' in slot)
-            return { value: slot.value, unit: slot.unit };
+          if (slot === null) {
+            return null;
+          }
+          if (typeof slot === 'number') {
+            return { value: slot, unit: 'cm' };
+          }
+          if (typeof slot === 'object' && slot !== null) {
+            const value = Number(slot.value ?? slot.length);
+
+            if (!Number.isFinite(value)) {
+              return null;
+            }
+
+            return {
+              value,
+              unit: slot.unit || slot.lengthUnit || 'cm',
+            };
+          }
           // slot is a measurementUID
           const m = measurementService.getMeasurement(slot);
-          if (!m?.data) return null;
+          if (!m?.data) {
+            return null;
+          }
           const firstKey = Object.keys(m.data)[0];
-          if (!firstKey) return null;
+          if (!firstKey) {
+            return null;
+          }
           const { length, unit } = m.data[firstKey] ?? {};
-          if (length == null) return null;
+          if (length == null) {
+            return null;
+          }
           return { value: length, unit: unit ?? 'cm' };
         })
         .filter(v => v !== null);
       const numericValues = resolved.map(r => r.value);
-      if (numericValues.length === 0) continue;
+      if (numericValues.length === 0) {
+        continue;
+      }
 
       const avg = numericValues.reduce((a, b) => a + b, 0) / numericValues.length;
       const unit = resolved[0]?.unit === 'cm US Region' ? 'cm' : (resolved[0]?.unit ?? 'cm');
@@ -69,7 +93,9 @@ export function buildReportPayload(state, measurementService) {
 
     // ── Observations ─────────────────────────────────────────────────────────
     const obs = siteState.observations;
-    if (!obs) continue;
+    if (!obs) {
+      continue;
+    }
 
     if (obs.doppler != null) {
       payload[`${mongoPrefix}ColorDopplerSignal`] = DOPPLER_MAP[obs.doppler] ?? '0 Absent';

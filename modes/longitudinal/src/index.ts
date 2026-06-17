@@ -2,6 +2,116 @@ import i18n from 'i18next';
 import { id } from './id';
 import initToolGroups from './initToolGroups';
 import toolbarButtons from './toolbarButtons';
+import { LV_TRACE_MEASUREMENT_LABELS_CONFIG } from './utils/lvTraceLabels';
+
+const ECHO_LENGTH_MEASUREMENT_LABELS_CONFIG = {
+  id: 'echoLengthMeasurementLabels',
+  labelOnMeasure: true,
+  exclusive: true,
+  items: [
+    { value: 'LVIDd', label: 'LVIDd' },
+    { value: 'LVIDs', label: 'LVIDs' },
+    { value: 'IVSd', label: 'IVSd' },
+    { value: 'PWd', label: 'PWd' },
+    { value: 'AO', label: 'Aortic root' },
+    { value: 'AscAo', label: 'Ascending aorta' },
+    { value: 'LVOTDiam', label: 'LVOT diameter' },
+    { value: 'LAd', label: 'Left atrial dimension' },
+    { value: 'RVIDd', label: 'RVIDd' },
+    { value: 'TAPSE', label: 'TAPSE' },
+  ],
+};
+
+const BOWEL_LENGTH_MEASUREMENT_LABELS_CONFIG = {
+  id: 'bowelLengthMeasurementLabels',
+  labelOnMeasure: true,
+  exclusive: true,
+  items: [
+    { value: 'BowelRectumBWT', label: 'Rectum BWT' },
+    { value: 'BowelSigmoidColonBWT', label: 'Sigmoid colon BWT' },
+    { value: 'BowelDescendingColonBWT', label: 'Descending colon BWT' },
+    { value: 'BowelTransverseColonBWT', label: 'Transverse colon BWT' },
+    { value: 'BowelAscendingColonBWT', label: 'Ascending colon BWT' },
+    { value: 'BowelCecumBWT', label: 'Cecum BWT' },
+    { value: 'BowelTerminalIleumBWT', label: 'Terminal ileum BWT' },
+    { value: 'BowelIleocolicAnastomosisBWT', label: 'Ileocolic anastomosis BWT' },
+    { value: 'BowelNeoTerminalIleumBWT', label: 'Neo-terminal ileum BWT' },
+  ],
+};
+
+function getViewerMeasurementDomainFromPath() {
+  const path = String(window.location?.pathname || '').toLowerCase();
+
+  if (path.includes('/bviewer/iuscan')) {
+    return 'iuscan';
+  }
+
+  if (path.includes('/bviewer')) {
+    return 'bowel';
+  }
+
+  if (path.includes('/rviewer') || path.includes('/stressecho') || path.includes('/dobutamine')) {
+    return 'echo';
+  }
+
+  return 'generic';
+}
+
+async function resolveViewerMeasurementDomain(commandsManager) {
+  try {
+    const resolvedDomain = await commandsManager.runCommand(
+      'getViewerMeasurementDomainForActiveStudy'
+    );
+
+    if (resolvedDomain) {
+      return resolvedDomain;
+    }
+  } catch (error) {
+    console.warn('[AR Measurements] could not resolve measurement domain:', error);
+  }
+
+  return getViewerMeasurementDomainFromPath();
+}
+
+async function getLabelConfigForMeasurement(measurement, commandsManager) {
+  const toolName = measurement?.toolName;
+
+  if (toolName === 'SplineROI') {
+    return {
+      title: 'Set LV Slot',
+      placeholder: 'Choose LV A4C/A2C ED/ES slot',
+      labelConfigOverride: LV_TRACE_MEASUREMENT_LABELS_CONFIG,
+    };
+  }
+
+  if (toolName !== 'Length') {
+    return null;
+  }
+
+  const domain = await resolveViewerMeasurementDomain(commandsManager);
+
+  if (domain === 'iuscan') {
+    return null;
+  }
+
+  if (domain === 'bowel') {
+    return {
+      title: 'Set Bowel Measurement',
+      placeholder: 'Choose bowel measurement',
+      labelConfigOverride: BOWEL_LENGTH_MEASUREMENT_LABELS_CONFIG,
+    };
+  }
+
+  if (domain === 'echo') {
+    return {
+      title: 'Set Echo Measurement',
+      placeholder: 'Choose echo measurement',
+      labelConfigOverride: ECHO_LENGTH_MEASUREMENT_LABELS_CONFIG,
+    };
+  }
+
+  return null;
+}
 
 // Allow this mode by excluding non-imaging modalities such as SR, SEG
 // Also, SM is not a simple imaging modalities, so exclude it.
@@ -18,12 +128,11 @@ const ohif = {
 const cornerstone = {
   measurements: '@ohif/extension-cornerstone.panelModule.panelMeasurement',
   segmentation: '@ohif/extension-cornerstone.panelModule.panelSegmentation',
+  viewport: '@ohif/extension-cornerstone.viewportModule.cornerstone',
 };
 
-const tracked = {
-  measurements: '@ohif/extension-measurement-tracking.panelModule.trackedMeasurements',
-  thumbnailList: '@ohif/extension-measurement-tracking.panelModule.seriesList',
-  viewport: '@ohif/extension-measurement-tracking.viewportModule.cornerstone-tracked',
+const arMeasurements = {
+  panel: 'extension-ar-measurements.panelModule.arMeasurements',
 };
 
 const dicomsr = {
@@ -61,7 +170,7 @@ const extensionDependencies = {
   // Can derive the versions at least process.env.from npm_package_version
   '@ohif/extension-default': '^3.0.0',
   '@ohif/extension-cornerstone': '^3.0.0',
-  '@ohif/extension-measurement-tracking': '^3.0.0',
+  'extension-ar-measurements': '^1.0.0',
   '@ohif/extension-cornerstone-dicom-sr': '^3.0.0',
   '@ohif/extension-cornerstone-dicom-seg': '^3.0.0',
   '@ohif/extension-cornerstone-dicom-pmap': '^3.0.0',
@@ -72,6 +181,10 @@ const extensionDependencies = {
 
 function modeFactory({ modeConfiguration }) {
   let _activatePanelTriggersSubscriptions = [];
+  let _measurementAddedSub = null;
+  let _suppressLabelPrompt = false;
+  let restoreConsoleWarn: null | (() => void) = null;
+
   return {
     // TODO: We're using this as a route segment
     // We should not be.
@@ -96,16 +209,63 @@ function modeFactory({ modeConfiguration }) {
         _origWarn(...args);
       };
 
+      restoreConsoleWarn = () => {
+        console.warn = _origWarn;
+        restoreConsoleWarn = null;
+      };
+
       const {
         measurementService,
         toolbarService,
         toolGroupService,
         customizationService,
         cineService,
-        viewportGridService,
+        panelService,
       } = servicesManager.services;
 
       measurementService.clearMeasurements();
+
+      _measurementAddedSub?.unsubscribe?.();
+      _measurementAddedSub = null;
+
+      _measurementAddedSub = measurementService.subscribe(
+        measurementService.EVENTS.MEASUREMENT_ADDED,
+        async ({ measurement }) => {
+          if (_suppressLabelPrompt) {
+            return;
+          }
+
+          if (!measurement?.uid || measurement?.label) {
+            return;
+          }
+
+          const labelOptions = await getLabelConfigForMeasurement(measurement, commandsManager);
+          if (!labelOptions) {
+            return;
+          }
+
+          try {
+            console.info('[AR Measurements] label prompt config', {
+              toolName: measurement?.toolName,
+              title: labelOptions.title,
+              placeholder: labelOptions.placeholder,
+              labelConfigId: labelOptions.labelConfigOverride?.id,
+            });
+
+            await commandsManager.runCommand('setMeasurementLabel', {
+              uid: measurement.uid,
+              ...labelOptions,
+            });
+
+            panelService?.activatePanel?.(
+              'extension-ar-measurements.panelModule.arMeasurements',
+              true
+            );
+          } catch (error) {
+            console.warn('[AR Measurements] label prompt failed:', error);
+          }
+        }
+      );
 
       // Init Default and SR ToolGroups
       initToolGroups(extensionManager, toolGroupService, commandsManager);
@@ -145,7 +305,6 @@ function modeFactory({ modeConfiguration }) {
 
       toolbarService.updateSection(toolbarService.sections.viewportActionMenu.topRight, [
         'modalityLoadBadge',
-        'trackingStatus',
         'navigationComponent',
       ]);
 
@@ -160,6 +319,9 @@ function modeFactory({ modeConfiguration }) {
         'EllipticalROI',
         'RectangleROI',
         'CircleROI',
+        'LVTrace',
+        'LVTraceSlot',
+        'SaveLVTraces',
         'PlanarFreehandROI',
         'SplineROI',
         'LivewireContour',
@@ -187,11 +349,33 @@ function modeFactory({ modeConfiguration }) {
         'SegmentLabelTool',
       ]);
 
-      customizationService.setCustomizations({
-        'panelSegmentation.disableEditing': {
-          $set: true,
+      customizationService.setCustomizations(
+        {
+          measurementLabels: {
+            $set: LV_TRACE_MEASUREMENT_LABELS_CONFIG,
+          },
+          'panelSegmentation.disableEditing': {
+            $set: true,
+          },
         },
-      });
+        customizationService.Scope.Mode
+      );
+
+      _suppressLabelPrompt = true;
+
+      Promise.resolve(
+        commandsManager.runCommand('hydrateMeasurementAnnotationsForActiveStudy', {
+          workflows: ['viewerMeasurements'],
+          domains: ['echo', 'bowel', 'generic'],
+          notify: false,
+        })
+      )
+        .catch(error => {
+          console.warn('[MeasurementAnnotations] longitudinal hydration failed:', error);
+        })
+        .finally(() => {
+          _suppressLabelPrompt = false;
+        });
 
       // Start with cine enabled so autoPlayCine triggers when display sets load
       cineService.setIsCineEnabled(true);
@@ -231,12 +415,20 @@ function modeFactory({ modeConfiguration }) {
         syncGroupService,
         segmentationService,
         cornerstoneViewportService,
+        customizationService,
         uiDialogService,
         uiModalService,
       } = servicesManager.services;
 
       _activatePanelTriggersSubscriptions.forEach(sub => sub.unsubscribe());
       _activatePanelTriggersSubscriptions = [];
+
+      _measurementAddedSub?.unsubscribe?.();
+      _measurementAddedSub = null;
+      _suppressLabelPrompt = false;
+
+      restoreConsoleWarn?.();
+      customizationService.onModeExit();
 
       uiDialogService.hideAll();
       uiModalService.hide();
@@ -271,14 +463,14 @@ function modeFactory({ modeConfiguration }) {
           return {
             id: ohif.layout,
             props: {
-              leftPanels: [tracked.thumbnailList],
+              leftPanels: [ohif.thumbnailList],
               leftPanelResizable: true,
-              rightPanels: [cornerstone.segmentation, tracked.measurements],
+              rightPanels: [cornerstone.segmentation, arMeasurements.panel],
               rightPanelClosed: true,
               rightPanelResizable: true,
               viewports: [
                 {
-                  namespace: tracked.viewport,
+                  namespace: '@ohif/extension-cornerstone.viewportModule.cornerstone',
                   displaySetsToDisplay: [
                     ohif.sopClassHandler,
                     dicomvideo.sopClassHandler,

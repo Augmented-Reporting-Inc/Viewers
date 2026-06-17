@@ -19,6 +19,14 @@ export const setToolActiveToolbar = {
   },
 };
 
+const activateToolByName = (toolName: string) => ({
+  commandName: setToolActiveToolbar.commandName,
+  commandOptions: {
+    ...setToolActiveToolbar.commandOptions,
+    toolName,
+  },
+});
+
 const toolbarButtons: Button[] = [
   // sections
   {
@@ -550,6 +558,50 @@ const toolbarButtons: Button[] = [
       tooltip: 'Circle Tool',
       commands: setToolActiveToolbar,
       evaluate: 'evaluate.cornerstoneTool',
+    },
+  },
+  {
+    id: 'LVTrace',
+    uiType: 'ohif.toolButton',
+    props: {
+      icon: 'icon-tool-spline-roi',
+      label: 'LV Trace',
+      tooltip: 'Trace LV endocardial border for Simpson EF',
+      commands: activateToolByName('SplineROI'),
+      evaluate: [
+        {
+          name: 'evaluate.cornerstoneTool',
+          toolNames: ['SplineROI'],
+          disabledText: 'LV Trace is not available on the current viewport',
+        },
+        {
+          name: 'evaluate.modality.supported',
+          supportedModalities: ['US'],
+          disabledText: 'LV Trace is only available for ultrasound studies',
+        },
+      ],
+    },
+  },
+  {
+    id: 'LVTraceSlot',
+    uiType: 'ohif.toolButton',
+    props: {
+      icon: 'tool-annotate',
+      label: 'Set LV Slot',
+      tooltip: 'Assign selected LV trace to A4C/A2C ED/ES',
+      commands: 'setSelectedMeasurementLabel',
+      evaluate: 'evaluate.action',
+    },
+  },
+  {
+    id: 'SaveLVTraces',
+    uiType: 'ohif.toolButton',
+    props: {
+      icon: 'tool-capture',
+      label: 'Save LV Traces',
+      tooltip: 'Save labelled LV traces to Augmented Reporting',
+      commands: 'exportLVTraceReport',
+      evaluate: 'evaluate.action',
     },
   },
   {

@@ -7,7 +7,250 @@
  * Both commands are also wired to keyboard hotkeys in mode-iuscan/src/index.js.
  */
 
-import { annotation as csToolsAnnotation } from '@cornerstonejs/tools';
+import { upsertViewerMeasurementAnnotations } from './utils/measurementAnnotations';
+import { buildFormApiUrl } from './utils/formApi';
+
+function parseIUScanLabel(label = '') {
+  const [siteCode, axisLabel] = String(label).split('-');
+
+  return {
+    groupKey: siteCode && axisLabel ? `${siteCode}:${axisLabel}` : String(label || ''),
+    axis: axisLabel === 'Long' ? 'longitudinal' : axisLabel === 'Cross' ? 'cross' : '',
+  };
+}
+
+function getFrameNumberFromReferencedImageId(referencedImageId = '') {
+  const match = String(referencedImageId).match(/\/frames\/(\d+)/);
+  const frame = Number(match?.[1]);
+
+  return Number.isFinite(frame) && frame > 0 ? frame : 1;
+}
+
+function getMeasurementDisplayText(measurement) {
+  if (Array.isArray(measurement?.displayText)) {
+    return measurement.displayText;
+  }
+
+  if (Array.isArray(measurement?.displayText?.primary)) {
+    return measurement.displayText.primary;
+  }
+
+  return [];
+}
+
+function getFirstMeasurementData(measurement) {
+  const data = measurement?.data;
+
+  if (!data || typeof data !== 'object') {
+    return null;
+  }
+
+  const firstKey = Object.keys(data)[0];
+
+  return firstKey ? data[firstKey] : null;
+}
+
+function parseLengthDisplayText(displayText) {
+  const text = Array.isArray(displayText) ? displayText.join(' ') : String(displayText || '');
+  const match = text.match(/(-?\d+(?:\.\d+)?)\s*([a-zA-Zµμ²^0-9/]+)?/);
+
+  if (!match) {
+    return {
+      value: null,
+      unit: '',
+    };
+  }
+
+  return {
+    value: Number(match[1]),
+    unit: match[2] || '',
+  };
+}
+
+function getLengthMeasurementPayload(measurement) {
+  const firstMeasurementData = getFirstMeasurementData(measurement);
+  const displayText = getMeasurementDisplayText(measurement);
+  const parsed = parseLengthDisplayText(displayText);
+
+  const value = Number(
+    measurement?.length ?? measurement?.value ?? firstMeasurementData?.length ?? parsed.value
+  );
+
+  const unit =
+    measurement?.lengthUnit || measurement?.unit || firstMeasurementData?.unit || parsed.unit || '';
+
+  const normalizedValue = Number.isFinite(value) ? value : null;
+  const normalizedDisplayText =
+    displayText.length || normalizedValue == null
+      ? displayText
+      : [`${normalizedValue} ${unit}`.trim()];
+
+  return {
+    displayText: normalizedDisplayText,
+    value: normalizedValue,
+    unit,
+    length: normalizedValue,
+    lengthUnit: unit,
+  };
+}
+
+function normalizeCanonicalSlotAnnotation(slot, studyInstanceId = '') {
+  const measurementId = slot?.uid || slot?.annotationId;
+
+  if (!measurementId || !slot?.referencedImageId || !Array.isArray(slot?.points)) {
+    return null;
+  }
+
+  const label = slot.label || slot.measurementRole || slot.role || '';
+  const parsedLabel = parseIUScanLabel(label);
+  const measurements = slot.measurements || {};
+  const value = Number(measurements.length ?? measurements.value ?? slot.value ?? slot.length);
+
+  if (!Number.isFinite(value)) {
+    return null;
+  }
+
+  const unit = measurements.lengthUnit || measurements.unit || slot.unit || slot.lengthUnit || '';
+
+  return {
+    annotationId: slot.annotationId || measurementId,
+    uid: measurementId,
+    workflow: 'viewerMeasurements',
+
+    domain: 'iuscan',
+    mode: 'repeated',
+    role: label,
+    label,
+    measurementRole: label,
+    toolName: slot.toolName || 'Length',
+
+    repeatedMeasurement: slot.repeatedMeasurement || {
+      groupKey: parsedLabel.groupKey,
+      axis: parsedLabel.axis,
+      maxSlots: 3,
+      aggregation: 'average',
+    },
+
+    StudyInstanceUID: slot.StudyInstanceUID || studyInstanceId,
+    SeriesInstanceUID: slot.SeriesInstanceUID || slot.referenceSeriesUID || '',
+    referenceSeriesUID: slot.referenceSeriesUID || slot.SeriesInstanceUID || '',
+    SOPInstanceUID: slot.SOPInstanceUID || '',
+    FrameOfReferenceUID: slot.FrameOfReferenceUID || '',
+    displaySetInstanceUID: slot.displaySetInstanceUID || '',
+    referencedImageId: slot.referencedImageId || '',
+    frameNumber:
+      slot.frameNumber && slot.frameNumber > 1
+        ? slot.frameNumber
+        : getFrameNumberFromReferencedImageId(slot.referencedImageId),
+    points: slot.points || [],
+
+    measurements: {
+      displayText: measurements.displayText || slot.displayText || [],
+      value,
+      unit,
+      length: value,
+      lengthUnit: unit,
+    },
+    displayText: slot.displayText || measurements.displayText || [],
+  };
+}
+
+function buildIUScanAnnotationSnapshot(assignSvc, measurementService, studyInstanceId = '') {
+  try {
+    const state = assignSvc.getFullState?.() || {};
+    const annotations = [];
+    const seen = new Set();
+
+    const addAnnotation = annotation => {
+      const measurementId = annotation?.uid || annotation?.annotationId;
+
+      if (!measurementId || seen.has(measurementId)) {
+        return;
+      }
+
+      if (
+        annotation.referencedImageId &&
+        Array.isArray(annotation.points) &&
+        annotation.points.length === 2 &&
+        annotation.measurements?.length != null
+      ) {
+        seen.add(measurementId);
+        annotations.push(annotation);
+      }
+    };
+
+    for (const siteState of Object.values(state)) {
+      for (const axis of ['longitudinal', 'cross']) {
+        const slots = siteState?.[axis]?.slots || [];
+
+        for (const slot of slots) {
+          if (!slot) {
+            continue;
+          }
+
+          if (typeof slot === 'object') {
+            addAnnotation(normalizeCanonicalSlotAnnotation(slot, studyInstanceId));
+            continue;
+          }
+
+          const measurement = measurementService.getMeasurement?.(slot);
+
+          if (!measurement?.label || measurement?.toolName !== 'Length') {
+            continue;
+          }
+
+          const parsedLabel = parseIUScanLabel(measurement.label);
+          const measurementPayload = getLengthMeasurementPayload(measurement);
+          const frameNumber =
+            measurement.frameNumber && measurement.frameNumber > 1
+              ? measurement.frameNumber
+              : getFrameNumberFromReferencedImageId(measurement.referencedImageId);
+
+          addAnnotation({
+            annotationId: measurement.uid,
+            uid: measurement.uid,
+            workflow: 'viewerMeasurements',
+
+            domain: 'iuscan',
+            mode: 'repeated',
+            role: measurement.label,
+            label: measurement.label,
+            measurementRole: measurement.label,
+            toolName: 'Length',
+
+            repeatedMeasurement: {
+              groupKey: parsedLabel.groupKey,
+              axis: parsedLabel.axis,
+              maxSlots: 3,
+              aggregation: 'average',
+            },
+
+            StudyInstanceUID:
+              measurement.referenceStudyUID || measurement.StudyInstanceUID || studyInstanceId,
+            SeriesInstanceUID:
+              measurement.referenceSeriesUID || measurement.SeriesInstanceUID || '',
+            referenceSeriesUID:
+              measurement.referenceSeriesUID || measurement.SeriesInstanceUID || '',
+            SOPInstanceUID: measurement.SOPInstanceUID || '',
+            FrameOfReferenceUID: measurement.FrameOfReferenceUID || '',
+            displaySetInstanceUID: measurement.displaySetInstanceUID || '',
+            referencedImageId: measurement.referencedImageId || '',
+            frameNumber,
+            points: measurement.points || [],
+
+            measurements: measurementPayload,
+            displayText: measurementPayload.displayText,
+          });
+        }
+      }
+    }
+
+    return annotations;
+  } catch (error) {
+    console.warn('[iUSCAN] Could not serialize annotations:', error?.message || error);
+    return [];
+  }
+}
 
 export default function getCommandsModule({ servicesManager, commandsManager }) {
   const { measurementService, uiNotificationService, viewportGridService, displaySetService } =
@@ -32,20 +275,20 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
           }
 
           // Resolve StudyInstanceUID from the active viewport's display set
-          let studyUID = null;
+          let studyInstanceId = null;
           try {
             const { activeViewportId, viewports } = viewportGridService.getState();
-            const activeVP = viewports.get?.(activeViewportId) ?? viewports[activeViewportId];
-            const dsUID = activeVP?.displaySetInstanceUIDs?.[0];
-            if (dsUID) {
-              const ds = displaySetService.getDisplaySetByUID(dsUID);
-              studyUID = ds?.StudyInstanceUID;
+            const activeViewport = viewports.get?.(activeViewportId) ?? viewports[activeViewportId];
+            const displaySetInstanceId = activeViewport?.displaySetInstanceUIDs?.[0];
+            if (displaySetInstanceId) {
+              const displaySet = displaySetService.getDisplaySetByUID(displaySetInstanceId);
+              studyInstanceId = displaySet?.StudyInstanceUID;
             }
           } catch (e) {
             console.warn('[iUSCAN] Could not resolve StudyInstanceUID:', e.message);
           }
 
-          if (!studyUID) {
+          if (!studyInstanceId) {
             uiNotificationService.show({
               title: 'iUSCAN',
               message: 'Cannot determine active study. Please ensure a series is displayed.',
@@ -57,38 +300,34 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
 
           const payload = assignSvc.buildReportPayload(measurementService);
 
-          // Serialize live iUSCAN Length annotations for viewport restoration
-          try {
-            const allMeasurements = measurementService.getMeasurements();
-            const iuscanAnnotations = allMeasurements
-              .filter(m => m.label && m.toolName === 'Length')
-              .map(m => ({
-                uid: m.uid,
-                label: m.label,
-                SOPInstanceUID: m.SOPInstanceUID,
-                referenceSeriesUID: m.referenceSeriesUID,
-                referencedImageId: m.referencedImageId,
-                frameNumber: m.frameNumber ?? 1,
-                points: m.points,
-              }));
-            if (iuscanAnnotations.length > 0) {
-              payload.IUScanAnnotations = JSON.stringify(iuscanAnnotations);
-            }
-          } catch (e) {
-            console.warn('[iUSCAN] Could not serialize annotations:', e.message);
-          }
           try {
             // Step 1: look up Mongo _id by StudyInstanceUID
-            const seriesRes = await fetch(`/formapi/api/series/study/${studyUID}`, {
-              credentials: 'include',
-            });
+            const seriesRes = await fetch(
+              buildFormApiUrl(`series/study/${encodeURIComponent(studyInstanceId)}`),
+              { credentials: 'include' }
+            );
             if (!seriesRes.ok) {
               throw new Error(`Series lookup failed: ${seriesRes.status}`);
             }
             const seriesDoc = await seriesRes.json();
 
+            // Serialize live iUSCAN Length annotations for viewport restoration.
+            const iuscanAnnotations = buildIUScanAnnotationSnapshot(
+              assignSvc,
+              measurementService,
+              studyInstanceId
+            );
+            if (iuscanAnnotations.length > 0) {
+              payload.MeasurementAnnotations = upsertViewerMeasurementAnnotations({
+                existingRaw: seriesDoc.MeasurementAnnotations,
+                source: 'extension-iuscan',
+                annotations: iuscanAnnotations,
+                replaceDomains: ['iuscan'],
+              });
+            }
+
             // Step 2: PUT measurements to the series document
-            const putRes = await fetch(`/formapi/api/series/${seriesDoc._id}`, {
+            const putRes = await fetch(buildFormApiUrl(`series/${seriesDoc._id}`), {
               method: 'PUT',
               headers: { 'Content-Type': 'application/json' },
               credentials: 'include',
@@ -116,7 +355,7 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
             console.error('[iUSCAN] exportIUScanReport error:', err);
             uiNotificationService.show({
               title: 'Augmented Reporting',
-              message: `Export failed: ${err.message}`,
+              message: `Export failed: ${err.message || err}`,
               type: 'error',
               duration: 5000,
             });
