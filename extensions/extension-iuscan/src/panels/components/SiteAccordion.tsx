@@ -1,7 +1,7 @@
 import React from 'react';
 import MeasurementGroup from './MeasurementGroup';
 import ScoreSelector from './ScoreSelector';
-import { COMPLICATION_TYPES } from '../../utils/labelMap';
+import { COMPLICATION_TYPES, MEASUREMENT_GROUPS } from '../../utils/labelMap';
 
 const HAUSTRATION_OPTIONS = [
   { value: 1, label: 'Present' },
@@ -35,6 +35,61 @@ const STRAT_OPTIONS = [
   { value: 2, label: 'Complete' },
 ];
 
+const sanitizeMeasurementUnit = unit =>
+  String(unit || 'mm')
+    .replace(/\s*US Region\s*/gi, '')
+    .trim() || 'mm';
+
+const toMillimeters = (value, unit) => {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return null;
+  }
+
+  const cleanUnit = sanitizeMeasurementUnit(unit);
+  return /^cm\b/i.test(cleanUnit) ? numeric * 10 : numeric;
+};
+
+const resolveSlotValueInMm = (slot, valueByMeasurementId) => {
+  if (slot === null) {
+    return null;
+  }
+
+  if (typeof slot === 'number') {
+    return slot;
+  }
+
+  if (typeof slot === 'object' && slot !== null) {
+    return toMillimeters(
+      slot.value ?? slot.length ?? slot.measurements?.length ?? slot.measurements?.value,
+      slot.unit ?? slot.lengthUnit ?? slot.measurements?.lengthUnit ?? slot.measurements?.unit
+    );
+  }
+
+  const entry = valueByMeasurementId[slot];
+  return entry != null
+    ? toMillimeters(entry.value ?? entry.length, entry.unit ?? entry.lengthUnit)
+    : null;
+};
+
+const EMPTY_MEASUREMENT_SLOTS = [null, null, null];
+
+const normalizeSlotArray = slots => (Array.isArray(slots) ? slots : EMPTY_MEASUREMENT_SLOTS);
+
+const getCurrentAssignmentSlots = ({ assignSvc, siteKey, stateKey, siteState }) => {
+  const directSlots = assignSvc?.getSlots?.(siteKey, stateKey);
+  if (Array.isArray(directSlots)) {
+    return directSlots;
+  }
+
+  const fullStateSlots = assignSvc?.getFullState?.()?.[siteKey]?.[stateKey]?.slots;
+  if (Array.isArray(fullStateSlots)) {
+    return fullStateSlots;
+  }
+
+  return normalizeSlotArray(siteState?.[stateKey]?.slots);
+};
+
 const STRICTURE_FIELDS = [
   {
     key: 'strictureMaxBWT',
@@ -63,7 +118,7 @@ const hasStrictureSelected = obs =>
 
 /**
  * Accordion section for a single anatomical site.
- * Renders two MeasurementGroups (Long + Cross) and four ScoreSelectors.
+ * Renders all measurement groups and observation controls.
  *
  * Collapsed header shows a BWT badge (⚠ if > 3 mm) and Doppler score
  * for at-a-glance review without opening every section.
@@ -79,36 +134,27 @@ export default function SiteAccordion({
   measurementService,
   commandsManager,
 }) {
-  const longSlots = siteState?.longitudinal?.slots ?? [null, null, null];
-  const crossSlots = siteState?.cross?.slots ?? [null, null, null];
   const obs = siteState?.observations ?? {};
 
-  // Resolve all filled mm values for the header summary
-  function resolveSlot(slot) {
-    if (slot === null) {
-      return null;
-    }
-    if (typeof slot === 'number') {
-      return slot;
-    }
-    if (typeof slot === 'object' && slot !== null && 'value' in slot) {
-      return slot.value;
-    }
-    const entry = valueByUID[slot];
-    return entry != null ? entry.value : null;
-  }
-  const allResolved = [...longSlots, ...crossSlots].map(resolveSlot).filter(v => v !== null);
-  const maxBWT = allResolved.length ? Math.max(...allResolved) : null;
-  // Get unit from first filled slot
-  const firstFilledSlot = [...longSlots, ...crossSlots].find(s => s !== null);
-  const unit =
-    firstFilledSlot != null
-      ? typeof firstFilledSlot === 'object' && 'unit' in firstFilledSlot
-        ? firstFilledSlot.unit
-        : (valueByUID[firstFilledSlot]?.unit ?? 'cm')
-      : 'cm';
-  const isAbnormal = maxBWT !== null && (unit === 'mm' ? maxBWT > 3.0 : maxBWT > 0.3);
+  const slotsByGroup = MEASUREMENT_GROUPS.reduce((acc, group) => {
+    acc[group.stateKey] = getCurrentAssignmentSlots({
+      assignSvc,
+      siteKey: site.key,
+      stateKey: group.stateKey,
+      siteState,
+    });
 
+    return acc;
+  }, {});
+
+  const bwtSlots = MEASUREMENT_GROUPS.filter(group => group.role === 'bwt').flatMap(
+    group => slotsByGroup[group.stateKey]
+  );
+  const allResolvedBwt = bwtSlots
+    .map(slot => resolveSlotValueInMm(slot, valueByUID))
+    .filter(v => v !== null);
+  const maxBWT = allResolvedBwt.length ? Math.max(...allResolvedBwt) : null;
+  const isAbnormal = maxBWT !== null && maxBWT > 3.0;
   return (
     <div className={`gi-accordion border-b border-gray-700 ${isOpen ? 'gi-accordion--open' : ''}`}>
       {/* ── Header ─────────────────────────────────────────────────────── */}
@@ -125,9 +171,9 @@ export default function SiteAccordion({
                 'rounded px-1.5 py-0.5 font-mono text-xs',
                 isAbnormal ? 'bg-red-900 text-red-300' : 'bg-gray-700 text-gray-300',
               ].join(' ')}
-              title="Max BWT across Long + Cross"
+              title="Max BWT across longitudinal + cross-section"
             >
-              {maxBWT.toFixed(2)} {unit}
+              {maxBWT.toFixed(2)} mm
               {isAbnormal ? ' ⚠' : ''}
             </span>
           )}
@@ -156,29 +202,20 @@ export default function SiteAccordion({
       {/* ── Body ───────────────────────────────────────────────────────── */}
       {isOpen && (
         <div className="space-y-3 overflow-x-hidden bg-gray-900 px-3 pb-3 pt-1">
-          <MeasurementGroup
-            label="Longitudinal (cm)"
-            site={site.key}
-            axis="longitudinal"
-            slots={longSlots}
-            valueByUID={valueByUID}
-            measurements={measurements}
-            assignSvc={assignSvc}
-            measurementService={measurementService}
-            commandsManager={commandsManager}
-          />
-
-          <MeasurementGroup
-            label="Cross-sectional (cm)"
-            site={site.key}
-            axis="cross"
-            slots={crossSlots}
-            valueByUID={valueByUID}
-            measurements={measurements}
-            assignSvc={assignSvc}
-            measurementService={measurementService}
-            commandsManager={commandsManager}
-          />
+          {MEASUREMENT_GROUPS.map(group => (
+            <MeasurementGroup
+              key={group.stateKey}
+              label={`${group.label} (mm)`}
+              site={site.key}
+              axis={group.stateKey}
+              slots={slotsByGroup[group.stateKey]}
+              valueByUID={valueByUID}
+              measurements={measurements}
+              assignSvc={assignSvc}
+              measurementService={measurementService}
+              commandsManager={commandsManager}
+            />
+          ))}
           {site.hasSegmentLength && (
             <div className="border-t border-gray-700 pt-2">
               <label className="mb-1 block text-xs text-gray-400">

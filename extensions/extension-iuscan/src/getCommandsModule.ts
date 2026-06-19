@@ -9,13 +9,35 @@
 
 import { upsertViewerMeasurementAnnotations } from './utils/measurementAnnotations';
 import { buildFormApiUrl } from './utils/formApi';
+import { SITES, MEASUREMENT_GROUPS } from './utils/labelMap';
 
 function parseIUScanLabel(label = '') {
-  const [siteCode, axisLabel] = String(label).split('-');
+  const parts = String(label || '').split('-');
+  const siteCode = parts[0] || '';
+  const axisToken = parts[parts.length - 1] || '';
 
   return {
-    groupKey: siteCode && axisLabel ? `${siteCode}:${axisLabel}` : String(label || ''),
-    axis: axisLabel === 'Long' ? 'longitudinal' : axisLabel === 'Cross' ? 'cross' : '',
+    groupKey: siteCode && axisToken ? `${siteCode}:${axisToken}` : String(label || ''),
+    axis:
+      axisToken === 'Long' || axisToken === 'Longitudinal'
+        ? 'longitudinal'
+        : axisToken === 'Cross' || axisToken === 'Cross-section'
+          ? 'cross'
+          : '',
+  };
+}
+
+function getCanonicalRepeatedMetadata(siteConfig, group) {
+  const label = `${siteConfig.code}-${group.labelSuffix || group.suffix}`;
+
+  return {
+    label,
+    repeatedMeasurement: {
+      groupKey: `${siteConfig.code}:${group.stateKey}`,
+      axis: group.axis || group.measurementAxis || group.stateKey,
+      maxSlots: 3,
+      aggregation: 'average',
+    },
   };
 }
 
@@ -94,14 +116,14 @@ function getLengthMeasurementPayload(measurement) {
   };
 }
 
-function normalizeCanonicalSlotAnnotation(slot, studyInstanceId = '') {
+function normalizeCanonicalSlotAnnotation(slot, studyInstanceId = '', rowContext = null) {
   const measurementId = slot?.uid || slot?.annotationId;
 
   if (!measurementId || !slot?.referencedImageId || !Array.isArray(slot?.points)) {
     return null;
   }
 
-  const label = slot.label || slot.measurementRole || slot.role || '';
+  const label = rowContext?.label || slot.label || slot.measurementRole || slot.role || '';
   const parsedLabel = parseIUScanLabel(label);
   const measurements = slot.measurements || {};
   const value = Number(measurements.length ?? measurements.value ?? slot.value ?? slot.length);
@@ -124,12 +146,13 @@ function normalizeCanonicalSlotAnnotation(slot, studyInstanceId = '') {
     measurementRole: label,
     toolName: slot.toolName || 'Length',
 
-    repeatedMeasurement: slot.repeatedMeasurement || {
-      groupKey: parsedLabel.groupKey,
-      axis: parsedLabel.axis,
-      maxSlots: 3,
-      aggregation: 'average',
-    },
+    repeatedMeasurement: rowContext?.repeatedMeasurement ||
+      slot.repeatedMeasurement || {
+        groupKey: parsedLabel.groupKey,
+        axis: parsedLabel.axis,
+        maxSlots: 3,
+        aggregation: 'average',
+      },
 
     StudyInstanceUID: slot.StudyInstanceUID || studyInstanceId,
     SeriesInstanceUID: slot.SeriesInstanceUID || slot.referenceSeriesUID || '',
@@ -163,8 +186,14 @@ function buildIUScanAnnotationSnapshot(assignSvc, measurementService, studyInsta
 
     const addAnnotation = annotation => {
       const measurementId = annotation?.uid || annotation?.annotationId;
+      const annotationKey = [
+        annotation?.label || '',
+        annotation?.repeatedMeasurement?.groupKey || '',
+        annotation?.repeatedMeasurement?.axis || '',
+        measurementId || '',
+      ].join('|');
 
-      if (!measurementId || seen.has(measurementId)) {
+      if (!measurementId || seen.has(annotationKey)) {
         return;
       }
 
@@ -174,33 +203,41 @@ function buildIUScanAnnotationSnapshot(assignSvc, measurementService, studyInsta
         annotation.points.length === 2 &&
         annotation.measurements?.length != null
       ) {
-        seen.add(measurementId);
+        seen.add(annotationKey);
         annotations.push(annotation);
       }
     };
 
-    for (const siteState of Object.values(state)) {
-      for (const axis of ['longitudinal', 'cross']) {
-        const slots = siteState?.[axis]?.slots || [];
+    for (const siteConfig of SITES) {
+      const siteState = state[siteConfig.key];
+      if (!siteState) {
+        continue;
+      }
 
+      for (const group of MEASUREMENT_GROUPS) {
+        const slots = siteState?.[group.stateKey]?.slots || [];
+        const rowContext = getCanonicalRepeatedMetadata(siteConfig, group);
         for (const slot of slots) {
           if (!slot) {
             continue;
           }
 
           if (typeof slot === 'object') {
-            addAnnotation(normalizeCanonicalSlotAnnotation(slot, studyInstanceId));
+            addAnnotation(normalizeCanonicalSlotAnnotation(slot, studyInstanceId, rowContext));
             continue;
           }
 
           const measurement = measurementService.getMeasurement?.(slot);
 
-          if (!measurement?.label || measurement?.toolName !== 'Length') {
+          if (measurement?.toolName && measurement.toolName !== 'Length') {
             continue;
           }
 
-          const parsedLabel = parseIUScanLabel(measurement.label);
           const measurementPayload = getLengthMeasurementPayload(measurement);
+          if (measurementPayload.value == null) {
+            continue;
+          }
+
           const frameNumber =
             measurement.frameNumber && measurement.frameNumber > 1
               ? measurement.frameNumber
@@ -213,17 +250,12 @@ function buildIUScanAnnotationSnapshot(assignSvc, measurementService, studyInsta
 
             domain: 'iuscan',
             mode: 'repeated',
-            role: measurement.label,
-            label: measurement.label,
-            measurementRole: measurement.label,
+            role: rowContext.label,
+            label: rowContext.label,
+            measurementRole: rowContext.label,
             toolName: 'Length',
 
-            repeatedMeasurement: {
-              groupKey: parsedLabel.groupKey,
-              axis: parsedLabel.axis,
-              maxSlots: 3,
-              aggregation: 'average',
-            },
+            repeatedMeasurement: rowContext.repeatedMeasurement,
 
             StudyInstanceUID:
               measurement.referenceStudyUID || measurement.StudyInstanceUID || studyInstanceId,
@@ -322,7 +354,10 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
                 existingRaw: seriesDoc.MeasurementAnnotations,
                 source: 'extension-iuscan',
                 annotations: iuscanAnnotations,
-                replaceDomains: ['iuscan'],
+                replaceFilter: annotation =>
+                  annotation?.workflow === 'viewerMeasurements' &&
+                  annotation?.domain === 'iuscan' &&
+                  (annotation?.mode === 'repeated' || !!annotation?.repeatedMeasurement),
               });
             }
 

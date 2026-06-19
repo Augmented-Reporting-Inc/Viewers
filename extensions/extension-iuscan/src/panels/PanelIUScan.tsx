@@ -3,6 +3,21 @@ import { useMeasurements } from '@ohif/extension-cornerstone';
 import SiteAccordion from './components/SiteAccordion';
 import { SITES } from '../utils/labelMap';
 
+const sanitizeMeasurementUnit = unit =>
+  String(unit || 'mm')
+    .replace(/\s*US Region\s*/gi, '')
+    .trim() || 'mm';
+
+const toMillimeters = (value, unit) => {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return null;
+  }
+
+  const cleanUnit = sanitizeMeasurementUnit(unit);
+  return /^cm\b/i.test(cleanUnit) ? numeric * 10 : numeric;
+};
+
 /**
  * Main iUSCAN right panel.
  *
@@ -47,7 +62,7 @@ export default function PanelIUScan({ servicesManager, commandsManager }) {
   // automatically and debounces + deep-compares to avoid excess re-renders.
   const measurements = useMeasurements({});
 
-  // UID → mm value lookup (recomputed only when measurements change)
+  // Measurement id → mm value lookup (recomputed only when measurements change)
   const valueByUID = useMemo(() => {
     const map = {};
     measurements.forEach(m => {
@@ -62,8 +77,9 @@ export default function PanelIUScan({ servicesManager, commandsManager }) {
       }
       const length = m.data[firstKey]?.length;
       const unit = m.data[firstKey]?.unit;
-      if (length != null) {
-        map[m.uid] = { value: length, unit: unit ?? 'cm' };
+      const valueInMm = toMillimeters(length, unit);
+      if (valueInMm != null) {
+        map[m.uid] = { value: valueInMm, unit: 'mm' };
       }
     });
     return map;
@@ -100,7 +116,8 @@ export default function PanelIUScan({ servicesManager, commandsManager }) {
       {/* Instruction hint (shown until first caliper placed) */}
       {measurements.length === 0 && (
         <div className="border-b border-gray-800 px-3 py-2 text-xs text-gray-500">
-          Draw calipers with the Length tool. Select a label to auto-assign to the matching segment.
+          Draw calipers with the Length tool. Select a BWT or submucosa label to auto-fill the
+          matching row.
         </div>
       )}
 

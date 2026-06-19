@@ -1,5 +1,12 @@
 import { PubSubService } from '@ohif/core';
-import { SITES, LABEL_MAP, DOPPLER_REVERSE, HAUSTRATION_REVERSE } from '../utils/labelMap';
+import {
+  SITES,
+  LABEL_MAP,
+  DOPPLER_REVERSE,
+  HAUSTRATION_REVERSE,
+  MEASUREMENT_GROUPS,
+  MEASUREMENT_SLOT_KEYS,
+} from '../utils/labelMap';
 import { buildReportPayload } from '../utils/reportBuilder';
 
 const EVENTS = {
@@ -15,8 +22,10 @@ const EVENTS = {
  *
  * State shape (per site):
  * {
- *   longitudinal: { slots: [null|uid, null|uid, null|uid] },
- *   cross:        { slots: [null|uid, null|uid, null|uid] },
+ *   longitudinal:          { slots: [null|measurementId, null|measurementId, null|measurementId] },
+ *   cross:                 { slots: [null|measurementId, null|measurementId, null|measurementId] },
+ *   submucosaLongitudinal: { slots: [null|measurementId, null|measurementId, null|measurementId] },
+ *   submucosaCross:        { slots: [null|measurementId, null|measurementId, null|measurementId] },
  *   observations: {
  *     doppler:        null|0|1|2|3,
  *     inflammatoryFat: null|0|1|2,
@@ -25,6 +34,228 @@ const EVENTS = {
  *   },
  * }
  */
+
+const sanitizeMeasurementUnit = unit =>
+  String(unit || 'mm')
+    .replace(/\s*US Region\s*/gi, '')
+    .trim() || 'mm';
+
+const toMillimeters = (value, unit = 'mm') => {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return null;
+  }
+
+  const normalizedUnit = sanitizeMeasurementUnit(unit).toLowerCase();
+  return /^cm\b/.test(normalizedUnit) ? numeric * 10 : numeric;
+};
+
+const buildHydratedMeasurementSlot = ({ value, unit, sourceField }) => {
+  const valueInMm = toMillimeters(value, unit);
+
+  if (valueInMm == null) {
+    return null;
+  }
+
+  return {
+    value: valueInMm,
+    unit: 'mm',
+    source: 'seriesDoc',
+    sourceField,
+  };
+};
+
+const formatMmDisplay = value => `${Number(value).toFixed(2)} mm`;
+
+const firstEmptySlotIndex = slots => slots.findIndex(slot => slot === null);
+
+const parseMaybeJson = value => {
+  if (!value) {
+    return null;
+  }
+
+  if (typeof value !== 'string') {
+    return value;
+  }
+
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
+};
+
+const normalizeRepeatedLabel = annotation => {
+  const explicitLabel = annotation?.label || annotation?.measurementRole || annotation?.role || '';
+  if (explicitLabel) {
+    return explicitLabel;
+  }
+
+  const groupKey = annotation?.repeatedMeasurement?.groupKey;
+  if (typeof groupKey === 'string' && groupKey.includes(':')) {
+    const [siteCode, axisLabel] = groupKey.split(':');
+    return `${siteCode}-${axisLabel}`;
+  }
+
+  return '';
+};
+
+const SITE_BY_CODE = SITES.reduce((acc, site) => {
+  if (site?.code) {
+    acc[String(site.code).trim().toUpperCase()] = site;
+  }
+  return acc;
+}, {});
+
+const MEASUREMENT_GROUP_BY_STATE_KEY = MEASUREMENT_GROUPS.reduce((acc, group) => {
+  if (group?.stateKey) {
+    acc[group.stateKey] = group;
+  }
+  return acc;
+}, {});
+
+const getRepeatedGroupKeyParts = annotation => {
+  const groupKey = annotation?.repeatedMeasurement?.groupKey;
+  if (typeof groupKey !== 'string' || !groupKey.includes(':')) {
+    return null;
+  }
+
+  const [rawSiteCode, rawStateKey] = groupKey.split(':');
+  const siteCode = String(rawSiteCode || '')
+    .trim()
+    .toUpperCase();
+  const stateKey = String(rawStateKey || '').trim();
+
+  if (!siteCode || !stateKey) {
+    return null;
+  }
+
+  return { siteCode, stateKey };
+};
+
+const resolveRepeatedAnnotationMapping = annotation => {
+  const label = normalizeRepeatedLabel(annotation);
+  const labelMapped = LABEL_MAP[label];
+  if (labelMapped) {
+    return {
+      ...labelMapped,
+      resolvedBy: 'label',
+      resolvedLabel: label,
+    };
+  }
+
+  const groupKeyParts = getRepeatedGroupKeyParts(annotation);
+  if (!groupKeyParts) {
+    return null;
+  }
+
+  const site = SITE_BY_CODE[groupKeyParts.siteCode];
+  const group = MEASUREMENT_GROUP_BY_STATE_KEY[groupKeyParts.stateKey];
+
+  if (!site || !group) {
+    return null;
+  }
+
+  return {
+    site: site.key,
+    axis: group.stateKey,
+    stateKey: group.stateKey,
+    role: group.role,
+    measurementAxis: group.axis,
+    suffix: group.suffix,
+    resolvedBy: 'groupKey',
+    resolvedLabel: label,
+  };
+};
+
+const isIuscanRepeatedAnnotation = value => {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+
+  const workflow = value.workflow;
+  const domain = value.domain;
+  const mode = value.mode;
+
+  return (
+    workflow === 'viewerMeasurements' &&
+    domain === 'iuscan' &&
+    (mode === 'repeated' || !!value.repeatedMeasurement) &&
+    !!(value.label || value.measurementRole || value.role)
+  );
+};
+
+const getRepeatedAnnotationKey = annotation =>
+  String(
+    annotation.annotationId ||
+      annotation.uid ||
+      [
+        annotation.label || annotation.measurementRole || annotation.role || '',
+        annotation.SOPInstanceUID || '',
+        annotation.frameNumber || '',
+        annotation.value ||
+          annotation?.measurements?.value ||
+          annotation?.measurements?.length ||
+          '',
+      ].join('|')
+  );
+
+const collectIuscanRepeatedAnnotationsFromValue = value => {
+  const root = parseMaybeJson(value);
+  const out = [];
+  const seen = new Set();
+
+  const visit = node => {
+    if (!node) {
+      return;
+    }
+
+    if (Array.isArray(node)) {
+      node.forEach(visit);
+      return;
+    }
+
+    if (typeof node !== 'object') {
+      return;
+    }
+
+    if (isIuscanRepeatedAnnotation(node)) {
+      const key = getRepeatedAnnotationKey(node);
+      if (!seen.has(key)) {
+        seen.add(key);
+        out.push(node);
+      }
+      return;
+    }
+
+    Object.values(node).forEach(visit);
+  };
+
+  visit(root);
+  return out;
+};
+
+const collectIuscanRepeatedAnnotationsFromSeriesDoc = doc => {
+  if (!doc) {
+    return [];
+  }
+
+  const out = [];
+  const seen = new Set();
+
+  for (const fieldName of ['MeasurementAnnotations', 'IUScanAnnotations']) {
+    for (const annotation of collectIuscanRepeatedAnnotationsFromValue(doc[fieldName])) {
+      const key = getRepeatedAnnotationKey(annotation);
+      if (!seen.has(key)) {
+        seen.add(key);
+        out.push(annotation);
+      }
+    }
+  }
+
+  return out;
+};
+
 class IUScanAssignmentService extends PubSubService {
   static REGISTRATION = {
     name: 'iuscanAssignmentService',
@@ -45,8 +276,10 @@ class IUScanAssignmentService extends PubSubService {
     const state = {};
     for (const { key } of SITES) {
       state[key] = {
-        longitudinal: { slots: [null, null, null] },
-        cross: { slots: [null, null, null] },
+        ...MEASUREMENT_GROUPS.reduce((acc, group) => {
+          acc[group.stateKey] = { slots: [null, null, null] };
+          return acc;
+        }, {}),
         observations: {
           doppler: null,
           inflammatoryFat: null,
@@ -72,13 +305,13 @@ class IUScanAssignmentService extends PubSubService {
   /**
    * Assign a measurementUID to a specific slot.
    * @param {string} site  - e.g. 'sigmoidColon'
-   * @param {string} axis  - 'longitudinal' | 'cross'
+   * @param {string} axis  - one of MEASUREMENT_SLOT_KEYS
    * @param {number} slot  - 0 | 1 | 2
    * @param {string|null} value - UID string or null
    */
   assign(site, axis, slot, value) {
-    if (!this._state[site]) {
-      console.warn(`[IUScanAssignmentService] Unknown site: ${site}`);
+    if (!this._state[site]?.[axis]) {
+      console.warn(`[IUScanAssignmentService] Unknown site/measurement group: ${site}/${axis}`);
       return;
     }
     this._state[site][axis].slots[slot] = value;
@@ -86,6 +319,10 @@ class IUScanAssignmentService extends PubSubService {
   }
 
   unassign(site, axis, slot) {
+    if (!this._state[site]?.[axis]) {
+      return;
+    }
+
     this._state[site][axis].slots[slot] = null;
     this._broadcastEvent(EVENTS.ASSIGNMENT_CHANGED, { site, axis, slot });
   }
@@ -110,7 +347,8 @@ class IUScanAssignmentService extends PubSubService {
       return false;
     }
 
-    const { site, axis } = mapped;
+    const { site } = mapped;
+    const axis = mapped.stateKey || mapped.axis;
     const slots = this._state[site]?.[axis]?.slots;
     if (!slots) {
       return false;
@@ -125,31 +363,46 @@ class IUScanAssignmentService extends PubSubService {
     return true;
   }
 
-  getCanonicalRepeatedMeasurementValue(annotation) {
+  getCanonicalRepeatedMeasurementValue(annotation, rowContext = {}) {
+    const { site, group, canonicalLabel, repeatedMeasurement } = rowContext;
     const measurements = annotation?.measurements || {};
-    const value = Number(measurements.length ?? measurements.value ?? annotation?.value);
+    const rawValue = Number(measurements.length ?? measurements.value ?? annotation?.value);
+    const rawUnit = measurements.lengthUnit || measurements.unit || annotation.unit || 'mm';
+    const value = toMillimeters(rawValue, rawUnit);
 
     if (!Number.isFinite(value)) {
       return null;
     }
 
     const measurementId = annotation.uid || annotation.annotationId;
-    const label = annotation.label || annotation.measurementRole || annotation.role || '';
+    const label =
+      canonicalLabel ||
+      (site && group ? `${site.code}-${group.labelSuffix || group.suffix}` : '') ||
+      annotation.label ||
+      annotation.measurementRole ||
+      annotation.role ||
+      '';
 
     return {
       annotationId: annotation.annotationId || measurementId,
       uid: measurementId,
       workflow: 'viewerMeasurements',
-
       domain: 'iuscan',
       mode: 'repeated',
       role: label,
       label,
       measurementRole: label,
       toolName: annotation.toolName || 'Length',
-
-      repeatedMeasurement: annotation.repeatedMeasurement || null,
-
+      repeatedMeasurement:
+        repeatedMeasurement ||
+        (site && group
+          ? {
+              groupKey: `${site.code}:${group.stateKey}`,
+              axis: group.axis || group.measurementAxis || group.stateKey,
+              maxSlots: 3,
+              aggregation: 'average',
+            }
+          : annotation.repeatedMeasurement || null),
       StudyInstanceUID: annotation.StudyInstanceUID || '',
       SeriesInstanceUID: annotation.SeriesInstanceUID || annotation.referenceSeriesUID || '',
       referenceSeriesUID: annotation.referenceSeriesUID || annotation.SeriesInstanceUID || '',
@@ -161,15 +414,15 @@ class IUScanAssignmentService extends PubSubService {
       points: annotation.points || [],
 
       value,
-      unit: measurements.lengthUnit || measurements.unit || annotation.unit || 'cm',
+      unit: 'mm',
       measurements: {
-        displayText: measurements.displayText || annotation.displayText || [],
+        displayText: [formatMmDisplay(value)],
         value,
-        unit: measurements.lengthUnit || measurements.unit || annotation.unit || 'cm',
+        unit: 'mm',
         length: value,
-        lengthUnit: measurements.lengthUnit || measurements.unit || annotation.unit || 'cm',
+        lengthUnit: 'mm',
       },
-      displayText: annotation.displayText || measurements.displayText || [],
+      displayText: [formatMmDisplay(value)],
     };
   }
 
@@ -183,10 +436,16 @@ class IUScanAssignmentService extends PubSubService {
       return false;
     }
 
-    const label = annotation.label || annotation.measurementRole || annotation.role;
-    const mapped = LABEL_MAP[label];
+    const label = normalizeRepeatedLabel(annotation);
+    const mapped = resolveRepeatedAnnotationMapping(annotation);
 
     if (!mapped) {
+      console.warn('[iUSCAN] skipped repeated annotation with unmapped label', {
+        label,
+        groupKey: annotation?.repeatedMeasurement?.groupKey,
+        annotationId: annotation?.annotationId || annotation?.uid,
+        knownLabelCount: Object.keys(LABEL_MAP || {}).length,
+      });
       return false;
     }
 
@@ -196,7 +455,8 @@ class IUScanAssignmentService extends PubSubService {
       return false;
     }
 
-    const { site, axis } = mapped;
+    const { site } = mapped;
+    const axis = mapped.stateKey || mapped.axis;
     const slots = this._state[site]?.[axis]?.slots;
 
     if (!slots) {
@@ -219,7 +479,7 @@ class IUScanAssignmentService extends PubSubService {
     });
 
     if (alreadyAssigned) {
-      return false;
+      return 'duplicate';
     }
 
     const nextEmpty = slots.findIndex(slot => slot === null);
@@ -234,12 +494,32 @@ class IUScanAssignmentService extends PubSubService {
 
   hydrateCanonicalRepeatedAnnotations(annotations = []) {
     let assignedCount = 0;
+    let duplicateCount = 0;
+    const skipped = [];
 
     for (const annotation of annotations) {
-      if (this.assignCanonicalRepeatedAnnotation(annotation)) {
+      const result = this.assignCanonicalRepeatedAnnotation(annotation);
+
+      if (result === true) {
         assignedCount++;
+      } else if (result === 'duplicate') {
+        duplicateCount++;
+      } else {
+        skipped.push({
+          label: normalizeRepeatedLabel(annotation),
+          groupKey: annotation?.repeatedMeasurement?.groupKey,
+          annotationId: annotation?.annotationId || annotation?.uid,
+        });
       }
     }
+
+    console.info('[iUSCAN] canonical repeated assignment result', {
+      inputCount: annotations.length,
+      assignedCount,
+      duplicateCount,
+      skippedCount: skipped.length,
+      skipped,
+    });
 
     if (assignedCount > 0) {
       this._broadcastEvent(EVENTS.ASSIGNMENT_CHANGED, {
@@ -288,8 +568,8 @@ class IUScanAssignmentService extends PubSubService {
       return false;
     }
 
-    const hasSlots = ['longitudinal', 'cross'].some(axis =>
-      siteState[axis].slots.some(s => s !== null)
+    const hasSlots = MEASUREMENT_SLOT_KEYS.some(axis =>
+      siteState[axis]?.slots?.some(s => s !== null)
     );
     if (hasSlots) {
       return true;
@@ -318,8 +598,12 @@ class IUScanAssignmentService extends PubSubService {
     const copy = {};
     for (const { key } of SITES) {
       copy[key] = {
-        longitudinal: { slots: [...this._state[key].longitudinal.slots] },
-        cross: { slots: [...this._state[key].cross.slots] },
+        ...MEASUREMENT_GROUPS.reduce((acc, group) => {
+          acc[group.stateKey] = {
+            slots: [...(this._state[key][group.stateKey]?.slots ?? [null, null, null])],
+          };
+          return acc;
+        }, {}),
         observations: {
           ...this._state[key].observations,
           complicationTypes: [...(this._state[key].observations.complicationTypes ?? [])],
@@ -331,19 +615,85 @@ class IUScanAssignmentService extends PubSubService {
 
   // ── Hydration from existing Mongo series document ─────────────────────────
   /**
-   * Hydrates observation fields from an existing Mongo Series document.
+   * Hydrates panel state from an existing Mongo Series document.
    *
-   * Important:
-   * Do not hydrate BWT/BWTLong/BWTCross values into assignment slots.
-   * Slots represent actual caliper annotations only and should be filled
-   * exclusively by restoreAnnotations().
+   * Preferred measurement restore path:
+   *   1. Restore canonical repeated viewer annotations into individual slots.
+   *   2. Fall back to saved scalar report fields, e.g. BWTLong/SubmucosaLong,
+   *      only when there are no restored/live caliper assignments for that row.
+   *
+   * The scalar fallback can only show one value because the Mongo report field
+   * stores the row average, not each repeated caliper.
    */
+  _hydrateMeasurementSlotsFromSeriesDocForSite(doc, site) {
+    const { key, mongoPrefix } = site;
+    const siteState = this._state[key];
+
+    if (!siteState || !mongoPrefix) {
+      return 0;
+    }
+
+    let hydratedCount = 0;
+
+    for (const group of MEASUREMENT_GROUPS) {
+      const axis = group.stateKey;
+      const slots = siteState?.[axis]?.slots;
+
+      if (!slots) {
+        continue;
+      }
+
+      const fieldName = `${mongoPrefix}${group.suffix}`;
+      const value = doc[fieldName];
+
+      if (value == null || String(value).trim() === '') {
+        continue;
+      }
+
+      // Do not overwrite restored/live caliper assignments.
+      if (slots.some(slot => slot !== null)) {
+        continue;
+      }
+
+      const slotValue = buildHydratedMeasurementSlot({
+        value,
+        unit: doc[`${fieldName}UOM`] || 'mm',
+        sourceField: fieldName,
+      });
+
+      if (!slotValue) {
+        continue;
+      }
+
+      const slotIndex = firstEmptySlotIndex(slots);
+      if (slotIndex === -1) {
+        continue;
+      }
+
+      slots[slotIndex] = slotValue;
+      hydratedCount++;
+    }
+
+    return hydratedCount;
+  }
+
   hydrateFromSeriesDoc(doc) {
     if (!doc) {
       return;
     }
 
-    for (const { key, mongoPrefix } of SITES) {
+    const repeatedAnnotations = collectIuscanRepeatedAnnotationsFromSeriesDoc(doc);
+    const restoredRepeatedMeasurementCount =
+      repeatedAnnotations.length > 0
+        ? this.hydrateCanonicalRepeatedAnnotations(repeatedAnnotations)
+        : 0;
+
+    let hydratedMeasurementCount = 0;
+
+    for (const site of SITES) {
+      const { key, mongoPrefix } = site;
+      hydratedMeasurementCount += this._hydrateMeasurementSlotsFromSeriesDocForSite(doc, site);
+
       // Observations
       const dopplerStr = doc[`${mongoPrefix}ColorDopplerSignal`];
       if (dopplerStr != null && DOPPLER_REVERSE[dopplerStr] !== undefined) {
@@ -455,7 +805,12 @@ class IUScanAssignmentService extends PubSubService {
       }
     }
 
-    this._broadcastEvent(EVENTS.ASSIGNMENT_CHANGED, { source: 'hydration' });
+    this._broadcastEvent(EVENTS.ASSIGNMENT_CHANGED, {
+      source: 'hydration',
+      hydratedMeasurementCount,
+      restoredRepeatedMeasurementCount,
+      repeatedAnnotationCount: repeatedAnnotations.length,
+    });
   }
 
   // ── Report ────────────────────────────────────────────────────────────────

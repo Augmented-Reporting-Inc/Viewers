@@ -1,13 +1,46 @@
 import React from 'react';
+import { MEASUREMENT_SLOT_KEYS } from '../../utils/labelMap';
+
+const sanitizeMeasurementUnit = unit =>
+  String(unit || 'mm')
+    .replace(/\s*US Region\s*/gi, '')
+    .trim() || 'mm';
+
+const toMillimeters = (value, unit) => {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return null;
+  }
+
+  const cleanUnit = sanitizeMeasurementUnit(unit);
+  return /^cm\b/i.test(cleanUnit) ? numeric * 10 : numeric;
+};
+
+const normalizeResolvedMeasurement = value => {
+  if (value === null || value === undefined) {
+    return null;
+  }
+
+  if (typeof value === 'number') {
+    return { value, unit: 'mm' };
+  }
+
+  const valueInMm = toMillimeters(
+    value.value ?? value.length ?? value.measurements?.length ?? value.measurements?.value,
+    value.unit ?? value.lengthUnit ?? value.measurements?.lengthUnit ?? value.measurements?.unit
+  );
+
+  return valueInMm == null ? null : { ...value, value: valueInMm, unit: 'mm' };
+};
 
 /**
- * One measurement axis (longitudinal or cross) for a single anatomical site.
+ * One measurement row for a single anatomical site.
  *
- * slots: array of 3 items, each null | uid-string | number (raw mm from hydration)
- * valueByUID: { [uid]: mm } — derived from useMeasurements() in the parent panel
+ * slots: array of 3 items, each null | measurement-id string | number | hydrated annotation object
+ * valueByUID: { [measurementId]: { value, unit } } — derived from useMeasurements() in the parent panel
  *
  * Slot click → jumpToMeasurement (highlights annotation in viewport)
- * "Assign" button → assigns most-recent unassigned caliper to next empty slot
+ * "+ Latest" button → assigns most-recent unassigned caliper to next empty slot
  */
 export default function MeasurementGroup({
   label,
@@ -20,15 +53,17 @@ export default function MeasurementGroup({
   measurementService,
   commandsManager,
 }) {
+  const slotList = slots ?? [null, null, null];
+
   // Resolve display value for each slot
-  const resolved = slots.map(slot => {
+  const resolved = slotList.map(slot => {
     if (slot === null) {
       return null;
     }
     if (typeof slot === 'object' && slot !== null && 'value' in slot) {
-      return slot;
+      return normalizeResolvedMeasurement(slot);
     } // hydrated { value, unit }
-    return valueByUID[slot] ?? null; // live caliper value
+    return normalizeResolvedMeasurement(valueByUID[slot] ?? null); // live caliper value
   });
 
   function getSlotMeasurementId(slot) {
@@ -85,21 +120,14 @@ export default function MeasurementGroup({
         ).toFixed(2)
       : null;
 
-  const unit =
-    filled.length > 0
-      ? typeof filled[0] === 'number'
-        ? 'cm'
-        : filled[0].unit === 'cm US Region'
-          ? 'cm'
-          : filled[0].unit
-      : 'cm';
+  const unit = 'mm';
 
   function handleAssignNext() {
     // Collect all UIDs already assigned anywhere across all sites/axes
     const allAssigned = new Set();
     const state = assignSvc.getFullState();
     Object.values(state).forEach(siteState => {
-      ['longitudinal', 'cross'].forEach(ax => {
+      MEASUREMENT_SLOT_KEYS.forEach(ax => {
         siteState?.[ax]?.slots?.forEach(s => {
           const measurementId = getSlotMeasurementId(s);
 
@@ -110,7 +138,7 @@ export default function MeasurementGroup({
       });
     });
 
-    const nextSlot = slots.findIndex(s => s === null);
+    const nextSlot = slotList.findIndex(s => s === null);
     if (nextSlot === -1) {
       return;
     } // all slots full
@@ -129,7 +157,7 @@ export default function MeasurementGroup({
   return (
     <div className="gi-measurement-group mb-2">
       <div className="mb-1 flex items-center justify-between">
-        <span className="text-xs text-gray-400">{label.replace('(cm)', `(${unit})`)}</span>
+        <span className="text-xs text-gray-400">{label}</span>
         <span className="text-xs text-gray-300">
           Avg:{' '}
           <strong className={average !== null ? 'text-primary-light' : 'text-gray-500'}>
@@ -139,7 +167,7 @@ export default function MeasurementGroup({
       </div>
 
       <div className="flex flex-wrap items-center gap-1 overflow-x-hidden">
-        {slots.map((slot, i) => {
+        {slotList.map((slot, i) => {
           const val = resolved[i];
           const isNavigable = isNavigableSlot(slot);
           return (
@@ -187,10 +215,10 @@ export default function MeasurementGroup({
               : 'hover:border-primary-light hover:text-primary-light border-gray-500 text-gray-300',
           ].join(' ')}
           disabled={filled.length >= 3}
-          title="Assign most recent caliper to this slot"
+          title="Use latest unassigned caliper for this measurement row"
           onClick={handleAssignNext}
         >
-          + Assign
+          + Latest
         </button>
       </div>
     </div>

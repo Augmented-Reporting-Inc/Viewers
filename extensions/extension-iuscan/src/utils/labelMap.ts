@@ -5,10 +5,46 @@
  * MEASUREMENT_LABELS and LABEL_MAP are generated from SITES.
  * Keep SITES as the single source of truth.
  */
-const AXES = [
-  { axis: 'longitudinal', suffix: 'Long', label: 'Long' },
-  { axis: 'cross', suffix: 'Cross', label: 'Cross' },
+export const MEASUREMENT_GROUPS = [
+  {
+    stateKey: 'longitudinal',
+    role: 'bwt',
+    axis: 'longitudinal',
+    suffix: 'BWTLong',
+    labelSuffix: 'BWT-Long',
+    label: 'BWT Longitudinal',
+    shortLabel: 'BWT Long',
+  },
+  {
+    stateKey: 'cross',
+    role: 'bwt',
+    axis: 'cross',
+    suffix: 'BWTCross',
+    labelSuffix: 'BWT-Cross',
+    label: 'BWT Cross-section',
+    shortLabel: 'BWT Cross',
+  },
+  {
+    stateKey: 'submucosaLongitudinal',
+    role: 'submucosa',
+    axis: 'longitudinal',
+    suffix: 'SubmucosaLong',
+    labelSuffix: 'Submucosa-Long',
+    label: 'Submucosa Longitudinal',
+    shortLabel: 'Submucosa Long',
+  },
+  {
+    stateKey: 'submucosaCross',
+    role: 'submucosa',
+    axis: 'cross',
+    suffix: 'SubmucosaCross',
+    labelSuffix: 'Submucosa-Cross',
+    label: 'Submucosa Cross-section',
+    shortLabel: 'Submucosa Cross',
+  },
 ];
+
+export const MEASUREMENT_SLOT_KEYS = MEASUREMENT_GROUPS.map(({ stateKey }) => stateKey);
 
 const LABEL_MODAL_BOTTOM_SITE_KEYS = new Set(['rectum', 'ileocecalValve']);
 /**
@@ -96,20 +132,33 @@ const MEASUREMENT_LABEL_SITE_ORDER = [
   ...SITES.filter(site => LABEL_MODAL_BOTTOM_SITE_KEYS.has(site.key)),
 ];
 
-export const MEASUREMENT_LABELS = MEASUREMENT_LABEL_SITE_ORDER.flatMap(site => {
-  if (site.hasMeasurements === false) return [];
+const getMeasurementLabelValue = (site, group) => `${site.code}-${group.labelSuffix}`;
 
-  return AXES.map(({ suffix, label }) => ({
-    value: `${site.code}-${suffix}`,
-    label: `${site.label} – ${label}`,
+export const MEASUREMENT_LABELS = MEASUREMENT_LABEL_SITE_ORDER.flatMap(site => {
+  if (site.hasMeasurements === false) {
+    return [];
+  }
+
+  return MEASUREMENT_GROUPS.map(group => ({
+    value: getMeasurementLabelValue(site, group),
+    label: `${site.label} – ${group.shortLabel}`,
   }));
 });
 
 export const LABEL_MAP = SITES.reduce((acc, site) => {
-  if (site.hasMeasurements === false) return acc;
+  if (site.hasMeasurements === false) {
+    return acc;
+  }
 
-  for (const { axis, suffix } of AXES) {
-    acc[`${site.code}-${suffix}`] = { site: site.key, axis };
+  for (const group of MEASUREMENT_GROUPS) {
+    acc[getMeasurementLabelValue(site, group)] = {
+      site: site.key,
+      axis: group.stateKey,
+      stateKey: group.stateKey,
+      role: group.role,
+      measurementAxis: group.axis,
+      suffix: group.suffix,
+    };
   }
 
   return acc;
