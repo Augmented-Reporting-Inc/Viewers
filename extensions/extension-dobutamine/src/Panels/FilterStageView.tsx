@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { Select } from '../../../../platform/ui/src/components';
 import PropTypes from 'prop-types';
 import { SyncControls } from '../components/SyncControls';
@@ -40,37 +40,131 @@ const secondDropdownOptions = {
 const getOptionLabel = (group, value) =>
   secondDropdownOptions[group]?.find(option => option.value === value)?.label || value;
 
+const getStudyInstanceUIDFromDisplaySet = displaySet =>
+  displaySet?.StudyInstanceUID ||
+  displaySet?.studyInstanceUID ||
+  displaySet?.study?.StudyInstanceUID ||
+  displaySet?.instances?.[0]?.StudyInstanceUID ||
+  '';
+
+const getDisplaySetValues = displaySets => {
+  if (!displaySets) {
+    return [];
+  }
+
+  if (Array.isArray(displaySets)) {
+    return displaySets;
+  }
+
+  if (displaySets instanceof Map) {
+    return Array.from(displaySets.values());
+  }
+
+  if (typeof displaySets === 'object') {
+    return Object.values(displaySets);
+  }
+
+  return [];
+};
+
+const getActiveStudyUID = servicesManager => {
+  const { displaySetService, viewportGridService } = servicesManager?.services || {};
+
+  const viewportGridState = viewportGridService?.getState?.();
+  const activeViewportId = viewportGridState?.activeViewportId;
+  const viewports = viewportGridState?.viewports;
+  const activeViewport =
+    (activeViewportId && viewports?.get?.(activeViewportId)) ||
+    (activeViewportId && viewports?.[activeViewportId]) ||
+    null;
+
+  const activeViewportDisplaySetUIDs = Array.isArray(activeViewport?.displaySetInstanceUIDs)
+    ? activeViewport.displaySetInstanceUIDs
+    : [];
+
+  const displaySetInstanceUIDs = [
+    ...activeViewportDisplaySetUIDs,
+    activeViewport?.displaySetInstanceUID,
+  ].filter(Boolean);
+
+  for (const displaySetInstanceUID of displaySetInstanceUIDs) {
+    const displaySet = displaySetService?.getDisplaySetByUID?.(displaySetInstanceUID);
+    const studyInstanceUID = getStudyInstanceUIDFromDisplaySet(displaySet);
+
+    if (studyInstanceUID) {
+      return studyInstanceUID;
+    }
+  }
+
+  const activeDisplaySets = displaySetService?.getActiveDisplaySets?.();
+
+  for (const displaySet of getDisplaySetValues(activeDisplaySets)) {
+    const studyInstanceUID = getStudyInstanceUIDFromDisplaySet(displaySet);
+
+    if (studyInstanceUID) {
+      return studyInstanceUID;
+    }
+  }
+
+  const allDisplaySets = displaySetService?.getDisplaySets?.() || displaySetService?.displaySets;
+
+  for (const displaySet of getDisplaySetValues(allDisplaySets)) {
+    const studyInstanceUID = getStudyInstanceUIDFromDisplaySet(displaySet);
+
+    if (studyInstanceUID) {
+      return studyInstanceUID;
+    }
+  }
+
+  return '';
+};
+
 export default function FilterStageView({ servicesManager, commandsManager }) {
   const [firstDropdownValue, setFirstDropdownValue] = useState('Stage');
   const [filterBy, setFilterBy] = useState(secondDropdownDefaults.Stage);
+
+  const applyHangingProtocol = nextFilterBy => {
+    if (!nextFilterBy) {
+      return;
+    }
+
+    const activeStudyUID = getActiveStudyUID(servicesManager);
+
+    if (!activeStudyUID) {
+      console.warn('[dobutamine] skipping hanging protocol switch; activeStudyUID not ready', {
+        filterBy: nextFilterBy,
+      });
+      return;
+    }
+
+    const protocolId = `${PROTOCOL_PREFIX}${nextFilterBy}`;
+
+    try {
+      commandsManager.runCommand('setHangingProtocol', {
+        activeStudyUID,
+        protocolId,
+      });
+    } catch (error) {
+      console.warn('[dobutamine] failed to set hanging protocol', {
+        activeStudyUID,
+        protocolId,
+        error,
+      });
+    }
+  };
 
   const handleFirstDropdownChange = option => {
     if (!option?.value) {
       return;
     }
 
-    setFirstDropdownValue(option.value);
+    const nextFirstDropdownValue = option.value;
+    const nextFilterBy = secondDropdownDefaults[nextFirstDropdownValue];
+
+    setFirstDropdownValue(nextFirstDropdownValue);
+    setFilterBy(nextFilterBy);
+    applyHangingProtocol(nextFilterBy);
   };
-
-  useEffect(() => {
-    setFilterBy(secondDropdownDefaults[firstDropdownValue]);
-  }, [firstDropdownValue]);
-
-  useEffect(() => {
-    if (!filterBy) {
-      return;
-    }
-
-    const protocolId = `${PROTOCOL_PREFIX}${filterBy}`;
-    console.log('[dobutamine] filterBy useEffect protocolID', protocolId, filterBy);
-
-    const updateCurrentProtocol = commandsManager.runCommand('setHangingProtocol', {
-      activeStudyUID: '',
-      protocolId,
-    });
-
-    console.log('updateCurrentProtocol', updateCurrentProtocol);
-  }, [filterBy, commandsManager]);
 
   const handleSecondDropdownChange = option => {
     if (!option?.value) {
@@ -78,6 +172,7 @@ export default function FilterStageView({ servicesManager, commandsManager }) {
     }
 
     setFilterBy(option.value);
+    applyHangingProtocol(option.value);
   };
 
   return (

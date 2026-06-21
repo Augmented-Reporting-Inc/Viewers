@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react';
-import { Select, Icon } from '../../../../platform/ui/src/components';
+import React, { useState } from 'react';
+import { Select } from '../../../../platform/ui/src/components';
 import PropTypes from 'prop-types';
 import { SyncControls } from '../../../extension-stress-echo/src/components/SyncControls';
 
@@ -7,6 +7,113 @@ import { SyncControls } from '../../../extension-stress-echo/src/components/Sync
 /*
  * FilterStageView panel enables the user to select stress echo stage or view
  */
+
+const PROTOCOL_PREFIX = 'extension-stress-echo.hangingProtocolModule.hp';
+
+const firstDropdownOptions = [
+  { value: 'Stage', label: 'by Stage' },
+  { value: 'Value', label: 'by View' },
+];
+
+const secondDropdownFirstOptions = {
+  Stage: 'Rest',
+  Value: 'LAX',
+};
+
+const secondDropdownOptions = {
+  Stage: [
+    { value: 'Rest', label: 'Rest' },
+    { value: 'Peak', label: 'Peak' },
+    { value: 'Recovery', label: 'Recovery' },
+  ],
+  Value: [
+    { value: 'LAX', label: 'LAX' },
+    { value: 'SAX', label: 'SAX' },
+    { value: 'AP4', label: 'AP4' },
+    { value: 'AP2', label: 'AP2' },
+    { value: 'AP3', label: 'AP3' },
+    { value: 'View6', label: 'View 6' },
+  ],
+};
+
+const getStudyInstanceUIDFromDisplaySet = displaySet =>
+  displaySet?.StudyInstanceUID ||
+  displaySet?.studyInstanceUID ||
+  displaySet?.study?.StudyInstanceUID ||
+  displaySet?.instances?.[0]?.StudyInstanceUID ||
+  '';
+
+const getDisplaySetValues = displaySets => {
+  if (!displaySets) {
+    return [];
+  }
+
+  if (Array.isArray(displaySets)) {
+    return displaySets;
+  }
+
+  if (displaySets instanceof Map) {
+    return Array.from(displaySets.values());
+  }
+
+  if (typeof displaySets === 'object') {
+    return Object.values(displaySets);
+  }
+
+  return [];
+};
+
+const getActiveStudyUID = servicesManager => {
+  const { displaySetService, viewportGridService } = servicesManager?.services || {};
+
+  const viewportGridState = viewportGridService?.getState?.();
+  const activeViewportId = viewportGridState?.activeViewportId;
+  const viewports = viewportGridState?.viewports;
+  const activeViewport =
+    (activeViewportId && viewports?.get?.(activeViewportId)) ||
+    (activeViewportId && viewports?.[activeViewportId]) ||
+    null;
+
+  const activeViewportDisplaySetUIDs = Array.isArray(activeViewport?.displaySetInstanceUIDs)
+    ? activeViewport.displaySetInstanceUIDs
+    : [];
+
+  const displaySetInstanceUIDs = [
+    ...activeViewportDisplaySetUIDs,
+    activeViewport?.displaySetInstanceUID,
+  ].filter(Boolean);
+
+  for (const displaySetInstanceUID of displaySetInstanceUIDs) {
+    const displaySet = displaySetService?.getDisplaySetByUID?.(displaySetInstanceUID);
+    const studyInstanceUID = getStudyInstanceUIDFromDisplaySet(displaySet);
+
+    if (studyInstanceUID) {
+      return studyInstanceUID;
+    }
+  }
+
+  const activeDisplaySets = displaySetService?.getActiveDisplaySets?.();
+
+  for (const displaySet of getDisplaySetValues(activeDisplaySets)) {
+    const studyInstanceUID = getStudyInstanceUIDFromDisplaySet(displaySet);
+
+    if (studyInstanceUID) {
+      return studyInstanceUID;
+    }
+  }
+
+  const allDisplaySets = displaySetService?.getDisplaySets?.() || displaySetService?.displaySets;
+
+  for (const displaySet of getDisplaySetValues(allDisplaySets)) {
+    const studyInstanceUID = getStudyInstanceUIDFromDisplaySet(displaySet);
+
+    if (studyInstanceUID) {
+      return studyInstanceUID;
+    }
+  }
+
+  return '';
+};
 
 export default function FilterStageView({ servicesManager, commandsManager }) {
   //  const { displaySetService, hangingProtocolService } = (servicesManager as ServicesManager)
@@ -16,39 +123,57 @@ export default function FilterStageView({ servicesManager, commandsManager }) {
   const [firstDropdownValue, setFirstDropdownValue] = useState('Stage');
   const [filterBy, setFilterBy] = useState('Rest');
 
+  const applyHangingProtocol = nextFilterBy => {
+    if (!nextFilterBy) {
+      return;
+    }
+
+    const activeStudyUID = getActiveStudyUID(servicesManager);
+
+    if (!activeStudyUID) {
+      console.warn('[stress-echo] skipping hanging protocol switch; activeStudyUID not ready', {
+        filterBy: nextFilterBy,
+      });
+      return;
+    }
+
+    const protocolId = `${PROTOCOL_PREFIX}${nextFilterBy}`;
+
+    try {
+      commandsManager.runCommand('setHangingProtocol', {
+        activeStudyUID,
+        protocolId,
+      });
+    } catch (error) {
+      console.warn('[stress-echo] failed to set hanging protocol', {
+        activeStudyUID,
+        protocolId,
+        error,
+      });
+    }
+  };
+
   const handleFirstDropdownChange = options => {
-    setFirstDropdownValue(options.value);
+    if (!options?.value) {
+      return;
+    }
+
+    const nextFirstDropdownValue = options.value;
+    const nextFilterBy = secondDropdownFirstOptions[nextFirstDropdownValue];
+
+    setFirstDropdownValue(nextFirstDropdownValue);
+    setFilterBy(nextFilterBy);
+    applyHangingProtocol(nextFilterBy);
   };
-
-  const secondDropdownFirstOptions = {
-    Stage: 'Rest',
-    Value: 'LAX',
-  };
-
-  useEffect(() => {
-    setFilterBy(secondDropdownFirstOptions[firstDropdownValue]);
-  }, [firstDropdownValue]);
-
-  const firstDropdownOptions = [
-    { value: 'Stage', label: 'by Stage' },
-    { value: 'Value', label: 'by View' },
-  ];
-
-  /** side effect for change to filterBy */
-  useEffect(() => {
-    const protocol = 'extension-stress-echo.hangingProtocolModule.hp' + filterBy;
-    console.log('filterBy useEffect protocolID', protocol, filterBy);
-
-    const updateCurrentProtocol = commandsManager.runCommand('setHangingProtocol', {
-      activeStudyUID: '',
-      protocolId: protocol,
-    });
-    console.log('updateCurrentProtocol', updateCurrentProtocol);
-  }, [filterBy, commandsManager]);
 
   const FilterSelect = () => {
     const handleSecondDropdownChange = options => {
-      setFilterBy(options.value); // Notify the parent
+      if (!options?.value) {
+        return;
+      }
+
+      setFilterBy(options.value);
+      applyHangingProtocol(options.value);
     };
 
     /**     useEffect(() => {
@@ -56,22 +181,6 @@ export default function FilterStageView({ servicesManager, commandsManager }) {
       setFilterBy('');
     }, [firstDropdownValue]);
 */
-
-    const secondDropdownOptions = {
-      Stage: [
-        { value: 'Rest', label: 'Rest' },
-        { value: 'Peak', label: 'Peak' },
-        { value: 'Recovery', label: 'Recovery' },
-      ],
-      Value: [
-        { value: 'LAX', label: 'LAX' },
-        { value: 'SAX', label: 'SAX' },
-        { value: 'AP4', label: 'AP4' },
-        { value: 'AP2', label: 'AP2' },
-        { value: 'AP3', label: 'AP3' },
-        { value: 'View6', label: 'View 6' },
-      ],
-    };
 
     return (
       <div>
@@ -195,15 +304,8 @@ export default function FilterStageView({ servicesManager, commandsManager }) {
 FilterStageView.propTypes = {
   commandsManager: PropTypes.shape({
     runCommand: PropTypes.func.isRequired,
-  }),
+  }).isRequired,
   servicesManager: PropTypes.shape({
-    services: PropTypes.shape({
-      measurementService: PropTypes.shape({
-        getMeasurements: PropTypes.func.isRequired,
-        subscribe: PropTypes.func.isRequired,
-        EVENTS: PropTypes.object.isRequired,
-        VALUE_TYPES: PropTypes.object.isRequired,
-      }).isRequired,
-    }).isRequired,
+    services: PropTypes.object.isRequired,
   }).isRequired,
 };
