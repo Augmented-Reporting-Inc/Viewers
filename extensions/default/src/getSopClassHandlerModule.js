@@ -5,13 +5,7 @@ import getDisplaySetMessages from './getDisplaySetMessages';
 import getDisplaySetsFromUnsupportedSeries from './getDisplaySetsFromUnsupportedSeries';
 import { chartHandler } from './SOPClassHandlers/chartSOPClassHandler';
 
-const {
-  isImage,
-  sortStudyInstances,
-  instancesSortCriteria,
-  sopClassDictionary,
-  isDisplaySetReconstructable,
-} = utils;
+const { isImage, sopClassDictionary, isDisplaySetReconstructable } = utils;
 const { ImageSet } = classes;
 
 const DEFAULT_VOLUME_LOADER_SCHEME = 'cornerstoneStreamingImageVolume';
@@ -37,6 +31,72 @@ const getDynamicVolumeInfo = instances => {
 
 const isMultiFrame = instance => {
   return instance.NumberOfFrames > 1;
+};
+
+const toNumberOrMax = value => {
+  const numericValue = Number(value);
+  return Number.isFinite(numericValue) ? numericValue : Number.MAX_SAFE_INTEGER;
+};
+
+const getInstanceNumber = instance => toNumberOrMax(instance?.InstanceNumber);
+
+const getInstanceTieBreaker = instance =>
+  String(
+    instance?.AcquisitionDateTime ||
+      instance?.AcquisitionTime ||
+      instance?.SOPInstanceUID ||
+      instance?.imageId ||
+      ''
+  );
+
+const compareInstancesByInstanceNumber = (a, b) => {
+  const instanceNumberA = getInstanceNumber(a);
+  const instanceNumberB = getInstanceNumber(b);
+
+  if (instanceNumberA !== instanceNumberB) {
+    return instanceNumberA - instanceNumberB;
+  }
+
+  return getInstanceTieBreaker(a).localeCompare(getInstanceTieBreaker(b));
+};
+
+const sortInstancesByInstanceNumber = instances => {
+  return [...instances].sort(compareInstancesByInstanceNumber);
+};
+
+const isSupportedImageInstance = instance => {
+  return isImage(instance.SOPClassUID) || instance.Rows;
+};
+
+const getFrameCount = instance => {
+  const frameCount = Number(instance?.NumberOfFrames);
+  return Number.isFinite(frameCount) && frameCount > 0 ? frameCount : 1;
+};
+
+const getImageFrameCount = ({ instances, imageIds }) => {
+  if (imageIds?.length) {
+    return imageIds.length;
+  }
+
+  return instances.reduce((total, instance) => total + getFrameCount(instance), 0);
+};
+
+const getFirstThumbnailSource = ({ instances, imageIds }) => {
+  return {
+    imageId: imageIds?.[0],
+    thumbnailInstance: instances[0],
+  };
+};
+
+const compareDisplaySetsByInstanceNumber = (a, b) => {
+  const instanceNumberA = toNumberOrMax(a.InstanceNumber ?? a.instanceNumber);
+  const instanceNumberB = toNumberOrMax(b.InstanceNumber ?? b.instanceNumber);
+
+  if (instanceNumberA !== instanceNumberB) {
+    return instanceNumberA - instanceNumberB;
+  }
+
+  return String(a.displaySetInstanceUID || '').localeCompare(String(b.displaySetInstanceUID || ''));
 };
 
 function getDisplaySetInfo(instances) {
@@ -68,10 +128,11 @@ function getDisplaySetInfo(instances) {
 }
 
 const makeDisplaySet = instances => {
-  // Need to sort the instances in order to get a consistent instance/thumbnail
-  sortStudyInstances(instances);
-  const instance = instances[0];
-  const imageSet = new ImageSet(instances);
+  const sortedInstances = sortInstancesByInstanceNumber(instances);
+  const instance = sortedInstances[0];
+  const instanceNumber = getInstanceNumber(instance);
+  const originalSeriesNumber = instance.SeriesNumber || 0;
+  const imageSet = new ImageSet(sortedInstances);
   const { extensionManager } = appContext;
   const dataSource = extensionManager.getActiveDataSource()[0];
   const {
@@ -89,14 +150,12 @@ const makeDisplaySet = instances => {
   const messages = getDisplaySetMessages(instances, isReconstructable, isDynamicVolume);
 
   const imageIds = dataSource.getImageIdsForDisplaySet(imageSet);
-  let imageId = imageIds[Math.floor(imageIds.length / 2)];
-  let thumbnailInstance = instances[Math.floor(instances.length / 2)];
-  if (isDynamicVolume) {
-    const timePoints = dynamicVolumeInfo.timePoints;
-    const middleIndex = Math.floor(timePoints.length / 2);
-    const middleTimePointImageIds = timePoints[middleIndex];
-    imageId = middleTimePointImageIds[Math.floor(middleTimePointImageIds.length / 2)];
-  }
+  const { imageId, thumbnailInstance } = getFirstThumbnailSource({
+    instances: sortedInstances,
+    imageIds,
+  });
+  const numImageFrames = getImageFrameCount({ instances: sortedInstances, imageIds });
+
   imageSet.setAttributes({
     volumeLoaderSchema,
     displaySetInstanceUID: imageSet.uid, // create a local alias for the imageSet UID
@@ -104,8 +163,17 @@ const makeDisplaySet = instances => {
     SeriesTime: instance.SeriesTime,
     SeriesInstanceUID: instance.SeriesInstanceUID,
     StudyInstanceUID: instance.StudyInstanceUID,
-    SeriesNumber: instance.SeriesNumber || 0,
-    InstanceNumber: instance.InstanceNumber,
+    // This custom handler creates one displaySet per instance.
+    // Use InstanceNumber as the display-set sort key so OHIF's initial
+    // thumbnail/viewport selection starts with the lowest instance number.
+    SeriesNumber: instanceNumber,
+    originalSeriesNumber,
+    InstanceNumber: instanceNumber,
+    instanceNumber,
+    initialImageIndex: 0,
+    initialImageOptions: {
+      index: 0,
+    },
     FrameRate: instance.FrameTime,
     EffectiveDuration:
       instance.FrameTime && instance.NumberOfFrames
@@ -114,9 +182,9 @@ const makeDisplaySet = instances => {
     SOPClassUID: instance.SOPClassUID,
     SeriesDescription: instance.SeriesDescription || '',
     Modality: instance.Modality,
-    isMultiFrame: isMultiFrame(instance),
+    isMultiFrame: sortedInstances.some(isMultiFrame),
     countIcon: isReconstructable ? 'icon-mpr' : undefined,
-    numImageFrames: instances.length,
+    numImageFrames,
     SOPClassHandlerId: `${id}.sopClassHandlerModule.${sopClassHandlerName}`,
     isReconstructable,
     messages,
@@ -127,14 +195,9 @@ const makeDisplaySet = instances => {
     supportsWindowLevel: true,
     label:
       instance.SeriesDescription ||
-      `${i18n.t('Series')} ${instance.SeriesNumber} - ${i18n.t(instance.Modality)}`,
+      `${i18n.t('Series')} ${originalSeriesNumber} - ${i18n.t(instance.Modality)}`,
     FrameOfReferenceUID: instance.FrameOfReferenceUID,
   });
-
-  const { servicesManager } = appContext;
-  const { customizationService } = servicesManager.services;
-
-  imageSet.sort(customizationService);
 
   // Include the first image instance number (after sorted)
   /*imageSet.setAttribute(
@@ -183,31 +246,26 @@ function getDisplaySetsFromSeries(instances) {
     throw new Error('No instances were provided');
   }
 
-  const displaySets = [];
   const sopClassUids = getSopClassUids(instances);
+  const imageInstances = sortInstancesByInstanceNumber(instances.filter(isSupportedImageInstance));
 
-  // Search through the instances (InstanceMetadata object) of this series
-  // Split Multi-frame instances and Single-image modalities
-  // into their own specific display sets. Place the rest of each
-  // series into another display set.
-  instances.forEach(instance => {
-    // All imaging modalities must have a valid value for sopClassUid (x00080016) or rows (x00280010)
-    if (!isImage(instance.SOPClassUID) && !instance.Rows) {
-      return;
-    }
+  const displaySets = imageInstances.map(instance => {
+    const displaySet = makeDisplaySet([instance]);
+    const instanceNumber = getInstanceNumber(instance);
 
-    let displaySet;
-    displaySet = makeDisplaySet([instance]);
     displaySet.setAttributes({
       sopClassUids,
       isClip: isMultiFrame(instance),
-      numImageFrames: instance.NumberOfFrames || 1,
-      instanceNumber: instance.InstanceNumber,
+      numImageFrames: getFrameCount(instance),
+      InstanceNumber: instanceNumber,
+      instanceNumber,
       acquisitionDatetime: instance.AcquisitionDateTime,
     });
-    displaySets.push(displaySet);
-    displaySets.sort((a, b) => (a.InstanceNumber > b.InstanceNumber ? 1 : -1));
+
+    return displaySet;
   });
+
+  displaySets.sort(compareDisplaySetsByInstanceNumber);
 
   return displaySets;
 }

@@ -465,7 +465,9 @@ function modeFactory({ modeConfiguration }) {
             props: {
               leftPanels: [ohif.thumbnailList],
               leftPanelResizable: true,
-              rightPanels: [cornerstone.segmentation, arMeasurements.panel],
+              // Keep AR Measurements first so the right panel defaults to
+              // Measurements when opened. Segmentation remains available as tab 2.
+              rightPanels: [arMeasurements.panel, cornerstone.segmentation],
               rightPanelClosed: true,
               rightPanelResizable: true,
               viewports: [
