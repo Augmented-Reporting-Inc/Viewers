@@ -1,5 +1,6 @@
 import {
   getEnabledElement,
+  metaData,
   StackViewport,
   VolumeViewport,
   utilities as csUtils,
@@ -44,9 +45,15 @@ import { upsertViewerMeasurementAnnotations } from './utils/measurementAnnotatio
 import { getRequestedWorkflowAnnotations } from './utils/measurementAnnotations';
 import {
   fetchSeriesDocForActiveStudy,
+  hydrateSavedViewerAnnotationForViewport,
   hydrateMeasurementAnnotationsForActiveStudy as hydrateMeasurementAnnotationsForActiveStudyUtil,
 } from './utils/measurementAnnotationHydration';
 import { buildFormApiUrl } from './utils/formApi';
+import {
+  LV_TRACE_MEASUREMENT_LABELS_CONFIG,
+  normalizeLVTraceSelection,
+  parseLVTraceLabel,
+} from './utils/lvTraceLabels';
 
 const { DefaultHistoryMemo } = csUtils.HistoryMemo;
 const toggleSyncFunctions = {
@@ -54,7 +61,20 @@ const toggleSyncFunctions = {
   voi: toggleVOISliceSync,
 };
 
-const LV_TRACE_LABEL_RE = /^LV-(A[24]C)-(ED|ES)$/i;
+const VIEWER_CONTOUR_TOOL_NAMES = new Set(
+  [
+    toolNames.SplineROI,
+    'SplineROI',
+    toolNames.PlanarFreehandROI,
+    'PlanarFreehandROI',
+    toolNames.LivewireContour,
+    'LivewireContour',
+  ].filter(Boolean)
+);
+
+function isViewerContourTool(toolName) {
+  return VIEWER_CONTOUR_TOOL_NAMES.has(toolName);
+}
 
 function inferDomainFromSeriesDoc(seriesDoc, explicitDomain) {
   if (explicitDomain && explicitDomain !== 'generic') {
@@ -268,7 +288,7 @@ function buildLengthCachedStats(annotation, referencedImageIdOverride = '') {
   return {
     [targetId]: {
       length,
-      unit: measurements.lengthUnit || measurements.unit || '',
+      unit: normalizeDisplayLengthUnit(measurements.lengthUnit || measurements.unit || ''),
     },
   };
 }
@@ -341,7 +361,7 @@ function hydrateSavedLengthAnnotationForActiveViewport({
     cachedStats: buildLengthCachedStats(savedAnnotation, referencedImageId),
   };
 
-  targetAnnotation.invalidated = true;
+  targetAnnotation.invalidated = false;
   targetAnnotation.isVisible = savedAnnotation.isVisible !== false;
   targetAnnotation.isLocked = !!savedAnnotation.isLocked;
 
@@ -385,10 +405,15 @@ function getLengthMeasurementPayload(measurement) {
   const parsed = parseLengthDisplayText(displayText);
 
   const value = measurement?.value ?? parsed.value;
-  const unit = measurement?.unit || parsed.unit || '';
+  const rawUnit = measurement?.unit || parsed.unit || '';
+  const unit = normalizeDisplayLengthUnit(rawUnit);
+  const nextDisplayText =
+    /px/i.test(String(rawUnit || '')) && Number.isFinite(Number(value))
+      ? [`${formatLengthMM(Number(value))} ${unit}`]
+      : normalizeDisplayTextUnits(displayText, 'length');
 
   return {
-    displayText,
+    displayText: nextDisplayText,
     value,
     unit,
     length: value,
@@ -411,28 +436,17 @@ function getExistingViewerAnnotationsById(seriesDoc) {
   }
 }
 
-function serializeViewerMeasurement(measurement, domain, existingAnnotation = null) {
+function serializeViewerMeasurement(measurement, domain, existingAnnotation = null, options = {}) {
   const label = measurement?.label || '';
-  const lvTrace = parseLVTraceLabel(label);
-  const stats = getMeasurementStats(measurement);
-  const isLVTrace =
-    measurement?.toolName === toolNames.SplineROI || measurement?.toolName === 'SplineROI';
+  const isContourMeasurement = isViewerContourTool(measurement?.toolName);
+  const lvTrace = domain === 'echo' && isContourMeasurement ? parseLVTraceLabel(label) : null;
   const frameNumber =
     measurement.frameNumber && measurement.frameNumber > 1
       ? measurement.frameNumber
       : getFrameNumberFromReferencedImageId(measurement.referencedImageId);
 
-  const nextMeasurements = isLVTrace
-    ? {
-        area: stats?.area ?? existingAnnotation?.measurements?.area ?? null,
-        areaUnit: stats?.areaUnit || existingAnnotation?.measurements?.areaUnit || '',
-        displayText:
-          getMeasurementDisplayText(measurement).length > 0
-            ? getMeasurementDisplayText(measurement)
-            : existingAnnotation?.measurements?.displayText ||
-              existingAnnotation?.displayText ||
-              [],
-      }
+  const nextMeasurements = isContourMeasurement
+    ? buildContourMeasurementPayload(measurement, existingAnnotation, options.displaySetService)
     : getLengthMeasurementPayload(measurement);
 
   const finalDisplayText =
@@ -479,88 +493,6 @@ function serializeViewerMeasurement(measurement, domain, existingAnnotation = nu
   };
 }
 
-function normalizeLVTraceLabelText(label) {
-  return String(label || '')
-    .trim()
-    .toLowerCase()
-    .replace(/[–—-]/g, ' ')
-    .replace(/\s+/g, ' ');
-}
-
-const LV_TRACE_DISPLAY_LABELS = {
-  'lv a4c end diastole': { view: 'A4C', phase: 'ED' },
-  'lv a4c end systole': { view: 'A4C', phase: 'ES' },
-  'lv a2c end diastole': { view: 'A2C', phase: 'ED' },
-  'lv a2c end systole': { view: 'A2C', phase: 'ES' },
-};
-
-const LV_TRACE_LABELS = [
-  { value: 'LV-A4C-ED', label: 'LV A4C – End diastole' },
-  { value: 'LV-A4C-ES', label: 'LV A4C – End systole' },
-  { value: 'LV-A2C-ED', label: 'LV A2C – End diastole' },
-  { value: 'LV-A2C-ES', label: 'LV A2C – End systole' },
-];
-
-const LV_TRACE_LABELS_CONFIG = {
-  id: 'lvTraceMeasurementLabels',
-  labelOnMeasure: false,
-  exclusive: true,
-  items: LV_TRACE_LABELS,
-};
-
-const LV_TRACE_LABEL_BY_VALUE = LV_TRACE_LABELS.reduce((acc, item) => {
-  acc[item.value] = item;
-  return acc;
-}, {});
-
-const LV_TRACE_VALUE_BY_NORMALIZED_LABEL = LV_TRACE_LABELS.reduce((acc, item) => {
-  acc[normalizeLVTraceLabelText(item.label)] = item.value;
-  return acc;
-}, {});
-
-function normalizeLVTraceSelection(value) {
-  const raw = String(value || '').trim();
-  if (!raw) {
-    return '';
-  }
-
-  if (LV_TRACE_LABEL_BY_VALUE[raw]) {
-    return raw;
-  }
-
-  return LV_TRACE_VALUE_BY_NORMALIZED_LABEL[normalizeLVTraceLabelText(raw)] || raw;
-}
-
-function parseLVTraceLabel(label) {
-  const raw = String(label || '').trim();
-  const valueMatch = raw.match(LV_TRACE_LABEL_RE);
-
-  if (valueMatch) {
-    const view = valueMatch[1].toUpperCase();
-    const phase = valueMatch[2].toUpperCase();
-
-    return {
-      label: raw,
-      view,
-      phase,
-      slot: `${view}_${phase}`,
-    };
-  }
-
-  const displayMatch = LV_TRACE_DISPLAY_LABELS[normalizeLVTraceLabelText(raw)];
-
-  if (!displayMatch) {
-    return null;
-  }
-
-  return {
-    label: raw,
-    view: displayMatch.view,
-    phase: displayMatch.phase,
-    slot: `${displayMatch.view}_${displayMatch.phase}`,
-  };
-}
-
 function getMeasurementStats(measurement) {
   const statsByTarget = measurement?.data || {};
   const preferredKey = measurement?.referencedImageId
@@ -575,53 +507,859 @@ function getMeasurementStats(measurement) {
   return firstKey ? statsByTarget[firstKey] : {};
 }
 
-function buildLVTraceAnnotation(measurement) {
-  const slotInfo = parseLVTraceLabel(measurement?.label);
-  if (!slotInfo) {
+function finiteNumberOrNull(value) {
+  const numberValue = Number(value);
+  return Number.isFinite(numberValue) ? numberValue : null;
+}
+
+function readRawDicomValue(source, keys = []) {
+  if (!source) {
+    return undefined;
+  }
+
+  for (const key of keys) {
+    const value = source[key];
+
+    if (value !== undefined && value !== null) {
+      return value;
+    }
+  }
+
+  return undefined;
+}
+
+function readDicomValue(source, keys = []) {
+  const value = readRawDicomValue(source, keys);
+
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+
+  if (Array.isArray(value)) {
+    return value[0];
+  }
+
+  if (Array.isArray(value?.Value)) {
+    return value.Value[0];
+  }
+
+  return value;
+}
+
+function readDicomNumber(source, keys = []) {
+  return finiteNumberOrNull(readDicomValue(source, keys));
+}
+
+function getDicomSequenceValues(source, keys = []) {
+  const value = readRawDicomValue(source, keys);
+
+  if (!value) {
+    return [];
+  }
+
+  if (Array.isArray(value)) {
+    return value;
+  }
+
+  if (Array.isArray(value?.Value)) {
+    return value.Value;
+  }
+
+  return [value];
+}
+
+function getMeasurementPointCenter(points = []) {
+  const validPoints = Array.isArray(points)
+    ? points.filter(point => Array.isArray(point) && point.length >= 2)
+    : [];
+
+  if (!validPoints.length) {
     return null;
   }
 
-  const stats = getMeasurementStats(measurement);
-  const frameNumber =
-    measurement.frameNumber && measurement.frameNumber > 1
-      ? measurement.frameNumber
-      : getFrameNumberFromReferencedImageId(measurement.referencedImageId);
+  const sum = validPoints.reduce(
+    (acc, point) => {
+      acc.x += Number(point[0]) || 0;
+      acc.y += Number(point[1]) || 0;
+      return acc;
+    },
+    { x: 0, y: 0 }
+  );
 
   return {
-    annotationId: measurement.uid,
-    workflow: 'viewerMeasurements',
-    role: slotInfo.slot,
-    domain: 'echo',
-    mode: 'single',
-    measurementRole: slotInfo.label,
-    uid: measurement.uid,
-    label: measurement.label,
-    slot: slotInfo.slot,
-    view: slotInfo.view,
-    phase: slotInfo.phase,
-
-    toolName: measurement.toolName,
-    points: measurement.points || [],
-    frameNumber,
-
-    StudyInstanceUID: measurement.referenceStudyUID || '',
-    SeriesInstanceUID: measurement.referenceSeriesUID || '',
-    SOPInstanceUID: measurement.SOPInstanceUID || '',
-    FrameOfReferenceUID: measurement.FrameOfReferenceUID || '',
-    displaySetInstanceUID: measurement.displaySetInstanceUID || '',
-    referencedImageId: measurement.referencedImageId || '',
-
-    measurements: {
-      area: stats?.area ?? null,
-      areaUnit: stats?.areaUnit || '',
-    },
+    x: sum.x / validPoints.length,
+    y: sum.y / validPoints.length,
   };
 }
 
-function getMissingLVTraceSlots(traces) {
-  const required = ['A4C_ED', 'A4C_ES', 'A2C_ED', 'A2C_ES'];
-  const present = new Set(traces.map(trace => trace.slot));
-  return required.filter(slot => !present.has(slot));
+function normalizePhysicalUnitCode(unitCode) {
+  if (unitCode === undefined || unitCode === null) {
+    return null;
+  }
+
+  if (typeof unitCode === 'number') {
+    return unitCode;
+  }
+
+  const text = String(unitCode).trim();
+  const hexMatch = text.match(/^0*([0-9a-f]+)h$/i);
+
+  if (hexMatch) {
+    return parseInt(hexMatch[1], 16);
+  }
+
+  const numberValue = Number(text);
+  return Number.isFinite(numberValue) ? numberValue : null;
+}
+
+function getPhysicalUnitScaleToMM(unitCode) {
+  const code = normalizePhysicalUnitCode(unitCode);
+
+  // DICOM US Region Calibration:
+  // 0003H = cm, so cm/pixel -> mm/pixel requires × 10.
+  if (code === 3) {
+    return 10;
+  }
+
+  return null;
+}
+
+function getDisplaySetForViewerMeasurement(displaySetService, measurement) {
+  if (!displaySetService || !measurement) {
+    return null;
+  }
+
+  if (measurement.displaySetInstanceUID && displaySetService.getDisplaySetByUID) {
+    const displaySet = displaySetService.getDisplaySetByUID(measurement.displaySetInstanceUID);
+
+    if (displaySet) {
+      return displaySet;
+    }
+  }
+
+  const seriesInstanceId = measurement.referenceSeriesUID || measurement.SeriesInstanceUID;
+  const sopInstanceId = measurement.SOPInstanceUID;
+
+  if (sopInstanceId && displaySetService.getDisplaySetForSOPInstanceUID) {
+    const displaySet = displaySetService.getDisplaySetForSOPInstanceUID(
+      sopInstanceId,
+      seriesInstanceId
+    );
+
+    if (displaySet) {
+      return displaySet;
+    }
+  }
+
+  const seriesDisplaySets =
+    seriesInstanceId && displaySetService.getDisplaySetsForSeries
+      ? displaySetService.getDisplaySetsForSeries(seriesInstanceId) || []
+      : [];
+
+  return seriesDisplaySets[0] || null;
+}
+
+function getDisplaySetInstances(displaySet) {
+  const candidates = [
+    displaySet?.images,
+    displaySet?.instances,
+    displaySet?.instance,
+    displaySet?.metadata?.images,
+    displaySet?.metadata?.instances,
+  ].filter(Boolean);
+
+  return candidates.flatMap(candidate => (Array.isArray(candidate) ? candidate : [candidate]));
+}
+
+function getSopInstanceIdFromSource(source) {
+  return (
+    source?.SOPInstanceUID ||
+    source?.sopInstanceUID ||
+    source?.metadata?.SOPInstanceUID ||
+    source?.Metadata?.SOPInstanceUID ||
+    readDicomValue(source, ['SOPInstanceUID', '00080018', 'x00080018'])
+  );
+}
+
+function getInstanceForViewerMeasurement(displaySetService, measurement) {
+  const displaySet = getDisplaySetForViewerMeasurement(displaySetService, measurement);
+  const instances = getDisplaySetInstances(displaySet);
+  const sopInstanceId = measurement?.SOPInstanceUID;
+
+  if (!instances.length) {
+    return null;
+  }
+
+  if (!sopInstanceId) {
+    return instances[0];
+  }
+
+  return (
+    instances.find(
+      instance => String(getSopInstanceIdFromSource(instance) || '') === sopInstanceId
+    ) || instances[0]
+  );
+}
+
+function getUltrasoundRegionsFromSource(source) {
+  const candidates = [
+    source,
+    source?.metadata,
+    source?.Metadata,
+    source?.instance,
+    source?.attributes,
+    source?.dicom,
+  ].filter(Boolean);
+
+  for (const candidate of candidates) {
+    const regions = getDicomSequenceValues(candidate, [
+      'SequenceOfUltrasoundRegions',
+      'sequenceOfUltrasoundRegions',
+      '00186011',
+      'x00186011',
+    ]);
+
+    if (regions.length) {
+      return regions;
+    }
+  }
+
+  return [];
+}
+
+function normalizeUltrasoundRegion(region) {
+  const minX = readDicomNumber(region, [
+    'RegionLocationMinX0',
+    'regionLocationMinX0',
+    '00186018',
+    'x00186018',
+  ]);
+  const minY = readDicomNumber(region, [
+    'RegionLocationMinY0',
+    'regionLocationMinY0',
+    '0018601A',
+    'x0018601A',
+  ]);
+  const maxX = readDicomNumber(region, [
+    'RegionLocationMaxX1',
+    'regionLocationMaxX1',
+    '0018601C',
+    'x0018601C',
+  ]);
+  const maxY = readDicomNumber(region, [
+    'RegionLocationMaxY1',
+    'regionLocationMaxY1',
+    '0018601E',
+    'x0018601E',
+  ]);
+  const physicalUnitsX = readDicomValue(region, [
+    'PhysicalUnitsXDirection',
+    'physicalUnitsXDirection',
+    '00186024',
+    'x00186024',
+  ]);
+  const physicalUnitsY = readDicomValue(region, [
+    'PhysicalUnitsYDirection',
+    'physicalUnitsYDirection',
+    '00186026',
+    'x00186026',
+  ]);
+  const physicalDeltaX = readDicomNumber(region, [
+    'PhysicalDeltaX',
+    'physicalDeltaX',
+    '0018602C',
+    'x0018602C',
+  ]);
+  const physicalDeltaY = readDicomNumber(region, [
+    'PhysicalDeltaY',
+    'physicalDeltaY',
+    '0018602E',
+    'x0018602E',
+  ]);
+
+  const xScale = getPhysicalUnitScaleToMM(physicalUnitsX);
+  const yScale = getPhysicalUnitScaleToMM(physicalUnitsY);
+
+  if (
+    physicalDeltaX == null ||
+    physicalDeltaY == null ||
+    !xScale ||
+    !yScale ||
+    physicalDeltaX === 0 ||
+    physicalDeltaY === 0
+  ) {
+    return null;
+  }
+
+  return {
+    minX,
+    minY,
+    maxX,
+    maxY,
+    column: Math.abs(physicalDeltaX) * xScale,
+    row: Math.abs(physicalDeltaY) * yScale,
+    unit: 'mm',
+    source: 'SequenceOfUltrasoundRegions',
+  };
+}
+
+function chooseUltrasoundRegionForPoints(regions = [], points = []) {
+  const normalizedRegions = regions.map(normalizeUltrasoundRegion).filter(Boolean);
+
+  if (!normalizedRegions.length) {
+    return null;
+  }
+
+  const center = getMeasurementPointCenter(points);
+
+  if (center) {
+    const containingRegions = normalizedRegions
+      .filter(region => {
+        if (
+          region.minX == null ||
+          region.minY == null ||
+          region.maxX == null ||
+          region.maxY == null
+        ) {
+          return false;
+        }
+
+        return (
+          center.x >= region.minX &&
+          center.x <= region.maxX &&
+          center.y >= region.minY &&
+          center.y <= region.maxY
+        );
+      })
+      .sort((a, b) => {
+        const areaA = Math.abs((a.maxX - a.minX) * (a.maxY - a.minY));
+        const areaB = Math.abs((b.maxX - b.minX) * (b.maxY - b.minY));
+        return areaA - areaB;
+      });
+
+    if (containingRegions[0]) {
+      return containingRegions[0];
+    }
+  }
+
+  return normalizedRegions[0];
+}
+
+function getUltrasoundRegionPixelSpacingMM(measurement, displaySetService) {
+  const instance = getInstanceForViewerMeasurement(displaySetService, measurement);
+  const regions = getUltrasoundRegionsFromSource(instance);
+  const region = chooseUltrasoundRegionForPoints(regions, measurement?.points);
+
+  if (!region?.row || !region?.column) {
+    return null;
+  }
+
+  return {
+    row: region.row,
+    column: region.column,
+    unit: 'mm',
+    source: region.source,
+  };
+}
+
+function getCornerstonePixelSpacingMM(referencedImageId = '') {
+  if (!referencedImageId) {
+    return null;
+  }
+
+  const calibratedPixelSpacing = metaData.get?.('calibratedPixelSpacing', referencedImageId) || {};
+  const imagePlaneModule = metaData.get?.('imagePlaneModule', referencedImageId) || {};
+  const imagePixelModule = metaData.get?.('imagePixelModule', referencedImageId) || {};
+  const pixelSpacing = imagePixelModule.pixelSpacing || imagePlaneModule.pixelSpacing || [];
+
+  const row =
+    finiteNumberOrNull(calibratedPixelSpacing.rowPixelSpacing) ??
+    finiteNumberOrNull(calibratedPixelSpacing[0]) ??
+    finiteNumberOrNull(imagePlaneModule.rowPixelSpacing) ??
+    finiteNumberOrNull(pixelSpacing[0]);
+
+  const column =
+    finiteNumberOrNull(calibratedPixelSpacing.columnPixelSpacing) ??
+    finiteNumberOrNull(calibratedPixelSpacing[1]) ??
+    finiteNumberOrNull(imagePlaneModule.columnPixelSpacing) ??
+    finiteNumberOrNull(pixelSpacing[1]);
+
+  if (!row || !column || row <= 0 || column <= 0 || (row === 1 && column === 1)) {
+    return null;
+  }
+
+  return {
+    row,
+    column,
+    unit: 'mm',
+    source: 'cornerstonePixelSpacing',
+  };
+}
+
+function getImagePixelSpacingMMForMeasurement(measurement, displaySetService) {
+  return (
+    getUltrasoundRegionPixelSpacingMM(measurement, displaySetService) ||
+    getCornerstonePixelSpacingMM(measurement?.referencedImageId)
+  );
+}
+
+function formatAreaMM2(area) {
+  if (!Number.isFinite(area)) {
+    return '';
+  }
+
+  if (area >= 100) {
+    return area.toFixed(0);
+  }
+
+  if (area >= 10) {
+    return area.toFixed(1);
+  }
+
+  return area.toFixed(2);
+}
+
+function formatLengthMM(length) {
+  if (!Number.isFinite(length)) {
+    return '';
+  }
+
+  if (length >= 100) {
+    return length.toFixed(0);
+  }
+
+  if (length >= 10) {
+    return length.toFixed(1);
+  }
+
+  return length.toFixed(2);
+}
+
+function normalizeDisplayLengthUnit(unit = '') {
+  return /px/i.test(String(unit || '')) ? 'mm' : unit || 'mm';
+}
+
+function normalizeDisplayAreaUnit(unit = '') {
+  return /px/i.test(String(unit || '')) ? 'mm²' : unit || 'mm²';
+}
+
+function normalizeDisplayTextUnits(displayText = [], unitType = 'length') {
+  const nextUnit = unitType === 'area' ? 'mm²' : 'mm';
+
+  return (Array.isArray(displayText) ? displayText : [String(displayText || '')])
+    .filter(Boolean)
+    .map(text =>
+      String(text)
+        .replace(/\bpx²\b/gi, nextUnit)
+        .replace(/\bpx\b/gi, nextUnit)
+    );
+}
+
+function buildContourMeasurementPayload(
+  measurement,
+  existingAnnotation = null,
+  displaySetService = null
+) {
+  const stats = getMeasurementStats(measurement);
+  const displayText =
+    getMeasurementDisplayText(measurement).length > 0
+      ? getMeasurementDisplayText(measurement)
+      : existingAnnotation?.measurements?.displayText || existingAnnotation?.displayText || [];
+
+  const rawArea =
+    finiteNumberOrNull(stats?.area) ?? finiteNumberOrNull(existingAnnotation?.measurements?.area);
+  const rawAreaUnit = stats?.areaUnit || existingAnnotation?.measurements?.areaUnit || '';
+
+  if (rawArea == null) {
+    return {
+      area: null,
+      areaUnit: rawAreaUnit,
+      displayText,
+    };
+  }
+
+  const pixelSpacing = getImagePixelSpacingMMForMeasurement(measurement, displaySetService);
+  const isPixelArea = /px/i.test(String(rawAreaUnit || ''));
+
+  if (!pixelSpacing || !isPixelArea) {
+    return {
+      area: rawArea,
+      areaUnit: rawAreaUnit,
+      displayText,
+    };
+  }
+
+  const areaMM2 = rawArea * pixelSpacing.row * pixelSpacing.column;
+
+  return {
+    area: areaMM2,
+    areaUnit: 'mm²',
+    pixelSpacing,
+    displayText: [`${formatAreaMM2(areaMM2)} mm²`],
+  };
+}
+
+function getSavedContourAreaForDisplay(savedAnnotation, referencedImageId = '') {
+  const measurements = savedAnnotation?.measurements || {};
+  const rawArea = finiteNumberOrNull(measurements.area);
+  const rawAreaUnit = String(measurements.areaUnit || '').trim();
+
+  if (rawArea == null) {
+    return null;
+  }
+
+  if (/px/i.test(rawAreaUnit)) {
+    const pixelSpacing = getCornerstonePixelSpacingMM(
+      referencedImageId || savedAnnotation?.referencedImageId || ''
+    );
+
+    if (pixelSpacing) {
+      return rawArea * pixelSpacing.row * pixelSpacing.column;
+    }
+  }
+
+  return rawArea;
+}
+
+function getSavedAnnotationDisplayText(savedAnnotation) {
+  const measurements = savedAnnotation?.measurements || {};
+  const unitType = isViewerContourTool(savedAnnotation?.toolName) ? 'area' : 'length';
+
+  if (Array.isArray(measurements.displayText) && measurements.displayText.length > 0) {
+    return normalizeDisplayTextUnits(measurements.displayText, unitType);
+  }
+
+  if (Array.isArray(savedAnnotation?.displayText) && savedAnnotation.displayText.length > 0) {
+    return normalizeDisplayTextUnits(savedAnnotation.displayText, unitType);
+  }
+
+  if (
+    savedAnnotation?.toolName === 'Length' &&
+    Number.isFinite(Number(measurements.length ?? measurements.value))
+  ) {
+    return [`${formatLengthMM(Number(measurements.length ?? measurements.value))} mm`];
+  }
+
+  if (isViewerContourTool(savedAnnotation?.toolName)) {
+    const area = getSavedContourAreaForDisplay(savedAnnotation, savedAnnotation?.referencedImageId);
+
+    if (area != null) {
+      return [`${formatAreaMM2(area)} mm²`];
+    }
+  }
+
+  return [];
+}
+
+function buildSavedAnnotationStatsForMeasurementService(savedAnnotation, referencedImageId = '') {
+  const targetId = referencedImageId || savedAnnotation?.referencedImageId;
+  const measurements = savedAnnotation?.measurements || {};
+  const statsKey = targetId ? `imageId:${targetId}` : '';
+
+  if (!statsKey) {
+    return {};
+  }
+
+  if (savedAnnotation?.toolName === 'Length') {
+    const length = finiteNumberOrNull(measurements.length ?? measurements.value);
+
+    if (length == null) {
+      return {};
+    }
+
+    return {
+      [statsKey]: {
+        length,
+        unit: normalizeDisplayLengthUnit(measurements.lengthUnit || measurements.unit || ''),
+      },
+    };
+  }
+
+  if (isViewerContourTool(savedAnnotation?.toolName)) {
+    const area = getSavedContourAreaForDisplay(
+      savedAnnotation,
+      referencedImageId || savedAnnotation?.referencedImageId || ''
+    );
+
+    if (area == null) {
+      return {};
+    }
+
+    return {
+      [statsKey]: {
+        area,
+        areaUnit: 'mm²',
+        areaUnits: 'mm²',
+        unit: 'mm',
+      },
+    };
+  }
+
+  return {};
+}
+
+function normalizeCornerstoneStatsTargetId(imageId = '') {
+  const value = String(imageId || '').trim();
+
+  if (!value) {
+    return '';
+  }
+
+  if (/^(imageId|volumeId):/i.test(value)) {
+    return value;
+  }
+
+  return `imageId:${value}`;
+}
+
+function getSavedAnnotationStatsTargetIds(savedAnnotation, referencedImageId = '') {
+  return Array.from(
+    new Set(
+      [referencedImageId, savedAnnotation?.referencedImageId]
+        .map(normalizeCornerstoneStatsTargetId)
+        .filter(Boolean)
+    )
+  );
+}
+
+function removeInvalidCornerstoneCachedStatsKeys(cachedStats = {}) {
+  return Object.fromEntries(
+    Object.entries(cachedStats || {}).filter(([targetId]) =>
+      /^(imageId|volumeId):/i.test(String(targetId || ''))
+    )
+  );
+}
+
+function buildSavedAnnotationStatsForCornerstone(savedAnnotation, referencedImageId = '') {
+  const targetIds = getSavedAnnotationStatsTargetIds(savedAnnotation, referencedImageId);
+  const measurements = savedAnnotation?.measurements || {};
+
+  if (!targetIds.length) {
+    return {};
+  }
+
+  if (savedAnnotation?.toolName === 'Length') {
+    const length = finiteNumberOrNull(measurements.length ?? measurements.value);
+
+    if (length == null) {
+      return {};
+    }
+
+    return Object.fromEntries(
+      targetIds.map(targetId => [
+        targetId,
+        {
+          length,
+          unit: normalizeDisplayLengthUnit(measurements.lengthUnit || measurements.unit || ''),
+          lengthUnit: normalizeDisplayLengthUnit(
+            measurements.lengthUnit || measurements.unit || ''
+          ),
+        },
+      ])
+    );
+  }
+
+  if (isViewerContourTool(savedAnnotation?.toolName)) {
+    const area = getSavedContourAreaForDisplay(
+      savedAnnotation,
+      referencedImageId || savedAnnotation?.referencedImageId || ''
+    );
+
+    if (area == null) {
+      return {};
+    }
+
+    return Object.fromEntries(
+      targetIds.map(targetId => [
+        targetId,
+        {
+          area,
+          areaUnit: 'mm²',
+          areaUnits: 'mm²',
+          unit: 'mm',
+          units: 'mm',
+          modalityUnit: 'mm',
+          modalityUnitOptions: {
+            areaUnit: 'mm²',
+            unit: 'mm',
+          },
+          arSavedMeasurementArea: area,
+          arSavedMeasurementAreaUnit: 'mm²',
+        },
+      ])
+    );
+  }
+
+  return {};
+}
+
+function forceSavedAnnotationCornerstoneDisplay({ savedAnnotation, referencedImageId = '' }) {
+  // Do not touch Length here. Length was already working, and LengthTool is
+  // stricter about cachedStats target keys during render.
+  if (!isViewerContourTool(savedAnnotation?.toolName)) {
+    return;
+  }
+
+  const annotationId = getAnnotationId(savedAnnotation);
+  const targetAnnotation = annotationId
+    ? cornerstoneTools.annotation.state.getAnnotation?.(annotationId)
+    : null;
+
+  if (!targetAnnotation) {
+    return;
+  }
+
+  const savedStats = buildSavedAnnotationStatsForCornerstone(savedAnnotation, referencedImageId);
+
+  if (!Object.keys(savedStats).length) {
+    return;
+  }
+
+  targetAnnotation.data = {
+    ...(targetAnnotation.data || {}),
+    arSavedMeasurementDisplayText: getSavedAnnotationDisplayText(savedAnnotation),
+    cachedStats: {
+      ...removeInvalidCornerstoneCachedStatsKeys(targetAnnotation.data?.cachedStats || {}),
+      ...savedStats,
+    },
+  };
+
+  targetAnnotation.invalidated = false;
+  targetAnnotation.isVisible = savedAnnotation.isVisible !== false;
+  targetAnnotation.isLocked = !!savedAnnotation.isLocked;
+}
+
+function forceSavedAnnotationDisplayEverywhere({
+  measurementService,
+  savedAnnotation,
+  referencedImageId = '',
+}) {
+  if (isViewerContourTool(savedAnnotation?.toolName)) {
+    forceSavedAnnotationCornerstoneDisplay({
+      savedAnnotation,
+      referencedImageId,
+    });
+  }
+
+  forceSavedAnnotationMeasurementServiceDisplay({
+    measurementService,
+    savedAnnotation,
+    referencedImageId,
+  });
+}
+
+function getSavedMeasurementLabel(measurement) {
+  return (
+    measurement?.label ||
+    measurement?.measurementRole ||
+    measurement?.role ||
+    measurement?.description ||
+    ''
+  );
+}
+
+function findMeasurementServiceMeasurementForSavedAnnotation(measurementService, savedAnnotation) {
+  const annotationId = getAnnotationId(savedAnnotation);
+
+  if (!annotationId) {
+    return {
+      updateId: '',
+      measurement: null,
+    };
+  }
+
+  const direct = measurementService.getMeasurement?.(annotationId);
+
+  if (direct) {
+    return {
+      updateId: direct.uid || direct.annotationUID || annotationId,
+      measurement: direct,
+    };
+  }
+
+  const measurements = measurementService.getMeasurements?.() || [];
+
+  const matched = measurements.find(measurement => {
+    const ids = [
+      measurement?.uid,
+      measurement?.id,
+      measurement?.annotationUID,
+      measurement?.annotationId,
+    ]
+      .filter(Boolean)
+      .map(value => String(value));
+
+    if (ids.includes(String(annotationId))) {
+      return true;
+    }
+
+    return (
+      measurement?.SOPInstanceUID === savedAnnotation?.SOPInstanceUID &&
+      measurement?.referencedImageId === savedAnnotation?.referencedImageId &&
+      getSavedMeasurementLabel(measurement) === getSavedMeasurementLabel(savedAnnotation)
+    );
+  });
+
+  return {
+    updateId: matched?.uid || matched?.annotationUID || annotationId,
+    measurement: matched || null,
+  };
+}
+
+function forceSavedAnnotationMeasurementServiceDisplay({
+  measurementService,
+  savedAnnotation,
+  referencedImageId = '',
+}) {
+  const annotationId = getAnnotationId(savedAnnotation);
+  const { updateId, measurement: currentMeasurement } =
+    findMeasurementServiceMeasurementForSavedAnnotation(measurementService, savedAnnotation);
+
+  if (!annotationId || !currentMeasurement) {
+    return;
+  }
+
+  const displayText = getSavedAnnotationDisplayText(savedAnnotation);
+  const stats = buildSavedAnnotationStatsForMeasurementService(savedAnnotation, referencedImageId);
+
+  const nextMeasurement = {
+    ...currentMeasurement,
+    label:
+      savedAnnotation.label ||
+      savedAnnotation.measurementRole ||
+      savedAnnotation.role ||
+      currentMeasurement.label,
+    displayText,
+    data: {
+      ...(currentMeasurement.data || {}),
+      ...stats,
+    },
+  };
+
+  if (savedAnnotation.toolName === 'Length') {
+    const measurements = savedAnnotation.measurements || {};
+    const length = finiteNumberOrNull(measurements.length ?? measurements.value);
+
+    if (length != null) {
+      nextMeasurement.value = length;
+      nextMeasurement.unit = 'mm';
+    }
+  }
+
+  if (isViewerContourTool(savedAnnotation.toolName)) {
+    const measurements = savedAnnotation.measurements || {};
+    const area = getSavedContourAreaForDisplay(
+      savedAnnotation,
+      referencedImageId || savedAnnotation?.referencedImageId || ''
+    );
+
+    if (area != null) {
+      nextMeasurement.area = area;
+      nextMeasurement.areaUnit = 'mm²';
+    }
+  }
+
+  measurementService.update(updateId || annotationId, nextMeasurement, true);
 }
 
 const { segmentation: segmentationUtils } = cstUtils;
@@ -1175,6 +1913,61 @@ function commandsModule({
         normalizeLabel,
       });
     },
+    setLVTraceMeasurementLabel: async ({ uid } = {}) => {
+      if (!uid) {
+        uiNotificationService.show({
+          title: 'LV Trace',
+          message: 'No LV trace measurement was selected.',
+          type: 'warning',
+          duration: 3500,
+        });
+        return null;
+      }
+
+      const measurement = measurementService.getMeasurement(uid);
+
+      if (!measurement) {
+        uiNotificationService.show({
+          title: 'LV Trace',
+          message: 'LV trace is not available as a viewer measurement.',
+          type: 'warning',
+          duration: 3500,
+        });
+        return null;
+      }
+
+      if (measurement.toolName !== toolNames.SplineROI && measurement.toolName !== 'SplineROI') {
+        uiNotificationService.show({
+          title: 'LV Trace',
+          message: 'Please select an LV Trace / Spline ROI contour.',
+          type: 'warning',
+          duration: 3500,
+        });
+        return null;
+      }
+
+      const nextLabel = await actions._handleMeasurementLabelDialog(uid, {
+        title: 'Set LV Slot',
+        placeholder: 'Choose LV A4C/A2C ED/ES slot',
+        labelConfigOverride: LV_TRACE_MEASUREMENT_LABELS_CONFIG,
+        normalizeLabel: normalizeLVTraceSelection,
+      });
+
+      if (!nextLabel) {
+        return null;
+      }
+
+      const slotInfo = parseLVTraceLabel(nextLabel);
+
+      uiNotificationService.show({
+        title: 'LV Trace',
+        message: slotInfo ? `LV slot set: ${slotInfo.slot}` : `Label set: ${nextLabel}`,
+        type: slotInfo ? 'success' : 'warning',
+        duration: 3000,
+      });
+
+      return nextLabel;
+    },
     setSelectedMeasurementLabel: async () => {
       const selectedAnnotationUIDs = cornerstoneTools.annotation.selection.getAnnotationsSelected();
       const uid = selectedAnnotationUIDs?.[0];
@@ -1189,161 +1982,7 @@ function commandsModule({
         return;
       }
 
-      const measurement = measurementService.getMeasurement(uid);
-
-      if (!measurement) {
-        uiNotificationService.show({
-          title: 'LV Trace',
-          message: 'Selected annotation is not available as a measurement.',
-          type: 'warning',
-          duration: 3500,
-        });
-        return;
-      }
-
-      if (measurement.toolName !== toolNames.SplineROI && measurement.toolName !== 'SplineROI') {
-        uiNotificationService.show({
-          title: 'LV Trace',
-          message: 'Please select an LV Trace / Spline ROI contour.',
-          type: 'warning',
-          duration: 3500,
-        });
-        return;
-      }
-
-      const nextLabel = await actions._handleMeasurementLabelDialog(uid, {
-        title: 'Set LV Slot',
-        placeholder: 'Choose LV A4C/A2C ED/ES slot',
-        labelConfigOverride: LV_TRACE_LABELS_CONFIG,
-        normalizeLabel: normalizeLVTraceSelection,
-      });
-
-      if (!nextLabel) {
-        return;
-      }
-
-      const slotInfo = parseLVTraceLabel(nextLabel);
-
-      uiNotificationService.show({
-        title: 'LV Trace',
-        message: slotInfo ? `LV slot set: ${slotInfo.slot}` : `Label set: ${nextLabel}`,
-        type: slotInfo ? 'success' : 'warning',
-        duration: 3000,
-      });
-    },
-    exportLVTraceReport: async () => {
-      const allMeasurements = measurementService.getMeasurements?.() || [];
-
-      const traces = allMeasurements
-        .filter(
-          measurement =>
-            measurement?.toolName === toolNames.SplineROI || measurement?.toolName === 'SplineROI'
-        )
-        .map(buildLVTraceAnnotation)
-        .filter(Boolean);
-
-      if (!traces.length) {
-        uiNotificationService.show({
-          title: 'LV Trace',
-          message: 'No labelled LV traces found. Assign A4C/A2C ED/ES slots first.',
-          type: 'warning',
-          duration: 4500,
-        });
-        return;
-      }
-
-      const studyUIDs = Array.from(
-        new Set(traces.map(trace => trace.StudyInstanceUID).filter(Boolean))
-      );
-
-      if (studyUIDs.length !== 1) {
-        uiNotificationService.show({
-          title: 'LV Trace',
-          message: 'LV traces must belong to a single study before saving.',
-          type: 'error',
-          duration: 5000,
-        });
-        return;
-      }
-
-      const missingSlots = getMissingLVTraceSlots(traces);
-      const studyUID = studyUIDs[0];
-
-      try {
-        const seriesRes = await fetch(
-          buildFormApiUrl(`series/study/${encodeURIComponent(studyUID)}`),
-          { credentials: 'include' }
-        );
-
-        if (!seriesRes.ok) {
-          throw new Error(`Series lookup failed: ${seriesRes.status}`);
-        }
-
-        const seriesDoc = await seriesRes.json();
-
-        const payload = {
-          MeasurementAnnotations: upsertViewerMeasurementAnnotations({
-            existingRaw: seriesDoc.MeasurementAnnotations,
-            source: 'rviewer-lv-trace',
-            annotations: traces,
-            replaceFilter: annotation =>
-              annotation?.domain === 'echo' && annotation?.toolName === 'SplineROI',
-            extra: {
-              missingSlots,
-            },
-          }),
-          accessType: 'update',
-        };
-
-        const putRes = await fetch(buildFormApiUrl(`series/${seriesDoc._id}`), {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          credentials: 'include',
-          body: JSON.stringify(payload),
-        });
-
-        if (!putRes.ok) {
-          throw new Error(`Save failed: ${putRes.status}`);
-        }
-
-        const updatedSeries = await putRes.json().catch(() => null);
-
-        try {
-          window.opener?.postMessage(
-            {
-              type: 'AR_LV_TRACE_UPDATED',
-              source: 'rviewer',
-              StudyInstanceUID: studyUID,
-              seriesId: String(seriesDoc?._id || ''),
-              fieldNames: ['MeasurementAnnotations'],
-              updatedFields: {
-                MeasurementAnnotations: payload.MeasurementAnnotations,
-              },
-              updatedSeries,
-            },
-            window.location.origin
-          );
-        } catch (notifyError) {
-          console.warn('[LVTrace] Could not notify opener:', notifyError);
-        }
-
-        uiNotificationService.show({
-          title: 'LV Trace',
-          message: missingSlots.length
-            ? `LV traces saved. Missing slots: ${missingSlots.join(', ')}.`
-            : 'All LV traces saved.',
-          type: missingSlots.length ? 'warning' : 'success',
-          duration: 4500,
-        });
-      } catch (err) {
-        console.error('[LVTrace] exportLVTraceReport error:', err);
-        uiNotificationService.show({
-          title: 'LV Trace',
-          message: `Save failed: ${err.message}`,
-          type: 'error',
-          duration: 5000,
-        });
-      }
+      await actions.setLVTraceMeasurementLabel({ uid });
     },
     hydrateMeasurementAnnotationsForActiveStudy: async ({
       seriesDoc,
@@ -3176,26 +3815,73 @@ function commandsModule({
         savedAnnotation
       );
 
-      await sleep(100);
+      await sleep(250);
+
+      const hydratedViewport =
+        cornerstoneViewportService.getCornerstoneViewport(targetViewportId) ||
+        cornerstoneViewportService.getCornerstoneViewport(
+          viewportGridService.getActiveViewportId()
+        ) ||
+        viewport;
 
       if (savedAnnotation.toolName === 'Length') {
         hydrateSavedLengthAnnotationForActiveViewport({
           annotation: savedAnnotation,
-          activeViewportId: viewport.id || targetViewportId,
+          activeViewportId: hydratedViewport.id || targetViewportId,
           referencedImageIdOverride: actualReferencedImageId || '',
         });
+      } else {
+        hydrateSavedViewerAnnotationForViewport({
+          annotation: savedAnnotation,
+          viewport: hydratedViewport,
+          viewportId: hydratedViewport.id || targetViewportId,
+          referencedImageIdOverride: actualReferencedImageId || '',
+          fallbackFrameOfReferenceUID:
+            hydratedViewport.getFrameOfReferenceUID?.() ||
+            savedAnnotation.FrameOfReferenceUID ||
+            '',
+        });
       }
+
+      forceSavedAnnotationDisplayEverywhere({
+        measurementService,
+        savedAnnotation,
+        referencedImageId: actualReferencedImageId || savedAnnotation.referencedImageId || '',
+      });
 
       try {
         const { triggerAnnotationRenderForViewportIds } = await import(
           '@cornerstonejs/tools/utilities'
         );
-        triggerAnnotationRenderForViewportIds([viewport.id || targetViewportId]);
+        triggerAnnotationRenderForViewportIds([hydratedViewport.id || targetViewportId]);
       } catch (error) {
         console.warn('[MeasurementAnnotations] trigger render failed:', error);
       }
 
-      viewport.render?.();
+      hydratedViewport.render?.();
+
+      // SplineROI can recalculate cachedStats multiple times after hydrate/render.
+      // Re-assert the saved AR/Mongo mm² display across that recalculation window.
+      for (const delayMs of [50, 150, 300, 600, 1000]) {
+        await sleep(delayMs);
+
+        forceSavedAnnotationDisplayEverywhere({
+          measurementService,
+          savedAnnotation,
+          referencedImageId: actualReferencedImageId || savedAnnotation.referencedImageId || '',
+        });
+
+        try {
+          const { triggerAnnotationRenderForViewportIds } = await import(
+            '@cornerstonejs/tools/utilities'
+          );
+          triggerAnnotationRenderForViewportIds([hydratedViewport.id || targetViewportId]);
+        } catch (error) {
+          console.warn('[MeasurementAnnotations] delayed trigger render failed:', error);
+        }
+
+        hydratedViewport.render?.();
+      }
     },
   };
 
@@ -3228,11 +3914,11 @@ function commandsModule({
     setMeasurementLabel: {
       commandFn: actions.setMeasurementLabel,
     },
+    setLVTraceMeasurementLabel: {
+      commandFn: actions.setLVTraceMeasurementLabel,
+    },
     setSelectedMeasurementLabel: {
       commandFn: actions.setSelectedMeasurementLabel,
-    },
-    exportLVTraceReport: {
-      commandFn: actions.exportLVTraceReport,
     },
     hydrateMeasurementAnnotationsForActiveStudy: {
       commandFn: actions.hydrateMeasurementAnnotationsForActiveStudy,
@@ -3521,7 +4207,9 @@ function commandsModule({
                 (measurement?.label || measurement?.measurementRole || measurement?.role)
             )
             .map(measurement =>
-              serializeViewerMeasurement(measurement, domain, existingById.get(measurement.uid))
+              serializeViewerMeasurement(measurement, domain, existingById.get(measurement.uid), {
+                displaySetService,
+              })
             )
             .filter(annotation => annotation.referencedImageId || annotation.points?.length);
 

@@ -1,8 +1,8 @@
 import i18n from 'i18next';
+import { metaData } from '@cornerstonejs/core';
 import { id } from './id';
 import initToolGroups from './initToolGroups';
 import toolbarButtons from './toolbarButtons';
-import { LV_TRACE_MEASUREMENT_LABELS_CONFIG } from './utils/lvTraceLabels';
 
 const ECHO_LENGTH_MEASUREMENT_LABELS_CONFIG = {
   id: 'echoLengthMeasurementLabels',
@@ -54,7 +54,464 @@ function getViewerMeasurementDomainFromPath() {
     return 'echo';
   }
 
-  return 'generic';
+  // This is the longitudinal mode. If it is not explicitly a bowel/iUSCAN route,
+  // treat it as echo so echo-only tools such as LV Trace are available even when
+  // the dev/local route basename is '/'.
+  return 'echo';
+}
+
+const AR_US_REGION_PIXEL_SPACING_PROVIDER_PRIORITY = 10000;
+
+function readRawDicomValue(source, keys = []) {
+  if (!source) {
+    return undefined;
+  }
+
+  for (const key of keys) {
+    const value = source[key];
+
+    if (value !== undefined && value !== null) {
+      return value;
+    }
+  }
+
+  return undefined;
+}
+
+function readDicomValue(source, keys = []) {
+  const value = readRawDicomValue(source, keys);
+
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+
+  if (Array.isArray(value)) {
+    return value[0];
+  }
+
+  if (Array.isArray(value?.Value)) {
+    return value.Value[0];
+  }
+
+  if (Array.isArray(value?.value)) {
+    return value.value[0];
+  }
+
+  return value;
+}
+
+function readDicomNumber(source, keys = []) {
+  const numberValue = Number(readDicomValue(source, keys));
+  return Number.isFinite(numberValue) ? numberValue : null;
+}
+
+function getDicomSequenceValues(source, keys = []) {
+  const value = readRawDicomValue(source, keys);
+
+  if (!value) {
+    return [];
+  }
+
+  if (Array.isArray(value)) {
+    return value;
+  }
+
+  if (Array.isArray(value?.Value)) {
+    return value.Value;
+  }
+
+  if (Array.isArray(value?.value)) {
+    return value.value;
+  }
+
+  return [value];
+}
+
+function parseDicomWebImageIdParts(imageId = '') {
+  const match = String(imageId).match(
+    /\/studies\/([^/]+)\/series\/([^/]+)\/instances\/([^/]+)(?:\/frames\/\d+)?/i
+  );
+
+  if (!match) {
+    return null;
+  }
+
+  return {
+    studyInstanceId: decodeURIComponent(match[1]),
+    seriesInstanceId: decodeURIComponent(match[2]),
+    sopInstanceId: decodeURIComponent(match[3]),
+  };
+}
+
+function getSopInstanceIdFromSource(source) {
+  return (
+    source?.SOPInstanceUID ||
+    source?.sopInstanceUID ||
+    source?.metadata?.SOPInstanceUID ||
+    source?.Metadata?.SOPInstanceUID ||
+    readDicomValue(source, ['SOPInstanceUID', '00080018', 'x00080018'])
+  );
+}
+
+function normalizeImageIdForCompare(imageId = '') {
+  return String(imageId || '')
+    .replace(/^wadors:/i, '')
+    .replace(/^dicomweb:/i, '')
+    .replace(/^https?:\/\/[^/]+/i, '')
+    .toLowerCase();
+}
+
+function getDisplaySetImageIds(displaySet) {
+  const candidates = [
+    displaySet?.imageIds,
+    displaySet?.images?.map(image => image?.imageId),
+    displaySet?.instances?.map(instance => instance?.imageId),
+  ].filter(Boolean);
+
+  return candidates.flatMap(candidate => (Array.isArray(candidate) ? candidate : [candidate]));
+}
+
+function getDisplaySetInstances(displaySet) {
+  const candidates = [
+    displaySet?.images,
+    displaySet?.instances,
+    displaySet?.instance,
+    displaySet?.metadata?.images,
+    displaySet?.metadata?.instances,
+  ].filter(Boolean);
+
+  return candidates.flatMap(candidate => (Array.isArray(candidate) ? candidate : [candidate]));
+}
+
+function getDicomInstanceForImageId(displaySetService, imageId = '') {
+  if (!displaySetService || !imageId) {
+    return null;
+  }
+
+  const normalizedImageId = normalizeImageIdForCompare(imageId);
+  const ids = parseDicomWebImageIdParts(imageId);
+  const sopInstanceId = ids?.sopInstanceId || '';
+
+  const displaySets =
+    displaySetService.getActiveDisplaySets?.() || displaySetService.getDisplaySets?.() || [];
+
+  for (const displaySet of displaySets) {
+    const imageIds = getDisplaySetImageIds(displaySet).map(normalizeImageIdForCompare);
+    const instances = getDisplaySetInstances(displaySet);
+
+    const imageIdIndex = imageIds.findIndex(candidate => {
+      return (
+        candidate === normalizedImageId ||
+        candidate.endsWith(normalizedImageId) ||
+        normalizedImageId.endsWith(candidate)
+      );
+    });
+
+    if (imageIdIndex >= 0 && instances[imageIdIndex]) {
+      return instances[imageIdIndex];
+    }
+
+    if (sopInstanceId) {
+      const matchedInstance = instances.find(
+        instance => String(getSopInstanceIdFromSource(instance) || '') === sopInstanceId
+      );
+
+      if (matchedInstance) {
+        return matchedInstance;
+      }
+    }
+  }
+
+  return null;
+}
+
+function normalizePhysicalUnitCode(unitCode) {
+  if (unitCode === undefined || unitCode === null) {
+    return null;
+  }
+
+  if (typeof unitCode === 'number') {
+    return unitCode;
+  }
+
+  const text = String(unitCode).trim();
+  const hexMatch = text.match(/^0*([0-9a-f]+)h$/i);
+
+  if (hexMatch) {
+    return parseInt(hexMatch[1], 16);
+  }
+
+  const numberValue = Number(text);
+  return Number.isFinite(numberValue) ? numberValue : null;
+}
+
+function getPhysicalUnitScaleToMM(unitCode) {
+  const code = normalizePhysicalUnitCode(unitCode);
+
+  // DICOM US Region Calibration:
+  // 0003H = cm, so cm/pixel -> mm/pixel requires × 10.
+  // Do not use non-spatial units such as seconds, hertz, velocity, etc.
+  if (code === 3) {
+    return 10;
+  }
+
+  return null;
+}
+
+function getUltrasoundRegionsFromInstance(instance) {
+  const candidates = [
+    instance,
+    instance?.metadata,
+    instance?.Metadata,
+    instance?.attributes,
+    instance?.dicom,
+  ].filter(Boolean);
+
+  for (const candidate of candidates) {
+    const regions = getDicomSequenceValues(candidate, [
+      'SequenceOfUltrasoundRegions',
+      'sequenceOfUltrasoundRegions',
+      '00186011',
+      'x00186011',
+    ]);
+
+    if (regions.length) {
+      return regions;
+    }
+  }
+
+  return [];
+}
+
+function normalizeUltrasoundRegion(region) {
+  const minX = readDicomNumber(region, [
+    'RegionLocationMinX0',
+    'regionLocationMinX0',
+    '00186018',
+    'x00186018',
+  ]);
+  const minY = readDicomNumber(region, [
+    'RegionLocationMinY0',
+    'regionLocationMinY0',
+    '0018601A',
+    'x0018601A',
+  ]);
+  const maxX = readDicomNumber(region, [
+    'RegionLocationMaxX1',
+    'regionLocationMaxX1',
+    '0018601C',
+    'x0018601C',
+  ]);
+  const maxY = readDicomNumber(region, [
+    'RegionLocationMaxY1',
+    'regionLocationMaxY1',
+    '0018601E',
+    'x0018601E',
+  ]);
+  const physicalUnitsX = readDicomValue(region, [
+    'PhysicalUnitsXDirection',
+    'physicalUnitsXDirection',
+    '00186024',
+    'x00186024',
+  ]);
+  const physicalUnitsY = readDicomValue(region, [
+    'PhysicalUnitsYDirection',
+    'physicalUnitsYDirection',
+    '00186026',
+    'x00186026',
+  ]);
+  const physicalDeltaX = readDicomNumber(region, [
+    'PhysicalDeltaX',
+    'physicalDeltaX',
+    '0018602C',
+    'x0018602C',
+  ]);
+  const physicalDeltaY = readDicomNumber(region, [
+    'PhysicalDeltaY',
+    'physicalDeltaY',
+    '0018602E',
+    'x0018602E',
+  ]);
+
+  const xScale = getPhysicalUnitScaleToMM(physicalUnitsX);
+  const yScale = getPhysicalUnitScaleToMM(physicalUnitsY);
+
+  if (
+    physicalDeltaX == null ||
+    physicalDeltaY == null ||
+    !xScale ||
+    !yScale ||
+    physicalDeltaX === 0 ||
+    physicalDeltaY === 0
+  ) {
+    return null;
+  }
+
+  return {
+    sourceRegion: region,
+    minX,
+    minY,
+    maxX,
+    maxY,
+    physicalDeltaX,
+    physicalDeltaY,
+    physicalUnitsXDirection: normalizePhysicalUnitCode(physicalUnitsX),
+    physicalUnitsYDirection: normalizePhysicalUnitCode(physicalUnitsY),
+    column: Math.abs(physicalDeltaX) * xScale,
+    row: Math.abs(physicalDeltaY) * yScale,
+  };
+}
+
+function getRegionPixelArea(region) {
+  if (
+    region?.minX == null ||
+    region?.minY == null ||
+    region?.maxX == null ||
+    region?.maxY == null
+  ) {
+    return 0;
+  }
+
+  return Math.abs((region.maxX - region.minX) * (region.maxY - region.minY));
+}
+
+function chooseRepresentativeUltrasoundRegion(regions = []) {
+  const normalizedRegions = regions.map(normalizeUltrasoundRegion).filter(Boolean);
+
+  if (!normalizedRegions.length) {
+    return null;
+  }
+
+  // Metadata providers receive only imageId, not measurement points.
+  // Prefer the largest spatially calibrated region as the best image-level
+  // approximation for B-mode echo/US anatomy.
+  return normalizedRegions.sort((a, b) => getRegionPixelArea(b) - getRegionPixelArea(a))[0];
+}
+
+function buildCornerstoneUltrasoundRegionMetadata(region) {
+  if (!region) {
+    return null;
+  }
+
+  return {
+    ...(region.sourceRegion || {}),
+
+    // Cornerstone core reads the lower-camel names from ultrasoundRegions metadata.
+    regionLocationMinX0: region.minX,
+    regionLocationMinY0: region.minY,
+    regionLocationMaxX1: region.maxX,
+    regionLocationMaxY1: region.maxY,
+    physicalUnitsXDirection: region.physicalUnitsXDirection,
+    physicalUnitsYDirection: region.physicalUnitsYDirection,
+    physicalDeltaX: region.physicalDeltaX,
+    physicalDeltaY: region.physicalDeltaY,
+  };
+}
+
+function getRepresentativeUltrasoundRegionMetadataForImageId(displaySetService, imageId = '') {
+  const instance = getDicomInstanceForImageId(displaySetService, imageId);
+
+  if (!instance) {
+    return undefined;
+  }
+
+  const regions = getUltrasoundRegionsFromInstance(instance);
+  const region = chooseRepresentativeUltrasoundRegion(regions);
+  const cornerstoneRegion = buildCornerstoneUltrasoundRegionMetadata(region);
+
+  if (!cornerstoneRegion) {
+    return undefined;
+  }
+
+  return [cornerstoneRegion];
+}
+
+function getUSRegionCalibratedPixelSpacingForImageId(displaySetService, imageId = '') {
+  const instance = getDicomInstanceForImageId(displaySetService, imageId);
+
+  if (!instance) {
+    return undefined;
+  }
+
+  const regions = getUltrasoundRegionsFromInstance(instance);
+  const region = chooseRepresentativeUltrasoundRegion(regions);
+
+  if (!region?.row || !region?.column) {
+    return undefined;
+  }
+
+  return {
+    rowPixelSpacing: region.row,
+    columnPixelSpacing: region.column,
+    spacing: [region.row, region.column],
+    unit: 'mm',
+    type: 'AR_US_REGION_CALIBRATION',
+  };
+}
+
+function createARUSRegionCalibrationProvider({ displaySetService }) {
+  const debug = String(window.localStorage?.getItem('AR_US_REGION_CAL_DEBUG') || '') === '1';
+
+  return function arUSRegionCalibrationProvider(type, imageId) {
+    if (type === 'ultrasoundRegions') {
+      const ultrasoundRegions = getRepresentativeUltrasoundRegionMetadataForImageId(
+        displaySetService,
+        imageId
+      );
+
+      if (debug) {
+        console.info(
+          `[AR US Region Calibration] ultrasoundRegions lookup ${JSON.stringify({
+            hit: !!ultrasoundRegions,
+            imageId,
+            regionCount: ultrasoundRegions?.length || 0,
+            region: ultrasoundRegions?.[0] || null,
+          })}`
+        );
+      }
+
+      return ultrasoundRegions;
+    }
+
+    if (type === 'calibratedPixelSpacing') {
+      const spacing = getUSRegionCalibratedPixelSpacingForImageId(displaySetService, imageId);
+
+      if (debug) {
+        console.info(
+          `[AR US Region Calibration] calibratedPixelSpacing lookup ${JSON.stringify({
+            hit: !!spacing,
+            imageId,
+            spacing: spacing || null,
+          })}`
+        );
+      }
+
+      return spacing;
+    }
+
+    return undefined;
+  };
+}
+
+const BASE_MEASUREMENT_TOOL_IDS = [
+  'Length',
+  'Bidirectional',
+  'ArrowAnnotate',
+  'EllipticalROI',
+  'RectangleROI',
+  'CircleROI',
+];
+
+const ECHO_ONLY_MEASUREMENT_TOOL_IDS = ['LVTrace', 'LVTraceSlot'];
+
+const GENERIC_CONTOUR_TOOL_IDS = ['PlanarFreehandROI', 'SplineROI', 'LivewireContour'];
+
+function getMeasurementToolIdsForDomain(domain) {
+  return [
+    ...BASE_MEASUREMENT_TOOL_IDS,
+    ...(domain === 'echo' ? ECHO_ONLY_MEASUREMENT_TOOL_IDS : []),
+    ...GENERIC_CONTOUR_TOOL_IDS,
+  ];
 }
 
 async function resolveViewerMeasurementDomain(commandsManager) {
@@ -75,20 +532,17 @@ async function resolveViewerMeasurementDomain(commandsManager) {
 
 async function getLabelConfigForMeasurement(measurement, commandsManager) {
   const toolName = measurement?.toolName;
+  const domain = await resolveViewerMeasurementDomain(commandsManager);
 
   if (toolName === 'SplineROI') {
     return {
-      title: 'Set LV Slot',
-      placeholder: 'Choose LV A4C/A2C ED/ES slot',
-      labelConfigOverride: LV_TRACE_MEASUREMENT_LABELS_CONFIG,
+      commandName: 'setLVTraceMeasurementLabel',
     };
   }
 
   if (toolName !== 'Length') {
     return null;
   }
-
-  const domain = await resolveViewerMeasurementDomain(commandsManager);
 
   if (domain === 'iuscan') {
     return null;
@@ -184,6 +638,7 @@ function modeFactory({ modeConfiguration }) {
   let _measurementAddedSub = null;
   let _suppressLabelPrompt = false;
   let restoreConsoleWarn: null | (() => void) = null;
+  let removeARUSRegionPixelSpacingProvider: null | (() => void) = null;
 
   return {
     // TODO: We're using this as a route segment
@@ -214,6 +669,8 @@ function modeFactory({ modeConfiguration }) {
         restoreConsoleWarn = null;
       };
 
+      removeARUSRegionPixelSpacingProvider?.();
+
       const {
         measurementService,
         toolbarService,
@@ -221,7 +678,22 @@ function modeFactory({ modeConfiguration }) {
         customizationService,
         cineService,
         panelService,
+        displaySetService,
       } = servicesManager.services;
+
+      const arUSRegionPixelSpacingProvider = createARUSRegionCalibrationProvider({
+        displaySetService,
+      });
+
+      (metaData as any).addProvider?.(
+        arUSRegionPixelSpacingProvider,
+        AR_US_REGION_PIXEL_SPACING_PROVIDER_PRIORITY
+      );
+
+      removeARUSRegionPixelSpacingProvider = () => {
+        (metaData as any).removeProvider?.(arUSRegionPixelSpacingProvider);
+        removeARUSRegionPixelSpacingProvider = null;
+      };
 
       measurementService.clearMeasurements();
 
@@ -250,12 +722,19 @@ function modeFactory({ modeConfiguration }) {
               title: labelOptions.title,
               placeholder: labelOptions.placeholder,
               labelConfigId: labelOptions.labelConfigOverride?.id,
+              commandName: labelOptions.commandName,
             });
 
-            await commandsManager.runCommand('setMeasurementLabel', {
-              uid: measurement.uid,
-              ...labelOptions,
-            });
+            if (labelOptions.commandName) {
+              await commandsManager.runCommand(labelOptions.commandName, {
+                uid: measurement.uid,
+              });
+            } else {
+              await commandsManager.runCommand('setMeasurementLabel', {
+                uid: measurement.uid,
+                ...labelOptions,
+              });
+            }
 
             panelService?.activatePanel?.(
               'extension-ar-measurements.panelModule.arMeasurements',
@@ -312,20 +791,10 @@ function modeFactory({ modeConfiguration }) {
         'windowLevelMenu',
       ]);
 
-      toolbarService.updateSection('MeasurementTools', [
-        'Length',
-        'Bidirectional',
-        'ArrowAnnotate',
-        'EllipticalROI',
-        'RectangleROI',
-        'CircleROI',
-        'LVTrace',
-        'LVTraceSlot',
-        'SaveLVTraces',
-        'PlanarFreehandROI',
-        'SplineROI',
-        'LivewireContour',
-      ]);
+      toolbarService.updateSection(
+        'MeasurementTools',
+        getMeasurementToolIdsForDomain(getViewerMeasurementDomainFromPath())
+      );
 
       toolbarService.updateSection('MoreTools', [
         'Reset',
@@ -351,9 +820,6 @@ function modeFactory({ modeConfiguration }) {
 
       customizationService.setCustomizations(
         {
-          measurementLabels: {
-            $set: LV_TRACE_MEASUREMENT_LABELS_CONFIG,
-          },
           'panelSegmentation.disableEditing': {
             $set: true,
           },
@@ -428,6 +894,7 @@ function modeFactory({ modeConfiguration }) {
       _suppressLabelPrompt = false;
 
       restoreConsoleWarn?.();
+      removeARUSRegionPixelSpacingProvider?.();
       customizationService.onModeExit();
 
       uiDialogService.hideAll();

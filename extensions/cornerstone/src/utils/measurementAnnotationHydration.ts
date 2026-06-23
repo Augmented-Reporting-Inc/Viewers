@@ -1,4 +1,6 @@
-import { annotation as csToolsAnnotation } from '@cornerstonejs/tools';
+import { metaData } from '@cornerstonejs/core';
+import { annotation as csToolsAnnotation, ToolGroupManager } from '@cornerstonejs/tools';
+import * as cornerstoneTools from '@cornerstonejs/tools';
 import { getRequestedWorkflowAnnotations } from './measurementAnnotations';
 import { buildFormApiUrl } from './formApi';
 
@@ -71,26 +73,6 @@ export async function fetchSeriesDocForActiveStudy(servicesManager) {
     SeriesInstanceUID: seriesInstanceId || '',
   });
 
-  if (studyInstanceId) {
-    const studyResult = await fetchJsonIfOk(
-      buildFormApiUrl(`series/study/${encodeURIComponent(studyInstanceId)}`)
-    );
-
-    if (studyResult.ok) {
-      console.info('[MeasurementAnnotations] resolved by StudyInstanceUID', {
-        seriesId: studyResult.data?._id,
-        hasMeasurementAnnotations: !!studyResult.data?.MeasurementAnnotations,
-      });
-
-      return studyResult.data;
-    }
-
-    console.warn('[MeasurementAnnotations] StudyInstanceUID lookup failed', {
-      status: studyResult.status,
-      url: studyResult.url,
-    });
-  }
-
   if (seriesInstanceId) {
     const seriesResult = await fetchJsonIfOk(
       buildFormApiUrl(`series/siuid/${encodeURIComponent(seriesInstanceId)}`)
@@ -108,6 +90,26 @@ export async function fetchSeriesDocForActiveStudy(servicesManager) {
     console.warn('[MeasurementAnnotations] SeriesInstanceUID lookup failed', {
       status: seriesResult.status,
       url: seriesResult.url,
+    });
+  }
+
+  if (studyInstanceId) {
+    const studyResult = await fetchJsonIfOk(
+      buildFormApiUrl(`series/study/${encodeURIComponent(studyInstanceId)}`)
+    );
+
+    if (studyResult.ok) {
+      console.info('[MeasurementAnnotations] resolved by StudyInstanceUID fallback', {
+        seriesId: studyResult.data?._id,
+        hasMeasurementAnnotations: !!studyResult.data?.MeasurementAnnotations,
+      });
+
+      return studyResult.data;
+    }
+
+    console.warn('[MeasurementAnnotations] StudyInstanceUID lookup failed', {
+      status: studyResult.status,
+      url: studyResult.url,
     });
   }
 
@@ -195,6 +197,358 @@ function finiteNumberOrNull(value) {
   return Number.isFinite(numberValue) ? numberValue : null;
 }
 
+function normalizeDisplayLengthUnit(unit = '') {
+  return /px/i.test(String(unit || '')) ? 'mm' : unit || 'mm';
+}
+
+function normalizeDisplayAreaUnit(unit = '') {
+  return /px/i.test(String(unit || '')) ? 'mm²' : unit || 'mm²';
+}
+
+function getCornerstonePixelSpacingMM(referencedImageId = '') {
+  if (!referencedImageId) {
+    return null;
+  }
+
+  const calibratedPixelSpacing = metaData.get?.('calibratedPixelSpacing', referencedImageId) || {};
+  const imagePlaneModule = metaData.get?.('imagePlaneModule', referencedImageId) || {};
+  const imagePixelModule = metaData.get?.('imagePixelModule', referencedImageId) || {};
+  const pixelSpacing = imagePixelModule.pixelSpacing || imagePlaneModule.pixelSpacing || [];
+
+  const row =
+    finiteNumberOrNull(calibratedPixelSpacing.rowPixelSpacing) ??
+    finiteNumberOrNull(calibratedPixelSpacing[0]) ??
+    finiteNumberOrNull(imagePlaneModule.rowPixelSpacing) ??
+    finiteNumberOrNull(pixelSpacing[0]);
+
+  const column =
+    finiteNumberOrNull(calibratedPixelSpacing.columnPixelSpacing) ??
+    finiteNumberOrNull(calibratedPixelSpacing[1]) ??
+    finiteNumberOrNull(imagePlaneModule.columnPixelSpacing) ??
+    finiteNumberOrNull(pixelSpacing[1]);
+
+  if (!row || !column || row <= 0 || column <= 0 || (row === 1 && column === 1)) {
+    return null;
+  }
+
+  return {
+    row,
+    column,
+    unit: 'mm',
+  };
+}
+
+function getSavedContourAreaMM2(savedAnnotation, referencedImageId = '') {
+  const measurements = savedAnnotation?.measurements || {};
+  const rawArea = finiteNumberOrNull(measurements.area);
+  const rawAreaUnit = String(measurements.areaUnit || '').trim();
+
+  if (rawArea == null) {
+    return null;
+  }
+
+  if (/px/i.test(rawAreaUnit)) {
+    const pixelSpacing = getCornerstonePixelSpacingMM(
+      referencedImageId || savedAnnotation?.referencedImageId || ''
+    );
+
+    if (pixelSpacing) {
+      return rawArea * pixelSpacing.row * pixelSpacing.column;
+    }
+  }
+
+  return rawArea;
+}
+
+function getLinearUnitForAreaUnit(areaUnit = '') {
+  const normalized = normalizeDisplayAreaUnit(areaUnit);
+
+  if (/mm/i.test(normalized)) {
+    return 'mm';
+  }
+
+  if (/cm/i.test(normalized)) {
+    return 'cm';
+  }
+
+  return 'mm';
+}
+
+function removeInvalidCachedStatsKeys(cachedStats = {}) {
+  return Object.fromEntries(
+    Object.entries(cachedStats || {}).filter(([targetId]) =>
+      /^(imageId|volumeId):/i.test(String(targetId || ''))
+    )
+  );
+}
+
+function getSavedContourStats(savedAnnotation, referencedImageId = '') {
+  const area = getSavedContourAreaMM2(savedAnnotation, referencedImageId);
+
+  if (area == null) {
+    return null;
+  }
+
+  return {
+    area,
+    areaUnit: 'mm²',
+    areaUnits: 'mm²',
+    unit: 'mm',
+    units: 'mm',
+    modalityUnit: 'mm',
+    modalityUnitOptions: {
+      areaUnit: 'mm²',
+      unit: 'mm',
+    },
+    arSavedMeasurementArea: area,
+    arSavedMeasurementAreaUnit: 'mm²',
+  };
+}
+
+function formatSavedAreaMM2(area) {
+  if (!Number.isFinite(area)) {
+    return '';
+  }
+
+  if (area >= 100) {
+    return area.toFixed(0);
+  }
+
+  if (area >= 10) {
+    return area.toFixed(1);
+  }
+
+  return area.toFixed(2);
+}
+
+function getSavedContourDisplayText(savedAnnotation, referencedImageId = '') {
+  const area = getSavedContourAreaMM2(savedAnnotation, referencedImageId);
+
+  if (area == null) {
+    return [];
+  }
+
+  return [`${formatSavedAreaMM2(area)} mm²`];
+}
+
+function getToolGroupForViewportSafe(viewport, viewportId = '') {
+  const resolvedViewportId = viewport?.id || viewportId;
+
+  if (!resolvedViewportId) {
+    return null;
+  }
+
+  try {
+    return ToolGroupManager.getToolGroupForViewport?.(
+      resolvedViewportId,
+      viewport?.renderingEngineId
+    );
+  } catch {
+    try {
+      return ToolGroupManager.getToolGroupForViewport?.(resolvedViewportId);
+    } catch {
+      return null;
+    }
+  }
+}
+
+function installSavedContourTextOverrideForViewport({ viewport, viewportId = '', toolName }) {
+  if (!viewport || !CONTOUR_TOOL_NAMES.has(toolName)) {
+    return;
+  }
+
+  const toolGroup = getToolGroupForViewportSafe(viewport, viewportId);
+  const toolInstance = toolGroup?.getToolInstance?.(toolName);
+
+  if (!toolInstance || toolInstance.__arSavedContourTextOverrideInstalled) {
+    return;
+  }
+
+  const previousGetTextLines = toolInstance.configuration?.getTextLines;
+
+  const getOverrideText = (...args) => {
+    for (const arg of args) {
+      const candidates = [arg?.data, arg?.annotation?.data, arg?.annotationData, arg].filter(
+        Boolean
+      );
+
+      for (const candidate of candidates) {
+        const overrideText = candidate?.arSavedMeasurementDisplayText;
+
+        if (Array.isArray(overrideText) && overrideText.length > 0) {
+          return overrideText;
+        }
+      }
+    }
+
+    return null;
+  };
+
+  const nextConfiguration = {
+    ...(toolInstance.configuration || {}),
+    getTextLines: function (...args) {
+      const overrideText = getOverrideText(...args);
+
+      if (overrideText) {
+        return overrideText;
+      }
+
+      if (typeof previousGetTextLines === 'function') {
+        return previousGetTextLines.call(this, ...args);
+      }
+
+      return [];
+    },
+  };
+
+  // Set both. Some Cornerstone versions mutate through the tool group; others
+  // read directly from the existing tool instance.
+  toolInstance.configuration = nextConfiguration;
+  toolGroup?.setToolConfiguration?.(toolName, nextConfiguration, true);
+
+  toolInstance.__arSavedContourTextOverrideInstalled = true;
+}
+
+function applySavedContourDisplayTextOverride({
+  targetAnnotation,
+  savedAnnotation,
+  viewport,
+  viewportId = '',
+}) {
+  const toolName = targetAnnotation?.metadata?.toolName || inferToolName(savedAnnotation);
+
+  if (!targetAnnotation || !CONTOUR_TOOL_NAMES.has(toolName)) {
+    return targetAnnotation;
+  }
+
+  const displayText = getSavedContourDisplayText(
+    savedAnnotation,
+    targetAnnotation?.metadata?.referencedImageId || savedAnnotation?.referencedImageId || ''
+  );
+
+  if (!displayText.length) {
+    return targetAnnotation;
+  }
+
+  installSavedContourTextOverrideForViewport({
+    viewport,
+    viewportId,
+    toolName,
+  });
+
+  targetAnnotation.data = {
+    ...(targetAnnotation.data || {}),
+    arSavedMeasurementDisplayText: displayText,
+  };
+
+  return targetAnnotation;
+}
+
+function getValidCornerstoneCachedStatsKeys(cachedStats = {}) {
+  return Object.keys(cachedStats || {}).filter(targetId =>
+    /^(imageId|volumeId):/i.test(String(targetId || ''))
+  );
+}
+
+function normalizeImageTargetId(imageId = '') {
+  const value = String(imageId || '').trim();
+
+  if (!value) {
+    return '';
+  }
+
+  if (/^(imageId|volumeId):/i.test(value)) {
+    return value;
+  }
+
+  return `imageId:${value}`;
+}
+
+function repatchSavedContourStatsAfterCornerstoneRecalc({
+  annotationUID,
+  savedAnnotation,
+  referencedImageId = '',
+  viewport,
+}) {
+  if (!annotationUID || !CONTOUR_TOOL_NAMES.has(inferToolName(savedAnnotation))) {
+    return;
+  }
+
+  const patchOnce = delayMs => {
+    window.setTimeout(() => {
+      const targetAnnotation = csToolsAnnotation.state.getAnnotation?.(annotationUID);
+
+      if (!targetAnnotation) {
+        return;
+      }
+
+      patchContourCachedStatsFromSaved(targetAnnotation, savedAnnotation, referencedImageId);
+
+      try {
+        viewport?.render?.();
+      } catch {
+        // Ignore render failures during viewport teardown / navigation.
+      }
+    }, delayMs);
+  };
+
+  // SplineROI emits multiple late measurement updates after hydrate.
+  // Patch after each likely recalculation window.
+  [0, 25, 75, 150, 300, 600, 1000].forEach(patchOnce);
+}
+
+function patchContourCachedStatsFromSaved(
+  targetAnnotation,
+  savedAnnotation,
+  referencedImageId = ''
+) {
+  const toolName = targetAnnotation?.metadata?.toolName || inferToolName(savedAnnotation);
+
+  if (!targetAnnotation || !CONTOUR_TOOL_NAMES.has(toolName)) {
+    return targetAnnotation;
+  }
+
+  const savedStats = getSavedContourStats(savedAnnotation, referencedImageId);
+
+  if (!savedStats) {
+    return targetAnnotation;
+  }
+
+  const existingCachedStats = removeInvalidCachedStatsKeys(
+    targetAnnotation.data?.cachedStats || {}
+  );
+
+  const existingKeys = getValidCornerstoneCachedStatsKeys(existingCachedStats);
+  const referencedTargetId = normalizeImageTargetId(
+    referencedImageId || savedAnnotation?.referencedImageId || ''
+  );
+
+  const keysToPatch = Array.from(new Set([...existingKeys, referencedTargetId].filter(Boolean)));
+
+  targetAnnotation.data = {
+    ...(targetAnnotation.data || {}),
+    cachedStats: {
+      ...existingCachedStats,
+      ...Object.fromEntries(
+        keysToPatch.map(targetId => [
+          targetId,
+          {
+            ...(existingCachedStats[targetId] || {}),
+            ...savedStats,
+          },
+        ])
+      ),
+    },
+    arSavedMeasurementDisplayText:
+      getSavedContourDisplayText(savedAnnotation, referencedImageId) || undefined,
+    arSavedMeasurementStatsLocked: true,
+  };
+
+  targetAnnotation.invalidated = false;
+
+  return targetAnnotation;
+}
+
 function buildCachedStatsForAnnotation(annotation, toolName, referencedImageId) {
   if (hasCornerstoneCachedStatsShape(annotation.cachedStats)) {
     return annotation.cachedStats;
@@ -218,23 +572,21 @@ function buildCachedStatsForAnnotation(annotation, toolName, referencedImageId) 
     return {
       [targetId]: {
         length,
-        unit: measurements.lengthUnit || measurements.unit || '',
+        unit: normalizeDisplayLengthUnit(measurements.lengthUnit || measurements.unit || ''),
+        lengthUnit: normalizeDisplayLengthUnit(measurements.lengthUnit || measurements.unit || ''),
       },
     };
   }
 
   if (CONTOUR_TOOL_NAMES.has(toolName)) {
-    const area = finiteNumberOrNull(measurements.area);
+    const savedStats = getSavedContourStats(annotation, referencedImageId);
 
-    if (area == null) {
+    if (!savedStats) {
       return {};
     }
 
     return {
-      [targetId]: {
-        area,
-        areaUnit: measurements.areaUnit || '',
-      },
+      [targetId]: savedStats,
     };
   }
 
@@ -286,10 +638,254 @@ function buildCornerstoneAnnotation(annotation, fallbackFrameOfReferenceUID = ''
     },
     data,
     highlighted: false,
-    invalidated: true,
+    invalidated: false,
     isLocked: !!annotation.isLocked,
     isVisible: annotation.isVisible !== false,
   };
+}
+
+function getToolClassForHydration(toolName) {
+  switch (toolName) {
+    case 'SplineROI':
+      return cornerstoneTools.SplineROITool;
+    case 'PlanarFreehandROI':
+      return cornerstoneTools.PlanarFreehandROITool;
+    case 'LivewireContour':
+      return cornerstoneTools.LivewireContourTool;
+    case 'Length':
+      return cornerstoneTools.LengthTool;
+    default:
+      return null;
+  }
+}
+
+function patchHydratedAnnotationFromSaved({
+  hydrated,
+  fallback,
+  savedAnnotation,
+  referencedImageId,
+  fallbackFrameOfReferenceUID = '',
+}) {
+  const annotationUID =
+    hydrated?.annotationUID ||
+    hydrated?.uid ||
+    fallback?.annotationUID ||
+    savedAnnotation?.uid ||
+    savedAnnotation?.annotationId;
+
+  const target = csToolsAnnotation.state.getAnnotation?.(annotationUID) || hydrated || fallback;
+
+  if (!target) {
+    return null;
+  }
+
+  const toolName = inferToolName(savedAnnotation);
+  const points = Array.isArray(savedAnnotation?.points) ? savedAnnotation.points : [];
+
+  target.annotationUID = annotationUID;
+  target.metadata = {
+    ...(target.metadata || {}),
+    ...(fallback?.metadata || {}),
+    toolName,
+    referencedImageId,
+    FrameOfReferenceUID:
+      target.metadata?.FrameOfReferenceUID ||
+      fallback?.metadata?.FrameOfReferenceUID ||
+      savedAnnotation.FrameOfReferenceUID ||
+      fallbackFrameOfReferenceUID ||
+      '',
+    SOPInstanceUID: savedAnnotation.SOPInstanceUID,
+    SeriesInstanceUID: savedAnnotation.SeriesInstanceUID || savedAnnotation.referenceSeriesUID,
+    StudyInstanceUID: savedAnnotation.StudyInstanceUID,
+  };
+
+  target.data = {
+    ...(target.data || {}),
+    ...(fallback?.data || {}),
+    label: savedAnnotation.label || savedAnnotation.measurementRole || savedAnnotation.role || '',
+    handles: {
+      ...(target.data?.handles || {}),
+      ...(fallback?.data?.handles || {}),
+      points,
+      activeHandleIndex: null,
+      textBox: {
+        ...(target.data?.handles?.textBox || {}),
+        ...(fallback?.data?.handles?.textBox || {}),
+        hasMoved: false,
+        worldPosition: points[0] || [0, 0, 0],
+        worldBoundingBox: null,
+      },
+    },
+    cachedStats: buildCachedStatsForAnnotation(savedAnnotation, toolName, referencedImageId),
+  };
+
+  if (CONTOUR_TOOL_NAMES.has(toolName)) {
+    target.data.contour = {
+      ...(target.data?.contour || {}),
+      closed: true,
+      polyline: points,
+    };
+  }
+
+  target.invalidated = false;
+  target.isVisible = savedAnnotation.isVisible !== false;
+  target.isLocked = !!savedAnnotation.isLocked;
+
+  return target;
+}
+
+function hydrateWithToolClass({
+  savedAnnotation,
+  viewportId,
+  fallbackAnnotation,
+  referencedImageId,
+  fallbackFrameOfReferenceUID = '',
+}) {
+  const toolName = inferToolName(savedAnnotation);
+  const ToolClass = getToolClassForHydration(toolName);
+  const points = Array.isArray(savedAnnotation?.points) ? savedAnnotation.points : [];
+  const annotationUID = savedAnnotation.uid || savedAnnotation.annotationId;
+
+  if (!ToolClass?.hydrate || !viewportId || !points.length || !annotationUID) {
+    return null;
+  }
+
+  try {
+    const existing = csToolsAnnotation.state.getAnnotation?.(annotationUID);
+
+    if (existing) {
+      csToolsAnnotation.state.removeAnnotation?.(annotationUID);
+    }
+
+    const hydrated = ToolClass.hydrate(viewportId, points, {
+      annotationUID,
+    });
+
+    return patchHydratedAnnotationFromSaved({
+      hydrated,
+      fallback: fallbackAnnotation,
+      savedAnnotation,
+      referencedImageId,
+      fallbackFrameOfReferenceUID,
+    });
+  } catch (error) {
+    console.warn('[MeasurementAnnotations] tool hydrate failed:', {
+      toolName,
+      annotationUID,
+      error,
+    });
+    return null;
+  }
+}
+
+export function hydrateSavedViewerAnnotationForViewport({
+  annotation,
+  viewport,
+  viewportId,
+  referencedImageIdOverride = '',
+  fallbackFrameOfReferenceUID = '',
+}: {
+  annotation: any;
+  viewport?: any;
+  viewportId?: string;
+  referencedImageIdOverride?: string;
+  fallbackFrameOfReferenceUID?: string;
+}) {
+  const annotationToHydrate = {
+    ...annotation,
+    referencedImageId: referencedImageIdOverride || annotation?.referencedImageId,
+  };
+
+  const cornerstoneAnnotation = buildCornerstoneAnnotation(
+    annotationToHydrate,
+    fallbackFrameOfReferenceUID
+  );
+
+  if (!cornerstoneAnnotation) {
+    return null;
+  }
+
+  const annotationUID = cornerstoneAnnotation.annotationUID;
+  const toolName = cornerstoneAnnotation.metadata?.toolName || inferToolName(annotationToHydrate);
+
+  installSavedContourTextOverrideForViewport({
+    viewport,
+    viewportId,
+    toolName,
+  });
+
+  const toolHydratedAnnotation = hydrateWithToolClass({
+    savedAnnotation: annotationToHydrate,
+    viewportId,
+    fallbackAnnotation: cornerstoneAnnotation,
+    referencedImageId: cornerstoneAnnotation.metadata.referencedImageId,
+    fallbackFrameOfReferenceUID,
+  });
+
+  if (toolHydratedAnnotation) {
+    const hydratedAnnotationUID =
+      toolHydratedAnnotation.annotationUID || toolHydratedAnnotation.uid || annotationUID;
+
+    const targetAnnotation =
+      csToolsAnnotation.state.getAnnotation?.(hydratedAnnotationUID) || toolHydratedAnnotation;
+
+    patchContourCachedStatsFromSaved(
+      targetAnnotation,
+      annotationToHydrate,
+      cornerstoneAnnotation.metadata.referencedImageId
+    );
+
+    applySavedContourDisplayTextOverride({
+      targetAnnotation,
+      savedAnnotation: annotationToHydrate,
+      viewport,
+      viewportId,
+    });
+
+    repatchSavedContourStatsAfterCornerstoneRecalc({
+      annotationUID: hydratedAnnotationUID,
+      savedAnnotation: annotationToHydrate,
+      referencedImageId: cornerstoneAnnotation.metadata.referencedImageId,
+      viewport,
+    });
+
+    csToolsAnnotation.selection.setAnnotationSelected?.(hydratedAnnotationUID, true);
+    return targetAnnotation;
+  }
+
+  const existing = csToolsAnnotation.state.getAnnotation?.(annotationUID);
+
+  if (existing) {
+    csToolsAnnotation.state.removeAnnotation?.(annotationUID);
+  }
+
+  const groupSelector =
+    viewport?.element ||
+    cornerstoneAnnotation.metadata.FrameOfReferenceUID ||
+    viewportId ||
+    cornerstoneAnnotation.metadata.referencedImageId;
+
+  csToolsAnnotation.state.addAnnotation(cornerstoneAnnotation, groupSelector);
+  applySavedContourDisplayTextOverride({
+    targetAnnotation: cornerstoneAnnotation,
+    savedAnnotation: annotationToHydrate,
+    viewport,
+    viewportId,
+  });
+  patchContourCachedStatsFromSaved(
+    cornerstoneAnnotation,
+    annotationToHydrate,
+    cornerstoneAnnotation.metadata.referencedImageId
+  );
+  repatchSavedContourStatsAfterCornerstoneRecalc({
+    annotationUID,
+    savedAnnotation: annotationToHydrate,
+    referencedImageId: cornerstoneAnnotation.metadata.referencedImageId,
+    viewport,
+  });
+  csToolsAnnotation.selection.setAnnotationSelected?.(annotationUID, true);
+
+  return cornerstoneAnnotation;
 }
 
 export async function hydrateMeasurementAnnotationsForSeriesDoc({
@@ -316,101 +912,23 @@ export async function hydrateMeasurementAnnotationsForSeriesDoc({
       seriesDoc,
       restoredCount: 0,
       skippedCount: 0,
+      replacedCount: 0,
       restoredAnnotations: [],
       processedAnnotations: [],
     };
   }
 
-  const restoredAnnotations = [];
-  const processedAnnotations = [];
-  let skippedCount = 0;
-  let replacedCount = 0;
-
-  const activeViewportInfo = getActiveViewportInfo(servicesManager);
-
-  for (const savedAnnotation of savedAnnotations) {
-    const toolName = inferToolName(savedAnnotation);
-
-    // Domain extensions, such as iUSCAN, rebuild semantic panel state from these
-    // canonical saved annotations. This is separate from visual Cornerstone restore.
-    //
-    // Important: Length annotations may be intentionally skipped for visual
-    // restoration here, but they still must be returned to iUSCAN so repeated
-    // measurement slots/averages can hydrate from canonical saved annotations.
-    processedAnnotations.push(savedAnnotation);
-
-    // Length annotations are intentionally not generically restored here.
-    // They are still returned via processedAnnotations so panels can hydrate.
-    // Saved-row click/navigation handles visual display on demand.
-    if (toolName === 'Length') {
-      skippedCount++;
-      continue;
-    }
-
-    const cornerstoneAnnotation = buildCornerstoneAnnotation(
-      savedAnnotation,
-      activeViewportInfo.FrameOfReferenceUID
-    );
-
-    if (!cornerstoneAnnotation) {
-      skippedCount++;
-      continue;
-    }
-
-    const groupSelector =
-      cornerstoneAnnotation.metadata.FrameOfReferenceUID ||
-      activeViewportInfo.element ||
-      savedAnnotation.referencedImageId;
-
-    try {
-      const existing = csToolsAnnotation.state.getAnnotation?.(cornerstoneAnnotation.annotationUID);
-
-      if (existing) {
-        csToolsAnnotation.state.removeAnnotation?.(cornerstoneAnnotation.annotationUID);
-        replacedCount++;
-      }
-
-      csToolsAnnotation.state.addAnnotation(cornerstoneAnnotation, groupSelector);
-
-      restoredAnnotations.push(savedAnnotation);
-
-      console.info('[MeasurementAnnotations] restored annotation', {
-        annotationUID: cornerstoneAnnotation.annotationUID,
-        toolName: cornerstoneAnnotation.metadata.toolName,
-        FrameOfReferenceUID: cornerstoneAnnotation.metadata.FrameOfReferenceUID,
-        groupSelectorType:
-          typeof groupSelector === 'string' ? 'string' : groupSelector ? 'element' : 'none',
-        referencedImageId: savedAnnotation.referencedImageId,
-      });
-    } catch (error) {
-      console.warn('[MeasurementAnnotations] restore failed:', error);
-      skippedCount++;
-    }
-  }
-
-  await sleep(10);
-
-  try {
-    const { triggerAnnotationRenderForViewportIds } = await import(
-      '@cornerstonejs/tools/utilities'
-    );
-    if (activeViewportInfo.activeViewportId) {
-      triggerAnnotationRenderForViewportIds([activeViewportInfo.activeViewportId]);
-    }
-
-    activeViewportInfo.viewport?.render?.();
-  } catch (error) {
-    console.warn('[MeasurementAnnotations] render trigger failed:', error);
-  }
-
-  await sleep(200);
+  // Initial study-load hydration should be panel-only.
+  // Visual viewport hydration should happen on explicit saved-row click/navigation,
+  // after the referenced display set and image are active.
+  const processedAnnotations = savedAnnotations.slice();
 
   return {
     seriesDoc,
-    restoredCount: restoredAnnotations.length,
-    skippedCount,
-    replacedCount,
-    restoredAnnotations,
+    restoredCount: 0,
+    skippedCount: 0,
+    replacedCount: 0,
+    restoredAnnotations: [],
     processedAnnotations,
   };
 }

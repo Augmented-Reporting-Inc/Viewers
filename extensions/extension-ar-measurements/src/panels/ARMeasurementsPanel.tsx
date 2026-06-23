@@ -11,33 +11,113 @@ function getMeasurementLabel(measurement) {
 }
 
 function getMeasurementValue(measurement) {
+  const unitType = getMeasurementUnitType(measurement);
+
   if (measurement?.displayText?.primary?.length) {
-    return measurement.displayText.primary.join(' ');
+    return normalizeDisplayTextUnits(measurement.displayText.primary, unitType).join(' ');
   }
 
   if (Array.isArray(measurement?.displayText) && measurement.displayText.length) {
-    return measurement.displayText.join(' ');
+    return normalizeDisplayTextUnits(measurement.displayText, unitType).join(' ');
   }
 
   if (measurement?.measurements?.displayText?.length) {
-    return measurement.measurements.displayText.join(' ');
+    return normalizeDisplayTextUnits(measurement.measurements.displayText, unitType).join(' ');
   }
 
   if (measurement?.measurements?.length != null) {
-    const unit = measurement.measurements.lengthUnit || measurement.measurements.unit || '';
+    const unit = normalizeDisplayLengthUnit(
+      measurement.measurements.lengthUnit || measurement.measurements.unit || ''
+    );
     return `${measurement.measurements.length} ${unit}`.trim();
   }
 
   if (measurement?.measurements?.area != null) {
-    const unit = measurement.measurements.areaUnit || '';
+    const unit = normalizeDisplayAreaUnit(measurement.measurements.areaUnit || '');
     return `${measurement.measurements.area} ${unit}`.trim();
   }
 
   if (measurement?.value != null && measurement?.unit) {
-    return `${measurement.value} ${measurement.unit}`;
+    return `${measurement.value} ${normalizeDisplayLengthUnit(measurement.unit)}`;
   }
 
   return '';
+}
+
+function isAreaMeasurement(measurement) {
+  const toolName = String(measurement?.toolName || '');
+  return (
+    /ROI|Contour|Spline|Freehand/i.test(toolName) ||
+    measurement?.measurements?.area != null ||
+    measurement?.area != null
+  );
+}
+
+function getMeasurementUnitType(measurement) {
+  return isAreaMeasurement(measurement) ? 'area' : 'length';
+}
+
+function normalizeDisplayLengthUnit(unit = '') {
+  return /px/i.test(String(unit || '')) ? 'mm' : unit || 'mm';
+}
+
+function normalizeDisplayAreaUnit(unit = '') {
+  return /px/i.test(String(unit || '')) ? 'mm²' : unit || 'mm²';
+}
+
+function normalizeDisplayTextUnits(displayText = [], unitType = 'length') {
+  const nextUnit = unitType === 'area' ? 'mm²' : 'mm';
+
+  return (Array.isArray(displayText) ? displayText : [String(displayText || '')])
+    .filter(Boolean)
+    .map(text =>
+      String(text)
+        .replace(/\bpx²\b/gi, nextUnit)
+        .replace(/\bpx\^2\b/gi, nextUnit)
+        .replace(/\bpx2\b/gi, nextUnit)
+        .replace(/\bpx\b/gi, nextUnit)
+    );
+}
+
+function normalizeMeasurementForDisplay(measurement) {
+  const unitType = getMeasurementUnitType(measurement);
+  const measurements = measurement?.measurements || {};
+
+  return {
+    ...measurement,
+    displayText: normalizeDisplayTextUnits(measurement?.displayText || [], unitType),
+    measurements: {
+      ...measurements,
+      displayText: normalizeDisplayTextUnits(measurements.displayText || [], unitType),
+      ...(measurements.length != null
+        ? {
+            unit: normalizeDisplayLengthUnit(measurements.unit),
+            lengthUnit: normalizeDisplayLengthUnit(measurements.lengthUnit || measurements.unit),
+          }
+        : {}),
+      ...(measurements.area != null
+        ? {
+            areaUnit: normalizeDisplayAreaUnit(measurements.areaUnit),
+          }
+        : {}),
+    },
+    ...(measurement?.unit ? { unit: normalizeDisplayLengthUnit(measurement.unit) } : {}),
+    ...(measurement?.areaUnit ? { areaUnit: normalizeDisplayAreaUnit(measurement.areaUnit) } : {}),
+  };
+}
+
+function mergeLiveMeasurementIntoSavedAnnotation(savedAnnotation, liveMeasurement) {
+  // Keep saved AR/Mongo display values as the user-facing source of truth.
+  // Live MeasurementService objects are still useful for visibility/jump state,
+  // but their px/px² display text should not replace saved AR units.
+  const normalizedSaved = normalizeMeasurementForDisplay(savedAnnotation);
+
+  return {
+    ...liveMeasurement,
+    ...normalizedSaved,
+    uid: normalizedSaved.uid || normalizedSaved.annotationId || liveMeasurement.uid,
+    isSavedAnnotation: true,
+  };
 }
 
 function hasSemanticLabel(measurement) {
@@ -54,11 +134,11 @@ function getMeasurementKey(measurement) {
 }
 
 function normalizeSavedAnnotation(annotation) {
-  return {
+  return normalizeMeasurementForDisplay({
     ...annotation,
     uid: annotation.uid || annotation.annotationId,
     isSavedAnnotation: true,
-  };
+  });
 }
 
 function getFrameNumber(measurement) {
@@ -174,7 +254,13 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
 
       const key = getMeasurementKey(measurement);
       if (key) {
-        byKey.set(key, measurement);
+        const savedAnnotation = byKey.get(key);
+
+        if (savedAnnotation?.isSavedAnnotation) {
+          byKey.set(key, mergeLiveMeasurementIntoSavedAnnotation(savedAnnotation, measurement));
+        } else {
+          byKey.set(key, normalizeMeasurementForDisplay(measurement));
+        }
       }
     }
 

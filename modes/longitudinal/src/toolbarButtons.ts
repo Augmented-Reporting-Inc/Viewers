@@ -568,18 +568,7 @@ const toolbarButtons: Button[] = [
       label: 'LV Trace',
       tooltip: 'Trace LV endocardial border for Simpson EF',
       commands: activateToolByName('SplineROI'),
-      evaluate: [
-        {
-          name: 'evaluate.cornerstoneTool',
-          toolNames: ['SplineROI'],
-          disabledText: 'LV Trace is not available on the current viewport',
-        },
-        {
-          name: 'evaluate.modality.supported',
-          supportedModalities: ['US'],
-          disabledText: 'LV Trace is only available for ultrasound studies',
-        },
-      ],
+      evaluate: 'evaluate.cornerstoneTool',
     },
   },
   {
@@ -590,17 +579,6 @@ const toolbarButtons: Button[] = [
       label: 'Set LV Slot',
       tooltip: 'Assign selected LV trace to A4C/A2C ED/ES',
       commands: 'setSelectedMeasurementLabel',
-      evaluate: 'evaluate.action',
-    },
-  },
-  {
-    id: 'SaveLVTraces',
-    uiType: 'ohif.toolButton',
-    props: {
-      icon: 'tool-capture',
-      label: 'Save LV Traces',
-      tooltip: 'Save labelled LV traces to Augmented Reporting',
-      commands: 'exportLVTraceReport',
       evaluate: 'evaluate.action',
     },
   },
