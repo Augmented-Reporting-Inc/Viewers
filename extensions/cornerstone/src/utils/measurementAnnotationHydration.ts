@@ -6,6 +6,17 @@ import { buildFormApiUrl } from './formApi';
 
 const CONTOUR_TOOL_NAMES = new Set(['SplineROI', 'PlanarFreehandROI', 'LivewireContour']);
 
+let explicitSeriesDocPromise: Promise<any | null> | null = null;
+let explicitSeriesDocCacheKey = '';
+
+function getExplicitSeriesDocCacheKey(seriesIds: string[]) {
+  if (!seriesIds.length) {
+    return '';
+  }
+
+  return `explicit:${seriesIds.join('|')}`;
+}
+
 function sleep(ms: number) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
@@ -59,7 +70,126 @@ async function fetchJsonIfOk(url: string) {
   };
 }
 
+function getViewerUrlSearchParams(): URLSearchParams {
+  const params = new URLSearchParams();
+
+  try {
+    const searchParams = new URLSearchParams(window.location?.search || '');
+    searchParams.forEach((value, key) => {
+      params.set(key, value);
+    });
+  } catch {}
+
+  try {
+    const hash = String(window.location?.hash || '');
+    const hashQuery = hash.includes('?') ? hash.slice(hash.indexOf('?') + 1).split('#')[0] : '';
+
+    const hashParams = new URLSearchParams(hashQuery);
+    hashParams.forEach((value, key) => {
+      if (!params.has(key)) {
+        params.set(key, value);
+      }
+    });
+  } catch {}
+
+  return params;
+}
+
+function getExplicitSeriesIdsFromViewerUrl(): string[] {
+  const qs = getViewerUrlSearchParams();
+  const seen = new Set<string>();
+
+  return [
+    String(qs.get('arLearnerSeriesId') || '').trim(),
+    String(qs.get('arSeriesId') || '').trim(),
+    String(qs.get('mongo_id') || '').trim(),
+    String(qs.get('mongoId') || '').trim(),
+    String(qs.get('arMongoId') || '').trim(),
+    String(qs.get('arBaseSeriesId') || '').trim(),
+  ].filter(value => {
+    if (!value || seen.has(value)) {
+      return false;
+    }
+
+    seen.add(value);
+    return true;
+  });
+}
+
+async function fetchSeriesDocById(seriesId: string) {
+  const id = String(seriesId || '').trim();
+
+  if (!id) {
+    return {
+      ok: false,
+      status: 0,
+      url: '',
+      data: null,
+    };
+  }
+
+  return fetchJsonIfOk(buildFormApiUrl(`series/${encodeURIComponent(id)}`));
+}
+
+async function fetchSeriesDocFromExplicitViewerContext() {
+  const explicitSeriesIds = getExplicitSeriesIdsFromViewerUrl();
+  const cacheKey = getExplicitSeriesDocCacheKey(explicitSeriesIds);
+
+  if (!cacheKey) {
+    return null;
+  }
+
+  if (explicitSeriesDocPromise && explicitSeriesDocCacheKey === cacheKey) {
+    return explicitSeriesDocPromise;
+  }
+
+  explicitSeriesDocCacheKey = cacheKey;
+  explicitSeriesDocPromise = (async () => {
+    for (const explicitSeriesId of explicitSeriesIds) {
+      const explicitResult = await fetchSeriesDocById(explicitSeriesId);
+
+      if (explicitResult.ok) {
+        console.info('[MeasurementAnnotations] resolved by explicit viewer series id', {
+          seriesId: explicitResult.data?._id,
+          requestedSeriesId: explicitSeriesId,
+          hasMeasurementAnnotations: !!explicitResult.data?.MeasurementAnnotations,
+        });
+
+        return explicitResult.data;
+      }
+
+      console.warn('[MeasurementAnnotations] explicit viewer series id lookup failed', {
+        requestedSeriesId: explicitSeriesId,
+        status: explicitResult.status,
+      });
+    }
+
+    return null;
+  })();
+
+  try {
+    const seriesDoc = await explicitSeriesDocPromise;
+
+    if (!seriesDoc) {
+      explicitSeriesDocPromise = null;
+      explicitSeriesDocCacheKey = '';
+    }
+
+    return seriesDoc;
+  } catch (error) {
+    explicitSeriesDocPromise = null;
+    explicitSeriesDocCacheKey = '';
+    throw error;
+  }
+}
+
 export async function fetchSeriesDocForActiveStudy(servicesManager) {
+  const explicitSeriesDoc = await fetchSeriesDocFromExplicitViewerContext();
+
+  if (explicitSeriesDoc) {
+    return explicitSeriesDoc;
+  }
+
   const displaySet = await waitForActiveDisplaySet(servicesManager);
   const studyInstanceId = displaySet?.StudyInstanceUID;
   const seriesInstanceId = displaySet?.SeriesInstanceUID;

@@ -87,6 +87,14 @@ module.exports = (env, argv) => {
           __dirname,
           'C:/Users/ot196/Downloads/Viewers/extensions/extension-ar-measurements/node_modules'
         ),
+        path.resolve(
+          __dirname,
+          'C:/Users/ot196/Downloads/Viewers/extensions/extension-ar-learning/node_modules'
+        ),
+        path.resolve(
+          __dirname,
+          'C:/Users/ot196/Downloads/Viewers/modes/mode-ar-learning/node_modules'
+        ),
       ],
     },
     plugins: [

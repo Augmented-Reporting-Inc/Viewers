@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 
 function getMeasurementLabel(measurement) {
   return (
@@ -10,35 +10,167 @@ function getMeasurementLabel(measurement) {
   );
 }
 
+const AR_SAVED_ANNOTATIONS_REFRESH_EVENT = 'ar-measurements:saved-annotations-updated';
+
+function finiteNumberOrNull(value) {
+  const numberValue = Number(value);
+  return Number.isFinite(numberValue) ? numberValue : null;
+}
+
+function formatMeasurementNumber(value) {
+  const numberValue = Number(value);
+
+  if (!Number.isFinite(numberValue)) {
+    return '';
+  }
+
+  if (Math.abs(numberValue) >= 100) {
+    return numberValue.toFixed(0);
+  }
+
+  if (Math.abs(numberValue) >= 10) {
+    return numberValue.toFixed(1);
+  }
+
+  return numberValue.toFixed(2);
+}
+
+function formatMeasurementValue(value, unit = 'mm') {
+  const numberValue = finiteNumberOrNull(value);
+
+  if (numberValue == null) {
+    return '';
+  }
+
+  return `${formatMeasurementNumber(numberValue)} ${unit}`.trim();
+}
+
+function displayEntryToString(entry, unitType = 'length') {
+  if (entry === undefined || entry === null) {
+    return '';
+  }
+
+  if (typeof entry === 'string' || typeof entry === 'number') {
+    return String(entry);
+  }
+
+  if (Array.isArray(entry)) {
+    return flattenDisplayText(entry, unitType).join(' ');
+  }
+
+  if (typeof entry === 'object') {
+    if (Array.isArray(entry.primary)) {
+      return flattenDisplayText(entry.primary, unitType).join(' ');
+    }
+
+    for (const key of ['text', 'label', 'displayValue', 'formatted']) {
+      if (entry[key]) {
+        return String(entry[key]);
+      }
+    }
+
+    const value = entry.length ?? entry.area ?? entry.value ?? entry.mean ?? entry.max ?? entry.min;
+
+    const unit =
+      entry.lengthUnit ||
+      entry.areaUnit ||
+      entry.areaUnits ||
+      entry.unit ||
+      entry.units ||
+      (unitType === 'area' ? 'mm²' : 'mm');
+
+    const formatted = formatMeasurementValue(value, unit);
+    if (formatted) {
+      return formatted;
+    }
+  }
+
+  return '';
+}
+
+function flattenDisplayText(displayText, unitType = 'length') {
+  const entries = Array.isArray(displayText) ? displayText : [displayText];
+
+  return entries
+    .flatMap(entry => {
+      const value = displayEntryToString(entry, unitType);
+      return value ? [value] : [];
+    })
+    .filter(Boolean);
+}
+
+function getFirstMeasurementStats(measurement) {
+  const statsByTarget = measurement?.data || measurement?.cachedStats || {};
+  const values = Object.values(statsByTarget || {}).filter(
+    value => value && typeof value === 'object'
+  );
+
+  return values[0] || {};
+}
+
 function getMeasurementValue(measurement) {
   const unitType = getMeasurementUnitType(measurement);
 
-  if (measurement?.displayText?.primary?.length) {
-    return normalizeDisplayTextUnits(measurement.displayText.primary, unitType).join(' ');
+  const displayText = flattenDisplayText(measurement?.displayText, unitType);
+  if (displayText.length) {
+    return normalizeDisplayTextUnits(displayText, unitType).join(' ');
   }
 
-  if (Array.isArray(measurement?.displayText) && measurement.displayText.length) {
-    return normalizeDisplayTextUnits(measurement.displayText, unitType).join(' ');
-  }
-
-  if (measurement?.measurements?.displayText?.length) {
-    return normalizeDisplayTextUnits(measurement.measurements.displayText, unitType).join(' ');
+  const measurementDisplayText = flattenDisplayText(
+    measurement?.measurements?.displayText,
+    unitType
+  );
+  if (measurementDisplayText.length) {
+    return normalizeDisplayTextUnits(measurementDisplayText, unitType).join(' ');
   }
 
   if (measurement?.measurements?.length != null) {
     const unit = normalizeDisplayLengthUnit(
       measurement.measurements.lengthUnit || measurement.measurements.unit || ''
     );
-    return `${measurement.measurements.length} ${unit}`.trim();
+    return formatMeasurementValue(measurement.measurements.length, unit);
   }
 
   if (measurement?.measurements?.area != null) {
     const unit = normalizeDisplayAreaUnit(measurement.measurements.areaUnit || '');
-    return `${measurement.measurements.area} ${unit}`.trim();
+    return formatMeasurementValue(measurement.measurements.area, unit);
   }
 
-  if (measurement?.value != null && measurement?.unit) {
-    return `${measurement.value} ${normalizeDisplayLengthUnit(measurement.unit)}`;
+  const stats = getFirstMeasurementStats(measurement);
+
+  if (stats?.length != null) {
+    return formatMeasurementValue(
+      stats.length,
+      normalizeDisplayLengthUnit(stats.lengthUnit || stats.unit || '')
+    );
+  }
+
+  if (stats?.area != null) {
+    return formatMeasurementValue(
+      stats.area,
+      normalizeDisplayAreaUnit(stats.areaUnit || stats.areaUnits || stats.unit || '')
+    );
+  }
+
+  if (finiteNumberOrNull(measurement?.value) != null) {
+    return formatMeasurementValue(
+      measurement.value,
+      normalizeDisplayLengthUnit(measurement.unit || '')
+    );
+  }
+
+  if (measurement?.value && typeof measurement.value === 'object') {
+    const valueText = flattenDisplayText(measurement.value, unitType);
+    if (valueText.length) {
+      return normalizeDisplayTextUnits(valueText, unitType).join(' ');
+    }
+  }
+
+  if (finiteNumberOrNull(measurement?.area) != null) {
+    return formatMeasurementValue(
+      measurement.area,
+      normalizeDisplayAreaUnit(measurement.areaUnit || '')
+    );
   }
 
   return '';
@@ -68,7 +200,7 @@ function normalizeDisplayAreaUnit(unit = '') {
 function normalizeDisplayTextUnits(displayText = [], unitType = 'length') {
   const nextUnit = unitType === 'area' ? 'mm²' : 'mm';
 
-  return (Array.isArray(displayText) ? displayText : [String(displayText || '')])
+  return flattenDisplayText(displayText, unitType)
     .filter(Boolean)
     .map(text =>
       String(text)
@@ -177,15 +309,135 @@ function getMeasurementSubtitle(measurement) {
   return parts.filter(Boolean).join(' • ');
 }
 
+function getViewerUrlSearchParams() {
+  const params = new URLSearchParams();
+
+  try {
+    const searchParams = new URLSearchParams(window.location?.search || '');
+    searchParams.forEach((value, key) => {
+      params.set(key, value);
+    });
+  } catch {}
+
+  try {
+    const hash = String(window.location?.hash || '');
+    const hashQuery = hash.includes('?') ? hash.slice(hash.indexOf('?') + 1).split('#')[0] : '';
+
+    const hashParams = new URLSearchParams(hashQuery);
+    hashParams.forEach((value, key) => {
+      if (!params.has(key)) {
+        params.set(key, value);
+      }
+    });
+  } catch {}
+
+  return params;
+}
+
+function getArViewerSaveTargetFromUrl() {
+  try {
+    const qs = getViewerUrlSearchParams();
+
+    return {
+      mode: String(qs.get('arSaveTarget') || '').trim(),
+      baseSeriesId: String(qs.get('arBaseSeriesId') || '').trim(),
+      learnerSeriesId: String(qs.get('arLearnerSeriesId') || '').trim(),
+      launchSource: String(qs.get('arLaunchSource') || '').trim(),
+      measurementWorkflowRole: String(qs.get('arMeasurementWorkflowRole') || '').trim(),
+    };
+  } catch {
+    return {
+      mode: '',
+      baseSeriesId: '',
+      learnerSeriesId: '',
+      launchSource: '',
+      measurementWorkflowRole: '',
+    };
+  }
+}
+
+function isLibraryLaunchSource(launchSource = '') {
+  return (
+    String(launchSource || '')
+      .trim()
+      .toLowerCase() === 'library'
+  );
+}
+
+function isAllowedLibraryMeasurementWorkflowRole(role = '') {
+  return ['learner', 'educator'].includes(
+    String(role || '')
+      .trim()
+      .toLowerCase()
+  );
+}
+
+function isLibraryLearnerCopyOnSaveTarget(saveTarget = getArViewerSaveTargetFromUrl()) {
+  return (
+    saveTarget.mode === 'learnerCopyOnSave' &&
+    !!saveTarget.baseSeriesId &&
+    isLibraryLaunchSource(saveTarget.launchSource) &&
+    isAllowedLibraryMeasurementWorkflowRole(saveTarget.measurementWorkflowRole)
+  );
+}
+
+function isLearnerViewerMeasurementWorkflowFromUrl() {
+  return isLibraryLearnerCopyOnSaveTarget();
+}
+
+function getArLearnerSeriesIdFromUrl() {
+  return getArViewerSaveTargetFromUrl().learnerSeriesId;
+}
+
 export default function ARMeasurementsPanel({ servicesManager, commandsManager }) {
   const { measurementService, uiNotificationService } = servicesManager.services;
 
   const [measurements, setMeasurements] = useState(
     () => measurementService.getMeasurements?.() || []
   );
-  const [isSaving, setIsSaving] = useState(false);
+  const [savingAction, setSavingAction] = useState('');
+  const isSaving = !!savingAction;
   const [domain, setDomain] = useState('generic');
   const [savedAnnotations, setSavedAnnotations] = useState([]);
+  const [isLearnerMeasurementWorkflow, setIsLearnerMeasurementWorkflow] = useState(
+    isLearnerViewerMeasurementWorkflowFromUrl
+  );
+
+  const applySavedAnnotationsResult = useCallback(result => {
+    if (!result) {
+      return;
+    }
+
+    if (result.domain) {
+      setDomain(result.domain);
+    }
+
+    const resultSaveTarget = result?.saveTarget || getArViewerSaveTargetFromUrl();
+    const isLibraryLearnerWorkflow =
+      isLearnerViewerMeasurementWorkflowFromUrl() ||
+      isLibraryLearnerCopyOnSaveTarget(resultSaveTarget);
+
+    setIsLearnerMeasurementWorkflow(isLibraryLearnerWorkflow);
+
+    const annotations = result.annotations || result.processedAnnotations || [];
+
+    const nextSavedAnnotations = annotations
+      .map(normalizeSavedAnnotation)
+      .filter(annotation => annotation?.toolName && hasSemanticLabel(annotation));
+
+    setSavedAnnotations(currentSavedAnnotations => {
+      if (
+        nextSavedAnnotations.length === 0 &&
+        currentSavedAnnotations.length > 0 &&
+        isLearnerViewerMeasurementWorkflowFromUrl() &&
+        getArLearnerSeriesIdFromUrl()
+      ) {
+        return currentSavedAnnotations;
+      }
+
+      return nextSavedAnnotations;
+    });
+  }, []);
 
   useEffect(() => {
     const refresh = () => {
@@ -213,29 +465,57 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
   useEffect(() => {
     let cancelled = false;
 
-    commandsManager
-      .runCommand('getViewerMeasurementAnnotationsForActiveStudy')
-      ?.then?.(result => {
-        if (!cancelled && result) {
-          if (result.domain) {
-            setDomain(result.domain);
-          }
+    const refreshSavedAnnotations = async () => {
+      try {
+        const result = await commandsManager.runCommand(
+          'getViewerMeasurementAnnotationsForActiveStudy'
+        );
 
-          setSavedAnnotations(
-            (result.annotations || [])
-              .map(normalizeSavedAnnotation)
-              .filter(annotation => annotation?.toolName && hasSemanticLabel(annotation))
-          );
+        if (!cancelled && result) {
+          applySavedAnnotationsResult(result);
         }
-      })
-      ?.catch?.(error => {
-        console.warn('[ARMeasurementsPanel] could not resolve saved annotations:', error);
-      });
+      } catch (error) {
+        if (!cancelled) {
+          console.warn('[ARMeasurementsPanel] could not resolve saved annotations:', error);
+        }
+      }
+    };
+
+    const handleSavedAnnotationsUpdated = event => {
+      if (cancelled) {
+        return;
+      }
+
+      const detail = event?.detail || {};
+
+      if (detail.annotations || detail.processedAnnotations) {
+        applySavedAnnotationsResult({
+          annotations: detail.annotations || detail.processedAnnotations || [],
+          processedAnnotations: detail.processedAnnotations || detail.annotations || [],
+          seriesDoc: detail.seriesDoc,
+          saveTarget: detail.saveTarget,
+          domain: detail.domain,
+        });
+        return;
+      }
+
+      refreshSavedAnnotations();
+    };
+
+    const timers = [0, 300, 1000, 2500].map(delay =>
+      window.setTimeout(refreshSavedAnnotations, delay)
+    );
+
+    window.addEventListener(AR_SAVED_ANNOTATIONS_REFRESH_EVENT, handleSavedAnnotationsUpdated);
+    window.addEventListener('popstate', refreshSavedAnnotations);
 
     return () => {
       cancelled = true;
+      timers.forEach(timer => window.clearTimeout(timer));
+      window.removeEventListener(AR_SAVED_ANNOTATIONS_REFRESH_EVENT, handleSavedAnnotationsUpdated);
+      window.removeEventListener('popstate', refreshSavedAnnotations);
     };
-  }, [commandsManager]);
+  }, [commandsManager, applySavedAnnotationsResult]);
 
   const visibleMeasurements = useMemo(() => {
     const byKey = new Map();
@@ -267,12 +547,14 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
     return Array.from(byKey.values());
   }, [measurements, savedAnnotations]);
 
-  const handleSave = async () => {
-    setIsSaving(true);
+  const handleSave = async (scoreNow = false) => {
+    setSavingAction(scoreNow ? 'score' : 'draft');
 
     try {
       await commandsManager.runCommand('saveViewerMeasurementsForActiveStudy', {
         domain: domain === 'generic' ? undefined : domain,
+        scoringIntent: scoreNow ? 'score-attempt' : 'draft',
+        educationAttemptIntent: scoreNow ? 'score-attempt' : 'draft',
       });
 
       const result = await commandsManager.runCommand(
@@ -282,11 +564,7 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
         }
       );
 
-      setSavedAnnotations(
-        (result?.annotations || [])
-          .map(normalizeSavedAnnotation)
-          .filter(annotation => annotation?.toolName && hasSemanticLabel(annotation))
-      );
+      applySavedAnnotationsResult(result);
     } catch (error) {
       console.error('[ARMeasurementsPanel] save failed:', error);
       uiNotificationService.show({
@@ -296,7 +574,7 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
         duration: 5000,
       });
     } finally {
-      setIsSaving(false);
+      setSavingAction('');
     }
   };
 
@@ -379,14 +657,36 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
       </div>
 
       <div className="border-t border-gray-700 p-3">
-        <button
-          type="button"
-          className="w-full rounded bg-blue-600 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50"
-          disabled={isSaving || visibleMeasurements.length === 0}
-          onClick={handleSave}
-        >
-          {isSaving ? 'Saving…' : 'Save Measurements'}
-        </button>
+        {isLearnerMeasurementWorkflow ? (
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              className="rounded bg-blue-600 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50"
+              disabled={isSaving || visibleMeasurements.length === 0}
+              onClick={() => handleSave(false)}
+            >
+              {savingAction === 'draft' ? 'Saving…' : 'Save Draft'}
+            </button>
+
+            <button
+              type="button"
+              className="rounded bg-green-600 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50"
+              disabled={isSaving || visibleMeasurements.length === 0}
+              onClick={() => handleSave(true)}
+            >
+              {savingAction === 'score' ? 'Saving…' : 'Save & Score'}
+            </button>
+          </div>
+        ) : (
+          <button
+            type="button"
+            className="w-full rounded bg-blue-600 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50"
+            disabled={isSaving || visibleMeasurements.length === 0}
+            onClick={() => handleSave(false)}
+          >
+            {savingAction === 'draft' ? 'Saving…' : 'Save Measurements'}
+          </button>
+        )}
       </div>
     </div>
   );

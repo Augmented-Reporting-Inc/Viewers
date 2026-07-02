@@ -81,6 +81,10 @@
     {
       "packageName": "extension-ar-measurements",
       "version": "0.0.1"
+    },
+    {
+      "packageName": "extension-ar-learning",
+      "version": "0.0.1"
     }
   ],
   "modes": [
@@ -123,6 +127,10 @@
     },
     {
       "packageName": "mode-dobutamine",
+      "version": "0.0.1"
+    },
+    {
+      "packageName": "mode-ar-learning",
       "version": "0.0.1"
     }
   ],

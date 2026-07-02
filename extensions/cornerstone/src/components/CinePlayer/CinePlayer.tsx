@@ -9,7 +9,7 @@ import { useAppConfig } from '@state';
 // from logs which CinePlayer + whether the decode patch is included.
 // ---------------------------------------------------------------------------
 const CINE_PLAYER_VERSION =
-  'rviewer bviewer adaptive-prefetch-100 + 2-stage-rate + echo-immediate + jpeg-decode-patch v3';
+  'rviewer bviewer adaptive-prefetch-100 + global-prefetch-limit-4 + small-window-1 v4';
 
 // ---------------------------------------------------------------------------
 // Instance prefetch utility
@@ -27,8 +27,8 @@ type PrefetchConfig = {
 
 const SMALL_CINE_PREFETCH: PrefetchConfig = {
   label: 'small-cine',
-  window: 3,
-  concurrency: 20,
+  window: 1,
+  concurrency: 4,
 };
 
 const LARGE_CINE_PREFETCH: PrefetchConfig = {
@@ -37,7 +37,29 @@ const LARGE_CINE_PREFETCH: PrefetchConfig = {
   concurrency: 4,
 };
 
+const MAX_BACKGROUND_FRAME_REQUESTS = 4;
 const activeBackgroundRequests = new Set<string>();
+const backgroundFrameRequestQueue: Array<() => void> = [];
+let activeBackgroundFrameRequestCount = 0;
+
+async function withBackgroundFrameRequestSlot<T>(work: () => Promise<T>): Promise<T> {
+  if (activeBackgroundFrameRequestCount >= MAX_BACKGROUND_FRAME_REQUESTS) {
+    await new Promise<void>(resolve => backgroundFrameRequestQueue.push(resolve));
+  }
+
+  activeBackgroundFrameRequestCount += 1;
+
+  try {
+    return await work();
+  } finally {
+    activeBackgroundFrameRequestCount -= 1;
+    const next = backgroundFrameRequestQueue.shift();
+
+    if (next) {
+      next();
+    }
+  }
+}
 
 function getImageIds(displaySet): string[] {
   const ids = displaySet.imageIds ?? displaySet.images?.map(img => img.imageId ?? img.url) ?? [];
@@ -103,8 +125,7 @@ async function prefetchDisplaySetFrames(displaySet, concurrency: number): Promis
     batch.forEach(id => activeBackgroundRequests.add(id));
     await Promise.all(
       batch.map(id =>
-        imageLoader
-          .loadAndCacheImage(id, {})
+        withBackgroundFrameRequestSlot(() => imageLoader.loadAndCacheImage(id, {}))
           .catch(() => {})
           .finally(() => activeBackgroundRequests.delete(id))
       )

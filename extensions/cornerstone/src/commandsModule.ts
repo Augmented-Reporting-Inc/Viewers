@@ -110,11 +110,18 @@ function inferDomainFromSeriesDoc(seriesDoc, explicitDomain) {
     tenantId === 'mk' ||
     tenantId === 'hrmx' ||
     tenantId === 'cneat' ||
+    tenantId === 'mohawk' ||
+    tenantId === 'echocollege' ||
+    tenantId === 'smp' ||
     labels.includes('tenant_prime') ||
     labels.includes('tenant_mk') ||
     labels.includes('tenant_hrmx') ||
     labels.includes('tenant_cneat') ||
+    labels.includes('tenant_mohawk') ||
+    labels.includes('tenant_echocollege') ||
+    labels.includes('tenant_smp') ||
     path.includes('/rviewer') ||
+    path.includes('/viewer') ||
     path.includes('/stressecho') ||
     path.includes('/dobutamine')
   ) {
@@ -122,6 +129,25 @@ function inferDomainFromSeriesDoc(seriesDoc, explicitDomain) {
   }
 
   return 'generic';
+}
+
+function inferDomainWithoutSeriesDoc(explicitDomain) {
+  if (explicitDomain && explicitDomain !== 'generic') {
+    return explicitDomain;
+  }
+
+  const path = String(window.location?.pathname || '').toLowerCase();
+
+  if (path.includes('/bviewer/iuscan')) {
+    return 'iuscan';
+  }
+
+  if (path.includes('/bviewer')) {
+    return 'bowel';
+  }
+
+  // Local/dev longitudinal `/viewer` routes are echo unless explicitly bowel/iUSCAN.
+  return 'echo';
 }
 
 function getAnnotationId(annotation) {
@@ -434,6 +460,36 @@ function getExistingViewerAnnotationsById(seriesDoc) {
   } catch {
     return new Map();
   }
+}
+
+function getExistingScorableViewerAnnotations(seriesDoc, domain = '') {
+  const annotations = Array.from(getExistingViewerAnnotationsById(seriesDoc).values());
+
+  return annotations.filter(annotation => {
+    if (!annotation || annotation.mode === 'repeated') {
+      return false;
+    }
+
+    if (
+      !annotation.toolName ||
+      !(annotation.label || annotation.measurementRole || annotation.role || annotation.slot)
+    ) {
+      return false;
+    }
+
+    if (!(annotation.referencedImageId || annotation.points?.length)) {
+      return false;
+    }
+
+    const annotationDomain = annotation.domain || 'generic';
+
+    return (
+      !domain ||
+      domain === 'generic' ||
+      annotationDomain === domain ||
+      annotationDomain === 'generic'
+    );
+  });
 }
 
 function serializeViewerMeasurement(measurement, domain, existingAnnotation = null, options = {}) {
@@ -1414,6 +1470,18 @@ const segmentAI = new ONNXSegmentationController({
 });
 let segmentAIEnabled = false;
 
+const AR_SAVED_ANNOTATIONS_REFRESH_EVENT = 'ar-measurements:saved-annotations-updated';
+
+function dispatchSavedAnnotationsRefresh(detail = {}) {
+  try {
+    window.dispatchEvent(
+      new CustomEvent(AR_SAVED_ANNOTATIONS_REFRESH_EVENT, {
+        detail,
+      })
+    );
+  } catch {}
+}
+
 function getDisplaySetForSavedAnnotation(displaySetService, annotation) {
   const sopInstanceId = annotation?.SOPInstanceUID;
   const seriesInstanceId = annotation?.SeriesInstanceUID || annotation?.referenceSeriesUID;
@@ -1450,6 +1518,150 @@ function getDisplaySetForSavedAnnotation(displaySetService, annotation) {
       return false;
     }) || seriesDisplaySets[0]
   );
+}
+
+function getViewerUrlSearchParams() {
+  const params = new URLSearchParams();
+
+  try {
+    const searchParams = new URLSearchParams(window.location?.search || '');
+    searchParams.forEach((value, key) => {
+      params.set(key, value);
+    });
+  } catch {}
+
+  try {
+    const hash = String(window.location?.hash || '');
+    const hashQuery = hash.includes('?') ? hash.slice(hash.indexOf('?') + 1).split('#')[0] : '';
+
+    const hashParams = new URLSearchParams(hashQuery);
+    hashParams.forEach((value, key) => {
+      if (!params.has(key)) {
+        params.set(key, value);
+      }
+    });
+  } catch {}
+
+  return params;
+}
+
+function getArViewerSaveTargetFromUrl() {
+  const qs = getViewerUrlSearchParams();
+
+  return {
+    mode: String(qs.get('arSaveTarget') || '').trim(),
+    baseSeriesId: String(qs.get('arBaseSeriesId') || '').trim(),
+    seriesId: String(qs.get('arSeriesId') || '').trim(),
+    learnerSeriesId: String(qs.get('arLearnerSeriesId') || '').trim(),
+    launchSource: String(qs.get('arLaunchSource') || '').trim(),
+    measurementWorkflowRole: String(qs.get('arMeasurementWorkflowRole') || '').trim(),
+  };
+}
+
+function isLibraryLaunchSource(launchSource = '') {
+  return (
+    String(launchSource || '')
+      .trim()
+      .toLowerCase() === 'library'
+  );
+}
+
+function isAllowedLibraryMeasurementWorkflowRole(role = '') {
+  return ['learner', 'educator'].includes(
+    String(role || '')
+      .trim()
+      .toLowerCase()
+  );
+}
+
+function isLearnerCopyOnSaveTarget(saveTarget = {}) {
+  return (
+    saveTarget.mode === 'learnerCopyOnSave' &&
+    !!saveTarget.baseSeriesId &&
+    isLibraryLaunchSource(saveTarget.launchSource) &&
+    isAllowedLibraryMeasurementWorkflowRole(saveTarget.measurementWorkflowRole)
+  );
+}
+
+function rememberArLearnerSeriesId(seriesId) {
+  const id = String(seriesId || '').trim();
+  if (!id) {
+    return;
+  }
+
+  try {
+    const parsed = new URL(window.location.href);
+    parsed.searchParams.set('arLearnerSeriesId', id);
+    window.history.replaceState(window.history.state, '', parsed.toString());
+  } catch {}
+}
+
+async function fetchSeriesDocById(seriesId) {
+  const id = String(seriesId || '').trim();
+  if (!id) {
+    return null;
+  }
+
+  const response = await fetch(buildFormApiUrl(`series/${encodeURIComponent(id)}`), {
+    method: 'GET',
+    credentials: 'include',
+  });
+
+  if (!response.ok) {
+    throw new Error(`Series lookup failed: ${response.status}`);
+  }
+
+  return response.json();
+}
+
+async function ensureLearnerCopyForViewerSave(saveTarget) {
+  const response = await fetch(buildFormApiUrl('series/ensure-learner-copy'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify({
+      baseSeriesId: saveTarget.baseSeriesId,
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Unable to resolve learner copy: ${response.status}`);
+  }
+
+  const learnerCopy = await response.json();
+  rememberArLearnerSeriesId(learnerCopy?._id);
+
+  return learnerCopy;
+}
+
+async function resolveViewerReadSeriesDoc(servicesManager, { allowBaseFallback = true } = {}) {
+  const saveTarget = getArViewerSaveTargetFromUrl();
+
+  if (isLearnerCopyOnSaveTarget(saveTarget)) {
+    if (saveTarget.learnerSeriesId) {
+      return fetchSeriesDocById(saveTarget.learnerSeriesId);
+    }
+
+    if (!allowBaseFallback) {
+      return null;
+    }
+  }
+
+  return fetchSeriesDocForActiveStudy(servicesManager);
+}
+
+async function resolveViewerSaveSeriesDoc({ servicesManager, currentSeriesDoc }) {
+  const saveTarget = getArViewerSaveTargetFromUrl();
+
+  if (!isLearnerCopyOnSaveTarget(saveTarget)) {
+    return currentSeriesDoc || fetchSeriesDocForActiveStudy(servicesManager);
+  }
+
+  if (currentSeriesDoc?.isLearnerCopy === true) {
+    return currentSeriesDoc;
+  }
+
+  return ensureLearnerCopyForViewerSave(saveTarget);
 }
 
 function commandsModule({
@@ -1990,10 +2202,28 @@ function commandsModule({
       domains,
       notify = false,
     } = {}) => {
+      const saveTarget = getArViewerSaveTargetFromUrl();
+      let targetSeriesDoc = seriesDoc;
+
+      if (!targetSeriesDoc && isLearnerCopyOnSaveTarget(saveTarget)) {
+        targetSeriesDoc = await resolveViewerReadSeriesDoc(servicesManager, {
+          allowBaseFallback: false,
+        });
+
+        if (!targetSeriesDoc) {
+          return {
+            seriesDoc: null,
+            restoredCount: 0,
+            skippedCount: 0,
+            restoredAnnotations: [],
+            processedAnnotations: [],
+          };
+        }
+      }
       try {
         const result = await hydrateMeasurementAnnotationsForActiveStudyUtil({
           servicesManager,
-          seriesDoc,
+          seriesDoc: targetSeriesDoc,
           workflows,
           domains,
         });
@@ -2006,6 +2236,17 @@ function commandsModule({
           processedCount: result.processedAnnotations?.length || 0,
           hasSeriesDoc: !!result.seriesDoc,
           seriesId: result.seriesDoc?._id,
+        });
+
+        dispatchSavedAnnotationsRefresh({
+          seriesDoc: result.seriesDoc,
+          saveTarget,
+          annotations: result.processedAnnotations || [],
+          processedAnnotations: result.processedAnnotations || [],
+          domain:
+            Array.isArray(domains) && domains.length === 1
+              ? domains[0]
+              : inferDomainFromSeriesDoc(result.seriesDoc, undefined),
         });
 
         if (notify && result.restoredCount > 0) {
@@ -3706,14 +3947,38 @@ function commandsModule({
       });
     },
     getViewerMeasurementDomainForActiveStudy: async ({ domain: explicitDomain } = {}) => {
-      const seriesDoc = await fetchSeriesDocForActiveStudy(servicesManager);
-      return inferDomainFromSeriesDoc(seriesDoc, explicitDomain);
+      try {
+        const seriesDoc = await resolveViewerReadSeriesDoc(servicesManager, {
+          allowBaseFallback: false,
+        });
+
+        if (seriesDoc) {
+          return inferDomainFromSeriesDoc(seriesDoc, explicitDomain);
+        }
+      } catch (error) {
+        console.warn('[MeasurementAnnotations] domain lookup using path fallback:', error);
+      }
+
+      return inferDomainWithoutSeriesDoc(explicitDomain);
     },
     getViewerMeasurementAnnotationsForActiveStudy: async ({
       domain: explicitDomain,
       workflows = ['viewerMeasurements'],
     } = {}) => {
-      const seriesDoc = await fetchSeriesDocForActiveStudy(servicesManager);
+      const saveTarget = getArViewerSaveTargetFromUrl();
+      const seriesDoc = await resolveViewerReadSeriesDoc(servicesManager, {
+        allowBaseFallback: false,
+      });
+
+      if (!seriesDoc) {
+        return {
+          seriesDoc: null,
+          saveTarget,
+          domain: inferDomainWithoutSeriesDoc(explicitDomain),
+          annotations: [],
+        };
+      }
+
       const domain = inferDomainFromSeriesDoc(seriesDoc, explicitDomain);
 
       const annotations = getRequestedWorkflowAnnotations(
@@ -3732,6 +3997,7 @@ function commandsModule({
 
       return {
         seriesDoc,
+        saveTarget,
         domain,
         annotations,
       };
@@ -4192,15 +4458,60 @@ function commandsModule({
     jumpToMeasurementViewport: actions.jumpToMeasurementViewport,
     initializeSegmentLabelTool: actions.initializeSegmentLabelTool,
     saveViewerMeasurementsForActiveStudy: {
-      commandFn: async ({ domain: explicitDomain } = {}) => {
+      commandFn: async ({ domain: explicitDomain, scoringIntent, educationAttemptIntent } = {}) => {
         const { measurementService, uiNotificationService } = servicesManager.services;
 
         try {
-          const seriesDoc = await fetchSeriesDocForActiveStudy(servicesManager);
+          const saveTarget = getArViewerSaveTargetFromUrl();
+          let activeSeriesDoc = null;
+
+          if (isLearnerCopyOnSaveTarget(saveTarget)) {
+            if (saveTarget.learnerSeriesId) {
+              activeSeriesDoc = await fetchSeriesDocById(saveTarget.learnerSeriesId);
+            } else {
+              console.info(
+                '[MeasurementAnnotations] learner-copy save will resolve learner copy before active lookup',
+                {
+                  baseSeriesId: saveTarget.baseSeriesId,
+                }
+              );
+            }
+          } else {
+            activeSeriesDoc = await fetchSeriesDocForActiveStudy(servicesManager);
+          }
+
+          const seriesDoc = await resolveViewerSaveSeriesDoc({
+            servicesManager,
+            currentSeriesDoc: activeSeriesDoc,
+          });
+
+          if (
+            isLearnerCopyOnSaveTarget(saveTarget) &&
+            (seriesDoc?.isLearnerCopy === true || seriesDoc?._id)
+          ) {
+            rememberArLearnerSeriesId(seriesDoc._id);
+          }
           const domain = inferDomainFromSeriesDoc(seriesDoc, explicitDomain);
+          const normalizedScoringIntent = String(scoringIntent || educationAttemptIntent || '')
+            .trim()
+            .toLowerCase()
+            .replace(/[_\s]+/g, '-');
+
+          const shouldSubmitForScore = [
+            'score',
+            'score-attempt',
+            'submit-score',
+            'submit-for-score',
+            'submitted-for-score',
+          ].includes(normalizedScoringIntent);
           const measurements = measurementService.getMeasurements?.() || [];
           const existingById = getExistingViewerAnnotationsById(seriesDoc);
-          const annotations = measurements
+          const existingScorableAnnotations = getExistingScorableViewerAnnotations(
+            seriesDoc,
+            domain
+          );
+
+          let annotations = measurements
             .filter(
               measurement =>
                 measurement?.toolName &&
@@ -4213,10 +4524,20 @@ function commandsModule({
             )
             .filter(annotation => annotation.referencedImageId || annotation.points?.length);
 
+          if (
+            annotations.length === 0 &&
+            shouldSubmitForScore &&
+            existingScorableAnnotations.length > 0
+          ) {
+            annotations = existingScorableAnnotations;
+          }
+
           if (annotations.length === 0) {
             uiNotificationService.show({
               title: 'AR Measurements',
-              message: 'No viewer measurements to save.',
+              message: shouldSubmitForScore
+                ? 'No saved viewer measurements to score.'
+                : 'No viewer measurements to save.',
               type: 'warning',
               duration: 3000,
             });
@@ -4250,8 +4571,9 @@ function commandsModule({
                 return !!existingId && savedAnnotationIds.has(existingId);
               },
             }),
+            scoringIntent: shouldSubmitForScore ? 'score-attempt' : 'draft',
+            educationAttemptIntent: shouldSubmitForScore ? 'score-attempt' : 'draft',
           };
-
           const response = await fetch(buildFormApiUrl(`series/${seriesDoc._id}`), {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
@@ -4263,9 +4585,19 @@ function commandsModule({
             throw new Error(`Save failed: ${response.status}`);
           }
 
+          dispatchSavedAnnotationsRefresh({
+            seriesDoc,
+            saveTarget: getArViewerSaveTargetFromUrl(),
+            domain,
+            annotations,
+            processedAnnotations: annotations,
+          });
+
           uiNotificationService.show({
             title: 'AR Measurements',
-            message: 'Viewer measurements saved.',
+            message: shouldSubmitForScore
+              ? 'Viewer measurements saved and submitted for scoring.'
+              : 'Viewer measurements saved.',
             type: 'success',
             duration: 3000,
           });
