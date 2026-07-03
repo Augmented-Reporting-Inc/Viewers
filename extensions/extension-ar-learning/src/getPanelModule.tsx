@@ -18,7 +18,7 @@ const getPanelModule = ({ commandsManager, servicesManager, extensionManager }: 
   return [
     {
       name: 'caseQuestions',
-      iconName: 'tab-list',
+      iconName: 'ListView',
       iconLabel: 'Questions',
       label: 'Case Questions',
       component: WrappedCaseQuestionsPanel,

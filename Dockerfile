@@ -45,7 +45,7 @@
 FROM node:20.18.1-slim AS builder
 
 ARG APP_CONFIG=config/default.js
-ARG PUBLIC_URL=/rviewer/
+ARG PUBLIC_URL=/bviewer/
 ARG BUILD_COMMIT=unknown
 ARG BUILD_DATE=unknown
 

@@ -385,6 +385,35 @@ function isLearnerViewerMeasurementWorkflowFromUrl() {
   return isLibraryLearnerCopyOnSaveTarget();
 }
 
+function normalizeMeasurementScoringToken(value = '') {
+  return String(value || '')
+    .trim()
+    .replace(/[_\s-]+/g, '')
+    .toLowerCase();
+}
+
+function isViewerQuizEducationScoringMode(value = '') {
+  return normalizeMeasurementScoringToken(value) === 'viewerquiz';
+}
+
+function isDisabledMeasurementScoringValue(value = '') {
+  const normalized = normalizeMeasurementScoringToken(value);
+  return ['disabled', 'disable', 'false', 'off', 'no', '0'].includes(normalized);
+}
+
+function isViewerMeasurementScoringDisabledFromUrl() {
+  try {
+    const qs = getViewerUrlSearchParams();
+
+    return (
+      isViewerQuizEducationScoringMode(qs.get('arEducationScoringMode')) ||
+      isDisabledMeasurementScoringValue(qs.get('arMeasurementScoring'))
+    );
+  } catch {
+    return false;
+  }
+}
+
 function getArLearnerSeriesIdFromUrl() {
   return getArViewerSaveTargetFromUrl().learnerSeriesId;
 }
@@ -402,7 +431,7 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
   const [isLearnerMeasurementWorkflow, setIsLearnerMeasurementWorkflow] = useState(
     isLearnerViewerMeasurementWorkflowFromUrl
   );
-
+  const isMeasurementScoringDisabled = isViewerMeasurementScoringDisabledFromUrl();
   const applySavedAnnotationsResult = useCallback(result => {
     if (!result) {
       return;
@@ -548,6 +577,16 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
   }, [measurements, savedAnnotations]);
 
   const handleSave = async (scoreNow = false) => {
+    if (scoreNow && isMeasurementScoringDisabled) {
+      uiNotificationService.show({
+        title: 'AR Measurements',
+        message: 'Measurement scoring is disabled for this viewer quiz workflow.',
+        type: 'warning',
+        duration: 5000,
+      });
+      return;
+    }
+
     setSavingAction(scoreNow ? 'score' : 'draft');
 
     try {
@@ -658,7 +697,11 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
 
       <div className="border-t border-gray-700 p-3">
         {isLearnerMeasurementWorkflow ? (
-          <div className="grid grid-cols-2 gap-2">
+          <div
+            className={
+              isMeasurementScoringDisabled ? 'grid grid-cols-1 gap-2' : 'grid grid-cols-2 gap-2'
+            }
+          >
             <button
               type="button"
               className="rounded bg-blue-600 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50"
@@ -668,14 +711,16 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
               {savingAction === 'draft' ? 'Saving…' : 'Save Draft'}
             </button>
 
-            <button
-              type="button"
-              className="rounded bg-green-600 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50"
-              disabled={isSaving || visibleMeasurements.length === 0}
-              onClick={() => handleSave(true)}
-            >
-              {savingAction === 'score' ? 'Saving…' : 'Save & Score'}
-            </button>
+            {!isMeasurementScoringDisabled ? (
+              <button
+                type="button"
+                className="rounded bg-green-600 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                disabled={isSaving || visibleMeasurements.length === 0}
+                onClick={() => handleSave(true)}
+              >
+                {savingAction === 'score' ? 'Saving…' : 'Save & Score'}
+              </button>
+            ) : null}
           </div>
         ) : (
           <button

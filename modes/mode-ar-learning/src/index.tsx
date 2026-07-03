@@ -592,6 +592,50 @@ const arLearning = {
   caseQuestions: 'extension-ar-learning.panelModule.caseQuestions',
 };
 
+function getLearningInitialPanelFromUrl() {
+  if (typeof window === 'undefined') {
+    return '';
+  }
+
+  try {
+    const params = new URLSearchParams(window.location?.search || '');
+    const raw = String(params.get('arInitialPanel') || params.get('arOpenPanel') || '')
+      .trim()
+      .replace(/[_\s-]+/g, '')
+      .toLowerCase();
+
+    if (['casequestions', 'questions', 'quiz', 'viewerquiz'].includes(raw)) {
+      return 'caseQuestions';
+    }
+
+    if (['armeasurements', 'measurements'].includes(raw)) {
+      return 'arMeasurements';
+    }
+
+    return '';
+  } catch {
+    return '';
+  }
+}
+
+function getLearningInitialPanelId() {
+  const initialPanel = getLearningInitialPanelFromUrl();
+
+  if (initialPanel === 'caseQuestions') {
+    return arLearning.caseQuestions;
+  }
+
+  if (initialPanel === 'arMeasurements') {
+    return arMeasurements.panel;
+  }
+
+  return '';
+}
+
+function shouldOpenLearningRightPanelByDefault() {
+  return !!getLearningInitialPanelId();
+}
+
 const dicomsr = {
   sopClassHandler: '@ohif/extension-cornerstone-dicom-sr.sopClassHandlerModule.dicom-sr',
   sopClassHandler3D: '@ohif/extension-cornerstone-dicom-sr.sopClassHandlerModule.dicom-sr-3d',
@@ -850,6 +894,18 @@ function modeFactory({ modeConfiguration }) {
       // Start with cine enabled so autoPlayCine triggers when display sets load
       cineService.setIsCineEnabled(true);
 
+      const initialPanelId = getLearningInitialPanelId();
+
+      if (initialPanelId) {
+        window.setTimeout(() => {
+          try {
+            panelService?.activatePanel?.(initialPanelId, true);
+          } catch (error) {
+            console.warn('[AR Learning] initial panel activation failed:', error);
+          }
+        }, 0);
+      }
+
       // // ActivatePanel event trigger for when a segmentation or measurement is added.
       // // Do not force activation so as to respect the state the user may have left the UI in.
       // _activatePanelTriggersSubscriptions = [
@@ -939,7 +995,7 @@ function modeFactory({ modeConfiguration }) {
               // Keep AR Measurements first so the right panel defaults to
               // Measurements when opened. Segmentation remains available as tab 2.
               rightPanels: [arLearning.caseQuestions, arMeasurements.panel],
-              rightPanelClosed: true,
+              rightPanelClosed: !shouldOpenLearningRightPanelByDefault(),
               rightPanelResizable: true,
               viewports: [
                 {

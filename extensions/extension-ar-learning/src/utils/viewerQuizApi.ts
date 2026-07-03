@@ -222,6 +222,28 @@ async function ensureLearnerCopyForViewerSave(saveTarget: ViewerSaveTarget) {
   return learnerCopy;
 }
 
+async function fetchViewerQuizContextForSaveTarget(saveTarget: ViewerSaveTarget) {
+  if (!saveTarget.baseSeriesId) {
+    return null;
+  }
+
+  const qs = new URLSearchParams({
+    baseSeriesId: saveTarget.baseSeriesId,
+  });
+
+  if (saveTarget.learnerSeriesId) {
+    qs.set('learnerSeriesId', saveTarget.learnerSeriesId);
+  }
+
+  const payload = await fetchJson(buildFormApiUrl(`series/viewer-quiz-context?${qs.toString()}`));
+
+  if (payload?.learnerSeriesId) {
+    rememberArLearnerSeriesId(payload.learnerSeriesId);
+  }
+
+  return payload;
+}
+
 async function resolveViewerReadSeriesDoc() {
   const saveTarget = getArViewerSaveTargetFromUrl();
 
@@ -246,11 +268,54 @@ async function resolveViewerSaveSeriesDoc() {
   return resolveViewerReadSeriesDoc();
 }
 
+async function resolveViewerQuizScoreSeriesDoc() {
+  const saveTarget = getArViewerSaveTargetFromUrl();
+
+  if (isLearnerCopyOnSaveTarget(saveTarget)) {
+    if (saveTarget.learnerSeriesId) {
+      return fetchSeriesDocById(saveTarget.learnerSeriesId);
+    }
+
+    const contextPayload = await fetchViewerQuizContextForSaveTarget(saveTarget);
+    const learnerSeriesId = cleanString(
+      contextPayload?.learnerSeriesId || contextPayload?.seriesId || ''
+    );
+
+    if (learnerSeriesId) {
+      rememberArLearnerSeriesId(learnerSeriesId);
+      return fetchSeriesDocById(learnerSeriesId);
+    }
+
+    return null;
+  }
+
+  return resolveViewerReadSeriesDoc();
+}
+
 function getSeriesId(seriesDoc: any): string {
   return cleanString(seriesDoc?._id || seriesDoc?.id);
 }
 
 export async function getViewerQuizzesForActiveStudy() {
+  const saveTarget = getArViewerSaveTargetFromUrl();
+
+  if (isLearnerCopyOnSaveTarget(saveTarget)) {
+    const contextPayload = await fetchViewerQuizContextForSaveTarget(saveTarget);
+
+    return {
+      ...(contextPayload || {}),
+      seriesDoc: null,
+      seriesId: cleanString(contextPayload?.seriesId || contextPayload?.learnerSeriesId || ''),
+      baseSeriesId: cleanString(contextPayload?.baseSeriesId || saveTarget.baseSeriesId),
+      learnerSeriesId: cleanString(contextPayload?.learnerSeriesId || saveTarget.learnerSeriesId),
+      tenantId: cleanString(contextPayload?.tenantId),
+      enabled: contextPayload?.enabled === true,
+      contentKeys: Array.isArray(contextPayload?.contentKeys) ? contextPayload.contentKeys : [],
+      quizzes: Array.isArray(contextPayload?.quizzes) ? contextPayload.quizzes : [],
+      responses: Array.isArray(contextPayload?.responses) ? contextPayload.responses : [],
+    };
+  }
+
   const seriesDoc = await resolveViewerReadSeriesDoc();
   const seriesId = getSeriesId(seriesDoc);
 
@@ -308,10 +373,14 @@ export async function saveViewerQuizResponseForActiveStudy({
     }
   );
 
+  const resolvedSeriesId = cleanString(payload?.seriesId || seriesId);
+  rememberArLearnerSeriesId(resolvedSeriesId);
+
   return {
     ...payload,
     seriesDoc,
-    seriesId: cleanString(payload?.seriesId || seriesId),
+    seriesId: resolvedSeriesId,
+    learnerSeriesId: resolvedSeriesId,
   };
 }
 
@@ -323,29 +392,44 @@ export async function submitViewerQuizScoreForActiveStudy() {
     throw new Error('Unable to resolve series for case question scoring.');
   }
 
-  const payload = await fetchJson(buildFormApiUrl(`series/${encodeURIComponent(seriesId)}`), {
-    method: 'PUT',
-    body: JSON.stringify({
-      accessType: 'update',
-      scoringIntent: 'score-attempt',
-      educationAttemptIntent: 'score-attempt',
-    }),
-  });
+  const payload = await fetchJson(
+    buildFormApiUrl(`series/${encodeURIComponent(seriesId)}/viewer-quiz-score`),
+    {
+      method: 'POST',
+      body: JSON.stringify({}),
+    }
+  );
+
+  const resolvedSeriesId = cleanString(payload?.seriesId || seriesId);
+  rememberArLearnerSeriesId(resolvedSeriesId);
 
   return {
     ...payload,
     seriesDoc,
-    seriesId,
+    seriesId: resolvedSeriesId,
+    learnerSeriesId: resolvedSeriesId,
   };
 }
 
 export async function getViewerQuizScoreForActiveStudy() {
-  const seriesDoc = await resolveViewerReadSeriesDoc();
+  const seriesDoc = await resolveViewerQuizScoreSeriesDoc();
   const seriesId = getSeriesId(seriesDoc);
 
   if (!seriesId) {
     return null;
   }
 
-  return fetchJson(buildFormApiUrl(`series/${encodeURIComponent(seriesId)}/scoring`));
+  const payload = await fetchJson(
+    buildFormApiUrl(`series/${encodeURIComponent(seriesId)}/viewer-quiz-score`)
+  );
+
+  const resolvedSeriesId = cleanString(payload?.seriesId || seriesId);
+  rememberArLearnerSeriesId(resolvedSeriesId);
+
+  return {
+    ...payload,
+    seriesDoc,
+    seriesId: resolvedSeriesId,
+    learnerSeriesId: resolvedSeriesId,
+  };
 }
