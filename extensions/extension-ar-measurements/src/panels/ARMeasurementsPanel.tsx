@@ -661,13 +661,13 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
   };
 
   return (
-    <div className="flex h-full flex-col bg-black text-white">
-      <div className="border-b border-gray-700 p-3">
+    <div className="flex h-full min-h-0 flex-col bg-black text-white">
+      <div className="shrink-0 border-b border-gray-700 p-3">
         <div className="text-base font-semibold">AR Measurements</div>
         <div className="mt-1 text-xs text-gray-400">Domain: {domain}</div>
       </div>
 
-      <div className="flex-1 overflow-auto p-3">
+      <div className="min-h-0 flex-1 overflow-y-auto p-3">
         {visibleMeasurements.length === 0 ? (
           <div className="text-sm text-gray-400">No viewer measurements yet.</div>
         ) : (
@@ -695,11 +695,13 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
         )}
       </div>
 
-      <div className="border-t border-gray-700 p-3">
+      <div className="shrink-0 border-t border-gray-700 bg-black p-3">
         {isLearnerMeasurementWorkflow ? (
           <div
             className={
-              isMeasurementScoringDisabled ? 'grid grid-cols-1 gap-2' : 'grid grid-cols-2 gap-2'
+              isMeasurementScoringDisabled
+                ? 'grid grid-cols-1 gap-2'
+                : 'grid grid-cols-1 gap-2 sm:grid-cols-2'
             }
           >
             <button

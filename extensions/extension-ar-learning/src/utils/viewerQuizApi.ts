@@ -116,6 +116,31 @@ function getStudyInstanceUIDFromUrl(): string {
   return raw.split(',')[0]?.trim() || '';
 }
 
+function isTruthyUrlFlag(value: unknown): boolean {
+  return ['1', 'true', 'yes', 'y'].includes(cleanString(value).toLowerCase());
+}
+
+export function isViewerQuizAuthoringMode(): boolean {
+  const qs = getViewerUrlSearchParams();
+
+  return isTruthyUrlFlag(qs.get('arQuizAuthoring'));
+}
+
+export function getViewerQuizAuthoringContextFromUrl() {
+  const qs = getViewerUrlSearchParams();
+
+  return {
+    libraryContentKey:
+      cleanString(qs.get('arLibraryContentKey')) ||
+      cleanString(qs.get('libraryContentKey')) ||
+      cleanString(qs.get('studyKey')),
+    preferredDefinitionId:
+      cleanString(qs.get('arQuizDefinitionId')) ||
+      cleanString(qs.get('quizDefinitionId')) ||
+      cleanString(qs.get('definitionId')),
+  };
+}
+
 function isLibraryLaunchSource(launchSource = ''): boolean {
   return cleanString(launchSource).toLowerCase() === 'library';
 }
@@ -145,6 +170,25 @@ function rememberArLearnerSeriesId(seriesId: unknown): void {
     parsed.searchParams.set('arLearnerSeriesId', id);
     window.history.replaceState(window.history.state, '', parsed.toString());
   } catch {}
+}
+
+function getLearnerSeriesIdFromQuizContextPayload(
+  payload: any,
+  saveTarget: ViewerSaveTarget
+): string {
+  const learnerSeriesId = cleanString(payload?.learnerSeriesId);
+
+  if (learnerSeriesId) {
+    return learnerSeriesId;
+  }
+
+  const payloadSeriesId = cleanString(payload?.seriesId);
+
+  if (payloadSeriesId && payloadSeriesId !== cleanString(saveTarget.baseSeriesId)) {
+    return payloadSeriesId;
+  }
+
+  return '';
 }
 
 async function fetchJson(url: string, options: RequestInit = {}) {
@@ -237,8 +281,10 @@ async function fetchViewerQuizContextForSaveTarget(saveTarget: ViewerSaveTarget)
 
   const payload = await fetchJson(buildFormApiUrl(`series/viewer-quiz-context?${qs.toString()}`));
 
-  if (payload?.learnerSeriesId) {
-    rememberArLearnerSeriesId(payload.learnerSeriesId);
+  const learnerSeriesId = getLearnerSeriesIdFromQuizContextPayload(payload, saveTarget);
+
+  if (learnerSeriesId) {
+    rememberArLearnerSeriesId(learnerSeriesId);
   }
 
   return payload;
@@ -260,6 +306,14 @@ async function resolveViewerSaveSeriesDoc() {
   if (isLearnerCopyOnSaveTarget(saveTarget)) {
     if (saveTarget.learnerSeriesId) {
       return fetchSeriesDocById(saveTarget.learnerSeriesId);
+    }
+
+    const contextPayload = await fetchViewerQuizContextForSaveTarget(saveTarget);
+    const learnerSeriesId = getLearnerSeriesIdFromQuizContextPayload(contextPayload, saveTarget);
+
+    if (learnerSeriesId) {
+      rememberArLearnerSeriesId(learnerSeriesId);
+      return fetchSeriesDocById(learnerSeriesId);
     }
 
     return ensureLearnerCopyForViewerSave(saveTarget);
@@ -301,13 +355,14 @@ export async function getViewerQuizzesForActiveStudy() {
 
   if (isLearnerCopyOnSaveTarget(saveTarget)) {
     const contextPayload = await fetchViewerQuizContextForSaveTarget(saveTarget);
+    const learnerSeriesId = getLearnerSeriesIdFromQuizContextPayload(contextPayload, saveTarget);
 
     return {
       ...(contextPayload || {}),
       seriesDoc: null,
-      seriesId: cleanString(contextPayload?.seriesId || contextPayload?.learnerSeriesId || ''),
+      seriesId: cleanString(contextPayload?.seriesId || learnerSeriesId || ''),
       baseSeriesId: cleanString(contextPayload?.baseSeriesId || saveTarget.baseSeriesId),
-      learnerSeriesId: cleanString(contextPayload?.learnerSeriesId || saveTarget.learnerSeriesId),
+      learnerSeriesId: cleanString(learnerSeriesId || saveTarget.learnerSeriesId),
       tenantId: cleanString(contextPayload?.tenantId),
       enabled: contextPayload?.enabled === true,
       contentKeys: Array.isArray(contextPayload?.contentKeys) ? contextPayload.contentKeys : [],
@@ -351,7 +406,14 @@ export async function saveViewerQuizResponseForActiveStudy({
   quizKey: string;
   quizVersion: number;
   status: 'draft' | 'submitted';
-  answers: Array<{ questionKey: string; value: any }>;
+  answers: Array<{
+    questionKey: string;
+    value: any;
+    viewerTarget?: any;
+    normalizedAnswer?: any;
+    sourceRefs?: any;
+    reviewPayload?: any;
+  }>;
 }) {
   const seriesDoc = await resolveViewerSaveSeriesDoc();
   const seriesId = getSeriesId(seriesDoc);
@@ -432,4 +494,83 @@ export async function getViewerQuizScoreForActiveStudy() {
     seriesId: resolvedSeriesId,
     learnerSeriesId: resolvedSeriesId,
   };
+}
+
+export async function submitAndRefreshViewerQuizScoreForActiveStudy() {
+  const submittedPayload = await submitViewerQuizScoreForActiveStudy();
+
+  try {
+    const refreshedPayload = await getViewerQuizScoreForActiveStudy();
+
+    if (refreshedPayload) {
+      return {
+        ...submittedPayload,
+        ...refreshedPayload,
+        submittedPayload,
+      };
+    }
+  } catch {
+    // Keep the POST result if the follow-up score read fails.
+  }
+
+  return submittedPayload;
+}
+
+export async function getViewerQuizAuthoringContent() {
+  const context = getViewerQuizAuthoringContextFromUrl();
+
+  if (!context.libraryContentKey) {
+    throw new Error('Missing quiz authoring content key.');
+  }
+
+  const qs = new URLSearchParams({
+    libraryContentKey: context.libraryContentKey,
+  });
+
+  return fetchJson(buildFormApiUrl(`library/quiz-management/content?${qs.toString()}`));
+}
+
+export async function saveViewerQuizAuthoringDraft({
+  definitionId,
+  title,
+  description,
+  changeSummary,
+  domain,
+  workflow,
+  viewerMode,
+  questions,
+  rubricId,
+  rubricItems,
+}: {
+  definitionId: string;
+  title?: string;
+  description?: string;
+  changeSummary?: string;
+  domain?: string;
+  workflow?: string;
+  viewerMode?: string;
+  questions: any[];
+  rubricId?: string;
+  rubricItems?: any[];
+}) {
+  const id = cleanString(definitionId);
+
+  if (!id) {
+    throw new Error('Missing draft quiz definition id.');
+  }
+
+  return fetchJson(buildFormApiUrl(`library/quiz-management/drafts/${encodeURIComponent(id)}`), {
+    method: 'PUT',
+    body: JSON.stringify({
+      title,
+      description,
+      changeSummary,
+      domain,
+      workflow,
+      viewerMode,
+      questions,
+      rubricId,
+      rubricItems,
+    }),
+  });
 }

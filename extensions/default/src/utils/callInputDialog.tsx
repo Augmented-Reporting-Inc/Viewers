@@ -86,15 +86,31 @@ export async function callInputDialog({
   return value;
 }
 
+function cleanDialogTitle(value = '') {
+  return String(value || '').trim();
+}
+
+function getAutoCompleteDialogTitle({ title, labelConfig } = {}) {
+  return (
+    cleanDialogTitle(title) ||
+    cleanDialogTitle(labelConfig?.dialogTitle) ||
+    cleanDialogTitle(labelConfig?.annotationTitle) ||
+    cleanDialogTitle(labelConfig?.title) ||
+    'Annotation'
+  );
+}
+
 export async function callInputDialogAutoComplete({
   measurement,
   uiDialogService,
   labelConfig,
   renderContent = LabellingFlow,
   element,
+  title,
 }) {
   const exclusive = labelConfig ? labelConfig.exclusive : false;
   const dropDownItems = labelConfig ? labelConfig.items : [];
+  const dialogTitle = getAutoCompleteDialogTitle({ title, labelConfig });
 
   const value = await new Promise<Map<string, string>>((resolve, reject) => {
     const labellingDoneCallback = newValue => {
@@ -108,7 +124,7 @@ export async function callInputDialogAutoComplete({
 
     uiDialogService.show({
       id: 'select-annotation',
-      title: 'Annotation',
+      title: dialogTitle,
       content: renderContent,
       contentProps: {
         labellingDoneCallback: labellingDoneCallback,
@@ -116,6 +132,9 @@ export async function callInputDialogAutoComplete({
         componentClassName: {},
         labelData: dropDownItems,
         exclusive: exclusive,
+        title: dialogTitle,
+        dialogTitle,
+        labelConfig,
       },
     });
   });

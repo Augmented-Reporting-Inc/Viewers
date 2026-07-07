@@ -5,6 +5,9 @@ import { initToolGroups, toolbarButtons } from '@ohif/mode-longitudinal';
 
 const ECHO_LENGTH_MEASUREMENT_LABELS_CONFIG = {
   id: 'echoLengthMeasurementLabels',
+  domain: 'echo',
+  dialogTitle: 'Echo Annotation',
+  annotationTitle: 'Echo Annotation',
   labelOnMeasure: true,
   exclusive: true,
   items: [
@@ -23,6 +26,9 @@ const ECHO_LENGTH_MEASUREMENT_LABELS_CONFIG = {
 
 const BOWEL_LENGTH_MEASUREMENT_LABELS_CONFIG = {
   id: 'bowelLengthMeasurementLabels',
+  domain: 'bowel',
+  dialogTitle: 'Bowel Annotation',
+  annotationTitle: 'Bowel Annotation',
   labelOnMeasure: true,
   exclusive: true,
   items: [
@@ -39,6 +45,20 @@ const BOWEL_LENGTH_MEASUREMENT_LABELS_CONFIG = {
 };
 
 function getViewerMeasurementDomainFromPath() {
+  const params = new URLSearchParams(window.location?.search || '');
+  const explicitDomain = String(
+    params.get('arMeasurementDomain') ||
+      params.get('arViewerDomain') ||
+      params.get('viewerDomain') ||
+      ''
+  )
+    .trim()
+    .toLowerCase();
+
+  if (['iuscan', 'bowel', 'echo', 'generic'].includes(explicitDomain)) {
+    return explicitDomain === 'iuscan' ? 'bowel' : explicitDomain;
+  }
+
   const path = String(window.location?.pathname || '').toLowerCase();
 
   if (path.includes('/bviewer/iuscan')) {
@@ -57,6 +77,59 @@ function getViewerMeasurementDomainFromPath() {
   // treat it as echo so echo-only tools such as LV Trace are available even when
   // the dev/local route basename is '/'.
   return 'echo';
+}
+
+function getLearningUrlParam(name) {
+  try {
+    return String(new URLSearchParams(window.location?.search || '').get(name) || '')
+      .trim()
+      .toLowerCase();
+  } catch {
+    return '';
+  }
+}
+
+function isViewerQuizMeasurementCaptureMode() {
+  const captureMode = getLearningUrlParam('arQuizMeasurementCapture');
+  const scoringMode = getLearningUrlParam('arEducationScoringMode');
+  const initialPanel = getLearningUrlParam('arInitialPanel');
+
+  return (
+    ['selected', 'manual', 'quiz'].includes(captureMode) ||
+    (['viewerquiz', 'viewer-quiz'].includes(scoringMode) &&
+      ['casequestions', 'questions', 'quiz', 'viewerquiz'].includes(
+        initialPanel.replace(/[_\s-]+/g, '')
+      ))
+  );
+}
+
+const AR_QUIZ_MEASUREMENT_ADDED_EVENT = 'ar-learning:quiz-measurement-added';
+
+function dispatchViewerQuizMeasurementAdded(measurement) {
+  if (!isViewerQuizMeasurementCaptureMode()) {
+    return;
+  }
+
+  const measurementId = String(
+    measurement?.uid || measurement?.annotationUID || measurement?.annotationId || ''
+  ).trim();
+
+  if (!measurementId) {
+    return;
+  }
+
+  window.setTimeout(() => {
+    try {
+      window.dispatchEvent(
+        new CustomEvent(AR_QUIZ_MEASUREMENT_ADDED_EVENT, {
+          detail: {
+            measurementId,
+            toolName: measurement?.toolName || '',
+          },
+        })
+      );
+    } catch {}
+  }, 50);
 }
 
 const AR_US_REGION_PIXEL_SPACING_PROVIDER_PRIORITY = 10000;
@@ -543,6 +616,10 @@ async function getLabelConfigForMeasurement(measurement, commandsManager) {
     return null;
   }
 
+  if (isViewerQuizMeasurementCaptureMode()) {
+    return null;
+  }
+
   if (domain === 'iuscan') {
     return null;
   }
@@ -604,7 +681,7 @@ function getLearningInitialPanelFromUrl() {
       .replace(/[_\s-]+/g, '')
       .toLowerCase();
 
-    if (['casequestions', 'questions', 'quiz', 'viewerquiz'].includes(raw)) {
+    if (['casequestions', 'questions', 'quiz', 'viewerquiz', 'quizauthoring'].includes(raw)) {
       return 'caseQuestions';
     }
 
@@ -751,11 +828,13 @@ function modeFactory({ modeConfiguration }) {
       _measurementAddedSub = measurementService.subscribe(
         measurementService.EVENTS.MEASUREMENT_ADDED,
         async ({ measurement }) => {
-          if (_suppressLabelPrompt) {
+          if (!measurement?.uid) {
             return;
           }
 
-          if (!measurement?.uid || measurement?.label) {
+          dispatchViewerQuizMeasurementAdded(measurement);
+
+          if (_suppressLabelPrompt || measurement?.label) {
             return;
           }
 
@@ -784,10 +863,12 @@ function modeFactory({ modeConfiguration }) {
               });
             }
 
-            panelService?.activatePanel?.(
-              'extension-ar-measurements.panelModule.arMeasurements',
-              true
-            );
+            if (!isViewerQuizMeasurementCaptureMode()) {
+              panelService?.activatePanel?.(
+                'extension-ar-measurements.panelModule.arMeasurements',
+                true
+              );
+            }
           } catch (error) {
             console.warn('[AR Measurements] label prompt failed:', error);
           }

@@ -6,6 +6,9 @@ import toolbarButtons from './toolbarButtons';
 
 const ECHO_LENGTH_MEASUREMENT_LABELS_CONFIG = {
   id: 'echoLengthMeasurementLabels',
+  domain: 'echo',
+  dialogTitle: 'Echo Annotation',
+  annotationTitle: 'Echo Annotation',
   labelOnMeasure: true,
   exclusive: true,
   items: [
@@ -24,6 +27,9 @@ const ECHO_LENGTH_MEASUREMENT_LABELS_CONFIG = {
 
 const BOWEL_LENGTH_MEASUREMENT_LABELS_CONFIG = {
   id: 'bowelLengthMeasurementLabels',
+  domain: 'bowel',
+  dialogTitle: 'Bowel Annotation',
+  annotationTitle: 'Bowel Annotation',
   labelOnMeasure: true,
   exclusive: true,
   items: [

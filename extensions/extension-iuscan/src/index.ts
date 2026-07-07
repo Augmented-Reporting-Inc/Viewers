@@ -443,6 +443,9 @@ const iuscanExtension = {
       {
         measurementLabels: {
           $set: {
+            domain: 'iuscan',
+            dialogTitle: 'Bowel Annotation',
+            annotationTitle: 'Bowel Annotation',
             labelOnMeasure: true,
             exclusive: false,
             items: MEASUREMENT_LABELS,

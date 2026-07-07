@@ -22,11 +22,40 @@ export const BOWEL_MEASUREMENT_LABELS = [
   { value: 'BowelProximalIleumBWT', label: 'Proximal ileum BWT' },
 ];
 
+function normalizeMeasurementDomain(domain = '') {
+  const value = String(domain || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[_\s]+/g, '-');
+
+  if (value === 'iuscan') {
+    return 'bowel';
+  }
+
+  if (value === 'nuclear' || value === 'nuccard') {
+    return 'nuclear-cardiology';
+  }
+
+  return value;
+}
+
 export function getViewerMeasurementDomainFromPath() {
+  const params = new URLSearchParams(window.location?.search || '');
+  const urlDomain = normalizeMeasurementDomain(
+    params.get('arMeasurementDomain') ||
+      params.get('arViewerDomain') ||
+      params.get('viewerDomain') ||
+      ''
+  );
+
+  if (urlDomain) {
+    return urlDomain;
+  }
+
   const path = String(window.location?.pathname || '').toLowerCase();
 
   if (path.includes('/bviewer/iuscan')) {
-    return 'iuscan';
+    return 'bowel';
   }
 
   if (path.includes('/bviewer')) {
@@ -41,16 +70,26 @@ export function getViewerMeasurementDomainFromPath() {
 }
 
 export function getMeasurementLabelConfigForDomain(domain) {
-  if (domain === 'bowel') {
+  const normalizedDomain = normalizeMeasurementDomain(domain);
+
+  if (normalizedDomain === 'bowel') {
     return {
+      id: 'bowelLengthMeasurementLabels',
+      domain: 'bowel',
+      dialogTitle: 'Bowel Annotation',
+      annotationTitle: 'Bowel Annotation',
       labelOnMeasure: true,
       exclusive: true,
       items: BOWEL_MEASUREMENT_LABELS,
     };
   }
 
-  if (domain === 'echo') {
+  if (normalizedDomain === 'echo') {
     return {
+      id: 'echoLengthMeasurementLabels',
+      domain: 'echo',
+      dialogTitle: 'Echo Annotation',
+      annotationTitle: 'Echo Annotation',
       labelOnMeasure: true,
       exclusive: true,
       items: ECHO_MEASUREMENT_LABELS,

@@ -136,6 +136,20 @@ function inferDomainWithoutSeriesDoc(explicitDomain) {
     return explicitDomain;
   }
 
+  const params = getViewerUrlSearchParams();
+  const urlDomain = String(
+    params.get('arMeasurementDomain') ||
+      params.get('arViewerDomain') ||
+      params.get('viewerDomain') ||
+      ''
+  )
+    .trim()
+    .toLowerCase();
+
+  if (['iuscan', 'bowel', 'echo', 'generic'].includes(urlDomain)) {
+    return urlDomain === 'iuscan' ? 'bowel' : urlDomain;
+  }
+
   const path = String(window.location?.pathname || '').toLowerCase();
 
   if (path.includes('/bviewer/iuscan')) {
@@ -148,6 +162,82 @@ function inferDomainWithoutSeriesDoc(explicitDomain) {
 
   // Local/dev longitudinal `/viewer` routes are echo unless explicitly bowel/iUSCAN.
   return 'echo';
+}
+
+function cleanDialogText(value = '') {
+  return String(value || '').trim();
+}
+
+function getMeasurementLabelDialogTitleForDomain(domain = '') {
+  const normalizedDomain = cleanDialogText(domain)
+    .toLowerCase()
+    .replace(/[_\s]+/g, '-');
+
+  if (normalizedDomain === 'iuscan' || normalizedDomain === 'bowel') {
+    return 'Bowel Annotation';
+  }
+
+  if (normalizedDomain === 'echo') {
+    return 'Echo Annotation';
+  }
+
+  if (normalizedDomain === 'ecg') {
+    return 'ECG Annotation';
+  }
+
+  if (
+    normalizedDomain === 'nuclear' ||
+    normalizedDomain === 'nuclear-cardiology' ||
+    normalizedDomain === 'nuccard'
+  ) {
+    return 'Nuclear Cardiology Annotation';
+  }
+
+  return 'Measurement Annotation';
+}
+
+function getMeasurementLabelDialogTitle(labelConfig, explicitTitle = '') {
+  const directTitle = cleanDialogText(explicitTitle);
+
+  if (directTitle) {
+    return directTitle;
+  }
+
+  const config =
+    labelConfig && typeof labelConfig === 'object' && !Array.isArray(labelConfig)
+      ? labelConfig
+      : {};
+
+  return (
+    cleanDialogText(config.dialogTitle) ||
+    cleanDialogText(config.annotationTitle) ||
+    cleanDialogText(config.title) ||
+    getMeasurementLabelDialogTitleForDomain(config.domain)
+  );
+}
+
+function normalizeMeasurementLabelConfigForDialog(labelConfig, explicitTitle = '') {
+  if (!labelConfig) {
+    return null;
+  }
+
+  const baseConfig = Array.isArray(labelConfig)
+    ? {
+        id: 'measurementLabels',
+        labelOnMeasure: false,
+        exclusive: true,
+        items: labelConfig,
+      }
+    : labelConfig;
+
+  const dialogTitle = getMeasurementLabelDialogTitle(baseConfig, explicitTitle);
+
+  return {
+    ...baseConfig,
+    dialogTitle,
+    annotationTitle: baseConfig.annotationTitle || dialogTitle,
+    title: baseConfig.title || dialogTitle,
+  };
 }
 
 function getAnnotationId(annotation) {
@@ -566,6 +656,219 @@ function getMeasurementStats(measurement) {
 function finiteNumberOrNull(value) {
   const numberValue = Number(value);
   return Number.isFinite(numberValue) ? numberValue : null;
+}
+
+function findMeasurementServiceMeasurementById(measurementService, measurementId = '') {
+  const id = String(measurementId || '').trim();
+
+  if (!id || !measurementService) {
+    return null;
+  }
+
+  const direct = measurementService.getMeasurement?.(id);
+
+  if (direct) {
+    return direct;
+  }
+
+  const measurements = measurementService.getMeasurements?.() || [];
+
+  return (
+    measurements.find(measurement => {
+      const ids = [
+        measurement?.uid,
+        measurement?.id,
+        measurement?.annotationUID,
+        measurement?.annotationId,
+      ]
+        .filter(Boolean)
+        .map(value => String(value));
+
+      return ids.includes(id);
+    }) || null
+  );
+}
+
+function getSelectedMeasurementIdFromViewport(element) {
+  const selectedAnnotationIds =
+    cornerstoneTools.annotation.selection.getAnnotationsSelected?.() || [];
+
+  if (selectedAnnotationIds?.[0]) {
+    return String(selectedAnnotationIds[0] || '').trim();
+  }
+
+  try {
+    const selectedAnnotation = element ? getFirstAnnotationSelected(element) : null;
+
+    return String(
+      selectedAnnotation?.annotationUID ||
+        selectedAnnotation?.uid ||
+        selectedAnnotation?.annotationId ||
+        ''
+    ).trim();
+  } catch {
+    return '';
+  }
+}
+
+function getMeasurementValueAndUnitForQuiz(measurement) {
+  const stats = getMeasurementStats(measurement);
+  const displayText = getMeasurementDisplayText(measurement);
+  const parsed = parseLengthDisplayText(displayText);
+
+  const lengthValue =
+    finiteNumberOrNull(measurement?.value) ??
+    finiteNumberOrNull(measurement?.length) ??
+    finiteNumberOrNull(stats?.length) ??
+    finiteNumberOrNull(parsed.value);
+
+  if (lengthValue != null) {
+    return {
+      value: lengthValue,
+      unit: normalizeDisplayLengthUnit(
+        measurement?.unit ||
+          measurement?.lengthUnit ||
+          stats?.unit ||
+          stats?.lengthUnit ||
+          parsed.unit ||
+          ''
+      ),
+      measurementKind: 'length',
+    };
+  }
+
+  const areaValue =
+    finiteNumberOrNull(measurement?.area) ??
+    finiteNumberOrNull(stats?.area) ??
+    finiteNumberOrNull(parsed.value);
+
+  if (areaValue != null) {
+    return {
+      value: areaValue,
+      unit: normalizeDisplayAreaUnit(
+        measurement?.areaUnit || stats?.areaUnit || stats?.areaUnits || parsed.unit || ''
+      ),
+      measurementKind: 'area',
+    };
+  }
+
+  return {
+    value: null,
+    unit: '',
+    measurementKind: '',
+  };
+}
+
+function roundQuizMeasurementValue(value, decimalPlaces = 2) {
+  const numericValue = Number(value);
+
+  if (!Number.isFinite(numericValue)) {
+    return value;
+  }
+
+  const factor = Math.pow(10, decimalPlaces);
+  return Math.round(numericValue * factor) / factor;
+}
+
+function buildViewerQuizTargetFromMeasurement(measurement) {
+  const frameNumber =
+    measurement?.frameNumber && measurement.frameNumber > 1
+      ? measurement.frameNumber
+      : getFrameNumberFromReferencedImageId(measurement?.referencedImageId);
+
+  return {
+    studyInstanceUID: measurement?.referenceStudyUID || measurement?.StudyInstanceUID || '',
+    seriesInstanceUID:
+      measurement?.referenceSeriesUID ||
+      measurement?.SeriesInstanceUID ||
+      measurement?.metadata?.SeriesInstanceUID ||
+      '',
+    sopInstanceUID: measurement?.SOPInstanceUID || measurement?.metadata?.SOPInstanceUID || '',
+    displaySetInstanceUID:
+      measurement?.displaySetInstanceUID || measurement?.metadata?.displaySetInstanceUID || '',
+    referencedImageId:
+      measurement?.referencedImageId || measurement?.metadata?.referencedImageId || '',
+    frameNumber,
+    frameIndex: frameNumber > 0 ? frameNumber - 1 : undefined,
+  };
+}
+
+function getMeasurementDisplayLabel(measurement) {
+  return (
+    measurement?.label ||
+    measurement?.measurementRole ||
+    measurement?.role ||
+    measurement?.description ||
+    measurement?.finding?.CodeMeaning ||
+    ''
+  );
+}
+
+function buildViewerQuizAnswerFromMeasurement({
+  measurement,
+  question = {},
+  measurementType = '',
+  expectedUnit = '',
+} = {}) {
+  const valueAndUnit = getMeasurementValueAndUnitForQuiz(measurement);
+
+  if (valueAndUnit.value == null) {
+    return null;
+  }
+
+  const annotationId = String(
+    measurement?.uid ||
+      measurement?.annotationUID ||
+      measurement?.annotationId ||
+      measurement?.id ||
+      ''
+  ).trim();
+
+  const questionAnswerConfig =
+    question?.answerConfig && typeof question.answerConfig === 'object'
+      ? question.answerConfig
+      : {};
+
+  const resolvedMeasurementType = String(
+    measurementType ||
+      questionAnswerConfig.measurementType ||
+      measurement?.measurementType ||
+      getMeasurementDisplayLabel(measurement) ||
+      ''
+  ).trim();
+
+  const resolvedUnit = String(expectedUnit || questionAnswerConfig.unit || valueAndUnit.unit || '')
+    .trim()
+    .replace(/^px$/i, 'mm');
+
+  const viewerTarget = buildViewerQuizTargetFromMeasurement(measurement);
+  const displayText = getMeasurementDisplayText(measurement);
+
+  return {
+    value: roundQuizMeasurementValue(valueAndUnit.value, 2),
+    unit: resolvedUnit || valueAndUnit.unit || '',
+    measurementType: resolvedMeasurementType,
+    measurementKind: valueAndUnit.measurementKind,
+    sourceAnnotationId: annotationId,
+    viewerTarget,
+    sourceRefs: {
+      annotationId,
+      measurementId: annotationId,
+      toolName: measurement?.toolName || measurement?.metadata?.toolName || '',
+      referencedImageId: viewerTarget.referencedImageId || '',
+      displaySetInstanceUID: viewerTarget.displaySetInstanceUID || '',
+      studyInstanceUID: viewerTarget.studyInstanceUID || '',
+      seriesInstanceUID: viewerTarget.seriesInstanceUID || '',
+      sopInstanceUID: viewerTarget.sopInstanceUID || '',
+      frameNumber: viewerTarget.frameNumber || '',
+    },
+    reviewPayload: {
+      label: getMeasurementDisplayLabel(measurement),
+      toolName: measurement?.toolName || measurement?.metadata?.toolName || '',
+      displayText,
+      capturedAt: new Date().toISOString(),
+    },
+  };
 }
 
 function readRawDicomValue(source, keys = []) {
@@ -1520,6 +1823,621 @@ function getDisplaySetForSavedAnnotation(displaySetService, annotation) {
   );
 }
 
+function quizNumberOrNull(value) {
+  if (value === null || typeof value === 'undefined' || value === '') {
+    return null;
+  }
+
+  const numberValue = Number(value);
+  return Number.isFinite(numberValue) ? numberValue : null;
+}
+
+function normalizeViewerQuizTarget(target = {}) {
+  const source = target && typeof target === 'object' && !Array.isArray(target) ? target : {};
+
+  const frameNumber =
+    quizNumberOrNull(source.frameNumber) ??
+    quizNumberOrNull(source.frameIndex) ??
+    quizNumberOrNull(source.frame);
+
+  const imageIndex = quizNumberOrNull(source.imageIndex);
+
+  return {
+    studyInstanceId: String(source.studyInstanceUID || source.StudyInstanceUID || '').trim(),
+    seriesInstanceId: String(source.seriesInstanceUID || source.SeriesInstanceUID || '').trim(),
+    sopInstanceId: String(source.sopInstanceUID || source.SOPInstanceUID || '').trim(),
+    displaySetInstanceId: String(source.displaySetInstanceUID || '').trim(),
+    referencedImageId: String(source.referencedImageId || '').trim(),
+    frameNumber,
+    imageIndex,
+  };
+}
+
+function hasViewerQuizTargetIdentity(target = {}) {
+  return !!(
+    target.displaySetInstanceId ||
+    target.seriesInstanceId ||
+    target.sopInstanceId ||
+    target.referencedImageId ||
+    Number.isFinite(target.imageIndex) ||
+    Number.isFinite(target.frameNumber)
+  );
+}
+
+function getDisplaySetForViewerQuizTarget(displaySetService, target = {}) {
+  if (!displaySetService || !target) {
+    return null;
+  }
+
+  if (target.displaySetInstanceId && displaySetService.getDisplaySetByUID) {
+    const displaySet = displaySetService.getDisplaySetByUID(target.displaySetInstanceId);
+
+    if (displaySet) {
+      return displaySet;
+    }
+  }
+
+  if (target.sopInstanceId && displaySetService.getDisplaySetForSOPInstanceUID) {
+    const displaySet = displaySetService.getDisplaySetForSOPInstanceUID(
+      target.sopInstanceId,
+      target.seriesInstanceId
+    );
+
+    if (displaySet) {
+      return displaySet;
+    }
+  }
+
+  const seriesDisplaySets =
+    target.seriesInstanceId && displaySetService.getDisplaySetsForSeries
+      ? displaySetService.getDisplaySetsForSeries(target.seriesInstanceId) || []
+      : [];
+
+  return seriesDisplaySets[0] || null;
+}
+
+function findImageIdIndexForViewerQuizTarget(viewport, target = {}) {
+  const imageIds = getViewportImageIds(viewport);
+
+  if (!imageIds.length) {
+    return {
+      index: -1,
+      imageId: '',
+      imageIds,
+      source: 'no-images',
+    };
+  }
+
+  const normalizedReference = normalizeImageIdForCompare(target.referencedImageId);
+
+  if (normalizedReference) {
+    const index = imageIds.findIndex(imageId => {
+      const normalized = normalizeImageIdForCompare(imageId);
+      return normalized === normalizedReference || normalized.endsWith(normalizedReference);
+    });
+
+    if (index >= 0) {
+      return {
+        index,
+        imageId: imageIds[index],
+        imageIds,
+        source: 'referencedImageId',
+      };
+    }
+  }
+
+  if (target.sopInstanceId && Number.isFinite(target.frameNumber)) {
+    const expectedInstanceFrame = `/instances/${String(target.sopInstanceId).toLowerCase()}/frames/${target.frameNumber}`;
+    const index = imageIds.findIndex(imageId =>
+      normalizeImageIdForCompare(imageId).includes(expectedInstanceFrame)
+    );
+
+    if (index >= 0) {
+      return {
+        index,
+        imageId: imageIds[index],
+        imageIds,
+        source: 'sop-frame',
+      };
+    }
+  }
+
+  if (target.sopInstanceId) {
+    const expectedInstance = `/instances/${String(target.sopInstanceId).toLowerCase()}`;
+    const index = imageIds.findIndex(imageId =>
+      normalizeImageIdForCompare(imageId).includes(expectedInstance)
+    );
+
+    if (index >= 0) {
+      return {
+        index,
+        imageId: imageIds[index],
+        imageIds,
+        source: 'sop',
+      };
+    }
+  }
+
+  if (
+    Number.isFinite(target.imageIndex) &&
+    target.imageIndex >= 0 &&
+    target.imageIndex < imageIds.length
+  ) {
+    return {
+      index: target.imageIndex,
+      imageId: imageIds[target.imageIndex],
+      imageIds,
+      source: 'imageIndex',
+    };
+  }
+
+  if (Number.isFinite(target.frameNumber)) {
+    const oneBasedIndex = target.frameNumber - 1;
+    if (oneBasedIndex >= 0 && oneBasedIndex < imageIds.length) {
+      return {
+        index: oneBasedIndex,
+        imageId: imageIds[oneBasedIndex],
+        imageIds,
+        source: 'frameNumber',
+      };
+    }
+  }
+
+  return {
+    index: -1,
+    imageId: '',
+    imageIds,
+    source: 'not-found',
+  };
+}
+
+async function jumpViewportToViewerQuizTargetImage(viewport, target = {}) {
+  const match = findImageIdIndexForViewerQuizTarget(viewport, target);
+
+  if (match.index < 0) {
+    console.warn('[ViewerQuiz] could not find target image in viewport stack', {
+      target,
+      imageIdCount: match.imageIds.length,
+      firstImageId: match.imageIds[0],
+      lastImageId: match.imageIds[match.imageIds.length - 1],
+      source: match.source,
+    });
+
+    return {
+      ok: false,
+      reason: 'target-image-not-found',
+      match,
+    };
+  }
+
+  try {
+    if (viewport.setImageIdIndex) {
+      await viewport.setImageIdIndex(match.index);
+    } else if (viewport.element) {
+      csUtils.jumpToSlice(viewport.element, {
+        imageIndex: match.index,
+      });
+    }
+
+    viewport.render?.();
+
+    console.info('[ViewerQuiz] jumped to target image', {
+      imageIndex: match.index,
+      actualImageId: match.imageId,
+      source: match.source,
+    });
+
+    return {
+      ok: true,
+      imageIndex: match.index,
+      imageId: match.imageId,
+      source: match.source,
+    };
+  } catch (error) {
+    console.warn('[ViewerQuiz] failed to jump to target image:', error);
+
+    return {
+      ok: false,
+      reason: 'jump-failed',
+      error,
+      match,
+    };
+  }
+}
+
+function getSopInstanceIdFromImageId(imageId = '') {
+  const match = String(imageId || '').match(/\/instances\/([^/]+)/i);
+  return match?.[1] ? decodeURIComponent(match[1]) : '';
+}
+
+function getInstanceNumberFromSource(source) {
+  return readDicomNumber(source, ['InstanceNumber', 'instanceNumber', '00200013', 'x00200013']);
+}
+
+function getInstanceNumberForViewerQuizTarget({
+  displaySet,
+  sopInstanceId = '',
+  imageIndex = -1,
+} = {}) {
+  const instances = getDisplaySetInstances(displaySet);
+
+  if (!instances.length) {
+    return null;
+  }
+
+  const matchedInstance =
+    instances.find(
+      instance => String(getSopInstanceIdFromSource(instance) || '') === String(sopInstanceId || '')
+    ) ||
+    (Number.isFinite(Number(imageIndex)) && Number(imageIndex) >= 0
+      ? instances[Number(imageIndex)]
+      : null) ||
+    instances[0];
+
+  return getInstanceNumberFromSource(matchedInstance);
+}
+
+function getActiveViewportDisplaySet({ viewportGridService, displaySetService, viewportId }) {
+  const viewportState = viewportGridService.getState?.()?.viewports?.get?.(viewportId);
+  const displaySetInstanceId = viewportState?.displaySetInstanceUIDs?.[0] || '';
+
+  if (!displaySetInstanceId || !displaySetService?.getDisplaySetByUID) {
+    return null;
+  }
+
+  return displaySetService.getDisplaySetByUID(displaySetInstanceId) || null;
+}
+
+function getCurrentViewportImageInfo(viewport) {
+  const imageIds = getViewportImageIds(viewport);
+  const currentImageId =
+    viewport?.getCurrentImageId?.() || imageIds[viewport?.getCurrentImageIdIndex?.()] || '';
+
+  let imageIndex = Number(viewport?.getCurrentImageIdIndex?.());
+
+  if (!Number.isFinite(imageIndex) || imageIndex < 0) {
+    imageIndex = currentImageId ? imageIds.indexOf(currentImageId) : -1;
+  }
+
+  if ((!currentImageId || imageIndex < 0) && imageIds.length === 1) {
+    return {
+      imageId: imageIds[0],
+      imageIndex: 0,
+      imageIds,
+    };
+  }
+
+  return {
+    imageId: currentImageId || '',
+    imageIndex,
+    imageIds,
+  };
+}
+
+function buildViewerQuizFrameAnswer({ viewport, displaySet, viewportId = '' } = {}) {
+  const imageInfo = getCurrentViewportImageInfo(viewport);
+
+  if (!imageInfo.imageId || imageInfo.imageIndex < 0) {
+    return null;
+  }
+
+  const frameNumber = getFrameNumberFromReferencedImageId(imageInfo.imageId);
+  const sopInstanceId =
+    getSopInstanceIdFromImageId(imageInfo.imageId) ||
+    displaySet?.SOPInstanceUID ||
+    displaySet?.sopInstanceUID ||
+    '';
+
+  const selectedTarget = {
+    studyInstanceUID: displaySet?.StudyInstanceUID || displaySet?.studyInstanceUID || '',
+    seriesInstanceUID: displaySet?.SeriesInstanceUID || displaySet?.seriesInstanceUID || '',
+    sopInstanceUID: sopInstanceId,
+    instanceNumber: getInstanceNumberForViewerQuizTarget({
+      displaySet,
+      sopInstanceId,
+      imageIndex: imageInfo.imageIndex,
+    }),
+    displaySetInstanceUID: displaySet?.displaySetInstanceUID || '',
+    referencedImageId: imageInfo.imageId,
+    frameNumber,
+    frameIndex: frameNumber > 0 ? frameNumber - 1 : imageInfo.imageIndex,
+    imageIndex: imageInfo.imageIndex,
+    viewportId,
+  };
+
+  return {
+    selectedTarget,
+    viewerTarget: selectedTarget,
+    sourceRefs: {
+      referencedImageId: imageInfo.imageId,
+      studyInstanceUID: selectedTarget.studyInstanceUID,
+      seriesInstanceUID: selectedTarget.seriesInstanceUID,
+      sopInstanceUID: selectedTarget.sopInstanceUID,
+      instanceNumber: selectedTarget.instanceNumber,
+      displaySetInstanceUID: selectedTarget.displaySetInstanceUID,
+      frameNumber,
+      imageIndex: imageInfo.imageIndex,
+      imageCount: imageInfo.imageIds.length,
+    },
+    reviewPayload: {
+      capturedAt: new Date().toISOString(),
+      captureMode: 'currentViewportFrame',
+    },
+  };
+}
+
+function getCanvasPointFromMouseEvent(event, element) {
+  const rect = element?.getBoundingClientRect?.();
+
+  if (!rect) {
+    return null;
+  }
+
+  return {
+    x: event.clientX - rect.left,
+    y: event.clientY - rect.top,
+  };
+}
+
+function buildViewerQuizPointAnswer({ event, viewport, displaySet, viewportId = '' } = {}) {
+  const imageInfo = getCurrentViewportImageInfo(viewport);
+  const canvasPoint = getCanvasPointFromMouseEvent(event, viewport?.element);
+
+  if (!imageInfo.imageId || imageInfo.imageIndex < 0 || !canvasPoint) {
+    return null;
+  }
+
+  let worldPoint = null;
+  try {
+    worldPoint =
+      typeof viewport?.canvasToWorld === 'function'
+        ? viewport.canvasToWorld([canvasPoint.x, canvasPoint.y])
+        : null;
+  } catch {
+    worldPoint = null;
+  }
+
+  const frameNumber = getFrameNumberFromReferencedImageId(imageInfo.imageId);
+  const sopInstanceId =
+    getSopInstanceIdFromImageId(imageInfo.imageId) ||
+    displaySet?.SOPInstanceUID ||
+    displaySet?.sopInstanceUID ||
+    '';
+
+  const selectedTarget = {
+    studyInstanceUID: displaySet?.StudyInstanceUID || displaySet?.studyInstanceUID || '',
+    seriesInstanceUID: displaySet?.SeriesInstanceUID || displaySet?.seriesInstanceUID || '',
+    sopInstanceUID: sopInstanceId,
+    instanceNumber: getInstanceNumberForViewerQuizTarget({
+      displaySet,
+      sopInstanceId,
+      imageIndex: imageInfo.imageIndex,
+    }),
+    displaySetInstanceUID: displaySet?.displaySetInstanceUID || '',
+    referencedImageId: imageInfo.imageId,
+    frameNumber,
+    frameIndex: frameNumber > 0 ? frameNumber - 1 : imageInfo.imageIndex,
+    imageIndex: imageInfo.imageIndex,
+    viewportId,
+  };
+
+  const point =
+    Array.isArray(worldPoint) && worldPoint.length >= 2
+      ? {
+          x: worldPoint[0],
+          y: worldPoint[1],
+          z: worldPoint[2] || 0,
+          coordinateSpace: 'world',
+        }
+      : {
+          x: canvasPoint.x,
+          y: canvasPoint.y,
+          coordinateSpace: 'canvas',
+        };
+
+  return {
+    point,
+    canvasPoint: {
+      ...canvasPoint,
+      coordinateSpace: 'canvas',
+    },
+    viewerTarget: selectedTarget,
+    selectedTarget,
+    sourceRefs: {
+      referencedImageId: imageInfo.imageId,
+      studyInstanceUID: selectedTarget.studyInstanceUID,
+      seriesInstanceUID: selectedTarget.seriesInstanceUID,
+      sopInstanceUID: selectedTarget.sopInstanceUID,
+      instanceNumber: selectedTarget.instanceNumber,
+      displaySetInstanceUID: selectedTarget.displaySetInstanceUID,
+      frameNumber,
+      imageIndex: imageInfo.imageIndex,
+      imageCount: imageInfo.imageIds.length,
+    },
+    reviewPayload: {
+      capturedAt: new Date().toISOString(),
+      captureMode: 'viewerQuizPoint',
+    },
+  };
+}
+
+function captureNextViewerClickPoint({ viewport, displaySet, viewportId = '' } = {}) {
+  const element = viewport?.element;
+
+  if (!element) {
+    return Promise.resolve({
+      ok: false,
+      reason: 'viewport-element-not-found',
+    });
+  }
+
+  return new Promise(resolve => {
+    const previousCursor = element.style.cursor;
+    let done = false;
+
+    function finish(result) {
+      if (done) {
+        return;
+      }
+      done = true;
+      element.style.cursor = previousCursor;
+      element.removeEventListener('click', handleClick, true);
+      window.removeEventListener('keydown', handleKeyDown, true);
+      resolve(result);
+    }
+
+    function handleKeyDown(event) {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        event.stopPropagation();
+        finish({
+          ok: false,
+          reason: 'cancelled',
+        });
+      }
+    }
+
+    function handleClick(event) {
+      event.preventDefault();
+      event.stopPropagation();
+
+      const answer = buildViewerQuizPointAnswer({
+        event,
+        viewport,
+        displaySet,
+        viewportId,
+      });
+
+      if (!answer) {
+        finish({
+          ok: false,
+          reason: 'point-capture-failed',
+        });
+        return;
+      }
+
+      finish({
+        ok: true,
+        answer,
+      });
+    }
+
+    element.style.cursor = 'crosshair';
+    element.addEventListener('click', handleClick, true);
+    window.addEventListener('keydown', handleKeyDown, true);
+  });
+}
+
+const VIEWER_QUIZ_MARKER_OVERLAY_CLASS = 'ar-viewer-quiz-marker-overlay';
+
+function clearViewerQuizMarkerOverlayForElement(element) {
+  try {
+    element
+      ?.querySelectorAll?.(`.${VIEWER_QUIZ_MARKER_OVERLAY_CLASS}`)
+      ?.forEach(node => node.remove());
+  } catch {}
+}
+
+function clearAllViewerQuizMarkerOverlays() {
+  try {
+    document
+      ?.querySelectorAll?.(`.${VIEWER_QUIZ_MARKER_OVERLAY_CLASS}`)
+      ?.forEach(node => node.remove());
+  } catch {}
+}
+
+function getCanvasPointForViewerQuizMarker(viewport, marker = {}) {
+  const point = marker?.point || marker;
+  const coordinateSpace = String(point?.coordinateSpace || marker?.coordinateSpace || '').trim();
+
+  if (coordinateSpace === 'world' && typeof viewport?.worldToCanvas === 'function') {
+    try {
+      const canvasPoint = viewport.worldToCanvas([
+        Number(point.x),
+        Number(point.y),
+        Number(point.z || 0),
+      ]);
+
+      if (Array.isArray(canvasPoint) && canvasPoint.length >= 2) {
+        return {
+          x: canvasPoint[0],
+          y: canvasPoint[1],
+        };
+      }
+    } catch {}
+  }
+
+  if (Number.isFinite(Number(point?.x)) && Number.isFinite(Number(point?.y))) {
+    return {
+      x: Number(point.x),
+      y: Number(point.y),
+    };
+  }
+
+  return null;
+}
+
+function drawViewerQuizMarkerOptions({ viewport, markerOptions = [] } = {}) {
+  const element = viewport?.element;
+
+  if (!element) {
+    return {
+      ok: false,
+      reason: 'viewport-element-not-found',
+      renderedCount: 0,
+    };
+  }
+
+  clearViewerQuizMarkerOverlayForElement(element);
+
+  const previousPosition = element.style.position;
+  if (!previousPosition || previousPosition === 'static') {
+    element.style.position = 'relative';
+  }
+
+  let renderedCount = 0;
+
+  for (const marker of Array.isArray(markerOptions) ? markerOptions : []) {
+    const markerId = String(marker?.markerId || marker?.markerKey || marker?.value || '').trim();
+    const label = String(marker?.label || markerId || `Marker ${renderedCount + 1}`).trim();
+    const canvasPoint = getCanvasPointForViewerQuizMarker(viewport, marker);
+
+    if (!canvasPoint) {
+      continue;
+    }
+
+    const node = document.createElement('div');
+    node.className = VIEWER_QUIZ_MARKER_OVERLAY_CLASS;
+    node.style.position = 'absolute';
+    node.style.left = `${canvasPoint.x}px`;
+    node.style.top = `${canvasPoint.y}px`;
+    node.style.transform = 'translate(-50%, -50%)';
+    node.style.zIndex = '30';
+    node.style.pointerEvents = 'none';
+    node.style.border = '2px solid #facc15';
+    node.style.background = 'rgba(0, 0, 0, 0.75)';
+    node.style.color = '#fef3c7';
+    node.style.borderRadius = '9999px';
+    node.style.minWidth = '24px';
+    node.style.height = '24px';
+    node.style.padding = '0 6px';
+    node.style.display = 'flex';
+    node.style.alignItems = 'center';
+    node.style.justifyContent = 'center';
+    node.style.fontSize = '12px';
+    node.style.fontWeight = '700';
+    node.textContent = label;
+
+    element.appendChild(node);
+    renderedCount += 1;
+  }
+
+  return {
+    ok: true,
+    renderedCount,
+  };
+}
+
 function getViewerUrlSearchParams() {
   const params = new URLSearchParams();
 
@@ -2062,14 +2980,11 @@ function commandsModule({
         options.labelConfigOverride || customizationService.getCustomization('measurementLabels');
       const renderContent = customizationService.getCustomization('ui.labellingComponent');
       const measurement = measurementService.getMeasurement(uid);
-      const normalizedLabelConfig = Array.isArray(labelConfig)
-        ? {
-            id: 'measurementLabels',
-            labelOnMeasure: false,
-            exclusive: true,
-            items: labelConfig,
-          }
-        : labelConfig;
+      const normalizedLabelConfig = normalizeMeasurementLabelConfigForDialog(
+        labelConfig,
+        options.title
+      );
+      const dialogTitle = getMeasurementLabelDialogTitle(normalizedLabelConfig, options.title);
 
       if (!measurement) {
         console.debug('No measurement found for label editing');
@@ -2079,7 +2994,7 @@ function commandsModule({
       if (!normalizedLabelConfig) {
         const label = await callInputDialog({
           uiDialogService,
-          title: options.title || 'Edit Measurement Label',
+          title: dialogTitle || 'Measurement Annotation',
           placeholder: options.placeholder || measurement.label || 'Enter new label',
           defaultValue: measurement.label,
         });
@@ -2097,6 +3012,7 @@ function commandsModule({
         uiDialogService,
         labelConfig: normalizedLabelConfig,
         renderContent,
+        title: dialogTitle,
       });
 
       if (val !== undefined && val !== null) {
@@ -2463,6 +3379,8 @@ function commandsModule({
     arrowTextCallback: async ({ callback, data }) => {
       const labelConfig = customizationService.getCustomization('measurementLabels');
       const renderContent = customizationService.getCustomization('ui.labellingComponent');
+      const normalizedLabelConfig = normalizeMeasurementLabelConfigForDialog(labelConfig);
+      const dialogTitle = getMeasurementLabelDialogTitle(normalizedLabelConfig);
 
       if (!labelConfig) {
         const label = await callInputDialog({
@@ -2478,8 +3396,9 @@ function commandsModule({
 
       const value = await callInputDialogAutoComplete({
         uiDialogService,
-        labelConfig,
+        labelConfig: normalizedLabelConfig,
         renderContent,
+        title: dialogTitle,
       });
       callback?.(value);
     },
@@ -4149,6 +5068,223 @@ function commandsModule({
         hydratedViewport.render?.();
       }
     },
+    jumpToViewerQuizTarget: async ({ viewerTarget, questionKey = '' } = {}) => {
+      const target = normalizeViewerQuizTarget(viewerTarget);
+
+      if (!hasViewerQuizTargetIdentity(target)) {
+        console.info('[ViewerQuiz] no viewer target to navigate', {
+          questionKey,
+          viewerTarget,
+        });
+
+        return {
+          ok: false,
+          reason: 'empty-target',
+        };
+      }
+
+      const activeViewportId = viewportGridService.getActiveViewportId();
+      const displaySet = getDisplaySetForViewerQuizTarget(displaySetService, target);
+      let targetViewportId = activeViewportId;
+
+      if (displaySet?.displaySetInstanceUID) {
+        const viewportToUpdate = cornerstoneViewportService.findUpdateableViewportConfiguration(
+          activeViewportId,
+          {
+            displaySetInstanceUID: displaySet.displaySetInstanceUID,
+            metadata: {
+              StudyInstanceUID: target.studyInstanceId || displaySet.StudyInstanceUID,
+              SeriesInstanceUID: target.seriesInstanceId || displaySet.SeriesInstanceUID,
+              SOPInstanceUID: target.sopInstanceId || '',
+              displaySetInstanceUID: displaySet.displaySetInstanceUID,
+              referencedImageId: target.referencedImageId || '',
+            },
+            referencedImageId: target.referencedImageId || '',
+          }
+        );
+
+        targetViewportId = viewportToUpdate?.viewportId || activeViewportId;
+
+        const updatedViewports = hangingProtocolService.getViewportsRequireUpdate(
+          targetViewportId,
+          displaySet.displaySetInstanceUID
+        );
+
+        if (updatedViewports?.[0]) {
+          if (viewportToUpdate?.viewportOptions) {
+            updatedViewports[0].viewportOptions = viewportToUpdate.viewportOptions;
+          }
+
+          commandsManager.run('setDisplaySetsForViewports', {
+            viewportsToUpdate: updatedViewports,
+          });
+
+          await sleep(150);
+        }
+      }
+
+      const viewport =
+        cornerstoneViewportService.getCornerstoneViewport(targetViewportId) ||
+        cornerstoneViewportService.getCornerstoneViewport(
+          viewportGridService.getActiveViewportId()
+        );
+
+      if (!viewport) {
+        console.warn('[ViewerQuiz] no viewport available for target navigation', {
+          questionKey,
+          target,
+        });
+
+        return {
+          ok: false,
+          reason: 'viewport-not-found',
+        };
+      }
+
+      return jumpViewportToViewerQuizTargetImage(viewport, target);
+    },
+    clearViewerQuizMarkerOptions: () => {
+      clearAllViewerQuizMarkerOverlays();
+      return {
+        ok: true,
+      };
+    },
+    showViewerQuizMarkerOptions: async ({
+      viewerTarget,
+      markerOptions = [],
+      questionKey = '',
+    } = {}) => {
+      if (viewerTarget) {
+        await actions.jumpToViewerQuizTarget({ viewerTarget, questionKey });
+      }
+
+      const activeViewportId = viewportGridService.getActiveViewportId();
+      const viewport = cornerstoneViewportService.getCornerstoneViewport(activeViewportId);
+
+      if (!viewport) {
+        return {
+          ok: false,
+          reason: 'viewport-not-found',
+          renderedCount: 0,
+        };
+      }
+
+      return drawViewerQuizMarkerOptions({
+        viewport,
+        markerOptions,
+      });
+    },
+    getCurrentViewerQuizFrameAnswer: async () => {
+      const activeViewportId = viewportGridService.getActiveViewportId();
+      const viewport = cornerstoneViewportService.getCornerstoneViewport(activeViewportId);
+
+      if (!viewport) {
+        return {
+          ok: false,
+          reason: 'viewport-not-found',
+        };
+      }
+
+      const displaySet = getActiveViewportDisplaySet({
+        viewportGridService,
+        displaySetService,
+        viewportId: activeViewportId,
+      });
+
+      const answer = buildViewerQuizFrameAnswer({
+        viewport,
+        displaySet,
+        viewportId: activeViewportId,
+      });
+
+      if (!answer) {
+        return {
+          ok: false,
+          reason: 'current-frame-not-found',
+        };
+      }
+
+      return {
+        ok: true,
+        answer,
+      };
+    },
+    captureViewerQuizPointAnswer: async () => {
+      const activeViewportId = viewportGridService.getActiveViewportId();
+      const viewport = cornerstoneViewportService.getCornerstoneViewport(activeViewportId);
+
+      if (!viewport) {
+        return {
+          ok: false,
+          reason: 'viewport-not-found',
+        };
+      }
+
+      const displaySet = getActiveViewportDisplaySet({
+        viewportGridService,
+        displaySetService,
+        viewportId: activeViewportId,
+      });
+
+      return captureNextViewerClickPoint({
+        viewport,
+        displaySet,
+        viewportId: activeViewportId,
+      });
+    },
+    getSelectedViewerMeasurementQuizAnswer: async ({
+      question = {},
+      measurementType = '',
+      unit = '',
+      measurementId = '',
+    } = {}) => {
+      const activeEnabledElement = _getActiveViewportEnabledElement();
+      const explicitMeasurementId = String(measurementId || '').trim();
+      const selectedMeasurementId =
+        explicitMeasurementId ||
+        getSelectedMeasurementIdFromViewport(activeEnabledElement?.viewport?.element);
+
+      if (!selectedMeasurementId) {
+        return {
+          ok: false,
+          reason: 'no-selected-measurement',
+        };
+      }
+
+      const measurement = findMeasurementServiceMeasurementById(
+        measurementService,
+        selectedMeasurementId
+      );
+
+      if (!measurement) {
+        return {
+          ok: false,
+          reason: 'selected-measurement-not-found',
+          selectedMeasurementId,
+        };
+      }
+
+      const answer = buildViewerQuizAnswerFromMeasurement({
+        measurement,
+        question,
+        measurementType,
+        expectedUnit: unit,
+      });
+
+      if (!answer) {
+        return {
+          ok: false,
+          reason: 'selected-measurement-has-no-numeric-value',
+          selectedMeasurementId,
+        };
+      }
+
+      return {
+        ok: true,
+        answer,
+        selectedMeasurementId,
+      };
+    },
   };
 
   const definitions = {
@@ -4631,6 +5767,24 @@ function commandsModule({
     },
     jumpToSavedViewerAnnotation: {
       commandFn: actions.jumpToSavedViewerAnnotation,
+    },
+    jumpToViewerQuizTarget: {
+      commandFn: actions.jumpToViewerQuizTarget,
+    },
+    showViewerQuizMarkerOptions: {
+      commandFn: actions.showViewerQuizMarkerOptions,
+    },
+    clearViewerQuizMarkerOptions: {
+      commandFn: actions.clearViewerQuizMarkerOptions,
+    },
+    getCurrentViewerQuizFrameAnswer: {
+      commandFn: actions.getCurrentViewerQuizFrameAnswer,
+    },
+    captureViewerQuizPointAnswer: {
+      commandFn: actions.captureViewerQuizPointAnswer,
+    },
+    getSelectedViewerMeasurementQuizAnswer: {
+      commandFn: actions.getSelectedViewerMeasurementQuizAnswer,
     },
   };
 
