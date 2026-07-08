@@ -11,6 +11,7 @@ import {
 } from '../utils/viewerQuizApi';
 
 const AR_QUIZ_MEASUREMENT_ADDED_EVENT = 'ar-learning:quiz-measurement-added';
+const AR_VIEWER_QUIZ_AUTHORING_SAVED_EVENT = 'ar:viewer-quiz-authoring-saved';
 
 type CaseQuestionsPanelProps = {
   commandsManager: any;
@@ -224,11 +225,29 @@ function buildInitialAnswers(quizzes: QuizDefinition[] = [], responses: QuizResp
   return next;
 }
 
+function getAnswerViewerTarget(value: any) {
+  const answer = plainObject(value);
+  const candidates = [
+    answer.selectedTarget,
+    answer.viewerTarget,
+    answer.placedMarker?.viewerTarget,
+    answer.goldMeasurement?.viewerTarget,
+  ];
+
+  return candidates.find(targetHasNavigationIdentity) || null;
+}
+
 function buildAnswerPayload(quiz: QuizDefinition, quizAnswers = {}) {
-  return (quiz.questions || []).map(question => ({
-    questionKey: question.questionKey,
-    value: quizAnswers[question.questionKey],
-  }));
+  return (quiz.questions || []).map(question => {
+    const value = quizAnswers[question.questionKey];
+    const viewerTarget = getAnswerViewerTarget(value);
+
+    return {
+      questionKey: question.questionKey,
+      value,
+      ...(viewerTarget ? { viewerTarget } : {}),
+    };
+  });
 }
 
 function hasRequiredMissing(quiz: QuizDefinition, quizAnswers = {}) {
@@ -414,6 +433,12 @@ function normalizeMarkerOptions(markerOptions: any[] = []) {
     const markerId = cleanString(
       marker?.markerId || marker?.markerKey || marker?.value || `marker-${index + 1}`
     );
+    const point = roundQuizPoint({
+      ...plainObject(marker?.point),
+      x: marker?.point?.x ?? marker?.x,
+      y: marker?.point?.y ?? marker?.y,
+      coordinateSpace: marker?.point?.coordinateSpace || marker?.coordinateSpace || 'world',
+    });
 
     return {
       ...marker,
@@ -421,8 +446,8 @@ function normalizeMarkerOptions(markerOptions: any[] = []) {
       markerKey: markerId,
       value: markerId,
       label: cleanString(marker?.label || markerId),
-      point: plainObject(marker?.point),
-      coordinateSpace: cleanString(marker?.coordinateSpace || marker?.point?.coordinateSpace),
+      point,
+      coordinateSpace: cleanString(point.coordinateSpace),
     };
   });
 }
@@ -447,14 +472,12 @@ function getDisplayFrameFromTarget(target: any) {
 
 function getDisplayInstanceFromTarget(target: any) {
   const instanceNumber = Number(target?.instanceNumber);
-  const sopInstanceId = cleanString(target?.sopInstanceUID || target?.SOPInstanceUID);
-  const sopSuffix = sopInstanceId ? `SOP …${sopInstanceId.slice(-8)}` : '';
 
   if (Number.isFinite(instanceNumber)) {
-    return [`Instance ${instanceNumber}`, sopSuffix].filter(Boolean).join(' · ');
+    return `Instance ${instanceNumber}`;
   }
 
-  return sopSuffix || 'Instance unknown';
+  return 'Instance unknown';
 }
 
 function getViewerTargetSummary(target: any) {
@@ -504,23 +527,102 @@ function finishQuizAuthoring() {
   window.close();
 }
 
+function notifyQuizAuthoringSaved(detail = {}) {
+  const message = {
+    type: AR_VIEWER_QUIZ_AUTHORING_SAVED_EVENT,
+    event: AR_VIEWER_QUIZ_AUTHORING_SAVED_EVENT,
+    savedAt: new Date().toISOString(),
+    ...detail,
+  };
+
+  try {
+    window.opener?.postMessage(message, '*');
+  } catch {}
+
+  try {
+    window.parent !== window && window.parent?.postMessage(message, '*');
+  } catch {}
+
+  try {
+    const channel = new BroadcastChannel(AR_VIEWER_QUIZ_AUTHORING_SAVED_EVENT);
+    channel.postMessage(message);
+    channel.close();
+  } catch {}
+
+  try {
+    window.localStorage?.setItem(AR_VIEWER_QUIZ_AUTHORING_SAVED_EVENT, JSON.stringify(message));
+  } catch {}
+
+  try {
+    window.dispatchEvent(
+      new CustomEvent(AR_VIEWER_QUIZ_AUTHORING_SAVED_EVENT, {
+        detail: message,
+      })
+    );
+  } catch {}
+}
+
 function hasPointCoordinates(point: any): boolean {
   return Number.isFinite(Number(point?.x)) && Number.isFinite(Number(point?.y));
+}
+
+const QUIZ_COORDINATE_DECIMAL_PLACES = 2;
+
+function roundQuizNumber(value: any, decimalPlaces = QUIZ_COORDINATE_DECIMAL_PLACES) {
+  const numericValue = Number(value);
+
+  if (!Number.isFinite(numericValue)) {
+    return value;
+  }
+
+  const factor = Math.pow(10, decimalPlaces);
+  return Math.round(numericValue * factor) / factor;
+}
+
+function formatQuizCoordinate(value: any) {
+  const numericValue = Number(value);
+
+  if (!Number.isFinite(numericValue)) {
+    return '';
+  }
+
+  return numericValue.toFixed(QUIZ_COORDINATE_DECIMAL_PLACES);
+}
+
+function roundQuizPoint(point: any = {}) {
+  const source = plainObject(point);
+
+  return {
+    ...source,
+    x: roundQuizNumber(source.x),
+    y: roundQuizNumber(source.y),
+    ...(source.z !== null && typeof source.z !== 'undefined'
+      ? { z: roundQuizNumber(source.z) }
+      : {}),
+  };
 }
 
 function isMarkerOptionPlaced(marker: any): boolean {
   return hasPointCoordinates(marker?.point || marker);
 }
 
-function getOverlayMarkerOptionsForQuestion(question: QuizQuestion) {
+function getOverlayMarkerOptionsForQuestion(
+  question: QuizQuestion,
+  options: { includeGoldMarker?: boolean } = {}
+) {
   const answerConfig = plainObject(question.answerConfig);
   const viewerTarget = getQuestionViewerTarget(question);
+  const includeGoldMarker = options.includeGoldMarker === true;
 
   if (isMarkerChoiceQuestionType(question)) {
     return normalizeMarkerOptions(answerConfig.markerOptions).filter(isMarkerOptionPlaced);
   }
 
   if (isPlaceMarkerQuestionType(question)) {
+    if (!includeGoldMarker) {
+      return [];
+    }
+
     const goldPoint = plainObject(answerConfig.goldPoint);
 
     if (!hasPointCoordinates(goldPoint)) {
@@ -691,10 +793,37 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     });
   }
 
-  async function selectQuestion(quiz: QuizDefinition, question: QuizQuestion) {
+  function getPlacedAnswerMarkerOptions(value: any) {
+    const answer = plainObject(value);
+    const placedMarker = plainObject(answer.placedMarker || answer);
+    const point = roundQuizPoint(plainObject(placedMarker.point || answer.point));
+
+    if (!hasPointCoordinates(point)) {
+      return [];
+    }
+
+    return [
+      {
+        markerId: 'learner-answer-marker',
+        markerKey: 'learner-answer-marker',
+        value: 'learner-answer-marker',
+        label: 'Your answer',
+        point,
+        coordinateSpace: point.coordinateSpace || 'world',
+        viewerTarget:
+          placedMarker.viewerTarget || answer.viewerTarget || answer.selectedTarget || {},
+      },
+    ];
+  }
+
+  async function selectQuestion(
+    quiz: QuizDefinition,
+    question: QuizQuestion,
+    options: { force?: boolean } = {}
+  ) {
     const nextActiveQuestionKey = `${quiz.quizKey}:${question.questionKey}`;
 
-    if (activeQuestionKey === nextActiveQuestionKey) {
+    if (!options.force && activeQuestionKey === nextActiveQuestionKey) {
       return;
     }
 
@@ -703,7 +832,15 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     const viewerTarget = getQuestionViewerTarget(question);
 
     if (!viewerTarget) {
-      const overlayMarkers = getOverlayMarkerOptionsForQuestion(question);
+      const questionAnswer = answersByQuizKey?.[quiz.quizKey]?.[question.questionKey];
+      const overlayMarkers = [
+        ...getOverlayMarkerOptionsForQuestion(question, {
+          includeGoldMarker: authoringMode,
+        }),
+        ...(!authoringMode && isPlaceMarkerQuestionType(question)
+          ? getPlacedAnswerMarkerOptions(questionAnswer)
+          : []),
+      ];
 
       if (overlayMarkers.length) {
         await runViewerCommand(commandsManager, 'showViewerQuizMarkerOptions', {
@@ -730,7 +867,15 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         });
       }
 
-      const overlayMarkers = getOverlayMarkerOptionsForQuestion(question);
+      const questionAnswer = answersByQuizKey?.[quiz.quizKey]?.[question.questionKey];
+      const overlayMarkers = [
+        ...getOverlayMarkerOptionsForQuestion(question, {
+          includeGoldMarker: authoringMode,
+        }),
+        ...(!authoringMode && isPlaceMarkerQuestionType(question)
+          ? getPlacedAnswerMarkerOptions(questionAnswer)
+          : []),
+      ];
 
       if (overlayMarkers.length) {
         await runViewerCommand(commandsManager, 'showViewerQuizMarkerOptions', {
@@ -773,7 +918,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
 
       uiNotificationService.show({
         title: 'Case Questions',
-        message: `Frame captured: ${Number(result.answer.selectedTarget.imageIndex) + 1}`,
+        message: `Frame captured: ${getViewerTargetSummary(result.answer.selectedTarget)}`,
         type: 'success',
         duration: 2500,
       });
@@ -818,14 +963,21 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       }
 
       const currentAnswer = answersByQuizKey[quiz.quizKey]?.[question.questionKey];
-      setAnswer(
-        quiz.quizKey,
-        question,
-        setObjectAnswerPart(currentAnswer, {
-          ...result.answer,
-          placedMarker: result.answer,
-        })
-      );
+      const nextAnswer = setObjectAnswerPart(currentAnswer, {
+        ...result.answer,
+        placedMarker: result.answer,
+      });
+
+      setAnswer(quiz.quizKey, question, nextAnswer);
+
+      await runViewerCommand(commandsManager, 'showViewerQuizMarkerOptions', {
+        viewerTarget:
+          result.answer.viewerTarget ||
+          result.answer.selectedTarget ||
+          getQuestionViewerTarget(question),
+        markerOptions: getPlacedAnswerMarkerOptions(nextAnswer),
+        questionKey: question.questionKey,
+      });
 
       uiNotificationService.show({
         title: 'Case Questions',
@@ -1167,7 +1319,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
           ...plainObject(question.answerConfig),
           viewerTarget: target,
           goldPoint: {
-            ...result.answer.point,
+            ...roundQuizPoint(result.answer.point),
             viewerTarget: target,
           },
         },
@@ -1182,7 +1334,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
 
       await runViewerCommand(commandsManager, 'showViewerQuizMarkerOptions', {
         viewerTarget: target,
-        markerOptions: getOverlayMarkerOptionsForQuestion(nextQuestion),
+        markerOptions: getOverlayMarkerOptionsForQuestion(nextQuestion, {
+          includeGoldMarker: true,
+        }),
         questionKey: question.questionKey,
       });
 
@@ -1251,7 +1405,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         markerKey: markerId,
         value: markerId,
         label,
-        point: result.answer.point,
+        point: roundQuizPoint(result.answer.point),
         coordinateSpace: result.answer.point?.coordinateSpace || 'world',
         viewerTarget: target,
         sourceRefs: result.answer.sourceRefs || {},
@@ -1277,7 +1431,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
 
       await runViewerCommand(commandsManager, 'showViewerQuizMarkerOptions', {
         viewerTarget: target,
-        markerOptions: getOverlayMarkerOptionsForQuestion(nextQuestion),
+        markerOptions: getOverlayMarkerOptionsForQuestion(nextQuestion, {
+          includeGoldMarker: true,
+        }),
         questionKey: question.questionKey,
       });
 
@@ -1291,6 +1447,123 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       uiNotificationService.show({
         title: 'Quiz Authoring',
         message: `Marker option capture failed: ${error?.message || error}`,
+        type: 'error',
+        duration: 6000,
+      });
+    } finally {
+      setCapturingAuthoringKey('');
+    }
+  }
+
+  async function removeAuthoringMarkerOption(question: QuizQuestion, markerIdToRemove = '') {
+    const markerId = cleanString(markerIdToRemove);
+    if (!markerId) {
+      return;
+    }
+
+    const answerConfig = plainObject(question.answerConfig);
+    const nextMarkers = normalizeMarkerOptions(answerConfig.markerOptions).filter(
+      marker => cleanString(marker.markerId || marker.markerKey || marker.value) !== markerId
+    );
+    const nextCorrectMarkerId =
+      cleanString(answerConfig.correctMarkerId) === markerId ? '' : answerConfig.correctMarkerId;
+    const nextQuestion = {
+      ...question,
+      answerConfig: {
+        ...answerConfig,
+        markerOptions: nextMarkers,
+        correctMarkerId: nextCorrectMarkerId,
+      },
+    };
+
+    updateAuthoringQuestion(question.questionKey, () => nextQuestion);
+
+    await runViewerCommand(commandsManager, 'showViewerQuizMarkerOptions', {
+      viewerTarget: getQuestionViewerTarget(nextQuestion),
+      markerOptions: getOverlayMarkerOptionsForQuestion(nextQuestion, {
+        includeGoldMarker: true,
+      }),
+      questionKey: question.questionKey,
+    });
+  }
+
+  async function clearAuthoringGoldPoint(question: QuizQuestion) {
+    const answerConfig = plainObject(question.answerConfig);
+    const nextQuestion = {
+      ...question,
+      answerConfig: {
+        ...answerConfig,
+        goldPoint: {
+          coordinateSpace: answerConfig.goldPoint?.coordinateSpace || 'world',
+        },
+      },
+    };
+
+    updateAuthoringQuestion(question.questionKey, () => nextQuestion);
+
+    await runViewerCommand(commandsManager, 'showViewerQuizMarkerOptions', {
+      viewerTarget: getQuestionViewerTarget(nextQuestion),
+      markerOptions: getOverlayMarkerOptionsForQuestion(nextQuestion, {
+        includeGoldMarker: true,
+      }),
+      questionKey: question.questionKey,
+    });
+  }
+
+  async function captureAuthoringMeasurement(question: QuizQuestion) {
+    const captureKey = `authoring-measurement:${question.questionKey}`;
+    const answerConfig = plainObject(question.answerConfig);
+
+    setCapturingAuthoringKey(captureKey);
+
+    try {
+      const result = await runViewerCommand(
+        commandsManager,
+        'getSelectedViewerMeasurementQuizAnswer',
+        {
+          question,
+          measurementType: cleanString(answerConfig.measurementType),
+          unit: cleanString(answerConfig.unit),
+        }
+      );
+
+      if (!result?.ok || !result?.answer) {
+        throw new Error(result?.reason || 'selected measurement not found');
+      }
+
+      const answer = result.answer;
+      const target = answer.viewerTarget || question.viewerTarget;
+      const unit = cleanString(answer.unit || answerConfig.unit);
+      const nextQuestion = {
+        ...question,
+        viewerTarget: target,
+        answerConfig: {
+          ...answerConfig,
+          viewerTarget: target,
+          goldMeasurement: answer,
+          goldValue: answer.value,
+          measurementType: answer.measurementType || answerConfig.measurementType || '',
+          unit,
+        },
+        scoringConfig: {
+          ...plainObject(question.scoringConfig),
+          absoluteTolerance: plainObject(question.scoringConfig).absoluteTolerance ?? '',
+          toleranceUnit: unit,
+        },
+      };
+
+      updateAuthoringQuestion(question.questionKey, () => nextQuestion);
+
+      uiNotificationService.show({
+        title: 'Quiz Authoring',
+        message: `Gold measurement captured: ${answer.value} ${unit}`,
+        type: 'success',
+        duration: 3000,
+      });
+    } catch (error) {
+      uiNotificationService.show({
+        title: 'Quiz Authoring',
+        message: `Measurement capture failed: ${error?.message || error}`,
         type: 'error',
         duration: 6000,
       });
@@ -1336,6 +1609,16 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         message: 'Draft quiz saved.',
         type: 'success',
         duration: 3000,
+      });
+
+      notifyQuizAuthoringSaved({
+        definitionId,
+        libraryContentKey: cleanString(
+          authoringPayload?.libraryContentKey ||
+            getViewerQuizAuthoringContextFromUrl().libraryContentKey
+        ),
+        quizKey: savedDefinition?.quizKey || authoringDefinition.quizKey,
+        quizVersion: Number(savedDefinition?.quizVersion || authoringDefinition.quizVersion || 1),
       });
 
       await refreshAuthoring({
@@ -1423,14 +1706,6 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       const captureKey = `${quiz.quizKey}:${question.questionKey}`;
       const captureInProgress = capturingFrameKey === captureKey;
       const selectedTarget = plainObject(value?.selectedTarget);
-      const imageIndex = Number(selectedTarget.imageIndex);
-      const frameNumber = Number(selectedTarget.frameNumber);
-      const displayFrame =
-        Number.isFinite(frameNumber) && frameNumber > 0
-          ? frameNumber
-          : Number.isFinite(imageIndex)
-            ? imageIndex + 1
-            : null;
 
       return (
         <div className="mt-2 space-y-2">
@@ -1447,9 +1722,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
             {captureInProgress ? 'Capturing frame…' : 'Use current frame as answer'}
           </button>
 
-          {displayFrame !== null ? (
+          {targetHasNavigationIdentity(selectedTarget) ? (
             <div className="bg-green-950/30 rounded border border-green-700 px-2 py-1 text-xs text-green-100">
-              Captured frame {displayFrame}
+              Captured {getViewerTargetSummary(selectedTarget)}
             </div>
           ) : (
             <div className="text-xs text-gray-400">
@@ -1546,7 +1821,6 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     if (question.type === 'measurementNumeric') {
       const captureKey = `${quiz.quizKey}:${question.questionKey}`;
       const captureInProgress = capturingMeasurementKey === captureKey;
-      const sourceAnnotationId = cleanString(value?.sourceAnnotationId);
 
       return (
         <div className="mt-2 w-full min-w-0 max-w-full space-y-2 overflow-hidden">
@@ -1590,15 +1864,13 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
             {captureInProgress ? 'Capturing…' : 'Recapture selected measurement'}
           </button>
 
-          {sourceAnnotationId ? (
-            <div className="bg-green-950/30 rounded border border-green-700 px-2 py-1 text-xs text-green-100">
-              Captured from selected measurement {sourceAnnotationId.slice(0, 8)}
-            </div>
-          ) : (
+          {value?.value === null ||
+          typeof value?.value === 'undefined' ||
+          cleanString(value?.value) === '' ? (
             <div className="text-xs text-gray-400">
               Draw or select a measurement annotation in the viewport, then use it as the answer.
             </div>
-          )}
+          ) : null}
         </div>
       );
     }
@@ -1659,7 +1931,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               onClick={event => {
                 event.preventDefault();
                 event.stopPropagation();
-                selectQuestion({ quizKey: 'authoring', quizVersion: 1 }, question);
+                selectQuestion({ quizKey: 'authoring', quizVersion: 1 }, question, { force: true });
               }}
             >
               Jump to target
@@ -1734,9 +2006,123 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
           </div>
         ) : null}
 
+        {question.type === 'frameSelection' ? (
+          <div className="mt-2 rounded border border-gray-700 p-2">
+            <label className="block text-xs font-semibold text-gray-200">Frame tolerance</label>
+            <input
+              className="mt-1 w-32 rounded border border-gray-700 bg-black px-2 py-1 text-sm text-white"
+              type="number"
+              min="0"
+              step="1"
+              value={numberOrEmpty(plainObject(question.scoringConfig).toleranceFrames)}
+              disabled={authoringSaving || !isDraftDefinition(authoringDefinition)}
+              onChange={event =>
+                patchAuthoringQuestion(question, {
+                  scoringConfig: {
+                    ...plainObject(question.scoringConfig),
+                    toleranceFrames: event.target.value,
+                  },
+                })
+              }
+            />
+            <div className="mt-1 text-[11px] text-gray-400">
+              Set how many frames on either side of the captured frame should be accepted.
+            </div>
+          </div>
+        ) : null}
+
+        {question.type === 'measurementNumeric' ? (
+          <div className="mt-2 rounded border border-gray-700 p-2">
+            <button
+              type="button"
+              className="rounded border border-green-600 px-2 py-1 text-xs font-semibold text-green-100 disabled:opacity-50"
+              disabled={isCapturing || authoringSaving || !isDraftDefinition(authoringDefinition)}
+              onClick={event => {
+                event.preventDefault();
+                event.stopPropagation();
+                captureAuthoringMeasurement(question);
+              }}
+            >
+              {isCapturing ? 'Capturing measurement…' : 'Use selected measurement as gold answer'}
+            </button>
+
+            {answerConfig.goldValue !== null &&
+            typeof answerConfig.goldValue !== 'undefined' &&
+            answerConfig.goldValue !== '' ? (
+              <div className="bg-green-950/30 mt-2 rounded border border-green-700 px-2 py-1 text-xs text-green-100">
+                Gold measurement: {answerConfig.goldValue} {answerConfig.unit || ''}
+                {answerConfig.measurementType ? ` · ${answerConfig.measurementType}` : ''}
+              </div>
+            ) : (
+              <div className="mt-2 text-xs text-orange-200">
+                Select a measurement annotation in the viewport, then capture it as the gold answer.
+              </div>
+            )}
+
+            <label className="mt-2 block text-xs font-semibold text-gray-200">
+              Absolute tolerance
+            </label>
+            <input
+              className="mt-1 w-36 rounded border border-gray-700 bg-black px-2 py-1 text-sm text-white"
+              type="number"
+              step="0.01"
+              value={numberOrEmpty(plainObject(question.scoringConfig).absoluteTolerance)}
+              disabled={authoringSaving || !isDraftDefinition(authoringDefinition)}
+              onChange={event =>
+                patchAuthoringQuestion(question, {
+                  scoringConfig: {
+                    ...plainObject(question.scoringConfig),
+                    absoluteTolerance: event.target.value,
+                    toleranceUnit:
+                      answerConfig.unit || plainObject(question.scoringConfig).toleranceUnit || '',
+                  },
+                })
+              }
+            />
+          </div>
+        ) : null}
+
+        {isPlaceMarkerQuestionType(question) ? (
+          <div className="mt-2 rounded border border-gray-700 p-2">
+            <label className="block text-xs font-semibold text-gray-200">
+              Gold marker tolerance radius
+            </label>
+            <input
+              className="mt-1 w-32 rounded border border-gray-700 bg-black px-2 py-1 text-sm text-white"
+              type="number"
+              step="0.01"
+              value={numberOrEmpty(plainObject(question.scoringConfig).radius)}
+              disabled={authoringSaving || !isDraftDefinition(authoringDefinition)}
+              onChange={event =>
+                patchAuthoringQuestion(question, {
+                  scoringConfig: {
+                    ...plainObject(question.scoringConfig),
+                    radius: event.target.value,
+                    radiusUnit: plainObject(question.scoringConfig).radiusUnit || 'world',
+                  },
+                })
+              }
+            />
+          </div>
+        ) : null}
+
         {hasGoldPoint ? (
-          <div className="bg-green-950/30 mt-2 rounded border border-green-700 px-2 py-1 text-xs text-green-100">
-            Gold marker: {Number(goldPoint.x).toFixed(1)}, {Number(goldPoint.y).toFixed(1)}
+          <div className="bg-green-950/30 mt-2 flex items-center justify-between gap-2 rounded border border-green-700 px-2 py-1 text-xs text-green-100">
+            <span>
+              Gold marker: {formatQuizCoordinate(goldPoint.x)}, {formatQuizCoordinate(goldPoint.y)}
+            </span>
+            <button
+              type="button"
+              className="rounded border border-red-600 px-2 py-1 text-[11px] font-semibold text-red-100 disabled:opacity-50"
+              disabled={authoringSaving || !isDraftDefinition(authoringDefinition)}
+              onClick={event => {
+                event.preventDefault();
+                event.stopPropagation();
+                clearAuthoringGoldPoint(question);
+              }}
+            >
+              Remove gold marker
+            </button>
           </div>
         ) : null}
 
@@ -1750,9 +2136,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                 return (
                   <div
                     key={markerId}
-                    className="flex items-center justify-between gap-2 text-xs text-gray-200"
+                    className="rounded border border-gray-700 bg-black/40 p-2 text-xs text-gray-200"
                   >
-                    <label className="flex min-w-0 flex-1 items-center gap-2">
+                    <label className="flex min-w-0 flex-wrap items-center gap-2">
                       <input
                         type="radio"
                         checked={selected}
@@ -1761,29 +2147,58 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                           patchAuthoringAnswerConfig(question, { correctMarkerId: markerId })
                         }
                       />
-                      <span>{marker.label || markerId}</span>
+                      <span className="min-w-0 break-words font-semibold">
+                        {marker.label || markerId}
+                      </span>
+                      <span
+                        className={
+                          selected
+                            ? 'rounded bg-green-900/60 px-2 py-0.5 text-green-100'
+                            : 'rounded bg-gray-800 px-2 py-0.5 text-gray-400'
+                        }
+                      >
+                        {selected ? 'correct answer' : 'mark as correct answer'}
+                      </span>
                       {isMarkerOptionPlaced(marker) ? (
                         <span className="text-gray-500">
-                          ({Number(marker.point.x).toFixed(1)}, {Number(marker.point.y).toFixed(1)})
+                          ({formatQuizCoordinate(marker.point.x)},{' '}
+                          {formatQuizCoordinate(marker.point.y)})
                         </span>
                       ) : (
                         <span className="text-orange-300">not placed</span>
                       )}
                     </label>
-                    <button
-                      type="button"
-                      className="rounded border border-yellow-600 px-2 py-1 text-[11px] font-semibold text-yellow-100 disabled:opacity-50"
-                      disabled={
-                        isCapturing || authoringSaving || !isDraftDefinition(authoringDefinition)
-                      }
-                      onClick={event => {
-                        event.preventDefault();
-                        event.stopPropagation();
-                        addAuthoringMarkerOption(question, markerId);
-                      }}
-                    >
-                      {isMarkerOptionPlaced(marker) ? 'Replace' : 'Place'}
-                    </button>
+
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        className="rounded border border-red-600 px-2 py-1 text-[11px] font-semibold text-red-100 disabled:opacity-50"
+                        disabled={
+                          isCapturing || authoringSaving || !isDraftDefinition(authoringDefinition)
+                        }
+                        onClick={event => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          removeAuthoringMarkerOption(question, markerId);
+                        }}
+                      >
+                        Remove
+                      </button>
+                      <button
+                        type="button"
+                        className="rounded border border-yellow-600 px-2 py-1 text-[11px] font-semibold text-yellow-100 disabled:opacity-50"
+                        disabled={
+                          isCapturing || authoringSaving || !isDraftDefinition(authoringDefinition)
+                        }
+                        onClick={event => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          addAuthoringMarkerOption(question, markerId);
+                        }}
+                      >
+                        {isMarkerOptionPlaced(marker) ? 'Replace' : 'Place'}
+                      </button>
+                    </div>
                   </div>
                 );
               })
@@ -1931,6 +2346,11 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                     <div className="mt-1 text-xs text-gray-400">{quiz.description}</div>
                   ) : null}
 
+                  <div className="bg-blue-950/30 mt-3 rounded border border-blue-700 p-2 text-xs text-blue-100">
+                    Click each question before answering. Questions marked “Opens question image”
+                    will move the viewer to the image/frame for that question.
+                  </div>
+
                   <div className="mt-3 space-y-4">
                     {questions.map((question, index) => {
                       const questionSelectionKey = `${quiz.quizKey}:${question.questionKey}`;
@@ -1957,7 +2377,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
 
                           {hasViewerTarget ? (
                             <div className="mt-1 text-[11px] uppercase tracking-wide text-blue-300">
-                              Opens target image
+                              Opens question image
                             </div>
                           ) : null}
 

@@ -770,11 +770,25 @@ function roundQuizMeasurementValue(value, decimalPlaces = 2) {
   return Math.round(numericValue * factor) / factor;
 }
 
-function buildViewerQuizTargetFromMeasurement(measurement) {
+function roundQuizCoordinateValue(value, decimalPlaces = 2) {
+  const numericValue = Number(value);
+
+  if (!Number.isFinite(numericValue)) {
+    return value;
+  }
+
+  const factor = Math.pow(10, decimalPlaces);
+  return Math.round(numericValue * factor) / factor;
+}
+
+function buildViewerQuizTargetFromMeasurement(measurement, displaySetService = null) {
   const frameNumber =
     measurement?.frameNumber && measurement.frameNumber > 1
       ? measurement.frameNumber
       : getFrameNumberFromReferencedImageId(measurement?.referencedImageId);
+  const instance = displaySetService
+    ? getInstanceForViewerMeasurement(displaySetService, measurement)
+    : null;
 
   return {
     studyInstanceUID: measurement?.referenceStudyUID || measurement?.StudyInstanceUID || '',
@@ -784,6 +798,7 @@ function buildViewerQuizTargetFromMeasurement(measurement) {
       measurement?.metadata?.SeriesInstanceUID ||
       '',
     sopInstanceUID: measurement?.SOPInstanceUID || measurement?.metadata?.SOPInstanceUID || '',
+    instanceNumber: getInstanceNumberFromSource(instance),
     displaySetInstanceUID:
       measurement?.displaySetInstanceUID || measurement?.metadata?.displaySetInstanceUID || '',
     referencedImageId:
@@ -809,6 +824,7 @@ function buildViewerQuizAnswerFromMeasurement({
   question = {},
   measurementType = '',
   expectedUnit = '',
+  displaySetService = null,
 } = {}) {
   const valueAndUnit = getMeasurementValueAndUnitForQuiz(measurement);
 
@@ -841,7 +857,7 @@ function buildViewerQuizAnswerFromMeasurement({
     .trim()
     .replace(/^px$/i, 'mm');
 
-  const viewerTarget = buildViewerQuizTargetFromMeasurement(measurement);
+  const viewerTarget = buildViewerQuizTargetFromMeasurement(measurement, displaySetService);
   const displayText = getMeasurementDisplayText(measurement);
 
   return {
@@ -1991,8 +2007,29 @@ function findImageIdIndexForViewerQuizTarget(viewport, target = {}) {
   };
 }
 
+async function waitForViewerQuizTargetImageMatch(viewport, target = {}, attempts = 20) {
+  let lastMatch = {
+    index: -1,
+    imageId: '',
+    imageIds: [],
+    source: 'not-started',
+  };
+
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    lastMatch = findImageIdIndexForViewerQuizTarget(viewport, target);
+
+    if (lastMatch.index >= 0) {
+      return lastMatch;
+    }
+
+    await sleep(100);
+  }
+
+  return lastMatch;
+}
+
 async function jumpViewportToViewerQuizTargetImage(viewport, target = {}) {
-  const match = findImageIdIndexForViewerQuizTarget(viewport, target);
+  const match = await waitForViewerQuizTargetImageMatch(viewport, target);
 
   if (match.index < 0) {
     console.warn('[ViewerQuiz] could not find target image in viewport stack', {
@@ -2224,21 +2261,22 @@ function buildViewerQuizPointAnswer({ event, viewport, displaySet, viewportId = 
   const point =
     Array.isArray(worldPoint) && worldPoint.length >= 2
       ? {
-          x: worldPoint[0],
-          y: worldPoint[1],
-          z: worldPoint[2] || 0,
+          x: roundQuizCoordinateValue(worldPoint[0]),
+          y: roundQuizCoordinateValue(worldPoint[1]),
+          z: roundQuizCoordinateValue(worldPoint[2] || 0),
           coordinateSpace: 'world',
         }
       : {
-          x: canvasPoint.x,
-          y: canvasPoint.y,
+          x: roundQuizCoordinateValue(canvasPoint.x),
+          y: roundQuizCoordinateValue(canvasPoint.y),
           coordinateSpace: 'canvas',
         };
 
   return {
     point,
     canvasPoint: {
-      ...canvasPoint,
+      x: roundQuizCoordinateValue(canvasPoint.x),
+      y: roundQuizCoordinateValue(canvasPoint.y),
       coordinateSpace: 'canvas',
     },
     viewerTarget: selectedTarget,
@@ -5119,7 +5157,7 @@ function commandsModule({
             viewportsToUpdate: updatedViewports,
           });
 
-          await sleep(150);
+          await sleep(300);
         }
       }
 
@@ -5269,6 +5307,7 @@ function commandsModule({
         question,
         measurementType,
         expectedUnit: unit,
+        displaySetService,
       });
 
       if (!answer) {
