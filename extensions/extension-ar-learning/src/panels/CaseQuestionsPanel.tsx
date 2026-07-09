@@ -88,6 +88,9 @@ function isAnswerEmpty(value: any): boolean {
     if (Object.prototype.hasOwnProperty.call(value, 'value')) {
       return value.value === null || value.value === undefined || cleanString(value.value) === '';
     }
+    if (Object.prototype.hasOwnProperty.call(value, 'selectedMarkerIds')) {
+      return !Array.isArray(value.selectedMarkerIds) || value.selectedMarkerIds.length === 0;
+    }
     if (Object.prototype.hasOwnProperty.call(value, 'selectedMarkerId')) {
       return !cleanString(value.selectedMarkerId);
     }
@@ -115,12 +118,118 @@ function getMarkerOptions(question: QuizQuestion) {
   return Array.isArray(options) ? options : [];
 }
 
+function normalizeMarkerIdList(...values: any[]): string[] {
+  const rawValues: any[] = [];
+
+  values.forEach(value => {
+    if (Array.isArray(value)) {
+      rawValues.push(...value);
+      return;
+    }
+
+    if (value && typeof value === 'object') {
+      if (Array.isArray(value.selectedMarkerIds)) {
+        rawValues.push(...value.selectedMarkerIds);
+      }
+      if (Array.isArray(value.correctMarkerIds)) {
+        rawValues.push(...value.correctMarkerIds);
+      }
+      if (Array.isArray(value.markerIds)) {
+        rawValues.push(...value.markerIds);
+      }
+      if (Array.isArray(value.selectedMarkers)) {
+        value.selectedMarkers.forEach(marker => {
+          rawValues.push(marker?.markerId, marker?.markerKey, marker?.value);
+        });
+      }
+
+      rawValues.push(
+        value.selectedMarkerId,
+        value.selectedMarkerKey,
+        value.correctMarkerId,
+        value.correctMarkerKey,
+        value.markerId,
+        value.markerKey,
+        value.value
+      );
+      return;
+    }
+
+    rawValues.push(value);
+  });
+
+  return Array.from(new Set(rawValues.map(value => cleanString(value)).filter(Boolean)));
+}
+
+function getCorrectMarkerIdsFromOptions(markerOptions: any[] = []) {
+  return normalizeMarkerOptions(markerOptions)
+    .filter(marker => marker?.correct === true || Number(marker?.points ?? marker?.marks ?? 0) > 0)
+    .map(marker => cleanString(marker.markerId || marker.markerKey || marker.value))
+    .filter(Boolean);
+}
+
+function getCorrectMarkerIdsFromAnswerConfig(answerConfig: Record<string, any> = {}) {
+  return normalizeMarkerIdList(
+    answerConfig.correctMarkerIds,
+    answerConfig.correctMarkerId,
+    answerConfig.correctMarkerKey,
+    getCorrectMarkerIdsFromOptions(answerConfig.markerOptions)
+  );
+}
+
+function toggleMarkerId(markerIds: string[] = [], markerId = '') {
+  const normalized = normalizeMarkerIdList(markerIds);
+  const value = cleanString(markerId);
+
+  if (!value) {
+    return normalized;
+  }
+
+  return normalized.includes(value)
+    ? normalized.filter(item => item !== value)
+    : [...normalized, value];
+}
+
+function normalizeMarkerQuestionType(value: unknown): string {
+  const type = cleanString(value);
+
+  if (type === 'markerChoice' || type === 'multipleMarkerChoice') {
+    return 'markerMultiSelect';
+  }
+
+  return type;
+}
+
 function isMarkerChoiceQuestionType(question: QuizQuestion) {
-  return ['markerChoice', 'multipleMarkerChoice'].includes(cleanString(question?.type));
+  return normalizeMarkerQuestionType(question?.type) === 'markerMultiSelect';
 }
 
 function isPlaceMarkerQuestionType(question: QuizQuestion) {
   return ['placeMarker', 'pointPlacement'].includes(cleanString(question?.type));
+}
+
+function isClassicAuthoringQuestion(question: QuizQuestion) {
+  return !isViewerNativeQuestion(question);
+}
+
+function getClassicAuthoringMessage(question: QuizQuestion) {
+  if (question.type === 'single_choice' || question.type === 'multi_select') {
+    return 'Edit choices and correct answers in Manage Quiz. This question does not require viewer authoring.';
+  }
+
+  if (question.type === 'true_false') {
+    return 'Edit the true/false correct answer in Manage Quiz. This question does not require viewer authoring.';
+  }
+
+  if (question.type === 'numeric') {
+    return 'Edit the accepted numeric range in Manage Quiz. This question does not require viewer authoring.';
+  }
+
+  if (question.type === 'short_text') {
+    return 'Edit the expected text answer in Manage Quiz. This question does not require viewer authoring.';
+  }
+
+  return 'Edit this non-viewer question in Manage Quiz.';
 }
 
 function setObjectAnswerPart(currentValue: any, patch: Record<string, any>) {
@@ -366,24 +475,30 @@ function buildViewerNativeRubricItem(question: QuizQuestion) {
   if (question.type === 'frameSelection') {
     correctValue = answerConfig.goldTarget || {};
   } else if (isMarkerChoiceQuestionType(question)) {
-    correctValue = cleanString(answerConfig.correctMarkerId || answerConfig.correctMarkerKey);
+    correctValue = getCorrectMarkerIdsFromAnswerConfig(answerConfig);
   } else if (isPlaceMarkerQuestionType(question)) {
     correctValue = answerConfig.goldPoint || {};
   } else if (question.type === 'measurementNumeric') {
     correctValue = answerConfig.goldValue;
   }
 
-  return {
+  const item: any = {
     questionKey: question.questionKey,
     points: Number(question.points || 1),
     match: 'viewer_native',
-    viewerQuestionType: question.type,
+    viewerQuestionType: normalizeMarkerQuestionType(question.type),
     correctValue,
     ...(targetHasNavigationIdentity(viewerTarget) ? { viewerTarget } : {}),
     scoringConfig: plainObject(question.scoringConfig),
     reviewConfig: plainObject(question.reviewConfig),
     feedback: cleanString(question.explanation),
   };
+
+  if (isMarkerChoiceQuestionType(question)) {
+    item.acceptedValues = Array.isArray(correctValue) ? correctValue : [];
+  }
+
+  return item;
 }
 
 function buildClassicRubricItem(question: QuizQuestion) {
@@ -1423,7 +1538,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
           ...answerConfig,
           viewerTarget: target,
           markerOptions: nextMarkers,
-          correctMarkerId: answerConfig.correctMarkerId || markerId,
+          correctMarkerIds: getCorrectMarkerIdsFromAnswerConfig(answerConfig),
+          correctMarkerId: '',
+          correctMarkerKey: '',
         },
       };
 
@@ -1465,14 +1582,17 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     const nextMarkers = normalizeMarkerOptions(answerConfig.markerOptions).filter(
       marker => cleanString(marker.markerId || marker.markerKey || marker.value) !== markerId
     );
-    const nextCorrectMarkerId =
-      cleanString(answerConfig.correctMarkerId) === markerId ? '' : answerConfig.correctMarkerId;
+    const nextCorrectMarkerIds = getCorrectMarkerIdsFromAnswerConfig(answerConfig).filter(
+      id => id !== markerId
+    );
     const nextQuestion = {
       ...question,
       answerConfig: {
         ...answerConfig,
         markerOptions: nextMarkers,
-        correctMarkerId: nextCorrectMarkerId,
+        correctMarkerIds: nextCorrectMarkerIds,
+        correctMarkerId: '',
+        correctMarkerKey: '',
       },
     };
 
@@ -1645,7 +1765,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     const quizAnswers = answersByQuizKey[quiz.quizKey] || {};
     const value = quizAnswers[question.questionKey];
     const choices = getQuestionChoices(question);
-    const markerOptions = getMarkerOptions(question);
+    const markerOptions = normalizeMarkerOptions(getMarkerOptions(question));
 
     if (question.type === 'single_choice' || question.type === 'true_false') {
       return (
@@ -1736,16 +1856,14 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     }
 
     if (isMarkerChoiceQuestionType(question)) {
-      const selectedMarkerId = cleanString(
-        value?.selectedMarkerId || value?.selectedMarkerKey || value
-      );
+      const selectedMarkerIds = normalizeMarkerIdList(value);
 
       return (
         <div className="mt-2 space-y-1">
           {markerOptions.length ? (
             markerOptions.map(marker => {
               const markerId = cleanString(marker.markerId || marker.markerKey || marker.value);
-              const selected = selectedMarkerId === markerId;
+              const selected = selectedMarkerIds.includes(markerId);
 
               return (
                 <label
@@ -1753,16 +1871,21 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                   className="flex cursor-pointer items-center gap-2 rounded border border-gray-700 px-2 py-1 text-sm hover:border-blue-400 hover:bg-gray-900"
                 >
                   <input
-                    type="radio"
-                    name={`${quiz.quizKey}-${question.questionKey}`}
+                    type="checkbox"
                     checked={selected}
-                    onChange={() =>
+                    onChange={() => {
+                      const nextSelectedMarkerIds = toggleMarkerId(selectedMarkerIds, markerId);
+                      const selectedMarkerSet = new Set(nextSelectedMarkerIds);
+
                       setAnswer(quiz.quizKey, question, {
-                        selectedMarkerId: markerId,
-                        selectedMarkerKey: markerId,
-                        selectedMarker: marker,
-                      })
-                    }
+                        selectedMarkerIds: nextSelectedMarkerIds,
+                        selectedMarkers: markerOptions.filter(option =>
+                          selectedMarkerSet.has(
+                            cleanString(option.markerId || option.markerKey || option.value)
+                          )
+                        ),
+                      });
+                    }}
                     disabled={disabled}
                   />
                   <span>{marker.label || markerId}</span>
@@ -1770,8 +1893,8 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               );
             })
           ) : (
-            <div className="text-xs text-orange-200">
-              No marker options have been configured for this question.
+            <div className="text-xs text-orange-300">
+              No marker options are available for this question.
             </div>
           )}
         </div>
@@ -1900,6 +2023,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
   function renderAuthoringQuestion(question: QuizQuestion, index: number) {
     const answerConfig = plainObject(question.answerConfig);
     const markerOptions = normalizeMarkerOptions(answerConfig.markerOptions);
+    const correctMarkerIds = getCorrectMarkerIdsFromAnswerConfig(answerConfig);
     const viewerTarget = getQuestionViewerTarget(question);
     const targetSummary = getViewerTargetSummary(viewerTarget);
     const isCapturing = capturingAuthoringKey.endsWith(`:${question.questionKey}`);
@@ -1944,7 +2068,12 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         {question.prompt ? (
           <div className="mt-1 text-xs text-gray-300">{question.prompt}</div>
         ) : null}
-
+        {isClassicAuthoringQuestion(question) ? (
+          <div className="mt-2 rounded border border-gray-700 bg-gray-900 px-2 py-2 text-xs text-gray-300">
+            <div className="font-semibold text-gray-100">No viewer authoring needed</div>
+            <div className="mt-1">{getClassicAuthoringMessage(question)}</div>
+          </div>
+        ) : null}
         <div className="mt-2 flex flex-wrap gap-2">
           {isViewerNativeQuestion(question) ? (
             <button
@@ -2131,7 +2260,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
             {markerOptions.length ? (
               markerOptions.map(marker => {
                 const markerId = cleanString(marker.markerId || marker.markerKey || marker.value);
-                const selected = cleanString(answerConfig.correctMarkerId) === markerId;
+                const selected = correctMarkerIds.includes(markerId);
 
                 return (
                   <div
@@ -2140,11 +2269,15 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                   >
                     <label className="flex min-w-0 flex-wrap items-center gap-2">
                       <input
-                        type="radio"
+                        type="checkbox"
                         checked={selected}
                         disabled={authoringSaving || !isDraftDefinition(authoringDefinition)}
                         onChange={() =>
-                          patchAuthoringAnswerConfig(question, { correctMarkerId: markerId })
+                          patchAuthoringAnswerConfig(question, {
+                            correctMarkerIds: toggleMarkerId(correctMarkerIds, markerId),
+                            correctMarkerId: '',
+                            correctMarkerKey: '',
+                          })
                         }
                       />
                       <span className="min-w-0 break-words font-semibold">
@@ -2157,7 +2290,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                             : 'rounded bg-gray-800 px-2 py-0.5 text-gray-400'
                         }
                       >
-                        {selected ? 'correct answer' : 'mark as correct answer'}
+                        {selected ? 'correct marker' : 'mark as correct marker'}
                       </span>
                       {isMarkerOptionPlaced(marker) ? (
                         <span className="text-gray-500">
@@ -2221,7 +2354,8 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         <div className="border-b border-gray-700 p-3">
           <div className="text-base font-semibold">Quiz Authoring</div>
           <div className="mt-1 text-xs text-gray-400">
-            Capture target frames, marker options, and gold points from the viewer.
+            Use this panel only for viewer-authored answers: frames, markers, gold points, and
+            measurements.
           </div>
         </div>
 
