@@ -3664,6 +3664,116 @@ function commandsModule({
         ],
       });
     },
+    releaseViewerQuizDrawingTool: () => {
+      const activeViewportId = viewportGridService.getActiveViewportId();
+      const toolGroupReference = toolGroupService.getToolGroupForViewport(activeViewportId);
+
+      const toolGroupId =
+        typeof toolGroupReference === 'string' ? toolGroupReference : toolGroupReference?.id || '';
+
+      const toolGroup =
+        typeof toolGroupReference === 'string'
+          ? toolGroupService.getToolGroup(toolGroupReference)
+          : toolGroupReference;
+
+      if (!toolGroup) {
+        return {
+          ok: false,
+          reason: 'tool-group-not-found',
+          activeViewportId,
+          toolGroupId,
+        };
+      }
+
+      const activeToolName = toolGroup.getActivePrimaryMouseButtonTool?.() || '';
+
+      if (!activeToolName) {
+        return {
+          ok: true,
+          released: false,
+          reason: 'no-active-primary-tool',
+          toolGroupId,
+        };
+      }
+
+      const quizDrawingToolNames = new Set([
+        'Length',
+        'Bidirectional',
+        'ArrowAnnotate',
+        'EllipticalROI',
+        'RectangleROI',
+        'CircleROI',
+        'PlanarFreehandROI',
+        'SplineROI',
+        'LivewireContour',
+        'Angle',
+        'CobbAngle',
+        'CalibrationLine',
+        'LVTrace',
+        'LVTraceSlot',
+      ]);
+
+      const activeTool = toolGroup.getToolInstance?.(activeToolName);
+      const isDrawingTool =
+        quizDrawingToolNames.has(activeToolName) || activeTool?.constructor?.isAnnotation === true;
+
+      if (!isDrawingTool) {
+        return {
+          ok: true,
+          released: false,
+          activeToolName,
+          reason: 'active-tool-is-not-drawing-tool',
+          toolGroupId,
+        };
+      }
+
+      const navigationToolNames = new Set([
+        'WindowLevel',
+        'StackScroll',
+        'Pan',
+        'Zoom',
+        'TrackballRotate',
+      ]);
+
+      const fallbackToolName = [
+        toolGroup.getPrevActivePrimaryToolName?.(),
+        'WindowLevel',
+        'StackScroll',
+        'Pan',
+        'Zoom',
+      ].find(candidate => {
+        return (
+          !!candidate &&
+          candidate !== activeToolName &&
+          navigationToolNames.has(candidate) &&
+          toolGroup.hasTool?.(candidate)
+        );
+      });
+
+      const activeToolOptions = toolGroup.getToolConfiguration(activeToolName);
+
+      activeToolOptions?.disableOnPassive
+        ? toolGroup.setToolDisabled(activeToolName)
+        : toolGroup.setToolPassive(activeToolName);
+
+      if (fallbackToolName) {
+        toolGroup.setToolActive(fallbackToolName, {
+          bindings: [
+            {
+              mouseButton: Enums.MouseBindings.Primary,
+            },
+          ],
+        });
+      }
+
+      return {
+        ok: true,
+        released: true,
+        releasedToolName: activeToolName,
+        fallbackToolName: fallbackToolName || '',
+        toolGroupId,
+      };
+    },
     // capture viewport
     showDownloadViewportModal: () => {
       const { activeViewportId } = viewportGridService.getState();
@@ -5248,6 +5358,8 @@ function commandsModule({
       };
     },
     captureViewerQuizPointAnswer: async () => {
+      actions.releaseViewerQuizDrawingTool();
+
       const activeViewportId = viewportGridService.getActiveViewportId();
       const viewport = cornerstoneViewportService.getCornerstoneViewport(activeViewportId);
 
@@ -5394,6 +5506,9 @@ function commandsModule({
     },
     setToolActive: {
       commandFn: actions.setToolActive,
+    },
+    releaseViewerQuizDrawingTool: {
+      commandFn: actions.releaseViewerQuizDrawingTool,
     },
     setToolActiveToolbar: {
       commandFn: actions.setToolActiveToolbar,

@@ -9,7 +9,22 @@ import { useAppConfig } from '@state';
 // from logs which CinePlayer + whether the decode patch is included.
 // ---------------------------------------------------------------------------
 const CINE_PLAYER_VERSION =
-  'rviewer bviewer adaptive-prefetch-100 + global-prefetch-limit-4 + small-window-1 v4';
+  'rviewer bviewer adaptive-prefetch-100 + global-prefetch-limit-4 + small-window-1 + learning-no-autoplay v5';
+
+function shouldAutoPlayCineForCurrentRoute(autoPlayCine): boolean {
+  if (!autoPlayCine) {
+    return false;
+  }
+
+  if (typeof window === 'undefined') {
+    return true;
+  }
+
+  const pathname = String(window.location?.pathname || '').toLowerCase();
+  const isLearningRoute = /(?:^|\/)learning(?:\/|$)/.test(pathname);
+
+  return !isLearningRoute;
+}
 
 // ---------------------------------------------------------------------------
 // Instance prefetch utility
@@ -412,6 +427,7 @@ function WrappedCinePlayer({
     let frameRate = 24;
     let isPlaying = cinesRef.current[viewportId]?.isPlaying || false;
     let shouldAutoPlay = false;
+    const autoPlayCine = shouldAutoPlayCineForCurrentRoute(appConfig.autoPlayCine);
 
     displaySetInstanceUIDs.forEach(displaySetInstanceUID => {
       const displaySet = displaySetService.getDisplaySetByUID(displaySetInstanceUID);
@@ -424,11 +440,11 @@ function WrappedCinePlayer({
         frameRate = displaySet.FrameRate
           ? Math.round(1000 / displaySet.FrameRate)
           : Math.round(EffectiveFrameRate);
-        if (appConfig.autoPlayCine) {
+        if (autoPlayCine) {
           shouldAutoPlay = true;
         }
-        isPlaying ||= !!appConfig.autoPlayCine;
-      } else if (appConfig.autoPlayCine && displaySet.numImageFrames > 1) {
+        isPlaying ||= autoPlayCine;
+      } else if (autoPlayCine && displaySet.numImageFrames > 1) {
         isPlaying = true;
         shouldAutoPlay = true;
       }

@@ -141,6 +141,29 @@ export function getViewerQuizAuthoringContextFromUrl() {
   };
 }
 
+export function getViewerQuizSessionKeyFromUrl(): string {
+  const saveTarget = getArViewerSaveTargetFromUrl();
+  const authoringContext = getViewerQuizAuthoringContextFromUrl();
+  const authoringMode = isViewerQuizAuthoringMode();
+  const primaryIdentity = authoringMode
+    ? authoringContext.preferredDefinitionId || authoringContext.libraryContentKey
+    : saveTarget.baseSeriesId ||
+      saveTarget.learnerSeriesId ||
+      saveTarget.seriesId ||
+      saveTarget.mongoId ||
+      getStudyInstanceUIDFromUrl();
+  const secondaryIdentity = authoringMode
+    ? authoringContext.libraryContentKey
+    : getStudyInstanceUIDFromUrl();
+
+  return [
+    'viewer-quiz',
+    authoringMode ? 'authoring' : 'learner',
+    primaryIdentity || 'unknown',
+    secondaryIdentity || '',
+  ].join('|');
+}
+
 function isLibraryLaunchSource(launchSource = ''): boolean {
   return cleanString(launchSource).toLowerCase() === 'library';
 }

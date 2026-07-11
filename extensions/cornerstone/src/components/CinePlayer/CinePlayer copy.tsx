@@ -9,8 +9,8 @@ import { useAppConfig } from '@state';
 // from logs which CinePlayer + whether the decode patch is included.
 // ---------------------------------------------------------------------------
 const CINE_PLAYER_VERSION =
-  'rviewer bviewer adaptive-prefetch-100 + 2-stage-rate + echo-immediate + jpeg-decode-patch v3';
-//  'rviewer bviewer adaptive-prefetch-100 + 2-stage-rate + echo-immediate + autoplay-retry v4';
+  'rviewer bviewer adaptive-prefetch-100 + global-prefetch-limit-4 + small-window-1 v4';
+
 // ---------------------------------------------------------------------------
 // Instance prefetch utility
 // Prefetches frames for an adaptive number of upcoming displaySets in the same
@@ -27,8 +27,8 @@ type PrefetchConfig = {
 
 const SMALL_CINE_PREFETCH: PrefetchConfig = {
   label: 'small-cine',
-  window: 3,
-  concurrency: 20,
+  window: 1,
+  concurrency: 4,
 };
 
 const LARGE_CINE_PREFETCH: PrefetchConfig = {
@@ -37,7 +37,29 @@ const LARGE_CINE_PREFETCH: PrefetchConfig = {
   concurrency: 4,
 };
 
+const MAX_BACKGROUND_FRAME_REQUESTS = 4;
 const activeBackgroundRequests = new Set<string>();
+const backgroundFrameRequestQueue: Array<() => void> = [];
+let activeBackgroundFrameRequestCount = 0;
+
+async function withBackgroundFrameRequestSlot<T>(work: () => Promise<T>): Promise<T> {
+  if (activeBackgroundFrameRequestCount >= MAX_BACKGROUND_FRAME_REQUESTS) {
+    await new Promise<void>(resolve => backgroundFrameRequestQueue.push(resolve));
+  }
+
+  activeBackgroundFrameRequestCount += 1;
+
+  try {
+    return await work();
+  } finally {
+    activeBackgroundFrameRequestCount -= 1;
+    const next = backgroundFrameRequestQueue.shift();
+
+    if (next) {
+      next();
+    }
+  }
+}
 
 function getImageIds(displaySet): string[] {
   const ids = displaySet.imageIds ?? displaySet.images?.map(img => img.imageId ?? img.url) ?? [];
@@ -103,8 +125,7 @@ async function prefetchDisplaySetFrames(displaySet, concurrency: number): Promis
     batch.forEach(id => activeBackgroundRequests.add(id));
     await Promise.all(
       batch.map(id =>
-        imageLoader
-          .loadAndCacheImage(id, {})
+        withBackgroundFrameRequestSlot(() => imageLoader.loadAndCacheImage(id, {}))
           .catch(() => {})
           .finally(() => activeBackgroundRequests.delete(id))
       )
@@ -208,7 +229,6 @@ function WrappedCinePlayer({
     total: number;
   } | null>(null);
   const cacheMonitorRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const lastHandledDisplaySetSignatureRef = useRef('');
 
   useEffect(() => {
     console.log(`[cine] ${CINE_PLAYER_VERSION}`);
@@ -224,23 +244,6 @@ function WrappedCinePlayer({
       cacheMonitorRef.current = null;
     }
   }, []);
-
-  useEffect(() => {
-    isMountedRef.current = true;
-
-    return () => {
-      isMountedRef.current = false;
-      cancelPendingPlay();
-
-      if (enabledVPElement) {
-        try {
-          cineService.stopClip(enabledVPElement, { viewportId });
-        } catch {
-          // viewport may already be gone
-        }
-      }
-    };
-  }, [cancelPendingPlay, cineService, enabledVPElement, viewportId]);
 
   const startPlayWhenReady = useCallback(
     (frameRate: number) => {
@@ -295,7 +298,6 @@ function WrappedCinePlayer({
 
               setBufferingProgress(null);
               setNewStackFrameRate(frameRate);
-
               cineService.setCine({ id: viewportId, isPlaying: true, frameRate });
               console.log(`[cine] fully cached → DICOM rate ${frameRate}fps`);
             }
@@ -343,7 +345,7 @@ function WrappedCinePlayer({
       //    safe stage-1 rate strictly below it. A longer window than a couple
       //    frames gives a stable estimate so stage 1 doesn't outrun loading. ──
       const totalFrames = dsets.reduce((sum, ds) => sum + getImageIds(ds).length, 0);
-      const MIN_BUFFERED_FRAMES = 3; // sample enough frames for a stable rate
+      const MIN_BUFFERED_FRAMES = 12; // sample enough frames for a stable rate
       const POLL_INTERVAL_MS = 100;
       const MAX_WAIT_MS = 20000;
       let elapsed = 0;
@@ -401,65 +403,34 @@ function WrappedCinePlayer({
   }, [startPlayWhenReady]);
 
   const newDisplaySetHandler = useCallback(() => {
-    if (!enabledVPElement) {
+    if (!enabledVPElement || !isCineEnabled) {
       return;
     }
 
     const { viewports } = viewportGridService.getState();
-    const viewportState = viewports.get(viewportId);
-
-    if (!viewportState) {
-      return;
-    }
-
-    const { displaySetInstanceUIDs = [] } = viewportState;
-    const displaySetSignature = displaySetInstanceUIDs.filter(Boolean).join('|');
-
-    if (!displaySetSignature) {
-      return;
-    }
-
-    const previousDisplaySetSignature = lastHandledDisplaySetSignatureRef.current;
-    const isSameDisplaySet = displaySetSignature === previousDisplaySetSignature;
-    const isNewDisplaySet = displaySetSignature !== previousDisplaySetSignature;
-    const currentCineState = cinesRef.current?.[viewportId] || {};
-
-    // VIEWPORT_NEW_IMAGE_SET can fire repeatedly while cine advances frames,
-    // and startup/retry effects can call this handler more than once for the
-    // same display set before React cine state has updated.
-    //
-    // Same display set = no autoplay decision here. Manual play/pause is handled
-    // by the cine controls and the main cines effect.
-    if (isSameDisplaySet) {
-      return;
-    }
-
+    const { displaySetInstanceUIDs } = viewports.get(viewportId);
     let frameRate = 24;
-    let hasPlayableCine = false;
-    let resolvedDisplaySetCount = 0;
+    let isPlaying = cinesRef.current[viewportId]?.isPlaying || false;
+    let shouldAutoPlay = false;
 
     displaySetInstanceUIDs.forEach(displaySetInstanceUID => {
       const displaySet = displaySetService.getDisplaySetByUID(displaySetInstanceUID);
-
-      if (!displaySet) {
-        return;
-      }
-
-      resolvedDisplaySetCount++;
-
-      const effectiveFrameRate =
+      const EffectiveFrameRate =
         displaySet.numImageFrames && displaySet.EffectiveDuration
           ? displaySet.numImageFrames / displaySet.EffectiveDuration
           : null;
 
-      if (displaySet.FrameRate || effectiveFrameRate) {
+      if (displaySet.FrameRate || EffectiveFrameRate) {
         frameRate = displaySet.FrameRate
           ? Math.round(1000 / displaySet.FrameRate)
-          : Math.round(effectiveFrameRate);
-
-        hasPlayableCine = true;
-      } else if (displaySet.numImageFrames > 1) {
-        hasPlayableCine = true;
+          : Math.round(EffectiveFrameRate);
+        if (appConfig.autoPlayCine) {
+          shouldAutoPlay = true;
+        }
+        isPlaying ||= !!appConfig.autoPlayCine;
+      } else if (appConfig.autoPlayCine && displaySet.numImageFrames > 1) {
+        isPlaying = true;
+        shouldAutoPlay = true;
       }
 
       if (displaySet.isDynamicVolume) {
@@ -475,55 +446,57 @@ function WrappedCinePlayer({
       }
     });
 
-    if (!resolvedDisplaySetCount) {
-      // On first study open, viewport state can exist before displaySetService
-      // can resolve the display set. Do not mark this signature as handled yet;
-      // startup retries and viewport events should still be able to start autoplay.
-      return;
-    }
-
-    if (!hasPlayableCine) {
-      lastHandledDisplaySetSignatureRef.current = displaySetSignature;
-      setNewStackFrameRate(frameRate);
-      cineService.setCine({
-        id: viewportId,
-        isPlaying: false,
-        frameRate,
-      });
-      return;
-    }
-
     setNewStackFrameRate(frameRate);
-    lastHandledDisplaySetSignatureRef.current = displaySetSignature;
+    cineService.setIsCineEnabled(true);
 
-    const shouldStartAutoplay = !!appConfig.autoPlayCine && hasPlayableCine && isNewDisplaySet;
-
-    if (shouldStartAutoplay) {
-      // Important: do not set isPlaying:false first.
-      // startPlayWhenReady will set isPlaying:true and the play effect will call playClip.
-      cineService.setIsCineEnabled(true);
+    if (shouldAutoPlay && isPlaying) {
+      // Pause first, then defer to the two-stage starter
+      cineService.setCine({ id: viewportId, isPlaying: false, frameRate });
       startPlayWhenReadyRef.current(frameRate);
       return;
     }
 
-    // Same display set: respect manual play/pause state.
-    cineService.setCine({
-      id: viewportId,
-      isPlaying: !!currentCineState.isPlaying,
-      frameRate,
-    });
+    if (isPlaying) {
+      cineService.setIsCineEnabled(isPlaying);
+    }
+    cineService.setCine({ id: viewportId, isPlaying, frameRate });
   }, [
     displaySetService,
     viewportId,
     viewportGridService,
+    isCineEnabled,
     enabledVPElement,
-    appConfig.autoPlayCine,
-    cineService,
+    appConfig,
   ]);
 
   useEffect(() => {
     cinesRef.current = cines;
   }, [cines]);
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    newDisplaySetHandler();
+    return () => {
+      cancelPendingPlay();
+    };
+  }, [isCineEnabled, newDisplaySetHandler, cancelPendingPlay]);
+
+  useEffect(() => {
+    if (!isCineEnabled || !cinesRef.current?.[viewportId] || !enabledVPElement) {
+      return;
+    }
+    const { isPlaying = false, frameRate = 24 } = cinesRef.current[viewportId];
+    const validFrameRate = Math.max(frameRate, 1);
+    if (isPlaying) {
+      try {
+        cineService.playClip(enabledVPElement, { framesPerSecond: validFrameRate, viewportId });
+      } catch (e) {
+        // viewport destroyed
+      }
+    } else {
+      cineService.stopClip(enabledVPElement);
+    }
+  }, [isCineEnabled, enabledVPElement]);
 
   useEffect(() => {
     if (!enabledVPElement) {
@@ -539,7 +512,9 @@ function WrappedCinePlayer({
 
     return () => {
       cancelPendingPlay();
-
+      cineService.stopClip(enabledVPElement);
+      isMountedRef.current = false;
+      cineService.setCine({ id: viewportId, isPlaying: false });
       enabledVPElement.removeEventListener(
         Enums.Events.VIEWPORT_NEW_IMAGE_SET,
         newDisplaySetHandler
@@ -549,76 +524,30 @@ function WrappedCinePlayer({
         newDisplaySetHandler
       );
     };
-  }, [enabledVPElement, newDisplaySetHandler, cancelPendingPlay]);
+  }, [enabledVPElement, newDisplaySetHandler, viewportId, cancelPendingPlay]);
 
   useEffect(() => {
-    if (!enabledVPElement || !appConfig.autoPlayCine) {
+    if (!cines || !cines[viewportId] || !enabledVPElement || !isMountedRef.current) {
       return;
     }
 
-    // On first study open, viewport/displaySet registration can lag the first
-    // render. These are one-shot retries, not a loop. Duplicate same-display-set
-    // calls are ignored by newDisplaySetHandler.
-    const timers = [0, 150, 500, 1000].map(delay =>
-      window.setTimeout(() => {
-        newDisplaySetHandler();
-      }, delay)
-    );
+    const { isPlaying = false, frameRate = 24 } = cines[viewportId];
+    const validFrameRate = Math.max(frameRate, 1);
+    if (isPlaying) {
+      try {
+        cineService.playClip(enabledVPElement, { framesPerSecond: validFrameRate, viewportId });
+      } catch (e) {
+        // viewport was destroyed before playClip could run
+      }
+    } else {
+      cineService.stopClip(enabledVPElement);
+    }
 
     return () => {
-      timers.forEach(timer => window.clearTimeout(timer));
+      cineService.stopClip(enabledVPElement, { viewportId });
     };
-  }, [enabledVPElement, appConfig.autoPlayCine, newDisplaySetHandler]);
+  }, [cines, viewportId, cineService, enabledVPElement]);
 
-  useEffect(() => {
-    if (!enabledVPElement || !appConfig.autoPlayCine || !isCineEnabled) {
-      return;
-    }
-
-    // Some OHIF startup paths enable cine after the viewport is mounted.
-    // React to that transition once the service says cine is enabled.
-    newDisplaySetHandler();
-  }, [enabledVPElement, appConfig.autoPlayCine, isCineEnabled, newDisplaySetHandler]);
-
-  useEffect(() => {
-    if (!enabledVPElement || !isMountedRef.current) {
-      return;
-    }
-
-    const cineState = cines?.[viewportId];
-
-    if (!isCineEnabled || !cineState) {
-      try {
-        cineService.stopClip(enabledVPElement, { viewportId });
-      } catch {
-        // viewport may be mid-transition
-      }
-      return;
-    }
-
-    const { isPlaying = false, frameRate = 24 } = cineState;
-    const validFrameRate = Math.max(frameRate, 1);
-
-    try {
-      if (isPlaying) {
-        cineService.playClip(enabledVPElement, {
-          framesPerSecond: validFrameRate,
-          viewportId,
-        });
-      } else {
-        cineService.stopClip(enabledVPElement, { viewportId });
-      }
-    } catch {
-      // viewport may have been destroyed before play/stop could run
-    }
-  }, [
-    isCineEnabled,
-    cines?.[viewportId]?.isPlaying,
-    cines?.[viewportId]?.frameRate,
-    viewportId,
-    cineService,
-    enabledVPElement,
-  ]);
   if (!isCineEnabled) {
     return null;
   }
@@ -736,10 +665,6 @@ function RenderCinePlayer({
         cineService.setViewportCineClosed(viewportId);
       }}
       onPlayPauseChange={isPlaying => {
-        if (isPlaying) {
-          cineService.setIsCineEnabled?.(true);
-        }
-
         cineService.setCine({
           id: viewportId,
           isPlaying,

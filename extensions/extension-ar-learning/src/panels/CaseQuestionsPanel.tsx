@@ -4,11 +4,16 @@ import {
   getViewerQuizzesForActiveStudy,
   getViewerQuizScoreForActiveStudy,
   getViewerQuizAuthoringContextFromUrl,
+  getViewerQuizSessionKeyFromUrl,
   isViewerQuizAuthoringMode,
   saveViewerQuizAuthoringDraft,
   saveViewerQuizResponseForActiveStudy,
   submitAndRefreshViewerQuizScoreForActiveStudy,
 } from '../utils/viewerQuizApi';
+import {
+  readViewerQuizSessionState,
+  writeViewerQuizSessionState,
+} from '../utils/viewerQuizSessionState';
 
 const AR_QUIZ_MEASUREMENT_ADDED_EVENT = 'ar-learning:quiz-measurement-added';
 const AR_VIEWER_QUIZ_AUTHORING_SAVED_EVENT = 'ar:viewer-quiz-authoring-saved';
@@ -67,6 +72,8 @@ type QuizResponse = {
   status?: string;
   answers?: Array<{ questionKey: string; value: any }>;
 };
+
+type AnswersByQuizKey = Record<string, Record<string, any>>;
 
 function cleanString(value: unknown): string {
   return String(value || '').trim();
@@ -312,8 +319,11 @@ function getQuestionChoices(question: QuizQuestion) {
   return [];
 }
 
-function buildInitialAnswers(quizzes: QuizDefinition[] = [], responses: QuizResponse[] = []) {
-  const next = {};
+function buildInitialAnswers(
+  quizzes: QuizDefinition[] = [],
+  responses: QuizResponse[] = []
+): AnswersByQuizKey {
+  const next: AnswersByQuizKey = {};
 
   quizzes.forEach(quiz => {
     const matchingResponse = responses.find(
@@ -322,13 +332,37 @@ function buildInitialAnswers(quizzes: QuizDefinition[] = [], responses: QuizResp
         Number(response.quizVersion || 1) === Number(quiz.quizVersion || 1)
     );
 
-    const quizAnswers = {};
+    const quizAnswers: Record<string, any> = {};
 
     (matchingResponse?.answers || []).forEach(answer => {
       quizAnswers[answer.questionKey] = answer.value;
     });
 
     next[quiz.quizKey] = quizAnswers;
+  });
+
+  return next;
+}
+
+function getLearnerQuizIdentity(quizzes: QuizDefinition[] = []) {
+  return quizzes
+    .map(quiz => `${cleanString(quiz.quizKey)}:${Number(quiz.quizVersion || 1)}`)
+    .filter(Boolean)
+    .sort()
+    .join('|');
+}
+
+function mergeQuizAnswers(
+  persistedAnswers: AnswersByQuizKey = {},
+  sessionAnswers: AnswersByQuizKey = {}
+): AnswersByQuizKey {
+  const next: AnswersByQuizKey = { ...persistedAnswers };
+
+  Object.entries(sessionAnswers).forEach(([quizKey, quizAnswers]) => {
+    next[quizKey] = {
+      ...(persistedAnswers[quizKey] || {}),
+      ...(quizAnswers || {}),
+    };
   });
 
   return next;
@@ -762,25 +796,35 @@ function getOverlayMarkerOptionsForQuestion(
 
 function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsPanelProps) {
   const { uiNotificationService } = servicesManager.services;
+  const authoringMode = isViewerQuizAuthoringMode();
+  const [sessionStateKey] = useState(() => getViewerQuizSessionKeyFromUrl());
+  const [initialSessionState] = useState(() => readViewerQuizSessionState(sessionStateKey));
 
   const [loading, setLoading] = useState(true);
   const [savingQuizKey, setSavingQuizKey] = useState('');
   const [scoringQuizKey, setScoringQuizKey] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [payload, setPayload] = useState<any>(null);
-  const [answersByQuizKey, setAnswersByQuizKey] = useState({});
+  const [answersByQuizKey, setAnswersByQuizKey] = useState<AnswersByQuizKey>(
+    () => initialSessionState?.answersByQuizKey || {}
+  );
   const [scoringPayload, setScoringPayload] = useState<any>(null);
   const [errorMessage, setErrorMessage] = useState('');
-  const [activeQuestionKey, setActiveQuestionKey] = useState('');
+  const [activeQuestionKey, setActiveQuestionKey] = useState(
+    () => initialSessionState?.activeQuestionKey || ''
+  );
   const [capturingMeasurementKey, setCapturingMeasurementKey] = useState('');
   const [capturingFrameKey, setCapturingFrameKey] = useState('');
   const [capturingPointKey, setCapturingPointKey] = useState('');
-  const authoringMode = isViewerQuizAuthoringMode();
   const [authoringPayload, setAuthoringPayload] = useState<any>(null);
   const [authoringDefinition, setAuthoringDefinition] = useState<QuizDefinition | null>(null);
   const [authoringRubric, setAuthoringRubric] = useState<QuizRubric | null>(null);
-  const [authoringQuestions, setAuthoringQuestions] = useState<QuizQuestion[]>([]);
-  const authoringQuestionsRef = useRef<QuizQuestion[]>([]);
+  const [authoringQuestions, setAuthoringQuestions] = useState<QuizQuestion[]>(
+    () => (initialSessionState?.authoringQuestions as QuizQuestion[]) || []
+  );
+  const authoringQuestionsRef = useRef<QuizQuestion[]>(
+    (initialSessionState?.authoringQuestions as QuizQuestion[]) || []
+  );
   const [authoringSaving, setAuthoringSaving] = useState(false);
   const [capturingAuthoringKey, setCapturingAuthoringKey] = useState('');
 
@@ -826,18 +870,29 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         throw new Error('Quiz authoring is not allowed for this account.');
       }
 
+      const definitionId = getDefinitionId(selectedDefinition);
+      const sessionState = readViewerQuizSessionState(sessionStateKey);
+      const questionsToUse =
+        definitionId &&
+        sessionState?.authoringDefinitionId === definitionId &&
+        Array.isArray(sessionState.authoringQuestions)
+          ? (sessionState.authoringQuestions as QuizQuestion[])
+          : nextQuestions;
+
       setAuthoringPayload(nextPayload);
       setAuthoringDefinition(selectedDefinition);
       setAuthoringRubric(selectedRubric);
-      authoringQuestionsRef.current = nextQuestions;
-      setAuthoringQuestions(nextQuestions);
+      authoringQuestionsRef.current = questionsToUse;
+      setAuthoringQuestions(questionsToUse);
+      writeViewerQuizSessionState(sessionStateKey, {
+        authoringDefinitionId: definitionId,
+        authoringQuestions: questionsToUse,
+      });
     } catch (error) {
       setErrorMessage(error?.message || String(error));
       setAuthoringPayload(null);
       setAuthoringDefinition(null);
       setAuthoringRubric(null);
-      authoringQuestionsRef.current = [];
-      setAuthoringQuestions([]);
     } finally {
       setLoading(false);
     }
@@ -857,17 +912,27 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
 
     try {
       const nextPayload = await getViewerQuizzesForActiveStudy();
+      const nextQuizzes = Array.isArray(nextPayload?.quizzes) ? nextPayload.quizzes : [];
+      const learnerQuizIdentity = getLearnerQuizIdentity(nextQuizzes);
+      const persistedAnswers = buildInitialAnswers(nextQuizzes, nextPayload.responses || []);
+      const sessionState = readViewerQuizSessionState(sessionStateKey);
+      const answersToUse =
+        learnerQuizIdentity && sessionState?.learnerQuizIdentity === learnerQuizIdentity
+          ? mergeQuizAnswers(persistedAnswers, sessionState.answersByQuizKey || {})
+          : persistedAnswers;
+
       setPayload(nextPayload);
-      setAnswersByQuizKey(
-        buildInitialAnswers(nextPayload.quizzes || [], nextPayload.responses || [])
-      );
+      setAnswersByQuizKey(answersToUse);
+      writeViewerQuizSessionState(sessionStateKey, {
+        learnerQuizIdentity,
+        answersByQuizKey: answersToUse,
+      });
 
       await refreshScoringPayload();
     } catch (error) {
       const message = error?.message || String(error);
       setErrorMessage(message);
       setPayload(null);
-      setAnswersByQuizKey({});
     } finally {
       setLoading(false);
     }
@@ -876,6 +941,31 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
   useEffect(() => {
     refresh();
   }, []);
+
+  useEffect(() => {
+    writeViewerQuizSessionState(sessionStateKey, {
+      answersByQuizKey,
+    });
+  }, [answersByQuizKey, sessionStateKey]);
+
+  useEffect(() => {
+    writeViewerQuizSessionState(sessionStateKey, {
+      activeQuestionKey,
+    });
+  }, [activeQuestionKey, sessionStateKey]);
+
+  useEffect(() => {
+    const definitionId = getDefinitionId(authoringDefinition);
+
+    if (!authoringMode || !definitionId) {
+      return;
+    }
+
+    writeViewerQuizSessionState(sessionStateKey, {
+      authoringDefinitionId: definitionId,
+      authoringQuestions,
+    });
+  }, [authoringDefinition, authoringMode, authoringQuestions, sessionStateKey]);
 
   function setAnswer(quizKey: string, question: QuizQuestion, value: any) {
     setAnswersByQuizKey(current => ({
@@ -937,6 +1027,10 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     options: { force?: boolean } = {}
   ) {
     const nextActiveQuestionKey = `${quiz.quizKey}:${question.questionKey}`;
+
+    if (question.type !== 'measurementNumeric') {
+      await runViewerCommand(commandsManager, 'releaseViewerQuizDrawingTool', {});
+    }
 
     if (!options.force && activeQuestionKey === nextActiveQuestionKey) {
       return;
@@ -1718,11 +1812,20 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       });
 
       const savedDefinition = result?.definition || result?.quizDefinition || null;
-      if (Array.isArray(savedDefinition?.questions)) {
+      const savedQuestions = Array.isArray(savedDefinition?.questions)
+        ? savedDefinition.questions
+        : questionsToSave;
+
+      if (savedDefinition) {
         setAuthoringDefinition(savedDefinition);
-        authoringQuestionsRef.current = savedDefinition.questions;
-        setAuthoringQuestions(savedDefinition.questions);
       }
+
+      authoringQuestionsRef.current = savedQuestions;
+      setAuthoringQuestions(savedQuestions);
+      writeViewerQuizSessionState(sessionStateKey, {
+        authoringDefinitionId: definitionId,
+        authoringQuestions: savedQuestions,
+      });
 
       uiNotificationService.show({
         title: 'Quiz Authoring',

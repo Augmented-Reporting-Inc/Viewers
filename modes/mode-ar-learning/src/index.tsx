@@ -89,18 +89,18 @@ function getLearningUrlParam(name) {
   }
 }
 
+function isTruthyLearningUrlFlag(value = '') {
+  return ['1', 'true', 'yes', 'y'].includes(
+    String(value || '')
+      .trim()
+      .toLowerCase()
+  );
+}
+
 function isViewerQuizMeasurementCaptureMode() {
   const captureMode = getLearningUrlParam('arQuizMeasurementCapture');
-  const scoringMode = getLearningUrlParam('arEducationScoringMode');
-  const initialPanel = getLearningUrlParam('arInitialPanel');
 
-  return (
-    ['selected', 'manual', 'quiz'].includes(captureMode) ||
-    (['viewerquiz', 'viewer-quiz'].includes(scoringMode) &&
-      ['casequestions', 'questions', 'quiz', 'viewerquiz'].includes(
-        initialPanel.replace(/[_\s-]+/g, '')
-      ))
-  );
+  return ['selected', 'manual', 'quiz'].includes(captureMode) || isViewerQuizWorkflowFromUrl();
 }
 
 const AR_QUIZ_MEASUREMENT_ADDED_EVENT = 'ar-learning:quiz-measurement-added';
@@ -695,6 +695,16 @@ function getLearningInitialPanelFromUrl() {
   }
 }
 
+function isViewerQuizWorkflowFromUrl() {
+  const scoringMode = getLearningUrlParam('arEducationScoringMode').replace(/[_\s-]+/g, '');
+
+  return (
+    isTruthyLearningUrlFlag(getLearningUrlParam('arQuizAuthoring')) ||
+    scoringMode === 'viewerquiz' ||
+    getLearningInitialPanelFromUrl() === 'caseQuestions'
+  );
+}
+
 function getLearningInitialPanelId() {
   const initialPanel = getLearningInitialPanelFromUrl();
 
@@ -707,6 +717,12 @@ function getLearningInitialPanelId() {
   }
 
   return '';
+}
+
+function getLearningRightPanels() {
+  return isViewerQuizWorkflowFromUrl()
+    ? [arLearning.caseQuestions]
+    : [arLearning.caseQuestions, arMeasurements.panel];
 }
 
 function shouldOpenLearningRightPanelByDefault() {
@@ -972,7 +988,8 @@ function modeFactory({ modeConfiguration }) {
           _suppressLabelPrompt = false;
         });
 
-      // Start with cine enabled so autoPlayCine triggers when display sets load
+      // Keep cine controls enabled for manual playback. The shared CinePlayer
+      // suppresses automatic startup on learning routes.
       cineService.setIsCineEnabled(true);
 
       const initialPanelId = getLearningInitialPanelId();
@@ -1073,9 +1090,9 @@ function modeFactory({ modeConfiguration }) {
             props: {
               leftPanels: [ohif.thumbnailList],
               leftPanelResizable: true,
-              // Keep AR Measurements first so the right panel defaults to
-              // Measurements when opened. Segmentation remains available as tab 2.
-              rightPanels: [arLearning.caseQuestions, arMeasurements.panel],
+              // Quiz taking and quiz authoring intentionally expose only Case Questions.
+              // Non-quiz learning workflows retain the AR Measurements tab.
+              rightPanels: getLearningRightPanels(),
               rightPanelClosed: !shouldOpenLearningRightPanelByDefault(),
               rightPanelResizable: true,
               viewports: [
