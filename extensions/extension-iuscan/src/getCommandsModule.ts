@@ -1,15 +1,26 @@
 /**
  * Commands registered by extension-iuscan.
  *
+ * setIUScanMeasurementLabel — opens the shared label dialog with iUSCAN labels
  * exportIUScanReport   — builds PUT body from assignment state, saves to formapi
  * clearIUScanMeasurements — clears assignment state and MeasurementService
  *
- * Both commands are also wired to keyboard hotkeys in mode-iuscan/src/index.js.
+ * The export and clear commands are also wired to keyboard hotkeys in mode-iuscan/src/index.js.
  */
 
 import { upsertViewerMeasurementAnnotations } from './utils/measurementAnnotations';
 import { buildFormApiUrl } from './utils/formApi';
-import { SITES, MEASUREMENT_GROUPS } from './utils/labelMap';
+import { SITES, MEASUREMENT_GROUPS, MEASUREMENT_LABELS } from './utils/labelMap';
+
+const IUSCAN_MEASUREMENT_LABELS_CONFIG = {
+  id: 'iuscanRepeatedMeasurementLabels',
+  domain: 'iuscan',
+  dialogTitle: 'Bowel Annotation',
+  annotationTitle: 'Bowel Annotation',
+  labelOnMeasure: true,
+  exclusive: false,
+  items: MEASUREMENT_LABELS,
+};
 
 function parseIUScanLabel(label = '') {
   const parts = String(label || '').split('-');
@@ -292,6 +303,21 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
     defaultContext: 'ACTIVE_VIEWPORT::CORNERSTONE',
 
     definitions: {
+      setIUScanMeasurementLabel: {
+        commandFn: async ({ uid } = {}) => {
+          if (!uid) {
+            return null;
+          }
+
+          return commandsManager.runCommand('setMeasurementLabel', {
+            uid,
+            title: IUSCAN_MEASUREMENT_LABELS_CONFIG.dialogTitle,
+            placeholder: 'Choose bowel measurement',
+            labelConfigOverride: IUSCAN_MEASUREMENT_LABELS_CONFIG,
+          });
+        },
+      },
+
       exportIUScanReport: {
         commandFn: async () => {
           const assignSvc = servicesManager.services.iuscanAssignmentService;

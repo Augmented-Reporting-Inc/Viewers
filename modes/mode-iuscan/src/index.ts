@@ -124,7 +124,7 @@ function modeFactory({ modeConfiguration }) {
           return;
         }
         setTimeout(() => {
-          commandsManager.runCommand('setMeasurementLabel', { uid });
+          commandsManager.runCommand('setIUScanMeasurementLabel', { uid });
         }, 0);
       };
       eventTarget.addEventListener(
