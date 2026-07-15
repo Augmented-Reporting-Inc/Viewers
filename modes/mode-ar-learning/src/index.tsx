@@ -574,7 +574,7 @@ const BASE_MEASUREMENT_TOOL_IDS = [
   'CircleROI',
 ];
 
-const ECHO_ONLY_MEASUREMENT_TOOL_IDS = ['LVTrace', 'LVTraceSlot'];
+const ECHO_ONLY_MEASUREMENT_TOOL_IDS = ['LVSimpsonEF', 'LVTraceSlot'];
 
 const GENERIC_CONTOUR_TOOL_IDS = ['PlanarFreehandROI', 'SplineROI', 'LivewireContour'];
 
@@ -606,17 +606,19 @@ async function getLabelConfigForMeasurement(measurement, commandsManager) {
   const toolName = measurement?.toolName;
   const domain = await resolveViewerMeasurementDomain(commandsManager);
 
-  if (toolName === 'SplineROI') {
+  // Viewer-quiz measurements are associated with the active question rather
+  // than with the normal echo/bowel measurement-label workflow.
+  if (isViewerQuizMeasurementCaptureMode()) {
+    return null;
+  }
+
+  if (toolName === 'SplineROI' && domain === 'echo') {
     return {
       commandName: 'setLVTraceMeasurementLabel',
     };
   }
 
   if (toolName !== 'Length') {
-    return null;
-  }
-
-  if (isViewerQuizMeasurementCaptureMode()) {
     return null;
   }
 
@@ -936,10 +938,23 @@ function modeFactory({ modeConfiguration }) {
         'windowLevelMenu',
       ]);
 
+      const initialMeasurementDomain = getViewerMeasurementDomainFromPath();
+
       toolbarService.updateSection(
         'MeasurementTools',
-        getMeasurementToolIdsForDomain(getViewerMeasurementDomainFromPath())
+        getMeasurementToolIdsForDomain(initialMeasurementDomain)
       );
+
+      Promise.resolve(resolveViewerMeasurementDomain(commandsManager))
+        .then(resolvedDomain => {
+          toolbarService.updateSection(
+            'MeasurementTools',
+            getMeasurementToolIdsForDomain(resolvedDomain || initialMeasurementDomain)
+          );
+        })
+        .catch(error => {
+          console.warn('[AR Measurements] could not refresh measurement tools:', error);
+        });
 
       toolbarService.updateSection('MoreTools', [
         'Reset',

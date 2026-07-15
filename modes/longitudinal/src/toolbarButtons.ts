@@ -561,14 +561,14 @@ const toolbarButtons: Button[] = [
     },
   },
   {
-    id: 'LVTrace',
+    id: 'LVSimpsonEF',
     uiType: 'ohif.toolButton',
     props: {
       icon: 'icon-tool-spline-roi',
-      label: 'LV Trace',
-      tooltip: 'Trace LV endocardial border for Simpson EF',
-      commands: activateToolByName('SplineROI'),
-      evaluate: 'evaluate.cornerstoneTool',
+      label: 'LV EF',
+      tooltip: 'Measure LV volumes and EF: draw hinge, then drag to apex',
+      commands: 'startLVSimpsonEFWorkflow',
+      evaluate: 'evaluate.action',
     },
   },
   {

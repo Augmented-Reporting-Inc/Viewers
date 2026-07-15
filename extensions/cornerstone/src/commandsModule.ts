@@ -41,19 +41,28 @@ import { updateSegmentBidirectionalStats } from './utils/updateSegmentationStats
 import { generateSegmentationCSVReport } from './utils/generateSegmentationCSVReport';
 import { getUpdatedViewportsForSegmentation } from './utils/hydrationUtils';
 import { SegmentationRepresentations } from '@cornerstonejs/tools/enums';
-import { upsertViewerMeasurementAnnotations } from './utils/measurementAnnotations';
-import { getRequestedWorkflowAnnotations } from './utils/measurementAnnotations';
 import {
+  REVIEWER_MEASUREMENTS_WORKFLOW,
+  VIEWER_MEASUREMENTS_WORKFLOW,
+  getRequestedWorkflowAnnotations,
+  upsertViewerMeasurementAnnotations,
+} from './utils/measurementAnnotations';
+import {
+  applyReviewMeasurementAnnotationStyle,
   fetchSeriesDocForActiveStudy,
   hydrateSavedViewerAnnotationForViewport,
   hydrateMeasurementAnnotationsForActiveStudy as hydrateMeasurementAnnotationsForActiveStudyUtil,
 } from './utils/measurementAnnotationHydration';
 import { buildFormApiUrl } from './utils/formApi';
 import {
+  LV_SIMPSON_MEASUREMENT_KIND,
   LV_TRACE_MEASUREMENT_LABELS_CONFIG,
+  LV_TRACE_LABELS,
+  getLVTraceLabelForSlot,
   normalizeLVTraceSelection,
   parseLVTraceLabel,
 } from './utils/lvTraceLabels';
+import { buildLVSimpsonContourFromHingeApex } from './utils/lvSimpsonContour';
 
 const { DefaultHistoryMemo } = csUtils.HistoryMemo;
 const toggleSyncFunctions = {
@@ -242,6 +251,20 @@ function normalizeMeasurementLabelConfigForDialog(labelConfig, explicitTitle = '
 
 function getAnnotationId(annotation) {
   return annotation?.uid || annotation?.annotationId;
+}
+
+function getSavedAnnotationViewportLabel(annotation: any = {}) {
+  const label = annotation?.label || annotation?.measurementRole || annotation?.role || '';
+
+  if (
+    annotation?.workflow === REVIEWER_MEASUREMENTS_WORKFLOW &&
+    label &&
+    !String(label).startsWith('Coach: ')
+  ) {
+    return `Coach: ${label}`;
+  }
+
+  return label;
 }
 
 function getFrameNumberFromReferencedImageId(referencedImageId = '') {
@@ -458,11 +481,14 @@ function hydrateSavedLengthAnnotationForActiveViewport({
     SOPInstanceUID: savedAnnotation.SOPInstanceUID,
     SeriesInstanceUID: savedAnnotation.SeriesInstanceUID || savedAnnotation.referenceSeriesUID,
     StudyInstanceUID: savedAnnotation.StudyInstanceUID,
+    arMeasurementWorkflow: savedAnnotation.workflow || '',
+    arMeasurementReadOnly: !!savedAnnotation.isLocked,
+    arMeasurementReviewRound: Number(savedAnnotation.reviewRound) || null,
   };
 
   targetAnnotation.data = {
     ...(targetAnnotation.data || {}),
-    label: savedAnnotation.label || savedAnnotation.measurementRole || savedAnnotation.role || '',
+    label: getSavedAnnotationViewportLabel(savedAnnotation),
     handles: {
       ...(targetAnnotation.data?.handles || {}),
       points,
@@ -475,11 +501,20 @@ function hydrateSavedLengthAnnotationForActiveViewport({
       },
     },
     cachedStats: buildLengthCachedStats(savedAnnotation, referencedImageId),
+    arMeasurementWorkflow: savedAnnotation.workflow || '',
+    arMeasurementReadOnly: !!savedAnnotation.isLocked,
+    arMeasurementReviewRound: Number(savedAnnotation.reviewRound) || null,
   };
 
   targetAnnotation.invalidated = false;
   targetAnnotation.isVisible = savedAnnotation.isVisible !== false;
   targetAnnotation.isLocked = !!savedAnnotation.isLocked;
+
+  applyReviewMeasurementAnnotationStyle({
+    annotationUID: hydratedId,
+    workflow: savedAnnotation.workflow,
+    measurementOwner: savedAnnotation.measurementOwner,
+  });
 
   cornerstoneTools.annotation.selection.setAnnotationSelected(hydratedId, true);
 
@@ -537,23 +572,22 @@ function getLengthMeasurementPayload(measurement) {
   };
 }
 
-function getExistingViewerAnnotationsById(seriesDoc) {
-  try {
-    const parsed = JSON.parse(String(seriesDoc?.MeasurementAnnotations || '{}'));
-    const annotations = parsed?.workflows?.viewerMeasurements?.annotations || [];
+function getExistingAnnotationsById(seriesDoc, workflow = VIEWER_MEASUREMENTS_WORKFLOW) {
+  const annotations = getRequestedWorkflowAnnotations(seriesDoc?.MeasurementAnnotations, [
+    workflow,
+  ]);
 
-    return new Map(
-      annotations
-        .filter(annotation => annotation?.annotationId || annotation?.uid)
-        .map(annotation => [annotation.annotationId || annotation.uid, annotation])
-    );
-  } catch {
-    return new Map();
-  }
+  return new Map(
+    annotations
+      .filter(annotation => annotation?.annotationId || annotation?.uid)
+      .map(annotation => [annotation.annotationId || annotation.uid, annotation])
+  );
 }
 
 function getExistingScorableViewerAnnotations(seriesDoc, domain = '') {
-  const annotations = Array.from(getExistingViewerAnnotationsById(seriesDoc).values());
+  const annotations = Array.from(
+    getExistingAnnotationsById(seriesDoc, VIEWER_MEASUREMENTS_WORKFLOW).values()
+  );
 
   return annotations.filter(annotation => {
     if (!annotation || annotation.mode === 'repeated') {
@@ -582,18 +616,51 @@ function getExistingScorableViewerAnnotations(seriesDoc, domain = '') {
   });
 }
 
+function getLVSimpsonGeometry(measurement, existingAnnotation = null) {
+  return (
+    measurement?.lvSimpson ||
+    measurement?.measurements?.lvSimpson ||
+    measurement?.geometry?.lvSimpson ||
+    existingAnnotation?.lvSimpson ||
+    existingAnnotation?.measurements?.lvSimpson ||
+    null
+  );
+}
+
+function getLVSimpsonMeasurementPayload(measurement, existingAnnotation = null) {
+  const lvSimpson = getLVSimpsonGeometry(measurement, existingAnnotation);
+
+  if (!lvSimpson) {
+    return {};
+  }
+
+  return {
+    measurementKind: LV_SIMPSON_MEASUREMENT_KIND,
+    lvSimpson: {
+      ...(existingAnnotation?.measurements?.lvSimpson || {}),
+      ...lvSimpson,
+      measurementKind: LV_SIMPSON_MEASUREMENT_KIND,
+    },
+  };
+}
+
 function serializeViewerMeasurement(measurement, domain, existingAnnotation = null, options = {}) {
   const label = measurement?.label || '';
   const isContourMeasurement = isViewerContourTool(measurement?.toolName);
   const lvTrace = domain === 'echo' && isContourMeasurement ? parseLVTraceLabel(label) : null;
+  const lvSimpson = getLVSimpsonGeometry(measurement, existingAnnotation);
+  const isLVSimpson = domain === 'echo' && !!lvSimpson;
   const frameNumber =
     measurement.frameNumber && measurement.frameNumber > 1
       ? measurement.frameNumber
       : getFrameNumberFromReferencedImageId(measurement.referencedImageId);
 
-  const nextMeasurements = isContourMeasurement
-    ? buildContourMeasurementPayload(measurement, existingAnnotation, options.displaySetService)
-    : getLengthMeasurementPayload(measurement);
+  const nextMeasurements = {
+    ...(isContourMeasurement
+      ? buildContourMeasurementPayload(measurement, existingAnnotation, options.displaySetService)
+      : getLengthMeasurementPayload(measurement)),
+    ...(isLVSimpson ? getLVSimpsonMeasurementPayload(measurement, existingAnnotation) : {}),
+  };
 
   const finalDisplayText =
     nextMeasurements?.displayText?.length > 0
@@ -602,11 +669,11 @@ function serializeViewerMeasurement(measurement, domain, existingAnnotation = nu
 
   return {
     annotationId: measurement.uid,
-    workflow: 'viewerMeasurements',
-    role: lvTrace?.slot || label,
+    workflow: options.workflow || VIEWER_MEASUREMENTS_WORKFLOW,
+    role: lvTrace?.slot || measurement?.slot || label,
     domain,
     mode: 'single',
-    measurementRole: lvTrace?.label || label,
+    measurementRole: lvTrace?.label || measurement?.measurementRole || label,
 
     uid: measurement.uid,
     label,
@@ -617,6 +684,16 @@ function serializeViewerMeasurement(measurement, domain, existingAnnotation = nu
           slot: lvTrace.slot,
           view: lvTrace.view,
           phase: lvTrace.phase,
+        }
+      : {}),
+
+    ...(isLVSimpson
+      ? {
+          measurementKind: LV_SIMPSON_MEASUREMENT_KIND,
+          slot: lvSimpson.slot || lvTrace?.slot || measurement?.slot,
+          view: lvSimpson.view || lvTrace?.view || measurement?.view,
+          phase: lvSimpson.phase || lvTrace?.phase || measurement?.phase,
+          lvSimpson: nextMeasurements.lvSimpson,
         }
       : {}),
 
@@ -1318,15 +1395,24 @@ function normalizeDisplayAreaUnit(unit = '') {
   return /px/i.test(String(unit || '')) ? 'mm²' : unit || 'mm²';
 }
 
+function stripMeasurementSourceSuffix(text = '') {
+  return String(text || '')
+    .replace(/\s+\bUS Region\b/gi, '')
+    .replace(/\s+\bAR_US_REGION_CALIBRATION\b/gi, '')
+    .trim();
+}
+
 function normalizeDisplayTextUnits(displayText = [], unitType = 'length') {
   const nextUnit = unitType === 'area' ? 'mm²' : 'mm';
 
   return (Array.isArray(displayText) ? displayText : [String(displayText || '')])
     .filter(Boolean)
     .map(text =>
-      String(text)
-        .replace(/\bpx²\b/gi, nextUnit)
-        .replace(/\bpx\b/gi, nextUnit)
+      stripMeasurementSourceSuffix(
+        String(text)
+          .replace(/\bpx²\b/gi, nextUnit)
+          .replace(/\bpx\b/gi, nextUnit)
+      )
     );
 }
 
@@ -1336,10 +1422,11 @@ function buildContourMeasurementPayload(
   displaySetService = null
 ) {
   const stats = getMeasurementStats(measurement);
-  const displayText =
+  const rawDisplayText =
     getMeasurementDisplayText(measurement).length > 0
       ? getMeasurementDisplayText(measurement)
       : existingAnnotation?.measurements?.displayText || existingAnnotation?.displayText || [];
+  const displayText = normalizeDisplayTextUnits(rawDisplayText, 'area');
 
   const rawArea =
     finiteNumberOrNull(stats?.area) ?? finiteNumberOrNull(existingAnnotation?.measurements?.area);
@@ -2366,7 +2453,357 @@ function captureNextViewerClickPoint({ viewport, displaySet, viewportId = '' } =
   });
 }
 
+const AR_LV_SIMPSON_PREVIEW_CLASS = 'ar-lv-simpson-preview-overlay';
+
+function setLVSimpsonViewportCursor(element, cursor = 'default') {
+  if (!element) {
+    return;
+  }
+
+  try {
+    element.style.cursor = cursor;
+    element.querySelectorAll?.('canvas, svg').forEach(node => {
+      if (node?.style) {
+        node.style.cursor = cursor;
+      }
+    });
+  } catch {}
+}
+
+function restoreLVSimpsonViewportCursor(element, previousCursor = '') {
+  const cursor =
+    previousCursor && previousCursor !== 'none' && previousCursor !== 'url("")'
+      ? previousCursor
+      : 'default';
+
+  setLVSimpsonViewportCursor(element, cursor);
+}
+
+function getWorldPointFromMouseEvent(event, viewport) {
+  const canvasPoint = getCanvasPointFromMouseEvent(event, viewport?.element);
+
+  if (!canvasPoint || !viewport?.canvasToWorld) {
+    return null;
+  }
+
+  try {
+    return viewport.canvasToWorld([canvasPoint.x, canvasPoint.y]);
+  } catch {
+    return null;
+  }
+}
+
+function createLVSimpsonPreviewOverlay(element) {
+  if (!element) {
+    return null;
+  }
+
+  clearLVSimpsonPreviewOverlay(element);
+
+  const overlay = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  overlay.classList.add(AR_LV_SIMPSON_PREVIEW_CLASS);
+  overlay.style.position = 'absolute';
+  overlay.style.inset = '0';
+  overlay.style.width = '100%';
+  overlay.style.height = '100%';
+  overlay.style.pointerEvents = 'none';
+  overlay.style.zIndex = '25';
+
+  const previousPosition = element.style.position;
+  if (!previousPosition || previousPosition === 'static') {
+    element.style.position = 'relative';
+  }
+
+  element.appendChild(overlay);
+
+  return overlay;
+}
+
+function clearLVSimpsonPreviewOverlay(element) {
+  try {
+    element?.querySelectorAll?.(`.${AR_LV_SIMPSON_PREVIEW_CLASS}`)?.forEach(node => node.remove());
+  } catch {}
+}
+
+function drawLVSimpsonPreview({ overlay, viewport, baseLeftPoint, baseRightPoint, apexPoint }) {
+  if (!overlay || !viewport?.worldToCanvas || !baseLeftPoint || !baseRightPoint) {
+    return;
+  }
+
+  overlay.replaceChildren();
+
+  const svgns = 'http://www.w3.org/2000/svg';
+  const baseLeftCanvas = viewport.worldToCanvas(baseLeftPoint);
+  const baseRightCanvas = viewport.worldToCanvas(baseRightPoint);
+
+  const addLine = (a, b, stroke = '#facc15') => {
+    const line = document.createElementNS(svgns, 'line');
+    line.setAttribute('x1', String(a[0]));
+    line.setAttribute('y1', String(a[1]));
+    line.setAttribute('x2', String(b[0]));
+    line.setAttribute('y2', String(b[1]));
+    line.setAttribute('stroke', stroke);
+    line.setAttribute('stroke-width', '2');
+    overlay.appendChild(line);
+  };
+
+  const addCircle = point => {
+    const circle = document.createElementNS(svgns, 'circle');
+    circle.setAttribute('cx', String(point[0]));
+    circle.setAttribute('cy', String(point[1]));
+    circle.setAttribute('r', '4');
+    circle.setAttribute('fill', '#facc15');
+    circle.setAttribute('stroke', '#111827');
+    circle.setAttribute('stroke-width', '1');
+    overlay.appendChild(circle);
+  };
+
+  addLine(baseLeftCanvas, baseRightCanvas);
+  addCircle(baseLeftCanvas);
+  addCircle(baseRightCanvas);
+
+  if (!apexPoint) {
+    return;
+  }
+
+  const apexCanvas = viewport.worldToCanvas(apexPoint);
+  const contour = buildLVSimpsonContourFromHingeApex({
+    baseLeftPoint,
+    baseRightPoint,
+    apexPoint,
+  });
+
+  if (contour?.points?.length) {
+    const polyline = document.createElementNS(svgns, 'polyline');
+    polyline.setAttribute(
+      'points',
+      contour.points
+        .map(point => viewport.worldToCanvas(point))
+        .map(point => `${point[0]},${point[1]}`)
+        .join(' ')
+    );
+    polyline.setAttribute('fill', 'rgba(250, 204, 21, 0.12)');
+    polyline.setAttribute('stroke', '#facc15');
+    polyline.setAttribute('stroke-width', '2');
+    overlay.appendChild(polyline);
+  }
+
+  const baseMidCanvas = [
+    (baseLeftCanvas[0] + baseRightCanvas[0]) / 2,
+    (baseLeftCanvas[1] + baseRightCanvas[1]) / 2,
+  ];
+
+  addLine(baseMidCanvas, apexCanvas, '#38bdf8');
+  addCircle(apexCanvas);
+}
+
+function sanitizeContourTextLines(lines = []) {
+  return (Array.isArray(lines) ? lines : [lines])
+    .map(line => stripMeasurementSourceSuffix(line))
+    .filter(Boolean);
+}
+
+function installLVSimpsonContourTextCleanupForViewport({ viewport, viewportId = '', toolName }) {
+  if (!viewport || !toolName) {
+    return;
+  }
+
+  let toolGroup = null;
+
+  try {
+    toolGroup =
+      ToolGroupManager.getToolGroupForViewport?.(
+        viewport.id || viewportId,
+        viewport.renderingEngineId
+      ) || ToolGroupManager.getToolGroupForViewport?.(viewport.id || viewportId);
+  } catch {
+    toolGroup = null;
+  }
+
+  const toolInstance = toolGroup?.getToolInstance?.(toolName);
+
+  if (!toolInstance || toolInstance.__arLVSimpsonTextCleanupInstalled) {
+    return;
+  }
+
+  const previousGetTextLines = toolInstance.configuration?.getTextLines;
+
+  const nextConfiguration = {
+    ...(toolInstance.configuration || {}),
+    getTextLines: function (...args) {
+      const lines =
+        typeof previousGetTextLines === 'function' ? previousGetTextLines.call(this, ...args) : [];
+
+      return sanitizeContourTextLines(lines);
+    },
+  };
+
+  toolInstance.configuration = nextConfiguration;
+  toolGroup?.setToolConfiguration?.(toolName, nextConfiguration, true);
+  toolInstance.__arLVSimpsonTextCleanupInstalled = true;
+}
+
+function captureLVSimpsonDrag({ viewport, onPreview }) {
+  const element = viewport?.element;
+
+  if (!element) {
+    return Promise.resolve(null);
+  }
+
+  return new Promise(resolve => {
+    const previousCursor = element.style.cursor;
+    let startWorld = null;
+    let done = false;
+
+    function finish(result) {
+      if (done) {
+        return;
+      }
+
+      done = true;
+      restoreLVSimpsonViewportCursor(element, previousCursor);
+      element.removeEventListener('mousedown', handleMouseDown, true);
+      window.removeEventListener('mousemove', handleMouseMove, true);
+      window.removeEventListener('mouseup', handleMouseUp, true);
+      window.removeEventListener('keydown', handleKeyDown, true);
+      resolve(result);
+    }
+
+    function handleKeyDown(event) {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        event.stopPropagation();
+        finish(null);
+      }
+    }
+
+    function handleMouseDown(event) {
+      event.preventDefault();
+      event.stopPropagation();
+
+      startWorld = getWorldPointFromMouseEvent(event, viewport);
+
+      if (!startWorld) {
+        finish(null);
+        return;
+      }
+
+      window.addEventListener('mousemove', handleMouseMove, true);
+      window.addEventListener('mouseup', handleMouseUp, true);
+    }
+
+    function handleMouseMove(event) {
+      if (!startWorld) {
+        return;
+      }
+
+      const currentWorld = getWorldPointFromMouseEvent(event, viewport);
+      if (currentWorld) {
+        onPreview?.({ startWorld, currentWorld });
+      }
+    }
+
+    function handleMouseUp(event) {
+      if (!startWorld) {
+        finish(null);
+        return;
+      }
+
+      const endWorld = getWorldPointFromMouseEvent(event, viewport);
+      finish(endWorld ? { startWorld, endWorld } : null);
+    }
+
+    setLVSimpsonViewportCursor(element, 'crosshair');
+    element.addEventListener('mousedown', handleMouseDown, true);
+    window.addEventListener('keydown', handleKeyDown, true);
+  });
+}
+
+function getLVSimpsonSlotDialogConfig() {
+  return {
+    ...LV_TRACE_MEASUREMENT_LABELS_CONFIG,
+    labelOnMeasure: false,
+    items: LV_TRACE_LABELS,
+  };
+}
+
+async function resolveLVSimpsonSlot({ uiDialogService, customizationService }) {
+  const renderContent = customizationService.getCustomization('ui.labellingComponent');
+  let value = null;
+
+  try {
+    value = await callInputDialogAutoComplete({
+      uiDialogService,
+      labelConfig: getLVSimpsonSlotDialogConfig(),
+      renderContent,
+      title: 'LV EF Slot',
+    });
+  } catch (error) {
+    console.warn('[LV EF] slot autocomplete failed; falling back to text input:', error);
+
+    value = await callInputDialog({
+      uiDialogService,
+      title: 'LV EF Slot',
+      placeholder: 'Choose LV-A4C-ED, LV-A4C-ES, LV-A2C-ED, or LV-A2C-ES',
+      defaultValue: 'LV-A4C-ED',
+    });
+  }
+
+  const label = normalizeLVTraceSelection(value);
+  const slotInfo = parseLVTraceLabel(label);
+
+  return slotInfo ? { label, slotInfo } : null;
+}
+
 const VIEWER_QUIZ_MARKER_OVERLAY_CLASS = 'ar-viewer-quiz-marker-overlay';
+
+const VIEWER_QUIZ_MARKER_REVIEW_STYLES: Record<
+  string,
+  { border: string; background: string; color: string; borderStyle: string }
+> = {
+  neutral: {
+    border: '#facc15',
+    background: 'rgba(0, 0, 0, 0.75)',
+    color: '#fef3c7',
+    borderStyle: 'solid',
+  },
+  learner: {
+    border: '#38bdf8',
+    background: 'rgba(8, 47, 73, 0.9)',
+    color: '#e0f2fe',
+    borderStyle: 'solid',
+  },
+  gold: {
+    border: '#c084fc',
+    background: 'rgba(59, 7, 100, 0.9)',
+    color: '#f3e8ff',
+    borderStyle: 'solid',
+  },
+  correct: {
+    border: '#22c55e',
+    background: 'rgba(20, 83, 45, 0.9)',
+    color: '#dcfce7',
+    borderStyle: 'solid',
+  },
+  incorrect: {
+    border: '#ef4444',
+    background: 'rgba(127, 29, 29, 0.9)',
+    color: '#fee2e2',
+    borderStyle: 'solid',
+  },
+  missed: {
+    border: '#f59e0b',
+    background: 'rgba(120, 53, 15, 0.9)',
+    color: '#fef3c7',
+    borderStyle: 'dashed',
+  },
+};
+
+function getViewerQuizMarkerReviewStyle(marker = {}) {
+  const reviewState = String(marker?.reviewState || marker?.variant || 'neutral').trim();
+
+  return VIEWER_QUIZ_MARKER_REVIEW_STYLES[reviewState] || VIEWER_QUIZ_MARKER_REVIEW_STYLES.neutral;
+}
 
 function clearViewerQuizMarkerOverlayForElement(element) {
   try {
@@ -2444,17 +2881,19 @@ function drawViewerQuizMarkerOptions({ viewport, markerOptions = [] } = {}) {
       continue;
     }
 
+    const reviewStyle = getViewerQuizMarkerReviewStyle(marker);
     const node = document.createElement('div');
     node.className = VIEWER_QUIZ_MARKER_OVERLAY_CLASS;
+    node.dataset.reviewState = String(marker?.reviewState || marker?.variant || 'neutral');
     node.style.position = 'absolute';
     node.style.left = `${canvasPoint.x}px`;
     node.style.top = `${canvasPoint.y}px`;
     node.style.transform = 'translate(-50%, -50%)';
     node.style.zIndex = '30';
     node.style.pointerEvents = 'none';
-    node.style.border = '2px solid #facc15';
-    node.style.background = 'rgba(0, 0, 0, 0.75)';
-    node.style.color = '#fef3c7';
+    node.style.border = `2px ${reviewStyle.borderStyle} ${reviewStyle.border}`;
+    node.style.background = reviewStyle.background;
+    node.style.color = reviewStyle.color;
     node.style.borderRadius = '9999px';
     node.style.minWidth = '24px';
     node.style.height = '24px';
@@ -2511,7 +2950,169 @@ function getArViewerSaveTargetFromUrl() {
     learnerSeriesId: String(qs.get('arLearnerSeriesId') || '').trim(),
     launchSource: String(qs.get('arLaunchSource') || '').trim(),
     measurementWorkflowRole: String(qs.get('arMeasurementWorkflowRole') || '').trim(),
+    reviewWorkflowType: String(qs.get('arReviewWorkflowType') || '').trim(),
+    measurementAccess: String(qs.get('arMeasurementAccess') || '').trim(),
   };
+}
+
+const REVIEW_WORKFLOW_MEASUREMENTS_SAVE_TARGET = 'reviewWorkflowMeasurements';
+
+function normalizeReviewMeasurementRole(value: unknown = '') {
+  const role = String(value || '')
+    .trim()
+    .toLowerCase();
+
+  return ['learner', 'educator'].includes(role) ? role : '';
+}
+
+function isReviewWorkflowMeasurementsSaveTarget(saveTarget: any = {}) {
+  return (
+    saveTarget.mode === REVIEW_WORKFLOW_MEASUREMENTS_SAVE_TARGET &&
+    !!saveTarget.seriesId &&
+    isLibraryLaunchSource(saveTarget.launchSource) &&
+    !!normalizeReviewMeasurementRole(saveTarget.measurementWorkflowRole) &&
+    !!String(saveTarget.reviewWorkflowType || '').trim()
+  );
+}
+
+function isReviewWorkflowMeasurementEditTarget(saveTarget: any = {}) {
+  return (
+    isReviewWorkflowMeasurementsSaveTarget(saveTarget) &&
+    String(saveTarget.measurementAccess || '')
+      .trim()
+      .toLowerCase() === 'edit'
+  );
+}
+
+function getWritableReviewMeasurementWorkflow(saveTarget: any = {}) {
+  if (!isReviewWorkflowMeasurementEditTarget(saveTarget)) {
+    return '';
+  }
+
+  return normalizeReviewMeasurementRole(saveTarget.measurementWorkflowRole) === 'educator'
+    ? REVIEWER_MEASUREMENTS_WORKFLOW
+    : VIEWER_MEASUREMENTS_WORKFLOW;
+}
+
+function getMeasurementWorkflowsForRead(saveTarget: any = {}, requestedWorkflows: string[] = []) {
+  if (isReviewWorkflowMeasurementsSaveTarget(saveTarget)) {
+    return [VIEWER_MEASUREMENTS_WORKFLOW, REVIEWER_MEASUREMENTS_WORKFLOW];
+  }
+
+  return Array.isArray(requestedWorkflows) && requestedWorkflows.length
+    ? requestedWorkflows
+    : [VIEWER_MEASUREMENTS_WORKFLOW];
+}
+
+function getCurrentReviewMeasurementRound(seriesDoc: any = {}) {
+  const entries = Array.isArray(seriesDoc?.studentPractice?.feedbackEntries)
+    ? seriesDoc.studentPractice.feedbackEntries
+    : [];
+
+  const draftRounds = entries
+    .filter(
+      entry =>
+        String(entry?.status || '')
+          .trim()
+          .toLowerCase() === 'draft'
+    )
+    .map(entry => Number(entry?.roundNumber) || 0)
+    .filter(roundNumber => roundNumber > 0);
+
+  if (draftRounds.length) {
+    return Math.max(...draftRounds);
+  }
+
+  const latestRound = entries.reduce(
+    (maxRound, entry) => Math.max(maxRound, Number(entry?.roundNumber) || 0),
+    0
+  );
+
+  return latestRound + 1;
+}
+
+function getMeasurementAnnotationId(annotation: any = {}) {
+  return String(
+    annotation?.uid || annotation?.annotationId || annotation?.id || annotation?.annotationUID || ''
+  ).trim();
+}
+
+function decorateReviewWorkflowAnnotations({ annotations, seriesDoc, saveTarget }) {
+  if (!isReviewWorkflowMeasurementsSaveTarget(saveTarget)) {
+    return annotations || [];
+  }
+
+  const writableWorkflow = getWritableReviewMeasurementWorkflow(saveTarget);
+  const currentRound = getCurrentReviewMeasurementRound(seriesDoc);
+
+  return (annotations || []).map(annotation => {
+    const workflow = String(annotation?.workflow || '').trim();
+    const reviewRound = Number(annotation?.reviewRound) || 0;
+
+    const isCurrentReviewerRound =
+      workflow !== REVIEWER_MEASUREMENTS_WORKFLOW ||
+      reviewRound === 0 ||
+      reviewRound === currentRound;
+
+    const isWritable = workflow === writableWorkflow && isCurrentReviewerRound;
+
+    return {
+      ...annotation,
+      workflow,
+      isLocked: !isWritable,
+      measurementOwner: workflow === REVIEWER_MEASUREMENTS_WORKFLOW ? 'coach' : 'learner',
+    };
+  });
+}
+
+function getBlockedReviewMeasurementIds({ seriesDoc, saveTarget }) {
+  const annotations = getRequestedWorkflowAnnotations(seriesDoc?.MeasurementAnnotations, [
+    VIEWER_MEASUREMENTS_WORKFLOW,
+    REVIEWER_MEASUREMENTS_WORKFLOW,
+  ]);
+
+  const decorated = decorateReviewWorkflowAnnotations({
+    annotations,
+    seriesDoc,
+    saveTarget,
+  });
+
+  return new Set(
+    decorated
+      .filter(annotation => annotation?.isLocked)
+      .map(getMeasurementAnnotationId)
+      .filter(Boolean)
+  );
+}
+
+function getWritableExistingReviewMeasurementIds({ seriesDoc, saveTarget }) {
+  const annotations = getRequestedWorkflowAnnotations(seriesDoc?.MeasurementAnnotations, [
+    VIEWER_MEASUREMENTS_WORKFLOW,
+    REVIEWER_MEASUREMENTS_WORKFLOW,
+  ]);
+
+  const decorated = decorateReviewWorkflowAnnotations({
+    annotations,
+    seriesDoc,
+    saveTarget,
+  });
+
+  return new Set(
+    decorated
+      .filter(annotation => annotation?.isLocked !== true)
+      .map(getMeasurementAnnotationId)
+      .filter(Boolean)
+  );
+}
+
+async function getResponseErrorMessage(response, fallback) {
+  try {
+    const body = await response.json();
+
+    return body?.message || body?.errorMsg || body?.error || fallback;
+  } catch {
+    return fallback;
+  }
 }
 
 function isLibraryLaunchSource(launchSource = '') {
@@ -2625,6 +3226,7 @@ function commandsModule({
   commandsManager,
   extensionManager,
 }: OhifTypes.Extensions.ExtensionParams): OhifTypes.Extensions.CommandsModule {
+  const viewerMeasurementsCreatedInSession = new Set<string>();
   const {
     viewportGridService,
     toolGroupService,
@@ -2667,6 +3269,52 @@ function commandsModule({
   }
 
   const actions = {
+    clearViewerMeasurementsCreatedInSession: () => {
+      viewerMeasurementsCreatedInSession.clear();
+    },
+
+    markViewerMeasurementCreatedInSession: ({ uid }: { uid?: string } = {}) => {
+      const measurementId = String(uid || '').trim();
+
+      if (!measurementId) {
+        return '';
+      }
+
+      viewerMeasurementsCreatedInSession.add(measurementId);
+
+      const saveTarget = getArViewerSaveTargetFromUrl();
+      const workflow = getWritableReviewMeasurementWorkflow(saveTarget);
+
+      const measurement = measurementService.getMeasurement?.(measurementId);
+
+      if (measurement && workflow) {
+        const measurementOwner = workflow === REVIEWER_MEASUREMENTS_WORKFLOW ? 'coach' : 'learner';
+
+        measurementService.update(
+          measurementId,
+          {
+            ...measurement,
+            workflow,
+            measurementOwner,
+            isLocked: false,
+            arCreatedInViewerSession: true,
+          },
+          true
+        );
+
+        const styleApplied = applyReviewMeasurementAnnotationStyle({
+          annotationUID: measurementId,
+          workflow,
+          measurementOwner,
+        });
+
+        if (styleApplied) {
+          cornerstoneViewportService.getRenderingEngine()?.render?.();
+        }
+      }
+
+      return measurementId;
+    },
     jumpToMeasurementViewport: ({ annotationUID, measurement }) => {
       cornerstoneTools.annotation.selection.setAnnotationSelected(annotationUID, true);
       const { metadata } = measurement;
@@ -3079,6 +3727,229 @@ function commandsModule({
         normalizeLabel,
       });
     },
+    startLVSimpsonEFWorkflow: async () => {
+      const { viewport } = _getActiveViewportEnabledElement() || {};
+      const activeViewportId = viewportGridService.getActiveViewportId();
+
+      if (!viewport?.element || !activeViewportId) {
+        uiNotificationService.show({
+          title: 'LV EF',
+          message: 'No active image viewport is available.',
+          type: 'warning',
+          duration: 3500,
+        });
+        return null;
+      }
+
+      const slotSelection = await resolveLVSimpsonSlot({
+        uiDialogService,
+        customizationService,
+      });
+
+      if (!slotSelection) {
+        return null;
+      }
+
+      const { label, slotInfo } = slotSelection;
+      const overlay = createLVSimpsonPreviewOverlay(viewport.element);
+
+      uiNotificationService.show({
+        title: 'LV EF',
+        message: 'Draw the mitral annular hinge line.',
+        type: 'info',
+        duration: 2500,
+      });
+
+      const hinge = await captureLVSimpsonDrag({
+        viewport,
+        onPreview: ({ startWorld, currentWorld }) => {
+          drawLVSimpsonPreview({
+            overlay,
+            viewport,
+            baseLeftPoint: startWorld,
+            baseRightPoint: currentWorld,
+          });
+        },
+      });
+
+      if (!hinge) {
+        clearLVSimpsonPreviewOverlay(viewport.element);
+        setLVSimpsonViewportCursor(viewport.element, 'default');
+        return null;
+      }
+
+      drawLVSimpsonPreview({
+        overlay,
+        viewport,
+        baseLeftPoint: hinge.startWorld,
+        baseRightPoint: hinge.endWorld,
+      });
+
+      uiNotificationService.show({
+        title: 'LV EF',
+        message: 'Drag from the hinge midpoint to the LV apex.',
+        type: 'info',
+        duration: 2500,
+      });
+
+      const apexDrag = await captureLVSimpsonDrag({
+        viewport,
+        onPreview: ({ currentWorld }) => {
+          drawLVSimpsonPreview({
+            overlay,
+            viewport,
+            baseLeftPoint: hinge.startWorld,
+            baseRightPoint: hinge.endWorld,
+            apexPoint: currentWorld,
+          });
+        },
+      });
+
+      clearLVSimpsonPreviewOverlay(viewport.element);
+      setLVSimpsonViewportCursor(viewport.element, 'default');
+
+      if (!apexDrag?.endWorld) {
+        return null;
+      }
+
+      const geometry = buildLVSimpsonContourFromHingeApex({
+        baseLeftPoint: hinge.startWorld,
+        baseRightPoint: hinge.endWorld,
+        apexPoint: apexDrag.endWorld,
+      });
+
+      if (!geometry?.points?.length) {
+        uiNotificationService.show({
+          title: 'LV EF',
+          message: 'Could not generate LV contour from hinge/apex geometry.',
+          type: 'warning',
+          duration: 3500,
+        });
+        return null;
+      }
+
+      const imageInfo = getCurrentViewportImageInfo(viewport);
+      const displaySet = getActiveViewportDisplaySet({
+        viewportGridService,
+        displaySetService,
+        viewportId: activeViewportId,
+      });
+      const annotationUID = `${csUtils.uuidv4()}`;
+      const frameNumber = getFrameNumberFromReferencedImageId(imageInfo.imageId);
+      const sopInstanceId =
+        getSopInstanceIdFromImageId(imageInfo.imageId) ||
+        displaySet?.SOPInstanceUID ||
+        displaySet?.sopInstanceUID ||
+        '';
+
+      const lvSimpson = {
+        measurementKind: LV_SIMPSON_MEASUREMENT_KIND,
+        slot: slotInfo.slot,
+        view: slotInfo.view,
+        phase: slotInfo.phase,
+        label,
+        contourSource: 'hingeApexGenerated',
+        baseLeftPoint: geometry.baseLeftPoint,
+        baseRightPoint: geometry.baseRightPoint,
+        baseMidpoint: geometry.baseMidpoint,
+        apexPoint: geometry.apexPoint,
+        contourPoints: geometry.points,
+        longAxisLengthMM: geometry.longAxisLengthMM,
+        userConfirmed: true,
+      };
+
+      let hydrated = null;
+      try {
+        hydrated = cornerstoneTools.SplineROITool?.hydrate?.(activeViewportId, geometry.points, {
+          annotationUID,
+        });
+      } catch (error) {
+        console.warn('[LV EF] SplineROI hydrate failed:', error);
+      }
+
+      const targetAnnotation =
+        cornerstoneTools.annotation.state.getAnnotation?.(annotationUID) || hydrated;
+
+      if (targetAnnotation) {
+        targetAnnotation.annotationUID = annotationUID;
+        targetAnnotation.metadata = {
+          ...(targetAnnotation.metadata || {}),
+          toolName: toolNames.SplineROI || 'SplineROI',
+          referencedImageId: imageInfo.imageId,
+          FrameOfReferenceUID:
+            viewport.getFrameOfReferenceUID?.() ||
+            targetAnnotation.metadata?.FrameOfReferenceUID ||
+            '',
+          SOPInstanceUID: sopInstanceId,
+          SeriesInstanceUID: displaySet?.SeriesInstanceUID || displaySet?.seriesInstanceUID || '',
+          StudyInstanceUID: displaySet?.StudyInstanceUID || displaySet?.studyInstanceUID || '',
+        };
+        targetAnnotation.data = {
+          ...(targetAnnotation.data || {}),
+          label,
+          lvSimpson,
+          handles: {
+            ...(targetAnnotation.data?.handles || {}),
+            points: geometry.points,
+            activeHandleIndex: null,
+          },
+          contour: {
+            ...(targetAnnotation.data?.contour || {}),
+            closed: true,
+            polyline: geometry.points,
+          },
+        };
+        targetAnnotation.invalidated = false;
+      }
+
+      const measurement = {
+        uid: annotationUID,
+        annotationUID,
+        toolName: toolNames.SplineROI || 'SplineROI',
+        label,
+        measurementRole: label,
+        role: slotInfo.slot,
+        slot: slotInfo.slot,
+        view: slotInfo.view,
+        phase: slotInfo.phase,
+        measurementKind: LV_SIMPSON_MEASUREMENT_KIND,
+        lvSimpson,
+        referenceStudyUID: displaySet?.StudyInstanceUID || displaySet?.studyInstanceUID || '',
+        referenceSeriesUID: displaySet?.SeriesInstanceUID || displaySet?.seriesInstanceUID || '',
+        SOPInstanceUID: sopInstanceId,
+        FrameOfReferenceUID: targetAnnotation?.metadata?.FrameOfReferenceUID || '',
+        displaySetInstanceUID: displaySet?.displaySetInstanceUID || '',
+        referencedImageId: imageInfo.imageId,
+        frameNumber,
+        points: geometry.points,
+        displayText: [`${slotInfo.slot.replace('_', ' ')} LV EF contour`],
+      };
+
+      try {
+        measurementService.update(annotationUID, measurement, true);
+      } catch (error) {
+        console.warn('[LV EF] measurementService.update failed:', error);
+      }
+
+      try {
+        cornerstoneTools.annotation.selection.setAnnotationSelected(annotationUID, true);
+        installLVSimpsonContourTextCleanupForViewport({
+          viewport,
+          viewportId: activeViewportId,
+          toolName: toolNames.SplineROI || 'SplineROI',
+        });
+        viewport.render?.();
+      } catch {}
+
+      uiNotificationService.show({
+        title: 'LV EF',
+        message: `${slotInfo.slot} contour created.`,
+        type: 'success',
+        duration: 2500,
+      });
+
+      return measurement;
+    },
     setLVTraceMeasurementLabel: async ({ uid } = {}) => {
       if (!uid) {
         uiNotificationService.show({
@@ -3175,44 +4046,54 @@ function commandsModule({
         }
       }
       try {
+        const resolvedWorkflows = getMeasurementWorkflowsForRead(saveTarget, workflows);
+
         const result = await hydrateMeasurementAnnotationsForActiveStudyUtil({
           servicesManager,
           seriesDoc: targetSeriesDoc,
-          workflows,
+          workflows: resolvedWorkflows,
           domains,
         });
 
+        const processedAnnotations = decorateReviewWorkflowAnnotations({
+          annotations: result.processedAnnotations || [],
+          seriesDoc: result.seriesDoc,
+          saveTarget,
+        });
+
+        const decoratedResult = {
+          ...result,
+          processedAnnotations,
+        };
+
         console.info('[MeasurementAnnotations] hydration result', {
-          workflows,
+          workflows: resolvedWorkflows,
           domains,
           restoredCount: result.restoredCount,
           skippedCount: result.skippedCount,
-          processedCount: result.processedAnnotations?.length || 0,
-          hasSeriesDoc: !!result.seriesDoc,
-          seriesId: result.seriesDoc?._id,
+          processedCount: processedAnnotations.length,
         });
 
         dispatchSavedAnnotationsRefresh({
           seriesDoc: result.seriesDoc,
           saveTarget,
-          annotations: result.processedAnnotations || [],
-          processedAnnotations: result.processedAnnotations || [],
-          domain:
-            Array.isArray(domains) && domains.length === 1
-              ? domains[0]
-              : inferDomainFromSeriesDoc(result.seriesDoc, undefined),
+          annotations: processedAnnotations,
+          processedAnnotations,
+          domain: Array.isArray(domains) && domains.length === 1 ? domains[0] : '',
         });
 
         if (notify && result.restoredCount > 0) {
           uiNotificationService.show({
             title: 'Measurements',
-            message: `Restored ${result.restoredCount} saved measurement annotation(s).`,
+            message: `${result.restoredCount} saved measurement${
+              result.restoredCount === 1 ? '' : 's'
+            } restored.`,
             type: 'success',
             duration: 2500,
           });
         }
 
-        return result;
+        return decoratedResult;
       } catch (error) {
         console.warn('[MeasurementAnnotations] hydration failed:', error);
 
@@ -5048,18 +5929,29 @@ function commandsModule({
 
       const domain = inferDomainFromSeriesDoc(seriesDoc, explicitDomain);
 
-      const annotations = getRequestedWorkflowAnnotations(
+      const resolvedWorkflows = getMeasurementWorkflowsForRead(saveTarget, workflows);
+
+      const requestedAnnotations = getRequestedWorkflowAnnotations(
         seriesDoc.MeasurementAnnotations,
-        workflows
+        resolvedWorkflows
       ).filter(annotation => {
         if (annotation?.mode === 'repeated') {
           return false;
         }
 
-        return (
-          annotation?.domain === domain ||
-          (domain !== 'generic' && annotation?.domain === 'generic')
-        );
+        if (!domain || domain === 'generic') {
+          return true;
+        }
+
+        const annotationDomain = annotation?.domain || 'generic';
+
+        return annotationDomain === domain || annotationDomain === 'generic';
+      });
+
+      const annotations = decorateReviewWorkflowAnnotations({
+        annotations: requestedAnnotations,
+        seriesDoc,
+        saveTarget,
       });
 
       return {
@@ -5467,6 +6359,9 @@ function commandsModule({
     setMeasurementLabel: {
       commandFn: actions.setMeasurementLabel,
     },
+    startLVSimpsonEFWorkflow: {
+      commandFn: actions.startLVSimpsonEFWorkflow,
+    },
     setLVTraceMeasurementLabel: {
       commandFn: actions.setLVTraceMeasurementLabel,
     },
@@ -5747,12 +6642,28 @@ function commandsModule({
     toggleSegmentLabel: actions.toggleSegmentLabel,
     jumpToMeasurementViewport: actions.jumpToMeasurementViewport,
     initializeSegmentLabelTool: actions.initializeSegmentLabelTool,
+    clearViewerMeasurementsCreatedInSession: {
+      commandFn: actions.clearViewerMeasurementsCreatedInSession,
+    },
+
+    markViewerMeasurementCreatedInSession: {
+      commandFn: actions.markViewerMeasurementCreatedInSession,
+    },
     saveViewerMeasurementsForActiveStudy: {
       commandFn: async ({ domain: explicitDomain, scoringIntent, educationAttemptIntent } = {}) => {
         const { measurementService, uiNotificationService } = servicesManager.services;
 
         try {
           const saveTarget = getArViewerSaveTargetFromUrl();
+
+          const isReviewWorkflowSave = isReviewWorkflowMeasurementsSaveTarget(saveTarget);
+
+          const writableWorkflow = getWritableReviewMeasurementWorkflow(saveTarget);
+
+          if (isReviewWorkflowSave && !writableWorkflow) {
+            throw new Error('Measurements are read-only for this coaching review.');
+          }
+
           let activeSeriesDoc = null;
 
           if (isLearnerCopyOnSaveTarget(saveTarget)) {
@@ -5781,7 +6692,9 @@ function commandsModule({
           ) {
             rememberArLearnerSeriesId(seriesDoc._id);
           }
+
           const domain = inferDomainFromSeriesDoc(seriesDoc, explicitDomain);
+
           const normalizedScoringIntent = String(scoringIntent || educationAttemptIntent || '')
             .trim()
             .toLowerCase()
@@ -5794,28 +6707,69 @@ function commandsModule({
             'submit-for-score',
             'submitted-for-score',
           ].includes(normalizedScoringIntent);
+
           const measurements = measurementService.getMeasurements?.() || [];
-          const existingById = getExistingViewerAnnotationsById(seriesDoc);
+
+          const targetWorkflow = writableWorkflow || VIEWER_MEASUREMENTS_WORKFLOW;
+
+          const existingById = getExistingAnnotationsById(seriesDoc, targetWorkflow);
+
+          const blockedMeasurementIds = isReviewWorkflowSave
+            ? getBlockedReviewMeasurementIds({
+                seriesDoc,
+                saveTarget,
+              })
+            : new Set();
+
+          const writableExistingMeasurementIds = isReviewWorkflowSave
+            ? getWritableExistingReviewMeasurementIds({
+                seriesDoc,
+                saveTarget,
+              })
+            : new Set();
+
           const existingScorableAnnotations = getExistingScorableViewerAnnotations(
             seriesDoc,
             domain
           );
 
+          const reviewRound = isReviewWorkflowSave
+            ? getCurrentReviewMeasurementRound(seriesDoc)
+            : 0;
+
           let annotations = measurements
-            .filter(
-              measurement =>
+            .filter(measurement => {
+              const measurementId = getMeasurementAnnotationId(measurement);
+
+              return (
                 measurement?.toolName &&
-                (measurement?.label || measurement?.measurementRole || measurement?.role)
-            )
+                (measurement?.label || measurement?.measurementRole || measurement?.role) &&
+                (!isReviewWorkflowSave ||
+                  (!!measurementId &&
+                    !blockedMeasurementIds.has(measurementId) &&
+                    (writableExistingMeasurementIds.has(measurementId) ||
+                      viewerMeasurementsCreatedInSession.has(measurementId))))
+              );
+            })
             .map(measurement =>
               serializeViewerMeasurement(measurement, domain, existingById.get(measurement.uid), {
                 displaySetService,
+                workflow: targetWorkflow,
               })
+            )
+            .map(annotation =>
+              isReviewWorkflowSave
+                ? {
+                    ...annotation,
+                    reviewRound,
+                  }
+                : annotation
             )
             .filter(annotation => annotation.referencedImageId || annotation.points?.length);
 
           if (
             annotations.length === 0 &&
+            !isReviewWorkflowSave &&
             shouldSubmitForScore &&
             existingScorableAnnotations.length > 0
           ) {
@@ -5831,70 +6785,139 @@ function commandsModule({
               type: 'warning',
               duration: 3000,
             });
+
             return null;
           }
 
           const savedAnnotationIds = new Set(
             annotations.map(annotation => annotation.annotationId || annotation.uid).filter(Boolean)
           );
-          const payload = {
-            accessType: 'update',
-            MeasurementAnnotations: upsertViewerMeasurementAnnotations({
-              existingRaw: seriesDoc.MeasurementAnnotations,
-              source: 'ar-measurements-panel',
-              annotations,
-              replaceFilter: existing => {
-                if (existing?.mode === 'repeated') {
-                  return false;
-                }
 
-                const existingDomainMatches =
-                  existing?.domain === domain ||
-                  (domain !== 'generic' && existing?.domain === 'generic');
+          let savedSeriesDoc = seriesDoc;
+          let refreshedAnnotations = annotations;
 
-                if (!existingDomainMatches) {
-                  return false;
-                }
+          if (isReviewWorkflowSave) {
+            const workflowType = encodeURIComponent(saveTarget.reviewWorkflowType);
 
-                const existingId = existing?.annotationId || existing?.uid;
+            const response = await fetch(
+              buildFormApiUrl(
+                `series/review-workflows/${encodeURIComponent(
+                  seriesDoc._id
+                )}/viewer-measurements?workflowType=${workflowType}`
+              ),
+              {
+                method: 'PUT',
+                headers: {
+                  'Content-Type': 'application/json',
+                },
+                credentials: 'include',
+                body: JSON.stringify({
+                  measurementWorkflowRole: normalizeReviewMeasurementRole(
+                    saveTarget.measurementWorkflowRole
+                  ),
+                  annotations,
+                }),
+              }
+            );
 
-                return !!existingId && savedAnnotationIds.has(existingId);
+            if (!response.ok) {
+              const message = await getResponseErrorMessage(
+                response,
+                `Save failed: ${response.status}`
+              );
+
+              throw new Error(message);
+            }
+
+            const result = await response.json();
+
+            savedSeriesDoc = result?.seriesDoc || result?.item || seriesDoc;
+
+            refreshedAnnotations = decorateReviewWorkflowAnnotations({
+              annotations: getRequestedWorkflowAnnotations(savedSeriesDoc.MeasurementAnnotations, [
+                VIEWER_MEASUREMENTS_WORKFLOW,
+                REVIEWER_MEASUREMENTS_WORKFLOW,
+              ]).filter(annotation => {
+                const annotationDomain = annotation?.domain || 'generic';
+
+                return (
+                  annotationDomain === domain ||
+                  (domain !== 'generic' && annotationDomain === 'generic')
+                );
+              }),
+              seriesDoc: savedSeriesDoc,
+              saveTarget,
+            });
+          } else {
+            const payload = {
+              accessType: 'update',
+
+              MeasurementAnnotations: upsertViewerMeasurementAnnotations({
+                existingRaw: seriesDoc.MeasurementAnnotations,
+                source: 'ar-measurements-panel',
+                annotations,
+                replaceFilter: existing => {
+                  if (existing?.mode === 'repeated') {
+                    return false;
+                  }
+
+                  const existingDomainMatches =
+                    existing?.domain === domain ||
+                    (domain !== 'generic' && existing?.domain === 'generic');
+
+                  if (!existingDomainMatches) {
+                    return false;
+                  }
+
+                  const existingId = existing?.annotationId || existing?.uid;
+
+                  return !!existingId && savedAnnotationIds.has(existingId);
+                },
+              }),
+
+              scoringIntent: shouldSubmitForScore ? 'score-attempt' : 'draft',
+
+              educationAttemptIntent: shouldSubmitForScore ? 'score-attempt' : 'draft',
+            };
+
+            const response = await fetch(buildFormApiUrl(`series/${seriesDoc._id}`), {
+              method: 'PUT',
+              headers: {
+                'Content-Type': 'application/json',
               },
-            }),
-            scoringIntent: shouldSubmitForScore ? 'score-attempt' : 'draft',
-            educationAttemptIntent: shouldSubmitForScore ? 'score-attempt' : 'draft',
-          };
-          const response = await fetch(buildFormApiUrl(`series/${seriesDoc._id}`), {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            credentials: 'include',
-            body: JSON.stringify(payload),
-          });
+              credentials: 'include',
+              body: JSON.stringify(payload),
+            });
 
-          if (!response.ok) {
-            throw new Error(`Save failed: ${response.status}`);
+            if (!response.ok) {
+              throw new Error(`Save failed: ${response.status}`);
+            }
           }
 
           dispatchSavedAnnotationsRefresh({
-            seriesDoc,
-            saveTarget: getArViewerSaveTargetFromUrl(),
+            seriesDoc: savedSeriesDoc,
+            saveTarget,
             domain,
-            annotations,
-            processedAnnotations: annotations,
+            annotations: refreshedAnnotations,
+            processedAnnotations: refreshedAnnotations,
           });
 
           uiNotificationService.show({
             title: 'AR Measurements',
-            message: shouldSubmitForScore
-              ? 'Viewer measurements saved and submitted for scoring.'
-              : 'Viewer measurements saved.',
+            message: isReviewWorkflowSave
+              ? normalizeReviewMeasurementRole(saveTarget.measurementWorkflowRole) === 'educator'
+                ? 'Coach measurements saved.'
+                : 'Learner measurements saved.'
+              : shouldSubmitForScore
+                ? 'Viewer measurements saved and submitted for scoring.'
+                : 'Viewer measurements saved.',
             type: 'success',
             duration: 3000,
           });
 
           return {
-            seriesDoc,
-            annotations,
+            seriesDoc: savedSeriesDoc,
+            annotations: refreshedAnnotations,
           };
         } catch (error) {
           console.error(

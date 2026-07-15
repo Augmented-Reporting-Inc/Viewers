@@ -437,6 +437,193 @@ function getQuizScoreItem(viewerQuizScore: any, quiz: QuizDefinition) {
   );
 }
 
+function getQuizScoreQuestionItem(quizScore: any, questionKey = '') {
+  const items = Array.isArray(quizScore?.items) ? quizScore.items : [];
+  const key = cleanString(questionKey);
+
+  return items.find(item => cleanString(item?.questionKey || item?.id) === key) || null;
+}
+
+function formatReviewNumber(value: any, decimalPlaces = 0): string {
+  if (value === null || typeof value === 'undefined' || value === '') {
+    return 'Unavailable';
+  }
+
+  const numericValue = Number(value);
+
+  if (!Number.isFinite(numericValue)) {
+    return 'Unavailable';
+  }
+
+  return decimalPlaces > 0 ? numericValue.toFixed(decimalPlaces) : String(numericValue);
+}
+
+function getQuestionChoiceLabel(question: QuizQuestion, value: any) {
+  const normalized = normalizeChoiceValue(value);
+  const choice = getQuestionChoices(question).find(
+    item => normalizeChoiceValue(item.value) === normalized
+  );
+
+  return cleanString(choice?.label || choice?.value || value);
+}
+
+function formatReviewAnswer(question: QuizQuestion, value: any): string {
+  if (value === null || typeof value === 'undefined' || value === '') {
+    return 'No answer';
+  }
+
+  if (question.type === 'true_false') {
+    return normalizeChoiceValue(value) === 'TRUE' ? 'True' : 'False';
+  }
+
+  if (question.type === 'single_choice') {
+    return getQuestionChoiceLabel(question, value) || cleanString(value);
+  }
+
+  if (question.type === 'multi_select') {
+    const values = Array.isArray(value) ? value : [value];
+    return values
+      .map(item => getQuestionChoiceLabel(question, item))
+      .filter(Boolean)
+      .join(', ');
+  }
+
+  if (question.type === 'frameSelection') {
+    const target = plainObject(value?.selectedTarget || value?.viewerTarget || value);
+    return targetHasNavigationIdentity(target)
+      ? getViewerTargetSummary(target)
+      : 'No frame selected';
+  }
+
+  if (isMarkerChoiceQuestionType(question)) {
+    const markerIds = normalizeMarkerIdList(value);
+    const labelsById = new Map(
+      normalizeMarkerOptions(getMarkerOptions(question)).map(marker => [
+        cleanString(marker.markerId || marker.markerKey || marker.value),
+        cleanString(marker.label || marker.markerId || marker.markerKey || marker.value),
+      ])
+    );
+
+    return (
+      markerIds.map(markerId => labelsById.get(markerId) || markerId).join(', ') ||
+      'No markers selected'
+    );
+  }
+
+  if (isPlaceMarkerQuestionType(question)) {
+    const source = plainObject(value?.point || value?.placedMarker?.point || value);
+    return hasPointCoordinates(source)
+      ? `${formatQuizCoordinate(source.x)}, ${formatQuizCoordinate(source.y)}`
+      : 'No marker placed';
+  }
+
+  if (question.type === 'measurementNumeric') {
+    const source = plainObject(value);
+    const numericValue = source.value ?? value;
+    const unit = cleanString(source.unit || question?.answerConfig?.unit);
+    const rangeParts = [
+      source.acceptedMin !== null && typeof source.acceptedMin !== 'undefined'
+        ? `minimum ${source.acceptedMin}`
+        : '',
+      source.acceptedMax !== null && typeof source.acceptedMax !== 'undefined'
+        ? `maximum ${source.acceptedMax}`
+        : '',
+    ].filter(Boolean);
+
+    if (rangeParts.length) {
+      return `${rangeParts.join(', ')}${unit ? ` ${unit}` : ''}`;
+    }
+
+    return `${numericValue}${unit ? ` ${unit}` : ''}`;
+  }
+
+  if (Array.isArray(value)) {
+    return value
+      .map(item => cleanString(item))
+      .filter(Boolean)
+      .join(', ');
+  }
+
+  if (value && typeof value === 'object') {
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return String(value);
+    }
+  }
+
+  return String(value);
+}
+
+function getReviewAnswerTarget(question: QuizQuestion, value: any) {
+  if (question.type === 'frameSelection') {
+    const target = plainObject(value?.selectedTarget || value?.viewerTarget || value);
+    return targetHasNavigationIdentity(target) ? target : null;
+  }
+
+  return getAnswerViewerTarget(value);
+}
+
+function getCorrectReviewTarget(question: QuizQuestion, scoreItem: any) {
+  if (scoreItem?.correctAnswerVisible !== true) {
+    return null;
+  }
+
+  if (question.type === 'frameSelection') {
+    const correctTarget = plainObject(scoreItem?.correctAnswer);
+    if (targetHasNavigationIdentity(correctTarget)) {
+      return correctTarget;
+    }
+  }
+
+  if (isMarkerChoiceQuestionType(question)) {
+    return null;
+  }
+
+  if (isPlaceMarkerQuestionType(question)) {
+    const goldPoint = plainObject(question?.answerConfig?.goldPoint);
+    const pointTarget = plainObject(goldPoint.viewerTarget || goldPoint.selectedTarget);
+    if (targetHasNavigationIdentity(pointTarget)) {
+      return pointTarget;
+    }
+  }
+
+  return getQuestionViewerTarget(question);
+}
+
+function getMarkerReviewOverlayOptions(question: QuizQuestion, learnerAnswer: any, scoreItem: any) {
+  const selectedMarkerIds = new Set(normalizeMarkerIdList(learnerAnswer));
+  const correctMarkerIds = new Set(
+    scoreItem?.correctAnswerVisible === true ? normalizeMarkerIdList(scoreItem?.correctAnswer) : []
+  );
+
+  return normalizeMarkerOptions(getMarkerOptions(question))
+    .filter(isMarkerOptionPlaced)
+    .map(marker => {
+      const markerId = cleanString(marker.markerId || marker.markerKey || marker.value);
+      const selected = selectedMarkerIds.has(markerId);
+      const correct = correctMarkerIds.has(markerId);
+      let reviewState = 'neutral';
+
+      if (scoreItem?.correctAnswerVisible === true) {
+        if (selected && correct) {
+          reviewState = 'correct';
+        } else if (selected) {
+          reviewState = 'incorrect';
+        } else if (correct) {
+          reviewState = 'missed';
+        }
+      } else if (selected) {
+        reviewState = 'learner';
+      }
+
+      return {
+        ...marker,
+        reviewState,
+      };
+    });
+}
+
 function getDefinitionId(definition: any): string {
   return cleanString(definition?._id || definition?.id);
 }
@@ -764,7 +951,12 @@ function getOverlayMarkerOptionsForQuestion(
   const includeGoldMarker = options.includeGoldMarker === true;
 
   if (isMarkerChoiceQuestionType(question)) {
-    return normalizeMarkerOptions(answerConfig.markerOptions).filter(isMarkerOptionPlaced);
+    return normalizeMarkerOptions(answerConfig.markerOptions)
+      .filter(isMarkerOptionPlaced)
+      .map(marker => ({
+        ...marker,
+        reviewState: 'neutral',
+      }));
   }
 
   if (isPlaceMarkerQuestionType(question)) {
@@ -787,6 +979,7 @@ function getOverlayMarkerOptionsForQuestion(
         point: goldPoint,
         coordinateSpace: goldPoint.coordinateSpace || 'world',
         viewerTarget: goldPoint.viewerTarget || viewerTarget,
+        reviewState: 'gold',
       },
     ];
   }
@@ -998,7 +1191,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     });
   }
 
-  function getPlacedAnswerMarkerOptions(value: any) {
+  function getPlacedAnswerMarkerOptions(value: any, reviewState = 'learner') {
     const answer = plainObject(value);
     const placedMarker = plainObject(answer.placedMarker || answer);
     const point = roundQuizPoint(plainObject(placedMarker.point || answer.point));
@@ -1017,14 +1210,73 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         coordinateSpace: point.coordinateSpace || 'world',
         viewerTarget:
           placedMarker.viewerTarget || answer.viewerTarget || answer.selectedTarget || {},
+        reviewState,
       },
     ];
+  }
+
+  function getGoldReviewMarkerOptions(question: QuizQuestion, scoreItem: any) {
+    if (scoreItem?.correctAnswerVisible !== true || !isPlaceMarkerQuestionType(question)) {
+      return [];
+    }
+
+    const correctAnswer = plainObject(scoreItem.correctAnswer);
+    const configuredGoldPoint = plainObject(question?.answerConfig?.goldPoint);
+    const point = roundQuizPoint(
+      hasPointCoordinates(correctAnswer) ? correctAnswer : configuredGoldPoint
+    );
+
+    if (!hasPointCoordinates(point)) {
+      return [];
+    }
+
+    return [
+      {
+        markerId: 'gold-answer-marker',
+        markerKey: 'gold-answer-marker',
+        value: 'gold-answer-marker',
+        label: 'Correct answer',
+        point,
+        coordinateSpace: point.coordinateSpace || 'world',
+        viewerTarget:
+          configuredGoldPoint.viewerTarget || getCorrectReviewTarget(question, scoreItem) || {},
+        reviewState: 'gold',
+      },
+    ];
+  }
+
+  function getQuestionOverlayMarkerOptions(
+    quiz: QuizDefinition,
+    question: QuizQuestion,
+    questionAnswer: any
+  ) {
+    if (authoringMode) {
+      return getOverlayMarkerOptionsForQuestion(question, {
+        includeGoldMarker: true,
+      });
+    }
+
+    const quizScore = viewerQuizScore ? getQuizScoreItem(viewerQuizScore, quiz) : null;
+    const scoreItem = getQuizScoreQuestionItem(quizScore, question.questionKey);
+
+    if (scoreItem && isMarkerChoiceQuestionType(question)) {
+      return getMarkerReviewOverlayOptions(question, questionAnswer, scoreItem);
+    }
+
+    if (isPlaceMarkerQuestionType(question)) {
+      return [
+        ...getPlacedAnswerMarkerOptions(questionAnswer),
+        ...getGoldReviewMarkerOptions(question, scoreItem),
+      ];
+    }
+
+    return getOverlayMarkerOptionsForQuestion(question);
   }
 
   async function selectQuestion(
     quiz: QuizDefinition,
     question: QuizQuestion,
-    options: { force?: boolean } = {}
+    options: { force?: boolean; viewerTarget?: any; markerOptions?: any[] } = {}
   ) {
     const nextActiveQuestionKey = `${quiz.quizKey}:${question.questionKey}`;
 
@@ -1038,19 +1290,20 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
 
     setActiveQuestionKey(nextActiveQuestionKey);
 
-    const viewerTarget = getQuestionViewerTarget(question);
+    const questionAnswer = answersByQuizKey?.[quiz.quizKey]?.[question.questionKey];
+    const quizScore = viewerQuizScore ? getQuizScoreItem(viewerQuizScore, quiz) : null;
+    const scoreItem = getQuizScoreQuestionItem(quizScore, question.questionKey);
+    const hasViewerTargetOverride = Object.prototype.hasOwnProperty.call(options, 'viewerTarget');
+    const viewerTarget = hasViewerTargetOverride
+      ? options.viewerTarget
+      : scoreItem
+        ? getReviewAnswerTarget(question, questionAnswer) || getQuestionViewerTarget(question)
+        : getQuestionViewerTarget(question);
+    const overlayMarkers = Array.isArray(options.markerOptions)
+      ? options.markerOptions
+      : getQuestionOverlayMarkerOptions(quiz, question, questionAnswer);
 
     if (!viewerTarget) {
-      const questionAnswer = answersByQuizKey?.[quiz.quizKey]?.[question.questionKey];
-      const overlayMarkers = [
-        ...getOverlayMarkerOptionsForQuestion(question, {
-          includeGoldMarker: authoringMode,
-        }),
-        ...(!authoringMode && isPlaceMarkerQuestionType(question)
-          ? getPlacedAnswerMarkerOptions(questionAnswer)
-          : []),
-      ];
-
       if (overlayMarkers.length) {
         await runViewerCommand(commandsManager, 'showViewerQuizMarkerOptions', {
           viewerTarget: null,
@@ -1076,19 +1329,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         });
       }
 
-      const questionAnswer = answersByQuizKey?.[quiz.quizKey]?.[question.questionKey];
-      const overlayMarkers = [
-        ...getOverlayMarkerOptionsForQuestion(question, {
-          includeGoldMarker: authoringMode,
-        }),
-        ...(!authoringMode && isPlaceMarkerQuestionType(question)
-          ? getPlacedAnswerMarkerOptions(questionAnswer)
-          : []),
-      ];
-
       if (overlayMarkers.length) {
         await runViewerCommand(commandsManager, 'showViewerQuizMarkerOptions', {
-          viewerTarget,
+          viewerTarget: null,
           markerOptions: overlayMarkers,
           questionKey: question.questionKey,
         });
@@ -2123,6 +2366,153 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     );
   }
 
+  function renderQuestionReview(quiz: QuizDefinition, question: QuizQuestion, quizScore: any) {
+    const scoreItem = getQuizScoreQuestionItem(quizScore, question.questionKey);
+
+    if (!scoreItem) {
+      return null;
+    }
+
+    const learnerAnswer =
+      scoreItem.learnerResponse !== undefined
+        ? scoreItem.learnerResponse
+        : answersByQuizKey?.[quiz.quizKey]?.[question.questionKey];
+    const correctAnswerVisible = scoreItem.correctAnswerVisible === true;
+    const learnerTarget = getReviewAnswerTarget(question, learnerAnswer);
+    const correctTarget = getCorrectReviewTarget(question, scoreItem);
+    const comparisonMarkers = getQuestionOverlayMarkerOptions(
+      quiz,
+      question,
+      answersByQuizKey?.[quiz.quizKey]?.[question.questionKey]
+    );
+    const status = cleanString(scoreItem.status).toLowerCase();
+    const correct = status === 'met' || status === 'correct';
+    const reviewDetails = plainObject(scoreItem.reviewDetails);
+    const canShowComparison =
+      (isMarkerChoiceQuestionType(question) || isPlaceMarkerQuestionType(question)) &&
+      comparisonMarkers.length > 0;
+
+    return (
+      <div
+        className={`mt-3 rounded border p-2 text-xs ${
+          correct
+            ? 'bg-green-950/30 border-green-700 text-green-100'
+            : 'bg-red-950/30 border-red-800 text-red-100'
+        }`}
+      >
+        <div className="flex items-center justify-between gap-2">
+          <div className="font-semibold">{correct ? 'Correct' : 'Needs review'}</div>
+          <div>
+            {Number(scoreItem.pointsAwarded || 0)} / {Number(scoreItem.pointsPossible || 0)}
+          </div>
+        </div>
+
+        <div className="mt-2">
+          <span className="font-semibold">Your answer:</span>{' '}
+          {formatReviewAnswer(question, learnerAnswer)}
+        </div>
+
+        {correctAnswerVisible ? (
+          <div className="mt-1">
+            <span className="font-semibold">Correct answer:</span>{' '}
+            {formatReviewAnswer(question, scoreItem.correctAnswer)}
+          </div>
+        ) : null}
+
+        {reviewDetails.mode === 'frameSelection' ? (
+          <div className="mt-1 text-gray-300">
+            Frame difference: {formatReviewNumber(reviewDetails.frameDelta)}; accepted tolerance:{' '}
+            {formatReviewNumber(reviewDetails.toleranceFrames)} frame(s).
+          </div>
+        ) : null}
+
+        {reviewDetails.mode === 'placeMarker' ? (
+          <div className="mt-1 text-gray-300">
+            Distance from correct marker: {formatReviewNumber(reviewDetails.distance, 2)}{' '}
+            {cleanString(reviewDetails.radiusUnit)}; accepted radius:{' '}
+            {formatReviewNumber(reviewDetails.radius, 2)} {cleanString(reviewDetails.radiusUnit)}.
+          </div>
+        ) : null}
+
+        {isMarkerChoiceQuestionType(question) && correctAnswerVisible ? (
+          <div className="mt-2 text-gray-300">
+            Green = correctly selected; red = incorrectly selected; dashed amber = missed correct
+            marker.
+          </div>
+        ) : null}
+
+        {scoreItem.feedback ? (
+          <div className="mt-2 rounded border border-gray-700 bg-black/30 p-2 text-gray-200">
+            {scoreItem.feedback}
+          </div>
+        ) : null}
+
+        {learnerTarget || correctTarget || canShowComparison ? (
+          <div className="mt-2 flex flex-wrap gap-2">
+            {learnerTarget ? (
+              <button
+                type="button"
+                className="hover:bg-blue-950 rounded border border-blue-500 px-2 py-1 font-semibold text-blue-100"
+                onClick={event => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  selectQuestion(quiz, question, {
+                    force: true,
+                    viewerTarget: learnerTarget,
+                    markerOptions: isPlaceMarkerQuestionType(question)
+                      ? getPlacedAnswerMarkerOptions(
+                          answersByQuizKey?.[quiz.quizKey]?.[question.questionKey]
+                        )
+                      : [],
+                  });
+                }}
+              >
+                Show your answer
+              </button>
+            ) : null}
+
+            {correctTarget ? (
+              <button
+                type="button"
+                className="hover:bg-purple-950 rounded border border-purple-500 px-2 py-1 font-semibold text-purple-100"
+                onClick={event => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  selectQuestion(quiz, question, {
+                    force: true,
+                    viewerTarget: correctTarget,
+                    markerOptions: getGoldReviewMarkerOptions(question, scoreItem),
+                  });
+                }}
+              >
+                Show correct answer
+              </button>
+            ) : null}
+
+            {canShowComparison ? (
+              <button
+                type="button"
+                className="rounded border border-gray-500 px-2 py-1 font-semibold text-gray-100 hover:bg-gray-800"
+                onClick={event => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  selectQuestion(quiz, question, {
+                    force: true,
+                    viewerTarget:
+                      learnerTarget || correctTarget || getQuestionViewerTarget(question),
+                    markerOptions: comparisonMarkers,
+                  });
+                }}
+              >
+                Show answer comparison
+              </button>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
+    );
+  }
+
   function renderAuthoringQuestion(question: QuizQuestion, index: number) {
     const answerConfig = plainObject(question.answerConfig);
     const markerOptions = normalizeMarkerOptions(answerConfig.markerOptions);
@@ -2627,6 +3017,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                           ) : null}
 
                           {renderQuestion(quiz, question, submitted)}
+                          {renderQuestionReview(quiz, question, quizScore)}
                         </div>
                       );
                     })}

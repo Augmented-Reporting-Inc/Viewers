@@ -1,7 +1,24 @@
 export const VIEWER_MEASUREMENTS_WORKFLOW = 'viewerMeasurements';
+export const REVIEWER_MEASUREMENTS_WORKFLOW = 'reviewerMeasurements';
+
+export const VIEWER_MEASUREMENT_WORKFLOWS = Object.freeze([
+  VIEWER_MEASUREMENTS_WORKFLOW,
+  REVIEWER_MEASUREMENTS_WORKFLOW,
+]);
+
+export type ViewerMeasurementWorkflow =
+  | typeof VIEWER_MEASUREMENTS_WORKFLOW
+  | typeof REVIEWER_MEASUREMENTS_WORKFLOW;
 
 export type ViewerMeasurementDomain = 'echo' | 'bowel' | 'iuscan' | 'generic';
+
 export type ViewerMeasurementMode = 'single' | 'repeated';
+
+export function isViewerMeasurementWorkflow(
+  workflow: unknown
+): workflow is ViewerMeasurementWorkflow {
+  return VIEWER_MEASUREMENT_WORKFLOWS.includes(String(workflow || '') as ViewerMeasurementWorkflow);
+}
 
 export function parseMeasurementAnnotations(raw: unknown) {
   if (!raw) {
@@ -81,8 +98,9 @@ function getAnnotationKey(annotation: any) {
   );
 }
 
-export function upsertViewerMeasurementAnnotations({
+export function upsertMeasurementWorkflowAnnotations({
   existingRaw,
+  workflow = VIEWER_MEASUREMENTS_WORKFLOW,
   source,
   annotations,
   replaceDomains = [],
@@ -90,15 +108,20 @@ export function upsertViewerMeasurementAnnotations({
   extra = {},
 }: {
   existingRaw?: unknown;
+  workflow?: ViewerMeasurementWorkflow;
   source: string;
   annotations: any[];
   replaceDomains?: string[];
   replaceFilter?: (annotation: any) => boolean;
   extra?: Record<string, unknown>;
 }) {
+  if (!isViewerMeasurementWorkflow(workflow)) {
+    throw new Error(`Unsupported measurement workflow: ${String(workflow || '')}`);
+  }
+
   const existing = parseMeasurementAnnotations(existingRaw);
   const workflows = existing.workflows || {};
-  const currentWorkflow = workflows[VIEWER_MEASUREMENTS_WORKFLOW] || {};
+  const currentWorkflow = workflows[workflow] || {};
 
   const currentAnnotations = Array.isArray(currentWorkflow.annotations)
     ? currentWorkflow.annotations
@@ -120,7 +143,7 @@ export function upsertViewerMeasurementAnnotations({
   for (const annotation of annotations || []) {
     mergedByKey.set(getAnnotationKey(annotation), {
       ...annotation,
-      workflow: VIEWER_MEASUREMENTS_WORKFLOW,
+      workflow,
     });
   }
 
@@ -128,7 +151,7 @@ export function upsertViewerMeasurementAnnotations({
     version: existing.version || 1,
     workflows: {
       ...workflows,
-      [VIEWER_MEASUREMENTS_WORKFLOW]: {
+      [workflow]: {
         ...currentWorkflow,
         source,
         savedAt: new Date().toISOString(),
@@ -136,5 +159,14 @@ export function upsertViewerMeasurementAnnotations({
         ...extra,
       },
     },
+  });
+}
+
+export function upsertViewerMeasurementAnnotations(
+  options: Omit<Parameters<typeof upsertMeasurementWorkflowAnnotations>[0], 'workflow'>
+) {
+  return upsertMeasurementWorkflowAnnotations({
+    ...options,
+    workflow: VIEWER_MEASUREMENTS_WORKFLOW,
   });
 }

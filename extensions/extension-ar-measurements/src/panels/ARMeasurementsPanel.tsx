@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { calculateLVSimpson, LV_SIMPSON_SLOT_ORDER } from '../utils/lvSimpson';
 
 function getMeasurementLabel(measurement) {
   return (
@@ -197,17 +198,26 @@ function normalizeDisplayAreaUnit(unit = '') {
   return /px/i.test(String(unit || '')) ? 'mm²' : unit || 'mm²';
 }
 
+function stripMeasurementSourceSuffix(text = '') {
+  return String(text || '')
+    .replace(/\s+\bUS Region\b/gi, '')
+    .replace(/\s+\bAR_US_REGION_CALIBRATION\b/gi, '')
+    .trim();
+}
+
 function normalizeDisplayTextUnits(displayText = [], unitType = 'length') {
   const nextUnit = unitType === 'area' ? 'mm²' : 'mm';
 
   return flattenDisplayText(displayText, unitType)
     .filter(Boolean)
     .map(text =>
-      String(text)
-        .replace(/\bpx²\b/gi, nextUnit)
-        .replace(/\bpx\^2\b/gi, nextUnit)
-        .replace(/\bpx2\b/gi, nextUnit)
-        .replace(/\bpx\b/gi, nextUnit)
+      stripMeasurementSourceSuffix(
+        String(text)
+          .replace(/\bpx²\b/gi, nextUnit)
+          .replace(/\bpx\^2\b/gi, nextUnit)
+          .replace(/\bpx2\b/gi, nextUnit)
+          .replace(/\bpx\b/gi, nextUnit)
+      )
     );
 }
 
@@ -293,20 +303,113 @@ function getMeasurementSubtitle(measurement) {
   const parts = [measurement?.toolName];
 
   const frameNumber = getFrameNumber(measurement);
+
   if (frameNumber) {
     parts.push(`Frame ${frameNumber}`);
+  }
+
+  if (measurement?.measurementOwner === 'coach') {
+    parts.unshift('Coach');
+  } else if (measurement?.measurementOwner === 'learner') {
+    parts.unshift('Learner');
+  }
+
+  if (Number(measurement?.reviewRound) > 0) {
+    parts.push(`Round ${Number(measurement.reviewRound)}`);
   }
 
   if (measurement?.isSavedAnnotation) {
     parts.push('saved');
   }
 
+  if (measurement?.isLocked === true) {
+    parts.push('read-only');
+  }
+
   const shortId = getShortId(measurement);
+
   if (shortId) {
     parts.push(shortId);
   }
 
   return parts.filter(Boolean).join(' • ');
+}
+
+function formatSimpsonValue(value, digits = 1) {
+  return Number.isFinite(Number(value)) ? Number(value).toFixed(digits) : '';
+}
+
+function LVSimpsonSummary({ result }) {
+  if (!result) {
+    return null;
+  }
+
+  const values = result.values;
+  const isComplete = result.status === 'complete';
+
+  return (
+    <div className="bg-gray-950 mb-3 rounded border border-gray-700 p-3">
+      <div className="flex items-start justify-between gap-2">
+        <div>
+          <div className="text-sm font-semibold">LV Simpson Biplane</div>
+          <div className="mt-1 text-xs text-gray-400">{result.method}</div>
+        </div>
+        <div
+          className={`rounded px-2 py-1 text-xs font-semibold ${
+            isComplete ? 'bg-green-900 text-green-100' : 'bg-yellow-900 text-yellow-100'
+          }`}
+        >
+          {result.status}
+        </div>
+      </div>
+
+      {values ? (
+        <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
+          <div className="rounded bg-black p-2">
+            <div className="text-xs text-gray-400">EDV</div>
+            <div className="font-semibold">{formatSimpsonValue(values.edvML)} mL</div>
+          </div>
+          <div className="rounded bg-black p-2">
+            <div className="text-xs text-gray-400">ESV</div>
+            <div className="font-semibold">{formatSimpsonValue(values.esvML)} mL</div>
+          </div>
+          <div className="rounded bg-black p-2">
+            <div className="text-xs text-gray-400">SV</div>
+            <div className="font-semibold">{formatSimpsonValue(values.strokeVolumeML)} mL</div>
+          </div>
+          <div className="rounded bg-black p-2">
+            <div className="text-xs text-gray-400">EF</div>
+            <div className="font-semibold">{formatSimpsonValue(values.ejectionFraction, 0)}%</div>
+          </div>
+        </div>
+      ) : null}
+
+      <div className="mt-3 space-y-1">
+        {LV_SIMPSON_SLOT_ORDER.map(slot => {
+          const slotResult = result.slots?.[slot];
+
+          return (
+            <div key={slot} className="flex justify-between gap-2 text-xs">
+              <span className="text-gray-300">{slot.replace('_', ' ')}</span>
+              <span className={slotResult?.complete ? 'text-green-300' : 'text-yellow-300'}>
+                {slotResult?.complete
+                  ? `complete • axis ${formatSimpsonValue(slotResult.longAxisLengthMM)} mm`
+                  : 'missing/incomplete'}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+
+      {result.messages?.length ? (
+        <div className="mt-3 space-y-1 text-xs text-yellow-200">
+          {result.messages.slice(0, 6).map(message => (
+            <div key={message}>• {message}</div>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 function getViewerUrlSearchParams() {
@@ -341,17 +444,23 @@ function getArViewerSaveTargetFromUrl() {
     return {
       mode: String(qs.get('arSaveTarget') || '').trim(),
       baseSeriesId: String(qs.get('arBaseSeriesId') || '').trim(),
+      seriesId: String(qs.get('arSeriesId') || '').trim(),
       learnerSeriesId: String(qs.get('arLearnerSeriesId') || '').trim(),
       launchSource: String(qs.get('arLaunchSource') || '').trim(),
       measurementWorkflowRole: String(qs.get('arMeasurementWorkflowRole') || '').trim(),
+      reviewWorkflowType: String(qs.get('arReviewWorkflowType') || '').trim(),
+      measurementAccess: String(qs.get('arMeasurementAccess') || '').trim(),
     };
   } catch {
     return {
       mode: '',
       baseSeriesId: '',
+      seriesId: '',
       learnerSeriesId: '',
       launchSource: '',
       measurementWorkflowRole: '',
+      reviewWorkflowType: '',
+      measurementAccess: '',
     };
   }
 }
@@ -418,9 +527,64 @@ function getArLearnerSeriesIdFromUrl() {
   return getArViewerSaveTargetFromUrl().learnerSeriesId;
 }
 
+const REVIEW_WORKFLOW_MEASUREMENTS_SAVE_TARGET = 'reviewWorkflowMeasurements';
+
+const VIEWER_MEASUREMENTS_WORKFLOW = 'viewerMeasurements';
+
+const REVIEWER_MEASUREMENTS_WORKFLOW = 'reviewerMeasurements';
+
+function isReviewWorkflowMeasurementsTarget(saveTarget: any = {}) {
+  return (
+    saveTarget.mode === REVIEW_WORKFLOW_MEASUREMENTS_SAVE_TARGET &&
+    !!saveTarget.seriesId &&
+    isLibraryLaunchSource(saveTarget.launchSource)
+  );
+}
+
+function getWritableMeasurementWorkflow(saveTarget: any = {}) {
+  if (
+    !isReviewWorkflowMeasurementsTarget(saveTarget) ||
+    String(saveTarget.measurementAccess || '')
+      .trim()
+      .toLowerCase() !== 'edit'
+  ) {
+    return '';
+  }
+
+  return String(saveTarget.measurementWorkflowRole || '')
+    .trim()
+    .toLowerCase() === 'educator'
+    ? REVIEWER_MEASUREMENTS_WORKFLOW
+    : VIEWER_MEASUREMENTS_WORKFLOW;
+}
+
+function isMeasurementEditable(measurement: any, saveTarget: any) {
+  if (!isReviewWorkflowMeasurementsTarget(saveTarget)) {
+    return true;
+  }
+
+  const writableWorkflow = getWritableMeasurementWorkflow(saveTarget);
+
+  if (!writableWorkflow) {
+    return false;
+  }
+
+  const workflow = String(measurement?.workflow || '').trim();
+
+  if (!workflow) {
+    return true;
+  }
+
+  return workflow === writableWorkflow && measurement?.isLocked !== true;
+}
+
 export default function ARMeasurementsPanel({ servicesManager, commandsManager }) {
   const { measurementService, uiNotificationService } = servicesManager.services;
+  const saveTarget = useMemo(getArViewerSaveTargetFromUrl, []);
 
+  const isReviewWorkflow = isReviewWorkflowMeasurementsTarget(saveTarget);
+
+  const isReviewWorkflowReadOnly = isReviewWorkflow && !getWritableMeasurementWorkflow(saveTarget);
   const [measurements, setMeasurements] = useState(
     () => measurementService.getMeasurements?.() || []
   );
@@ -551,6 +715,7 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
 
     for (const annotation of savedAnnotations) {
       const key = getMeasurementKey(annotation);
+
       if (key) {
         byKey.set(key, annotation);
       }
@@ -562,8 +727,21 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
       }
 
       const key = getMeasurementKey(measurement);
+
       if (key) {
         const savedAnnotation = byKey.get(key);
+
+        // Do not present imported/machine-created measurements as
+        // learner or coach measurements merely because they are live
+        // in MeasurementService.
+        if (
+          isReviewWorkflow &&
+          !savedAnnotation &&
+          !measurement?.workflow &&
+          measurement?.arCreatedInViewerSession !== true
+        ) {
+          continue;
+        }
 
         if (savedAnnotation?.isSavedAnnotation) {
           byKey.set(key, mergeLiveMeasurementIntoSavedAnnotation(savedAnnotation, measurement));
@@ -573,8 +751,69 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
       }
     }
 
-    return Array.from(byKey.values());
-  }, [measurements, savedAnnotations]);
+    const writableWorkflow = getWritableMeasurementWorkflow(saveTarget);
+
+    return Array.from(byKey.values()).map(measurement => {
+      if (!isReviewWorkflow || measurement?.workflow || !writableWorkflow) {
+        return measurement;
+      }
+
+      return {
+        ...measurement,
+        workflow: writableWorkflow,
+        measurementOwner: writableWorkflow === REVIEWER_MEASUREMENTS_WORKFLOW ? 'coach' : 'learner',
+        isLocked: false,
+      };
+    });
+  }, [measurements, savedAnnotations, isReviewWorkflow, saveTarget]);
+
+  const editableMeasurements = useMemo(
+    () => visibleMeasurements.filter(measurement => isMeasurementEditable(measurement, saveTarget)),
+    [visibleMeasurements, saveTarget]
+  );
+
+  const measurementGroups = useMemo(() => {
+    if (!isReviewWorkflow) {
+      return [
+        {
+          key: 'all',
+          title: '',
+          measurements: visibleMeasurements,
+        },
+      ];
+    }
+
+    return [
+      {
+        key: 'learner',
+        title:
+          String(saveTarget.measurementWorkflowRole || '').toLowerCase() === 'learner'
+            ? 'My measurements'
+            : 'Learner measurements',
+        measurements: visibleMeasurements.filter(
+          measurement => measurement?.workflow !== REVIEWER_MEASUREMENTS_WORKFLOW
+        ),
+      },
+      {
+        key: 'coach',
+        title:
+          String(saveTarget.measurementWorkflowRole || '').toLowerCase() === 'educator'
+            ? 'My measurements'
+            : 'Coach measurements',
+        measurements: visibleMeasurements.filter(
+          measurement => measurement?.workflow === REVIEWER_MEASUREMENTS_WORKFLOW
+        ),
+      },
+    ];
+  }, [isReviewWorkflow, saveTarget, visibleMeasurements]);
+
+  const lvSimpsonResult = useMemo(() => {
+    if (domain !== 'echo') {
+      return null;
+    }
+
+    return calculateLVSimpson(visibleMeasurements);
+  }, [domain, visibleMeasurements]);
 
   const handleSave = async (scoreNow = false) => {
     if (scoreNow && isMeasurementScoringDisabled) {
@@ -664,39 +903,92 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
     <div className="flex h-full min-h-0 flex-col bg-black text-white">
       <div className="shrink-0 border-b border-gray-700 p-3">
         <div className="text-base font-semibold">AR Measurements</div>
-        <div className="mt-1 text-xs text-gray-400">Domain: {domain}</div>
+        <div className="mt-1 text-xs text-gray-400">
+          {isReviewWorkflow
+            ? `Virtual coaching • ${
+                String(saveTarget.measurementWorkflowRole || '').toLowerCase() === 'educator'
+                  ? 'Coach'
+                  : 'Learner'
+              }${isReviewWorkflowReadOnly ? ' • read-only' : ''}`
+            : `Domain: ${domain}`}
+        </div>
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto p-3">
+        {domain === 'echo' ? <LVSimpsonSummary result={lvSimpsonResult} /> : null}
+
         {visibleMeasurements.length === 0 ? (
           <div className="text-sm text-gray-400">No viewer measurements yet.</div>
         ) : (
           <div className="space-y-2">
-            {visibleMeasurements.map(measurement => {
-              const label = getMeasurementLabel(measurement);
-              const value = getMeasurementValue(measurement);
-              const subtitle = getMeasurementSubtitle(measurement);
+            <div className="space-y-4">
+              {measurementGroups.map(group => (
+                <div key={group.key}>
+                  {group.title ? (
+                    <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-400">
+                      {group.title}
+                    </div>
+                  ) : null}
 
-              return (
-                <button
-                  key={measurement.uid || measurement.id || `${measurement.toolName}-${label}`}
-                  type="button"
-                  className="w-full rounded border border-gray-700 p-2 text-left hover:border-blue-400 hover:bg-gray-900"
-                  onClick={() => jumpToMeasurement(measurement)}
-                  title="Jump to measurement"
-                >
-                  <div className="text-sm font-semibold">{label}</div>
-                  <div className="text-xs text-gray-400">{subtitle}</div>
-                  {value ? <div className="mt-1 text-sm">{value}</div> : null}
-                </button>
-              );
-            })}
+                  {group.measurements.length === 0 ? (
+                    <div className="text-sm text-gray-500">No measurements in this section.</div>
+                  ) : (
+                    <div className="space-y-2">
+                      {group.measurements.map(measurement => {
+                        const label = getMeasurementLabel(measurement);
+                        const value = getMeasurementValue(measurement);
+                        const subtitle = getMeasurementSubtitle(measurement);
+
+                        return (
+                          <button
+                            key={
+                              measurement.uid ||
+                              measurement.id ||
+                              `${measurement.toolName}-${label}`
+                            }
+                            type="button"
+                            className="w-full rounded border border-gray-700 p-2 text-left hover:border-blue-400 hover:bg-gray-900"
+                            onClick={() => jumpToMeasurement(measurement)}
+                            title="Jump to measurement"
+                          >
+                            <div className="text-sm font-semibold">{label}</div>
+
+                            <div className="text-xs text-gray-400">{subtitle}</div>
+
+                            {value ? <div className="mt-1 text-sm">{value}</div> : null}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
           </div>
         )}
       </div>
 
       <div className="shrink-0 border-t border-gray-700 bg-black p-3">
-        {isLearnerMeasurementWorkflow ? (
+        {isReviewWorkflow ? (
+          isReviewWorkflowReadOnly ? (
+            <div className="text-center text-xs text-gray-400">
+              Measurements are read-only for this coaching review.
+            </div>
+          ) : (
+            <button
+              type="button"
+              className="w-full rounded bg-blue-600 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50"
+              disabled={isSaving || editableMeasurements.length === 0}
+              onClick={() => handleSave(false)}
+            >
+              {savingAction === 'draft'
+                ? 'Saving…'
+                : String(saveTarget.measurementWorkflowRole || '').toLowerCase() === 'educator'
+                  ? 'Save Coach Measurements'
+                  : 'Save Learner Measurements'}
+            </button>
+          )
+        ) : isLearnerMeasurementWorkflow ? (
           <div
             className={
               isMeasurementScoringDisabled

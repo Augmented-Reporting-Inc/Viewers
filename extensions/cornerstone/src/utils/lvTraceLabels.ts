@@ -9,6 +9,8 @@ export const LV_TRACE_REQUIRED_SLOTS = ['A4C_ED', 'A4C_ES', 'A2C_ED', 'A2C_ES'];
 
 export const LV_TRACE_LABEL_RE = /^LV-(A[24]C)-(ED|ES)$/i;
 
+export const LV_SIMPSON_MEASUREMENT_KIND = 'lvSimpsonSlot';
+
 export const LV_TRACE_MEASUREMENT_LABELS_CONFIG = {
   id: 'lvTraceMeasurementLabels',
   labelOnMeasure: false,
@@ -68,6 +70,11 @@ export function parseLVTraceLabel(label) {
     phase,
     slot: `${view}_${phase}`,
   };
+}
+
+export function getLVTraceLabelForSlot(slot = '') {
+  const normalizedSlot = String(slot || '').trim();
+  return LV_TRACE_LABELS.find(item => `${item.view}_${item.phase}` === normalizedSlot)?.value || '';
 }
 
 export function getMissingLVTraceSlots(traces = []) {

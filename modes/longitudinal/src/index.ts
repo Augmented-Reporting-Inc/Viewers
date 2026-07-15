@@ -66,6 +66,37 @@ function getViewerMeasurementDomainFromPath() {
   return 'echo';
 }
 
+function isViewerMeasurementReadOnlyFromUrl() {
+  const params = new URLSearchParams();
+
+  try {
+    const searchParams = new URLSearchParams(window.location?.search || '');
+
+    searchParams.forEach((value, key) => params.set(key, value));
+  } catch {}
+
+  try {
+    const hash = String(window.location?.hash || '');
+
+    const hashQuery = hash.includes('?') ? hash.slice(hash.indexOf('?') + 1).split('#')[0] : '';
+
+    const hashParams = new URLSearchParams(hashQuery);
+
+    hashParams.forEach((value, key) => {
+      if (!params.has(key)) {
+        params.set(key, value);
+      }
+    });
+  } catch {}
+
+  return ['readonly', 'feedbackreadonly'].includes(
+    String(params.get('arMeasurementAccess') || '')
+      .trim()
+      .replace(/[_\s-]+/g, '')
+      .toLowerCase()
+  );
+}
+
 const AR_US_REGION_PIXEL_SPACING_PROVIDER_PRIORITY = 10000;
 
 function readRawDicomValue(source, keys = []) {
@@ -508,7 +539,7 @@ const BASE_MEASUREMENT_TOOL_IDS = [
   'CircleROI',
 ];
 
-const ECHO_ONLY_MEASUREMENT_TOOL_IDS = ['LVTrace', 'LVTraceSlot'];
+const ECHO_ONLY_MEASUREMENT_TOOL_IDS = ['LVSimpsonEF', 'LVTraceSlot'];
 
 const GENERIC_CONTOUR_TOOL_IDS = ['PlanarFreehandROI', 'SplineROI', 'LivewireContour'];
 
@@ -540,7 +571,7 @@ async function getLabelConfigForMeasurement(measurement, commandsManager) {
   const toolName = measurement?.toolName;
   const domain = await resolveViewerMeasurementDomain(commandsManager);
 
-  if (toolName === 'SplineROI') {
+  if (toolName === 'SplineROI' && domain === 'echo') {
     return {
       commandName: 'setLVTraceMeasurementLabel',
     };
@@ -701,6 +732,7 @@ function modeFactory({ modeConfiguration }) {
         removeARUSRegionPixelSpacingProvider = null;
       };
 
+      commandsManager.runCommand('clearViewerMeasurementsCreatedInSession');
       measurementService.clearMeasurements();
 
       _measurementAddedSub?.unsubscribe?.();
@@ -742,6 +774,9 @@ function modeFactory({ modeConfiguration }) {
               });
             }
 
+            commandsManager.runCommand('markViewerMeasurementCreatedInSession', {
+              uid: measurement.uid,
+            });
             panelService?.activatePanel?.(
               'extension-ar-measurements.panelModule.arMeasurements',
               true
@@ -797,32 +832,67 @@ function modeFactory({ modeConfiguration }) {
         'windowLevelMenu',
       ]);
 
+      const initialMeasurementDomain = getViewerMeasurementDomainFromPath();
+
+      const measurementToolsReadOnly = isViewerMeasurementReadOnlyFromUrl();
+
       toolbarService.updateSection(
         'MeasurementTools',
-        getMeasurementToolIdsForDomain(getViewerMeasurementDomainFromPath())
+        measurementToolsReadOnly ? [] : getMeasurementToolIdsForDomain(initialMeasurementDomain)
       );
 
-      toolbarService.updateSection('MoreTools', [
-        'Reset',
-        'rotate-right',
-        'flipHorizontal',
-        'ImageSliceSync',
-        'ReferenceLines',
-        'ImageOverlayViewer',
-        'StackScroll',
-        'invert',
-        'Probe',
-        'Cine',
-        'Angle',
-        'CobbAngle',
-        'Magnify',
-        'CalibrationLine',
-        'TagBrowser',
-        'AdvancedMagnify',
-        'UltrasoundDirectionalTool',
-        'WindowLevelRegion',
-        'SegmentLabelTool',
-      ]);
+      Promise.resolve(resolveViewerMeasurementDomain(commandsManager))
+        .then(resolvedDomain => {
+          toolbarService.updateSection(
+            'MeasurementTools',
+            measurementToolsReadOnly
+              ? []
+              : getMeasurementToolIdsForDomain(resolvedDomain || initialMeasurementDomain)
+          );
+        })
+        .catch(error => {
+          console.warn('[AR Measurements] could not refresh measurement tools:', error);
+        });
+
+      toolbarService.updateSection(
+        'MoreTools',
+        measurementToolsReadOnly
+          ? [
+              'Reset',
+              'rotate-right',
+              'flipHorizontal',
+              'ImageSliceSync',
+              'ReferenceLines',
+              'ImageOverlayViewer',
+              'StackScroll',
+              'invert',
+              'Cine',
+              'Magnify',
+              'TagBrowser',
+              'AdvancedMagnify',
+            ]
+          : [
+              'Reset',
+              'rotate-right',
+              'flipHorizontal',
+              'ImageSliceSync',
+              'ReferenceLines',
+              'ImageOverlayViewer',
+              'StackScroll',
+              'invert',
+              'Probe',
+              'Cine',
+              'Angle',
+              'CobbAngle',
+              'Magnify',
+              'CalibrationLine',
+              'TagBrowser',
+              'AdvancedMagnify',
+              'UltrasoundDirectionalTool',
+              'WindowLevelRegion',
+              'SegmentLabelTool',
+            ]
+      );
 
       customizationService.setCustomizations(
         {

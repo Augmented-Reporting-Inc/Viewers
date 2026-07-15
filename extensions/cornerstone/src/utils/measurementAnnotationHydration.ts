@@ -1,10 +1,133 @@
 import { metaData } from '@cornerstonejs/core';
 import { annotation as csToolsAnnotation, ToolGroupManager } from '@cornerstonejs/tools';
 import * as cornerstoneTools from '@cornerstonejs/tools';
-import { getRequestedWorkflowAnnotations } from './measurementAnnotations';
+import {
+  REVIEWER_MEASUREMENTS_WORKFLOW,
+  getRequestedWorkflowAnnotations,
+  isViewerMeasurementWorkflow,
+} from './measurementAnnotations';
 import { buildFormApiUrl } from './formApi';
 
 const CONTOUR_TOOL_NAMES = new Set(['SplineROI', 'PlanarFreehandROI', 'LivewireContour']);
+
+const COACH_MEASUREMENT_COLOR = 'rgb(56, 189, 248)';
+const COACH_MEASUREMENT_HIGHLIGHT_COLOR = 'rgb(125, 211, 252)';
+const COACH_MEASUREMENT_SELECTED_COLOR = 'rgb(186, 230, 253)';
+const COACH_MEASUREMENT_LINE_DASH = '4,3';
+const COACH_MEASUREMENT_TEXT_BACKGROUND = 'rgba(8, 47, 73, 0.85)';
+
+function buildAnnotationStateStyle(
+  property: string,
+  {
+    normal,
+    highlighted = normal,
+    selected = highlighted,
+    locked = normal,
+  }: {
+    normal: string;
+    highlighted?: string;
+    selected?: string;
+    locked?: string;
+  }
+) {
+  return {
+    [property]: normal,
+    [`${property}Active`]: normal,
+    [`${property}Passive`]: normal,
+
+    [`${property}Highlighted`]: highlighted,
+    [`${property}HighlightedActive`]: highlighted,
+    [`${property}HighlightedPassive`]: highlighted,
+
+    [`${property}Selected`]: selected,
+    [`${property}SelectedActive`]: selected,
+    [`${property}SelectedPassive`]: selected,
+
+    [`${property}Locked`]: locked,
+    [`${property}LockedActive`]: locked,
+    [`${property}LockedPassive`]: locked,
+  };
+}
+
+const COACH_MEASUREMENT_ANNOTATION_STYLE = Object.freeze({
+  ...buildAnnotationStateStyle('color', {
+    normal: COACH_MEASUREMENT_COLOR,
+    highlighted: COACH_MEASUREMENT_HIGHLIGHT_COLOR,
+    selected: COACH_MEASUREMENT_SELECTED_COLOR,
+  }),
+
+  ...buildAnnotationStateStyle('lineDash', {
+    normal: COACH_MEASUREMENT_LINE_DASH,
+  }),
+
+  ...buildAnnotationStateStyle('lineWidth', {
+    normal: '2',
+    highlighted: '3',
+    selected: '3',
+  }),
+
+  ...buildAnnotationStateStyle('textBoxColor', {
+    normal: COACH_MEASUREMENT_COLOR,
+    highlighted: COACH_MEASUREMENT_HIGHLIGHT_COLOR,
+    selected: COACH_MEASUREMENT_SELECTED_COLOR,
+  }),
+
+  ...buildAnnotationStateStyle('textBoxBackground', {
+    normal: COACH_MEASUREMENT_TEXT_BACKGROUND,
+  }),
+
+  ...buildAnnotationStateStyle('textBoxLinkLineColor', {
+    normal: COACH_MEASUREMENT_COLOR,
+    highlighted: COACH_MEASUREMENT_HIGHLIGHT_COLOR,
+    selected: COACH_MEASUREMENT_SELECTED_COLOR,
+  }),
+
+  ...buildAnnotationStateStyle('textBoxLinkLineDash', {
+    normal: COACH_MEASUREMENT_LINE_DASH,
+  }),
+
+  ...buildAnnotationStateStyle('textBoxLinkLineWidth', {
+    normal: '2',
+  }),
+});
+
+function isCoachMeasurementAnnotation({ workflow = '', measurementOwner = '' } = {}) {
+  return (
+    String(workflow || '').trim() === REVIEWER_MEASUREMENTS_WORKFLOW ||
+    String(measurementOwner || '')
+      .trim()
+      .toLowerCase() === 'coach'
+  );
+}
+
+export function applyReviewMeasurementAnnotationStyle({
+  annotationUID = '',
+  workflow = '',
+  measurementOwner = '',
+}: {
+  annotationUID?: string;
+  workflow?: string;
+  measurementOwner?: string;
+} = {}) {
+  const resolvedAnnotationUID = String(annotationUID || '').trim();
+
+  if (
+    !resolvedAnnotationUID ||
+    !isCoachMeasurementAnnotation({
+      workflow,
+      measurementOwner,
+    })
+  ) {
+    return false;
+  }
+
+  csToolsAnnotation.config.style.setAnnotationStyles(
+    resolvedAnnotationUID,
+    COACH_MEASUREMENT_ANNOTATION_STYLE
+  );
+
+  return true;
+}
 
 let explicitSeriesDocPromise: Promise<any | null> | null = null;
 let explicitSeriesDocCacheKey = '';
@@ -252,12 +375,26 @@ function inferToolName(annotation) {
   return annotation?.toolName || '';
 }
 
+function getViewportAnnotationLabel(annotation: any = {}) {
+  const label = annotation?.label || annotation?.measurementRole || annotation?.role || '';
+
+  if (
+    annotation?.workflow === REVIEWER_MEASUREMENTS_WORKFLOW &&
+    label &&
+    !String(label).startsWith('Coach: ')
+  ) {
+    return `Coach: ${label}`;
+  }
+
+  return label;
+}
+
 function isCanonicalViewerMeasurementAnnotation(annotation) {
   const annotationId = annotation?.uid || annotation?.annotationId;
 
   return !!(
     annotation &&
-    annotation.workflow === 'viewerMeasurements' &&
+    isViewerMeasurementWorkflow(annotation.workflow) &&
     annotationId &&
     annotation.domain &&
     annotation.mode &&
@@ -734,7 +871,7 @@ function buildCornerstoneAnnotation(annotation, fallbackFrameOfReferenceUID = ''
   }
 
   const data: any = {
-    label: annotation.label || annotation.measurementRole || annotation.role || '',
+    label: getViewportAnnotationLabel(annotation),
     handles: {
       points,
       activeHandleIndex: null,
@@ -765,8 +902,16 @@ function buildCornerstoneAnnotation(annotation, fallbackFrameOfReferenceUID = ''
       SOPInstanceUID: annotation.SOPInstanceUID,
       SeriesInstanceUID: annotation.SeriesInstanceUID || annotation.referenceSeriesUID,
       StudyInstanceUID: annotation.StudyInstanceUID,
+      arMeasurementWorkflow: annotation.workflow || '',
+      arMeasurementReadOnly: !!annotation.isLocked,
+      arMeasurementReviewRound: Number(annotation.reviewRound) || null,
     },
-    data,
+    data: {
+      ...data,
+      arMeasurementWorkflow: annotation.workflow || '',
+      arMeasurementReadOnly: !!annotation.isLocked,
+      arMeasurementReviewRound: Number(annotation.reviewRound) || null,
+    },
     highlighted: false,
     invalidated: false,
     isLocked: !!annotation.isLocked,
@@ -827,12 +972,15 @@ function patchHydratedAnnotationFromSaved({
     SOPInstanceUID: savedAnnotation.SOPInstanceUID,
     SeriesInstanceUID: savedAnnotation.SeriesInstanceUID || savedAnnotation.referenceSeriesUID,
     StudyInstanceUID: savedAnnotation.StudyInstanceUID,
+    arMeasurementWorkflow: savedAnnotation.workflow || '',
+    arMeasurementReadOnly: !!savedAnnotation.isLocked,
+    arMeasurementReviewRound: Number(savedAnnotation.reviewRound) || null,
   };
 
   target.data = {
     ...(target.data || {}),
     ...(fallback?.data || {}),
-    label: savedAnnotation.label || savedAnnotation.measurementRole || savedAnnotation.role || '',
+    label: getViewportAnnotationLabel(savedAnnotation),
     handles: {
       ...(target.data?.handles || {}),
       ...(fallback?.data?.handles || {}),
@@ -847,6 +995,9 @@ function patchHydratedAnnotationFromSaved({
       },
     },
     cachedStats: buildCachedStatsForAnnotation(savedAnnotation, toolName, referencedImageId),
+    arMeasurementWorkflow: savedAnnotation.workflow || '',
+    arMeasurementReadOnly: !!savedAnnotation.isLocked,
+    arMeasurementReviewRound: Number(savedAnnotation.reviewRound) || null,
   };
 
   if (CONTOUR_TOOL_NAMES.has(toolName)) {
@@ -860,6 +1011,12 @@ function patchHydratedAnnotationFromSaved({
   target.invalidated = false;
   target.isVisible = savedAnnotation.isVisible !== false;
   target.isLocked = !!savedAnnotation.isLocked;
+
+  applyReviewMeasurementAnnotationStyle({
+    annotationUID,
+    workflow: savedAnnotation.workflow,
+    measurementOwner: savedAnnotation.measurementOwner,
+  });
 
   return target;
 }
@@ -996,6 +1153,13 @@ export function hydrateSavedViewerAnnotationForViewport({
     cornerstoneAnnotation.metadata.referencedImageId;
 
   csToolsAnnotation.state.addAnnotation(cornerstoneAnnotation, groupSelector);
+
+  applyReviewMeasurementAnnotationStyle({
+    annotationUID,
+    workflow: annotationToHydrate.workflow,
+    measurementOwner: annotationToHydrate.measurementOwner,
+  });
+
   applySavedContourDisplayTextOverride({
     targetAnnotation: cornerstoneAnnotation,
     savedAnnotation: annotationToHydrate,
