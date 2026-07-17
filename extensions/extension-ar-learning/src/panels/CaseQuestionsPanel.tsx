@@ -252,6 +252,24 @@ function plainObject(value: any) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
 }
 
+function getNestedViewerTarget(value: any) {
+  const source = plainObject(value);
+  const placedMarker = plainObject(source.placedMarker);
+  const goldMeasurement = plainObject(source.goldMeasurement);
+  const candidates = [
+    source.selectedTarget,
+    source.viewerTarget,
+    source.target,
+    placedMarker.selectedTarget,
+    placedMarker.viewerTarget,
+    goldMeasurement.selectedTarget,
+    goldMeasurement.viewerTarget,
+    source,
+  ];
+
+  return candidates.find(targetHasNavigationIdentity) || null;
+}
+
 function targetHasNavigationIdentity(target: any) {
   const normalized = plainObject(target);
 
@@ -368,27 +386,201 @@ function mergeQuizAnswers(
   return next;
 }
 
-function getAnswerViewerTarget(value: any) {
-  const answer = plainObject(value);
-  const candidates = [
-    answer.selectedTarget,
-    answer.viewerTarget,
-    answer.placedMarker?.viewerTarget,
-    answer.goldMeasurement?.viewerTarget,
-  ];
+function getReviewTargetIdentityScore(value: any) {
+  const target = plainObject(value);
+  let score = 0;
 
-  return candidates.find(targetHasNavigationIdentity) || null;
+  if (cleanString(target.referencedImageId)) {
+    score += 8;
+  }
+  if (cleanString(target.sopInstanceUID || target.SOPInstanceUID)) {
+    score += 6;
+  }
+  if (cleanString(target.seriesInstanceUID || target.SeriesInstanceUID)) {
+    score += 4;
+  }
+  if (cleanString(target.displaySetInstanceUID)) {
+    score += 3;
+  }
+  if (cleanString(target.studyInstanceUID || target.StudyInstanceUID)) {
+    score += 2;
+  }
+  if (target.frameNumber !== null && typeof target.frameNumber !== 'undefined') {
+    score += 1;
+  }
+  if (target.frameIndex !== null && typeof target.frameIndex !== 'undefined') {
+    score += 1;
+  }
+  if (target.imageIndex !== null && typeof target.imageIndex !== 'undefined') {
+    score += 1;
+  }
+
+  return score;
+}
+
+function chooseReviewTargetValue(preferredValue: any, fallbackValue: any) {
+  const preferredTarget = plainObject(preferredValue);
+  const fallbackTarget = plainObject(fallbackValue);
+  const preferredScore = getReviewTargetIdentityScore(preferredTarget);
+  const fallbackScore = getReviewTargetIdentityScore(fallbackTarget);
+
+  if (preferredScore > 0 && preferredScore >= fallbackScore) {
+    return { ...preferredTarget };
+  }
+
+  if (fallbackScore > 0) {
+    return { ...fallbackTarget };
+  }
+
+  return {};
+}
+
+function mergeReviewAnswerValue(persistedValue: any, scoredValue: any) {
+  if (typeof scoredValue === 'undefined') {
+    return persistedValue;
+  }
+
+  const persisted = plainObject(persistedValue);
+  const scored = plainObject(scoredValue);
+
+  if (!Object.keys(persisted).length || !Object.keys(scored).length) {
+    return scoredValue;
+  }
+
+  const merged = {
+    ...persisted,
+    ...scored,
+  };
+
+  ['selectedTarget', 'viewerTarget'].forEach(key => {
+    const target = chooseReviewTargetValue(scored[key], persisted[key]);
+
+    if (Object.keys(target).length) {
+      merged[key] = target;
+    }
+  });
+
+  ['placedMarker', 'sourceRefs', 'reviewPayload'].forEach(key => {
+    const persistedPart = plainObject(persisted[key]);
+    const scoredPart = plainObject(scored[key]);
+
+    if (Object.keys(persistedPart).length || Object.keys(scoredPart).length) {
+      merged[key] = {
+        ...persistedPart,
+        ...scoredPart,
+      };
+    }
+  });
+
+  return merged;
+}
+
+function mergeReviewReferenceValues(...values: any[]) {
+  const merged: Record<string, any> = {};
+
+  values.forEach(value => {
+    const source = plainObject(value);
+
+    if (!Object.keys(source).length) {
+      return;
+    }
+
+    const previous = { ...merged };
+    Object.assign(merged, source);
+
+    ['selectedTarget', 'viewerTarget'].forEach(key => {
+      const target = chooseReviewTargetValue(source[key], previous[key]);
+
+      if (Object.keys(target).length) {
+        merged[key] = target;
+      }
+    });
+
+    ['placedMarker', 'sourceRefs', 'reviewPayload', 'annotation', 'annotationSnapshot'].forEach(
+      key => {
+        const currentPart = plainObject(previous[key]);
+        const sourcePart = plainObject(source[key]);
+
+        if (Object.keys(currentPart).length || Object.keys(sourcePart).length) {
+          merged[key] = {
+            ...currentPart,
+            ...sourcePart,
+          };
+        }
+      }
+    );
+  });
+
+  return merged;
+}
+
+function getReviewLearnerAnswer(question: QuizQuestion, persistedValue: any, scoreItem: any) {
+  const mergedAnswer = mergeReviewAnswerValue(persistedValue, scoreItem?.learnerResponse);
+
+  if (question.type !== 'frameSelection') {
+    return mergedAnswer;
+  }
+
+  const reviewDetails = plainObject(scoreItem?.reviewDetails);
+  const learnerTarget =
+    getNestedViewerTarget(reviewDetails.learnerTarget) ||
+    getNestedViewerTarget(scoreItem?.learnerResponse) ||
+    getNestedViewerTarget(persistedValue);
+
+  if (!learnerTarget) {
+    return mergedAnswer;
+  }
+
+  return {
+    ...plainObject(mergedAnswer),
+    selectedTarget: { ...plainObject(learnerTarget) },
+    viewerTarget: { ...plainObject(learnerTarget) },
+  };
+}
+
+function hasMeasurementComparisonReference(value: any) {
+  const source = plainObject(value);
+  const sourceRefs = plainObject(source.sourceRefs);
+  const reviewPayload = plainObject(source.reviewPayload);
+  const annotation = plainObject(
+    source.annotation ||
+      source.annotationSnapshot ||
+      reviewPayload.annotation ||
+      reviewPayload.annotationSnapshot
+  );
+
+  return !!(
+    Object.keys(annotation).length > 0 ||
+    cleanString(
+      source.sourceAnnotationId ||
+        source.annotationId ||
+        source.annotationUID ||
+        sourceRefs.annotationId ||
+        sourceRefs.measurementId
+    ) ||
+    getNestedViewerTarget(source) ||
+    cleanString(source.measurementType || reviewPayload.label)
+  );
+}
+
+function getAnswerViewerTarget(value: any) {
+  return getNestedViewerTarget(value);
 }
 
 function buildAnswerPayload(quiz: QuizDefinition, quizAnswers = {}) {
   return (quiz.questions || []).map(question => {
     const value = quizAnswers[question.questionKey];
+    const structuredValue = plainObject(value);
     const viewerTarget = getAnswerViewerTarget(value);
+    const sourceRefs = plainObject(structuredValue.sourceRefs);
+    const reviewPayload = plainObject(structuredValue.reviewPayload);
 
     return {
       questionKey: question.questionKey,
       value,
       ...(viewerTarget ? { viewerTarget } : {}),
+      ...(Object.keys(sourceRefs).length ? { sourceRefs } : {}),
+      ...(Object.keys(reviewPayload).length ? { reviewPayload } : {}),
     };
   });
 }
@@ -442,6 +634,84 @@ function getQuizScoreQuestionItem(quizScore: any, questionKey = '') {
   const key = cleanString(questionKey);
 
   return items.find(item => cleanString(item?.questionKey || item?.id) === key) || null;
+}
+
+function getViewerTargetSopInstanceId(value: any) {
+  const target = getNestedViewerTarget(value) || plainObject(value);
+  const direct = cleanString(target.sopInstanceUID || target.SOPInstanceUID);
+
+  if (direct) {
+    return direct;
+  }
+
+  const match = cleanString(target.referencedImageId).match(/\/instances\/([^/]+)/i);
+  return match?.[1] ? decodeURIComponent(match[1]) : '';
+}
+
+function getViewerTargetInstanceNumber(value: any) {
+  const target = getNestedViewerTarget(value) || plainObject(value);
+  const instanceNumber = Number(target.instanceNumber ?? target.InstanceNumber);
+
+  return Number.isFinite(instanceNumber) ? instanceNumber : null;
+}
+
+function compareViewerTargetInstances(leftValue: any, rightValue: any) {
+  const leftSopInstanceId = getViewerTargetSopInstanceId(leftValue);
+  const rightSopInstanceId = getViewerTargetSopInstanceId(rightValue);
+
+  if (leftSopInstanceId && rightSopInstanceId) {
+    return leftSopInstanceId === rightSopInstanceId;
+  }
+
+  const leftInstanceNumber = getViewerTargetInstanceNumber(leftValue);
+  const rightInstanceNumber = getViewerTargetInstanceNumber(rightValue);
+
+  if (leftInstanceNumber !== null && rightInstanceNumber !== null) {
+    return leftInstanceNumber === rightInstanceNumber;
+  }
+
+  return null;
+}
+
+function isQuizReviewItemCorrect(question: QuizQuestion, scoreItem: any) {
+  const reviewDetails = plainObject(scoreItem?.reviewDetails);
+
+  if (question.type === 'frameSelection' && reviewDetails.mode === 'frameSelection') {
+    const frameDelta = Number(reviewDetails.frameDelta);
+    const toleranceFrames = Number(reviewDetails.toleranceFrames);
+    const targetInstanceMatch = compareViewerTargetInstances(
+      reviewDetails.learnerTarget || scoreItem?.learnerResponse,
+      reviewDetails.goldTarget || scoreItem?.correctAnswer
+    );
+    const instanceOk =
+      typeof reviewDetails.instanceOk === 'boolean'
+        ? reviewDetails.instanceOk
+        : targetInstanceMatch === null
+          ? true
+          : targetInstanceMatch;
+
+    if (Number.isFinite(frameDelta) && Number.isFinite(toleranceFrames)) {
+      return (
+        reviewDetails.seriesOk !== false &&
+        instanceOk &&
+        Math.abs(frameDelta) <= Math.abs(toleranceFrames)
+      );
+    }
+  }
+
+  if (typeof scoreItem?.matched === 'boolean') {
+    return scoreItem.matched;
+  }
+
+  const pointsAwarded = Number(scoreItem?.pointsAwarded);
+  const pointsPossible = Number(scoreItem?.pointsPossible);
+
+  if (Number.isFinite(pointsAwarded) && Number.isFinite(pointsPossible) && pointsPossible > 0) {
+    return pointsAwarded >= pointsPossible;
+  }
+
+  const status = cleanString(scoreItem?.status).toLowerCase();
+  return status === 'met' || status === 'correct';
 }
 
 function formatReviewNumber(value: any, decimalPlaces = 0): string {
@@ -555,10 +825,26 @@ function formatReviewAnswer(question: QuizQuestion, value: any): string {
   return String(value);
 }
 
+function formatCorrectReviewAnswer(question: QuizQuestion, value: any): string {
+  if (question.type !== 'measurementNumeric') {
+    return formatReviewAnswer(question, value);
+  }
+
+  const source = plainObject(value);
+  const goldMeasurement = plainObject(source.goldMeasurement);
+  const numericValue = source.value ?? source.goldValue ?? goldMeasurement.value;
+  const unit = cleanString(source.unit || goldMeasurement.unit || question?.answerConfig?.unit);
+
+  if (numericValue !== null && typeof numericValue !== 'undefined' && numericValue !== '') {
+    return `${roundQuizNumber(numericValue, 2)}${unit ? ` ${unit}` : ''}`;
+  }
+
+  return formatReviewAnswer(question, value);
+}
+
 function getReviewAnswerTarget(question: QuizQuestion, value: any) {
   if (question.type === 'frameSelection') {
-    const target = plainObject(value?.selectedTarget || value?.viewerTarget || value);
-    return targetHasNavigationIdentity(target) ? target : null;
+    return getNestedViewerTarget(value);
   }
 
   return getAnswerViewerTarget(value);
@@ -569,10 +855,18 @@ function getCorrectReviewTarget(question: QuizQuestion, scoreItem: any) {
     return null;
   }
 
+  const correctAnswerTarget = getNestedViewerTarget(scoreItem?.correctAnswer);
+
   if (question.type === 'frameSelection') {
-    const correctTarget = plainObject(scoreItem?.correctAnswer);
-    if (targetHasNavigationIdentity(correctTarget)) {
-      return correctTarget;
+    const configuredCorrectTarget = getNestedViewerTarget(
+      question?.answerConfig?.goldTarget || question?.viewerTarget
+    );
+
+    if (correctAnswerTarget || configuredCorrectTarget) {
+      return {
+        ...plainObject(configuredCorrectTarget),
+        ...plainObject(correctAnswerTarget),
+      };
     }
   }
 
@@ -581,10 +875,29 @@ function getCorrectReviewTarget(question: QuizQuestion, scoreItem: any) {
   }
 
   if (isPlaceMarkerQuestionType(question)) {
+    if (correctAnswerTarget) {
+      return correctAnswerTarget;
+    }
+
     const goldPoint = plainObject(question?.answerConfig?.goldPoint);
-    const pointTarget = plainObject(goldPoint.viewerTarget || goldPoint.selectedTarget);
-    if (targetHasNavigationIdentity(pointTarget)) {
+    const pointTarget = getNestedViewerTarget(goldPoint);
+    if (pointTarget) {
       return pointTarget;
+    }
+  }
+
+  if (question.type === 'measurementNumeric') {
+    const reviewDetails = plainObject(scoreItem?.reviewDetails);
+    const rubricMeasurement = mergeReviewReferenceValues(
+      question?.answerConfig?.goldMeasurement,
+      scoreItem?.correctAnswer,
+      reviewDetails.goldMeasurement,
+      reviewDetails.rubricMeasurement
+    );
+    const rubricMeasurementTarget = getNestedViewerTarget(rubricMeasurement);
+
+    if (rubricMeasurementTarget) {
+      return rubricMeasurementTarget;
     }
   }
 
@@ -592,9 +905,18 @@ function getCorrectReviewTarget(question: QuizQuestion, scoreItem: any) {
 }
 
 function getMarkerReviewOverlayOptions(question: QuizQuestion, learnerAnswer: any, scoreItem: any) {
-  const selectedMarkerIds = new Set(normalizeMarkerIdList(learnerAnswer));
+  const reviewDetails = plainObject(scoreItem?.reviewDetails);
+  const selectedMarkerIds = new Set(
+    normalizeMarkerIdList(reviewDetails.learnerMarkerIds, learnerAnswer)
+  );
   const correctMarkerIds = new Set(
-    scoreItem?.correctAnswerVisible === true ? normalizeMarkerIdList(scoreItem?.correctAnswer) : []
+    scoreItem?.correctAnswerVisible === true
+      ? normalizeMarkerIdList(
+          reviewDetails.correctMarkerIds,
+          scoreItem?.correctAnswer,
+          getCorrectMarkerIdsFromAnswerConfig(plainObject(question?.answerConfig))
+        )
+      : []
   );
 
   return normalizeMarkerOptions(getMarkerOptions(question))
@@ -622,6 +944,20 @@ function getMarkerReviewOverlayOptions(question: QuizQuestion, learnerAnswer: an
         reviewState,
       };
     });
+}
+
+function getLearnerMarkerOverlayOptions(question: QuizQuestion, learnerAnswer: any) {
+  const selectedMarkerIds = new Set(normalizeMarkerIdList(learnerAnswer));
+
+  return normalizeMarkerOptions(getMarkerOptions(question))
+    .filter(marker => {
+      const markerId = cleanString(marker.markerId || marker.markerKey || marker.value);
+      return isMarkerOptionPlaced(marker) && selectedMarkerIds.has(markerId);
+    })
+    .map(marker => ({
+      ...marker,
+      reviewState: 'learner',
+    }));
 }
 
 function getDefinitionId(definition: any): string {
@@ -794,11 +1130,15 @@ function getNextMarkerId(markerOptions: any[] = []) {
 }
 
 function getDisplayFrameFromTarget(target: any) {
-  const frameNumber = Number(target?.frameNumber);
+  const frameNumber = Number(target?.frameNumber ?? target?.FrameNumber);
+  const frameIndex = Number(target?.frameIndex);
   const imageIndex = Number(target?.imageIndex);
 
   if (Number.isFinite(frameNumber) && frameNumber > 0) {
     return frameNumber;
+  }
+  if (Number.isFinite(frameIndex) && frameIndex >= 0) {
+    return frameIndex + 1;
   }
   if (Number.isFinite(imageIndex) && imageIndex >= 0) {
     return imageIndex + 1;
@@ -807,13 +1147,25 @@ function getDisplayFrameFromTarget(target: any) {
 }
 
 function getDisplayInstanceFromTarget(target: any) {
-  const instanceNumber = Number(target?.instanceNumber);
+  const metadata = plainObject(target?.metadata);
+  const imageMetadata = plainObject(target?.imageMetadata);
+  const instanceNumber = Number(
+    target?.instanceNumber ??
+      target?.InstanceNumber ??
+      metadata.instanceNumber ??
+      metadata.InstanceNumber ??
+      imageMetadata.instanceNumber ??
+      imageMetadata.InstanceNumber
+  );
+  const instanceIndex = Number(target?.instanceIndex);
 
-  if (Number.isFinite(instanceNumber)) {
+  if (Number.isFinite(instanceNumber) && instanceNumber > 0) {
     return `Instance ${instanceNumber}`;
   }
-
-  return 'Instance unknown';
+  if (Number.isFinite(instanceIndex) && instanceIndex >= 0) {
+    return `Instance ${instanceIndex + 1}`;
+  }
+  return 'Instance unavailable';
 }
 
 function getViewerTargetSummary(target: any) {
@@ -1220,10 +1572,19 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       return [];
     }
 
+    const reviewDetails = plainObject(scoreItem?.reviewDetails);
+    const reviewGoldPoint = plainObject(reviewDetails.goldPoint);
     const correctAnswer = plainObject(scoreItem.correctAnswer);
+    const correctAnswerPoint = plainObject(correctAnswer.point || correctAnswer.goldPoint);
     const configuredGoldPoint = plainObject(question?.answerConfig?.goldPoint);
     const point = roundQuizPoint(
-      hasPointCoordinates(correctAnswer) ? correctAnswer : configuredGoldPoint
+      hasPointCoordinates(reviewGoldPoint)
+        ? reviewGoldPoint
+        : hasPointCoordinates(correctAnswer)
+          ? correctAnswer
+          : hasPointCoordinates(correctAnswerPoint)
+            ? correctAnswerPoint
+            : configuredGoldPoint
     );
 
     if (!hasPointCoordinates(point)) {
@@ -1239,8 +1600,18 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         point,
         coordinateSpace: point.coordinateSpace || 'world',
         viewerTarget:
-          configuredGoldPoint.viewerTarget || getCorrectReviewTarget(question, scoreItem) || {},
+          getNestedViewerTarget(reviewGoldPoint) ||
+          getNestedViewerTarget(correctAnswer) ||
+          getNestedViewerTarget(configuredGoldPoint) ||
+          getCorrectReviewTarget(question, scoreItem) ||
+          {},
         reviewState: 'gold',
+        toleranceRadius:
+          reviewDetails.radius ?? plainObject(question?.scoringConfig).radius ?? null,
+        toleranceRadiusUnit:
+          cleanString(reviewDetails.radiusUnit) ||
+          cleanString(plainObject(question?.scoringConfig).radiusUnit) ||
+          'world',
       },
     ];
   }
@@ -1248,7 +1619,8 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
   function getQuestionOverlayMarkerOptions(
     quiz: QuizDefinition,
     question: QuizQuestion,
-    questionAnswer: any
+    questionAnswer: any,
+    options: { reviewMode?: 'learner' | 'comparison' } = {}
   ) {
     if (authoringMode) {
       return getOverlayMarkerOptionsForQuestion(question, {
@@ -1260,14 +1632,19 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     const scoreItem = getQuizScoreQuestionItem(quizScore, question.questionKey);
 
     if (scoreItem && isMarkerChoiceQuestionType(question)) {
-      return getMarkerReviewOverlayOptions(question, questionAnswer, scoreItem);
+      const reviewLearnerAnswer = getReviewLearnerAnswer(question, questionAnswer, scoreItem);
+
+      return options.reviewMode === 'comparison'
+        ? getMarkerReviewOverlayOptions(question, reviewLearnerAnswer, scoreItem)
+        : getLearnerMarkerOverlayOptions(question, reviewLearnerAnswer);
     }
 
     if (isPlaceMarkerQuestionType(question)) {
-      return [
-        ...getPlacedAnswerMarkerOptions(questionAnswer),
-        ...getGoldReviewMarkerOptions(question, scoreItem),
-      ];
+      const learnerMarkers = getPlacedAnswerMarkerOptions(questionAnswer);
+
+      return options.reviewMode === 'comparison'
+        ? [...learnerMarkers, ...getGoldReviewMarkerOptions(question, scoreItem)]
+        : learnerMarkers;
     }
 
     return getOverlayMarkerOptionsForQuestion(question);
@@ -1279,6 +1656,10 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     options: { force?: boolean; viewerTarget?: any; markerOptions?: any[] } = {}
   ) {
     const nextActiveQuestionKey = `${quiz.quizKey}:${question.questionKey}`;
+
+    try {
+      await runViewerCommand(commandsManager, 'clearViewerQuizMeasurementComparison', {});
+    } catch {}
 
     if (question.type !== 'measurementNumeric') {
       await runViewerCommand(commandsManager, 'releaseViewerQuizDrawingTool', {});
@@ -1293,15 +1674,62 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     const questionAnswer = answersByQuizKey?.[quiz.quizKey]?.[question.questionKey];
     const quizScore = viewerQuizScore ? getQuizScoreItem(viewerQuizScore, quiz) : null;
     const scoreItem = getQuizScoreQuestionItem(quizScore, question.questionKey);
+    const reviewQuestionAnswer = scoreItem
+      ? getReviewLearnerAnswer(question, questionAnswer, scoreItem)
+      : questionAnswer;
+    const reviewDetails = plainObject(scoreItem?.reviewDetails);
+    const learnerMeasurement =
+      scoreItem && question.type === 'measurementNumeric'
+        ? mergeReviewReferenceValues(
+            questionAnswer,
+            scoreItem.learnerResponse,
+            reviewDetails.learnerMeasurement
+          )
+        : {};
     const hasViewerTargetOverride = Object.prototype.hasOwnProperty.call(options, 'viewerTarget');
     const viewerTarget = hasViewerTargetOverride
       ? options.viewerTarget
       : scoreItem
-        ? getReviewAnswerTarget(question, questionAnswer) || getQuestionViewerTarget(question)
+        ? getReviewAnswerTarget(question, reviewQuestionAnswer) ||
+          getCorrectReviewTarget(question, scoreItem) ||
+          getQuestionViewerTarget(question)
         : getQuestionViewerTarget(question);
     const overlayMarkers = Array.isArray(options.markerOptions)
       ? options.markerOptions
-      : getQuestionOverlayMarkerOptions(quiz, question, questionAnswer);
+      : getQuestionOverlayMarkerOptions(quiz, question, reviewQuestionAnswer, {
+          reviewMode: 'learner',
+        });
+
+    if (
+      question.type === 'measurementNumeric' &&
+      hasMeasurementComparisonReference(learnerMeasurement)
+    ) {
+      try {
+        const measurementResult = await runViewerCommand(
+          commandsManager,
+          'showViewerQuizLearnerMeasurement',
+          {
+            learnerMeasurement,
+            viewerTarget:
+              viewerTarget ||
+              getReviewAnswerTarget(question, learnerMeasurement) ||
+              getQuestionViewerTarget(question),
+            questionKey: question.questionKey,
+          }
+        );
+
+        if (measurementResult?.ok === true) {
+          return;
+        }
+
+        console.warn('[CaseQuestionsPanel] learner measurement was not displayed', {
+          questionKey: question.questionKey,
+          result: measurementResult,
+        });
+      } catch (error) {
+        console.warn('[CaseQuestionsPanel] learner measurement display failed:', error);
+      }
+    }
 
     if (!viewerTarget) {
       if (overlayMarkers.length) {
@@ -1332,6 +1760,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       if (overlayMarkers.length) {
         await runViewerCommand(commandsManager, 'showViewerQuizMarkerOptions', {
           viewerTarget: null,
+          viewportId: result?.viewportId || '',
           markerOptions: overlayMarkers,
           questionKey: question.questionKey,
         });
@@ -2373,24 +2802,44 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       return null;
     }
 
-    const learnerAnswer =
-      scoreItem.learnerResponse !== undefined
-        ? scoreItem.learnerResponse
-        : answersByQuizKey?.[quiz.quizKey]?.[question.questionKey];
+    const persistedLearnerAnswer = answersByQuizKey?.[quiz.quizKey]?.[question.questionKey];
+    const learnerAnswer = getReviewLearnerAnswer(question, persistedLearnerAnswer, scoreItem);
     const correctAnswerVisible = scoreItem.correctAnswerVisible === true;
     const learnerTarget = getReviewAnswerTarget(question, learnerAnswer);
     const correctTarget = getCorrectReviewTarget(question, scoreItem);
-    const comparisonMarkers = getQuestionOverlayMarkerOptions(
-      quiz,
-      question,
-      answersByQuizKey?.[quiz.quizKey]?.[question.questionKey]
-    );
-    const status = cleanString(scoreItem.status).toLowerCase();
-    const correct = status === 'met' || status === 'correct';
+    const comparisonMarkers = getQuestionOverlayMarkerOptions(quiz, question, learnerAnswer, {
+      reviewMode: 'comparison',
+    });
+    const correct = isQuizReviewItemCorrect(question, scoreItem);
     const reviewDetails = plainObject(scoreItem.reviewDetails);
-    const canShowComparison =
+    const learnerMeasurement = mergeReviewReferenceValues(
+      persistedLearnerAnswer,
+      scoreItem.learnerResponse,
+      reviewDetails.learnerMeasurement
+    );
+    const rubricMeasurement = mergeReviewReferenceValues(
+      question?.answerConfig?.goldMeasurement,
+      scoreItem.correctAnswer,
+      reviewDetails.goldMeasurement,
+      reviewDetails.rubricMeasurement
+    );
+
+    const canShowMarkerComparison =
       (isMarkerChoiceQuestionType(question) || isPlaceMarkerQuestionType(question)) &&
       comparisonMarkers.length > 0;
+
+    const canShowFrameComparison = question.type === 'frameSelection' && !!correctTarget;
+    const canShowMeasurementComparison =
+      question.type === 'measurementNumeric' &&
+      correctAnswerVisible &&
+      hasMeasurementComparisonReference(learnerMeasurement) &&
+      hasMeasurementComparisonReference(rubricMeasurement);
+    const canShowComparison =
+      canShowMarkerComparison || canShowFrameComparison || canShowMeasurementComparison;
+    const canShowLearnerAnswerButton =
+      !!learnerTarget &&
+      question.type !== 'measurementNumeric' &&
+      !isPlaceMarkerQuestionType(question);
 
     return (
       <div
@@ -2414,14 +2863,23 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
 
         {correctAnswerVisible ? (
           <div className="mt-1">
-            <span className="font-semibold">Correct answer:</span>{' '}
-            {formatReviewAnswer(question, scoreItem.correctAnswer)}
+            <span className="font-semibold">
+              {question.type === 'measurementNumeric' ? 'Rubric answer:' : 'Correct answer:'}
+            </span>{' '}
+            {formatCorrectReviewAnswer(question, scoreItem.correctAnswer)}
           </div>
         ) : null}
 
         {reviewDetails.mode === 'frameSelection' ? (
           <div className="mt-1 text-gray-300">
-            Frame difference: {formatReviewNumber(reviewDetails.frameDelta)}; accepted tolerance:{' '}
+            Instance match:{' '}
+            {compareViewerTargetInstances(
+              reviewDetails.learnerTarget || scoreItem?.learnerResponse,
+              reviewDetails.goldTarget || scoreItem?.correctAnswer
+            ) === false
+              ? 'No'
+              : 'Yes'}
+            ; frame difference: {formatReviewNumber(reviewDetails.frameDelta)}; accepted tolerance:{' '}
             {formatReviewNumber(reviewDetails.toleranceFrames)} frame(s).
           </div>
         ) : null}
@@ -2449,7 +2907,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
 
         {learnerTarget || correctTarget || canShowComparison ? (
           <div className="mt-2 flex flex-wrap gap-2">
-            {learnerTarget ? (
+            {canShowLearnerAnswerButton ? (
               <button
                 type="button"
                 className="hover:bg-blue-950 rounded border border-blue-500 px-2 py-1 font-semibold text-blue-100"
@@ -2460,9 +2918,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                     force: true,
                     viewerTarget: learnerTarget,
                     markerOptions: isPlaceMarkerQuestionType(question)
-                      ? getPlacedAnswerMarkerOptions(
-                          answersByQuizKey?.[quiz.quizKey]?.[question.questionKey]
-                        )
+                      ? getPlacedAnswerMarkerOptions(learnerAnswer)
                       : [],
                   });
                 }}
@@ -2471,40 +2927,54 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               </button>
             ) : null}
 
-            {correctTarget ? (
-              <button
-                type="button"
-                className="hover:bg-purple-950 rounded border border-purple-500 px-2 py-1 font-semibold text-purple-100"
-                onClick={event => {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  selectQuestion(quiz, question, {
-                    force: true,
-                    viewerTarget: correctTarget,
-                    markerOptions: getGoldReviewMarkerOptions(question, scoreItem),
-                  });
-                }}
-              >
-                Show correct answer
-              </button>
-            ) : null}
-
             {canShowComparison ? (
               <button
                 type="button"
                 className="rounded border border-gray-500 px-2 py-1 font-semibold text-gray-100 hover:bg-gray-800"
-                onClick={event => {
+                onClick={async event => {
                   event.preventDefault();
                   event.stopPropagation();
+
+                  if (canShowMeasurementComparison) {
+                    try {
+                      const result = await runViewerCommand(
+                        commandsManager,
+                        'showViewerQuizMeasurementComparison',
+                        {
+                          learnerMeasurement,
+                          rubricMeasurement,
+                          viewerTarget:
+                            correctTarget || learnerTarget || getQuestionViewerTarget(question),
+                          questionKey: question.questionKey,
+                        }
+                      );
+
+                      if (result?.learnerRendered !== true || result?.rubricRendered !== true) {
+                        uiNotificationService.show({
+                          title: 'Case Questions',
+                          message:
+                            'The learner and rubric measurement annotations could not both be displayed.',
+                          type: 'warning',
+                          duration: 4500,
+                        });
+                      }
+                    } catch (error) {
+                      console.warn('[CaseQuestionsPanel] measurement comparison failed:', error);
+                    }
+                    return;
+                  }
+
                   selectQuestion(quiz, question, {
                     force: true,
                     viewerTarget:
-                      learnerTarget || correctTarget || getQuestionViewerTarget(question),
-                    markerOptions: comparisonMarkers,
+                      question.type === 'frameSelection'
+                        ? correctTarget
+                        : learnerTarget || correctTarget || getQuestionViewerTarget(question),
+                    markerOptions: canShowMarkerComparison ? comparisonMarkers : [],
                   });
                 }}
               >
-                Show answer comparison
+                Show correct answer
               </button>
             ) : null}
           </div>

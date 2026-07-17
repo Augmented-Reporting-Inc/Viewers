@@ -936,6 +936,10 @@ function buildViewerQuizAnswerFromMeasurement({
 
   const viewerTarget = buildViewerQuizTargetFromMeasurement(measurement, displaySetService);
   const displayText = getMeasurementDisplayText(measurement);
+  const annotationSnapshot = serializeViewerMeasurement(measurement, 'generic', null, {
+    workflow: VIEWER_MEASUREMENTS_WORKFLOW,
+    displaySetService,
+  });
 
   return {
     value: roundQuizMeasurementValue(valueAndUnit.value, 2),
@@ -960,6 +964,7 @@ function buildViewerQuizAnswerFromMeasurement({
       toolName: measurement?.toolName || measurement?.metadata?.toolName || '',
       displayText,
       capturedAt: new Date().toISOString(),
+      annotation: annotationSnapshot,
     },
   };
 }
@@ -1938,11 +1943,10 @@ function quizNumberOrNull(value) {
 function normalizeViewerQuizTarget(target = {}) {
   const source = target && typeof target === 'object' && !Array.isArray(target) ? target : {};
 
-  const frameNumber =
-    quizNumberOrNull(source.frameNumber) ??
-    quizNumberOrNull(source.frameIndex) ??
-    quizNumberOrNull(source.frame);
-
+  const explicitFrameNumber =
+    quizNumberOrNull(source.frameNumber ?? source.FrameNumber) ?? quizNumberOrNull(source.frame);
+  const frameIndex = quizNumberOrNull(source.frameIndex);
+  const frameNumber = explicitFrameNumber ?? (frameIndex !== null ? frameIndex + 1 : null);
   const imageIndex = quizNumberOrNull(source.imageIndex);
 
   return {
@@ -2182,13 +2186,9 @@ function getInstanceNumberForViewerQuizTarget({
   displaySet,
   sopInstanceId = '',
   imageIndex = -1,
+  imageId = '',
 } = {}) {
   const instances = getDisplaySetInstances(displaySet);
-
-  if (!instances.length) {
-    return null;
-  }
-
   const matchedInstance =
     instances.find(
       instance => String(getSopInstanceIdFromSource(instance) || '') === String(sopInstanceId || '')
@@ -2197,8 +2197,27 @@ function getInstanceNumberForViewerQuizTarget({
       ? instances[Number(imageIndex)]
       : null) ||
     instances[0];
+  const displaySetInstanceNumber = getInstanceNumberFromSource(matchedInstance);
 
-  return getInstanceNumberFromSource(matchedInstance);
+  if (Number.isFinite(Number(displaySetInstanceNumber))) {
+    return Number(displaySetInstanceNumber);
+  }
+
+  const metadataCandidates = [
+    metaData.get?.('instance', imageId),
+    metaData.get?.('instanceModule', imageId),
+    metaData.get?.('generalImageModule', imageId),
+  ];
+
+  for (const metadataSource of metadataCandidates) {
+    const metadataInstanceNumber = getInstanceNumberFromSource(metadataSource);
+
+    if (Number.isFinite(Number(metadataInstanceNumber))) {
+      return Number(metadataInstanceNumber);
+    }
+  }
+
+  return null;
 }
 
 function getActiveViewportDisplaySet({ viewportGridService, displaySetService, viewportId }) {
@@ -2260,6 +2279,7 @@ function buildViewerQuizFrameAnswer({ viewport, displaySet, viewportId = '' } = 
       displaySet,
       sopInstanceId,
       imageIndex: imageInfo.imageIndex,
+      imageId: imageInfo.imageId,
     }),
     displaySetInstanceUID: displaySet?.displaySetInstanceUID || '',
     referencedImageId: imageInfo.imageId,
@@ -2336,6 +2356,7 @@ function buildViewerQuizPointAnswer({ event, viewport, displaySet, viewportId = 
       displaySet,
       sopInstanceId,
       imageIndex: imageInfo.imageIndex,
+      imageId: imageInfo.imageId,
     }),
     displaySetInstanceUID: displaySet?.displaySetInstanceUID || '',
     referencedImageId: imageInfo.imageId,
@@ -2852,6 +2873,58 @@ function getCanvasPointForViewerQuizMarker(viewport, marker = {}) {
   return null;
 }
 
+function getViewerQuizMarkerToleranceRadiusPx(viewport, marker = {}, canvasPoint = null) {
+  const radius = Number(marker?.toleranceRadius);
+
+  if (!Number.isFinite(radius) || radius <= 0 || !canvasPoint) {
+    return 0;
+  }
+
+  const radiusUnit = String(marker?.toleranceRadiusUnit || '')
+    .trim()
+    .toLowerCase();
+
+  if (radiusUnit === 'canvas' || radiusUnit === 'pixel' || radiusUnit === 'pixels') {
+    return radius;
+  }
+
+  const point = marker?.point || marker;
+  const worldPoint = [Number(point?.x), Number(point?.y), Number(point?.z || 0)];
+
+  if (
+    String(point?.coordinateSpace || marker?.coordinateSpace || '').trim() !== 'world' ||
+    worldPoint.some(value => !Number.isFinite(value)) ||
+    typeof viewport?.worldToCanvas !== 'function'
+  ) {
+    return radius;
+  }
+
+  try {
+    const camera = viewport.getCamera?.() || {};
+    const viewUp = Array.isArray(camera.viewUp) ? camera.viewUp : [0, 1, 0];
+    const viewPlaneNormal = Array.isArray(camera.viewPlaneNormal)
+      ? camera.viewPlaneNormal
+      : [0, 0, 1];
+    const right = vec3.create();
+    vec3.cross(right, viewUp, viewPlaneNormal);
+
+    if (vec3.length(right) === 0) {
+      vec3.set(right, 1, 0, 0);
+    } else {
+      vec3.normalize(right, right);
+    }
+
+    const edgeWorld = vec3.scaleAndAdd(vec3.create(), worldPoint as any, right, radius);
+    const edgeCanvas = viewport.worldToCanvas(edgeWorld);
+
+    if (Array.isArray(edgeCanvas) && edgeCanvas.length >= 2) {
+      return Math.hypot(edgeCanvas[0] - canvasPoint.x, edgeCanvas[1] - canvasPoint.y);
+    }
+  } catch {}
+
+  return radius;
+}
+
 function drawViewerQuizMarkerOptions({ viewport, markerOptions = [] } = {}) {
   const element = viewport?.element;
 
@@ -2871,6 +2944,14 @@ function drawViewerQuizMarkerOptions({ viewport, markerOptions = [] } = {}) {
   }
 
   let renderedCount = 0;
+  const renderedCanvasPoints: Array<{ x: number; y: number }> = [];
+  const overlapOffsets = [
+    { x: 0, y: 0 },
+    { x: 18, y: -18 },
+    { x: -18, y: 18 },
+    { x: 18, y: 18 },
+    { x: -18, y: -18 },
+  ];
 
   for (const marker of Array.isArray(markerOptions) ? markerOptions : []) {
     const markerId = String(marker?.markerId || marker?.markerKey || marker?.value || '').trim();
@@ -2881,13 +2962,40 @@ function drawViewerQuizMarkerOptions({ viewport, markerOptions = [] } = {}) {
       continue;
     }
 
+    const overlappingMarkerCount = renderedCanvasPoints.filter(
+      renderedPoint =>
+        Math.abs(renderedPoint.x - canvasPoint.x) <= 4 &&
+        Math.abs(renderedPoint.y - canvasPoint.y) <= 4
+    ).length;
+    const overlapOffset =
+      overlapOffsets[Math.min(overlappingMarkerCount, overlapOffsets.length - 1)];
     const reviewStyle = getViewerQuizMarkerReviewStyle(marker);
+    const toleranceRadiusPx = getViewerQuizMarkerToleranceRadiusPx(viewport, marker, canvasPoint);
+
+    if (toleranceRadiusPx > 0) {
+      const toleranceNode = document.createElement('div');
+      toleranceNode.className = VIEWER_QUIZ_MARKER_OVERLAY_CLASS;
+      toleranceNode.dataset.reviewState = 'gold-tolerance';
+      toleranceNode.style.position = 'absolute';
+      toleranceNode.style.left = `${canvasPoint.x}px`;
+      toleranceNode.style.top = `${canvasPoint.y}px`;
+      toleranceNode.style.width = `${toleranceRadiusPx * 2}px`;
+      toleranceNode.style.height = `${toleranceRadiusPx * 2}px`;
+      toleranceNode.style.transform = 'translate(-50%, -50%)';
+      toleranceNode.style.zIndex = '29';
+      toleranceNode.style.pointerEvents = 'none';
+      toleranceNode.style.border = '2px dashed #c084fc';
+      toleranceNode.style.background = 'rgba(192, 132, 252, 0.08)';
+      toleranceNode.style.borderRadius = '9999px';
+      element.appendChild(toleranceNode);
+    }
+
     const node = document.createElement('div');
     node.className = VIEWER_QUIZ_MARKER_OVERLAY_CLASS;
     node.dataset.reviewState = String(marker?.reviewState || marker?.variant || 'neutral');
     node.style.position = 'absolute';
-    node.style.left = `${canvasPoint.x}px`;
-    node.style.top = `${canvasPoint.y}px`;
+    node.style.left = `${canvasPoint.x + overlapOffset.x}px`;
+    node.style.top = `${canvasPoint.y + overlapOffset.y}px`;
     node.style.transform = 'translate(-50%, -50%)';
     node.style.zIndex = '30';
     node.style.pointerEvents = 'none';
@@ -2906,6 +3014,7 @@ function drawViewerQuizMarkerOptions({ viewport, markerOptions = [] } = {}) {
     node.textContent = label;
 
     element.appendChild(node);
+    renderedCanvasPoints.push(canvasPoint);
     renderedCount += 1;
   }
 
@@ -2913,6 +3022,379 @@ function drawViewerQuizMarkerOptions({ viewport, markerOptions = [] } = {}) {
     ok: true,
     renderedCount,
   };
+}
+
+function asViewerQuizPlainObject(value: any) {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+}
+
+function getViewerQuizMeasurementReferenceCandidates(reference: any = {}) {
+  const source = asViewerQuizPlainObject(reference);
+  const reviewPayload = asViewerQuizPlainObject(source.reviewPayload);
+  const nested = [
+    source,
+    source.learnerMeasurement,
+    source.rubricMeasurement,
+    source.goldMeasurement,
+    source.correctAnswer,
+    reviewPayload,
+  ]
+    .map(asViewerQuizPlainObject)
+    .filter(candidate => Object.keys(candidate).length > 0);
+
+  return Array.from(new Set(nested));
+}
+
+function getViewerQuizMeasurementAnnotationSnapshot(reference: any = {}) {
+  const candidates = getViewerQuizMeasurementReferenceCandidates(reference).flatMap(source => {
+    const reviewPayload = asViewerQuizPlainObject(source.reviewPayload);
+
+    return [
+      source.annotation,
+      source.annotationSnapshot,
+      reviewPayload.annotation,
+      reviewPayload.annotationSnapshot,
+      source,
+    ];
+  });
+
+  return (
+    candidates
+      .map(asViewerQuizPlainObject)
+      .find(
+        candidate =>
+          !!String(candidate?.toolName || '').trim() &&
+          !!String(candidate?.referencedImageId || '').trim() &&
+          Array.isArray(candidate?.points) &&
+          candidate.points.length > 0
+      ) || null
+  );
+}
+
+function getViewerQuizMeasurementSourceAnnotationId(reference: any = {}) {
+  for (const source of getViewerQuizMeasurementReferenceCandidates(reference)) {
+    const sourceRefs = asViewerQuizPlainObject(source.sourceRefs);
+    const reviewPayload = asViewerQuizPlainObject(source.reviewPayload);
+    const annotationSnapshot = asViewerQuizPlainObject(
+      source.annotation ||
+        source.annotationSnapshot ||
+        reviewPayload.annotation ||
+        reviewPayload.annotationSnapshot
+    );
+    const annotationId = String(
+      source.sourceAnnotationId ||
+        source.annotationId ||
+        source.annotationUID ||
+        source.uid ||
+        sourceRefs.annotationId ||
+        sourceRefs.measurementId ||
+        annotationSnapshot.annotationId ||
+        annotationSnapshot.uid ||
+        ''
+    ).trim();
+
+    if (annotationId) {
+      return annotationId;
+    }
+  }
+
+  return '';
+}
+
+function normalizeViewerQuizMeasurementMatchText(value: any) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[_\s-]+/g, '');
+}
+
+function getViewerQuizMeasurementReferenceLabels(reference: any = {}) {
+  const labels = getViewerQuizMeasurementReferenceCandidates(reference).flatMap(source => {
+    const reviewPayload = asViewerQuizPlainObject(source.reviewPayload);
+
+    return [
+      source.measurementType,
+      source.label,
+      source.measurementRole,
+      source.role,
+      source.description,
+      reviewPayload.label,
+    ];
+  });
+
+  return new Set(labels.map(normalizeViewerQuizMeasurementMatchText).filter(Boolean));
+}
+
+function getViewerQuizMeasurementReferenceValue(reference: any = {}) {
+  for (const source of getViewerQuizMeasurementReferenceCandidates(reference)) {
+    const measurements = asViewerQuizPlainObject(source.measurements);
+    const value = quizNumberOrNull(
+      source.value ?? measurements.value ?? measurements.length ?? measurements.area
+    );
+
+    if (value !== null) {
+      return value;
+    }
+  }
+
+  return null;
+}
+
+function scoreViewerQuizMeasurementAnnotationCandidate(reference: any = {}, candidate: any = {}) {
+  const referenceTarget = getViewerQuizMeasurementReferenceTarget(reference);
+  const candidateTarget = getViewerQuizMeasurementReferenceTarget({}, candidate);
+  let score = 0;
+
+  if (referenceTarget?.referencedImageId) {
+    const referenceImage = normalizeImageIdForCompare(referenceTarget.referencedImageId);
+    const candidateImage = normalizeImageIdForCompare(candidateTarget?.referencedImageId);
+
+    if (!candidateImage || referenceImage !== candidateImage) {
+      return -1;
+    }
+
+    score += 120;
+  } else if (referenceTarget?.sopInstanceUID) {
+    if (
+      !candidateTarget?.sopInstanceUID ||
+      String(referenceTarget.sopInstanceUID) !== String(candidateTarget.sopInstanceUID)
+    ) {
+      return -1;
+    }
+
+    score += 80;
+  }
+
+  if (
+    referenceTarget?.seriesInstanceUID &&
+    candidateTarget?.seriesInstanceUID === referenceTarget.seriesInstanceUID
+  ) {
+    score += 25;
+  }
+
+  if (
+    Number.isFinite(Number(referenceTarget?.frameNumber)) &&
+    Number(referenceTarget.frameNumber) === Number(candidateTarget?.frameNumber)
+  ) {
+    score += 20;
+  }
+
+  const referenceLabels = getViewerQuizMeasurementReferenceLabels(reference);
+  const candidateLabels = getViewerQuizMeasurementReferenceLabels(candidate);
+
+  if ([...referenceLabels].some(label => candidateLabels.has(label))) {
+    score += 40;
+  }
+
+  const referenceToolName = normalizeViewerQuizMeasurementMatchText(
+    getViewerQuizMeasurementReferenceCandidates(reference)
+      .map(source => source.toolName)
+      .find(Boolean)
+  );
+  const candidateToolName = normalizeViewerQuizMeasurementMatchText(candidate?.toolName);
+
+  if (referenceToolName && candidateToolName === referenceToolName) {
+    score += 20;
+  }
+
+  const referenceValue = getViewerQuizMeasurementReferenceValue(reference);
+  const candidateValue = getViewerQuizMeasurementReferenceValue(candidate);
+
+  if (
+    referenceValue !== null &&
+    candidateValue !== null &&
+    Math.abs(referenceValue - candidateValue) <= 0.01
+  ) {
+    score += 20;
+  }
+
+  return score;
+}
+
+function findViewerQuizMeasurementAnnotationInSeriesDocs(
+  reference: any = {},
+  seriesDocs: any[] = []
+) {
+  const directSnapshot = getViewerQuizMeasurementAnnotationSnapshot(reference);
+
+  if (directSnapshot) {
+    return directSnapshot;
+  }
+
+  const annotations = (Array.isArray(seriesDocs) ? seriesDocs : []).flatMap(seriesDoc =>
+    getRequestedWorkflowAnnotations(seriesDoc?.MeasurementAnnotations)
+  );
+  const sourceAnnotationId = getViewerQuizMeasurementSourceAnnotationId(reference);
+
+  if (sourceAnnotationId) {
+    const exactMatch = annotations.find(
+      candidate => getMeasurementAnnotationId(candidate) === sourceAnnotationId
+    );
+
+    if (exactMatch) {
+      return exactMatch;
+    }
+  }
+
+  const bestMatch = annotations
+    .map(candidate => ({
+      candidate,
+      score: scoreViewerQuizMeasurementAnnotationCandidate(reference, candidate),
+    }))
+    .filter(entry => entry.score >= 60)
+    .sort((left, right) => right.score - left.score)[0];
+
+  return bestMatch?.candidate || null;
+}
+
+function getViewerQuizMeasurementReferenceTarget(
+  reference: any = {},
+  annotationSnapshot: any = {}
+) {
+  const annotation = asViewerQuizPlainObject(annotationSnapshot);
+  const directTarget = getViewerQuizMeasurementReferenceCandidates(reference)
+    .flatMap(source => {
+      const placedMarker = asViewerQuizPlainObject(source.placedMarker);
+
+      return [
+        source.viewerTarget,
+        source.selectedTarget,
+        placedMarker.viewerTarget,
+        placedMarker.selectedTarget,
+      ];
+    })
+    .map(asViewerQuizPlainObject)
+    .find(candidate => Object.keys(candidate).length > 0);
+
+  if (directTarget) {
+    return directTarget;
+  }
+
+  if (!Object.keys(annotation).length) {
+    return null;
+  }
+
+  return {
+    studyInstanceUID: annotation.StudyInstanceUID || '',
+    seriesInstanceUID: annotation.SeriesInstanceUID || annotation.referenceSeriesUID || '',
+    sopInstanceUID: annotation.SOPInstanceUID || '',
+    displaySetInstanceUID: annotation.displaySetInstanceUID || '',
+    referencedImageId: annotation.referencedImageId || '',
+    frameNumber: annotation.frameNumber,
+  };
+}
+
+function buildViewerQuizMeasurementStateStyle({
+  color,
+  background,
+  lineDash = '',
+}: {
+  color: string;
+  background: string;
+  lineDash?: string;
+}) {
+  const style: Record<string, string> = {};
+  const suffixes = [
+    '',
+    'Active',
+    'Passive',
+    'Highlighted',
+    'HighlightedActive',
+    'HighlightedPassive',
+    'Selected',
+    'SelectedActive',
+    'SelectedPassive',
+    'Locked',
+    'LockedActive',
+    'LockedPassive',
+  ];
+
+  suffixes.forEach(suffix => {
+    style[`color${suffix}`] = color;
+    style[`lineWidth${suffix}`] = '3';
+    style[`lineDash${suffix}`] = lineDash;
+    style[`textBoxColor${suffix}`] = color;
+    style[`textBoxBackground${suffix}`] = background;
+    style[`textBoxLinkLineColor${suffix}`] = color;
+    style[`textBoxLinkLineWidth${suffix}`] = '2';
+    style[`textBoxLinkLineDash${suffix}`] = lineDash;
+  });
+
+  return style;
+}
+
+const VIEWER_QUIZ_MEASUREMENT_COMPARISON_STYLES = Object.freeze({
+  learner: buildViewerQuizMeasurementStateStyle({
+    color: 'rgb(56, 189, 248)',
+    background: 'rgba(8, 47, 73, 0.9)',
+  }),
+  rubric: buildViewerQuizMeasurementStateStyle({
+    color: 'rgb(192, 132, 252)',
+    background: 'rgba(59, 7, 100, 0.9)',
+    lineDash: '5,3',
+  }),
+});
+
+function buildViewerQuizMeasurementComparisonAnnotation({
+  sourceAnnotation,
+  variant,
+  questionKey,
+}: {
+  sourceAnnotation: any;
+  variant: 'learner' | 'rubric';
+  questionKey?: string;
+}) {
+  const safeQuestionKey = String(questionKey || 'question')
+    .trim()
+    .replace(/[^A-Za-z0-9._-]+/g, '-');
+  const comparisonAnnotationId = `ar-viewer-quiz-${variant}-${safeQuestionKey}`;
+  const label = variant === 'rubric' ? 'Rubric measurement' : 'Your measurement';
+
+  return {
+    ...sourceAnnotation,
+    annotationId: comparisonAnnotationId,
+    uid: comparisonAnnotationId,
+    label,
+    measurementRole: label,
+    role: label,
+    isLocked: true,
+    isVisible: true,
+    measurementOwner: variant,
+  };
+}
+
+function hydrateViewerQuizMeasurementComparisonAnnotation({
+  comparisonAnnotation,
+  viewport,
+  viewportId,
+  referencedImageIdOverride = '',
+  fallbackFrameOfReferenceUID = '',
+}: {
+  comparisonAnnotation: any;
+  viewport: any;
+  viewportId: string;
+  referencedImageIdOverride?: string;
+  fallbackFrameOfReferenceUID?: string;
+}) {
+  const toolName = String(comparisonAnnotation?.toolName || '')
+    .trim()
+    .toLowerCase();
+
+  if (toolName === 'length') {
+    return hydrateSavedLengthAnnotationForActiveViewport({
+      annotation: comparisonAnnotation,
+      activeViewportId: viewportId,
+      referencedImageIdOverride,
+    });
+  }
+
+  return hydrateSavedViewerAnnotationForViewport({
+    annotation: comparisonAnnotation,
+    viewport,
+    viewportId,
+    referencedImageIdOverride,
+    fallbackFrameOfReferenceUID,
+  });
 }
 
 function getViewerUrlSearchParams() {
@@ -3227,6 +3709,7 @@ function commandsModule({
   extensionManager,
 }: OhifTypes.Extensions.ExtensionParams): OhifTypes.Extensions.CommandsModule {
   const viewerMeasurementsCreatedInSession = new Set<string>();
+  const viewerQuizMeasurementComparisonAnnotationIds = new Set<string>();
   const {
     viewportGridService,
     toolGroupService,
@@ -3254,6 +3737,110 @@ function commandsModule({
   function _getActiveViewportToolGroupId() {
     const viewport = _getActiveViewportEnabledElement();
     return toolGroupService.getToolGroupForViewport(viewport.id);
+  }
+
+  function getViewerQuizMeasurementAnnotationFromService(reference: any = {}) {
+    const annotationId = getViewerQuizMeasurementSourceAnnotationId(reference);
+    const measurement = findMeasurementServiceMeasurementById(measurementService, annotationId);
+
+    if (measurement) {
+      return serializeViewerMeasurement(measurement, 'generic', null, {
+        workflow: VIEWER_MEASUREMENTS_WORKFLOW,
+        displaySetService,
+      });
+    }
+
+    const stateAnnotation = annotationId ? annotation.state.getAnnotation?.(annotationId) : null;
+
+    if (!stateAnnotation) {
+      return null;
+    }
+
+    const metadata = asViewerQuizPlainObject(stateAnnotation.metadata);
+    const data = asViewerQuizPlainObject(stateAnnotation.data);
+    const handles = asViewerQuizPlainObject(data.handles);
+    const referenceValue = getViewerQuizMeasurementReferenceValue(reference);
+    const referenceSource = getViewerQuizMeasurementReferenceCandidates(reference)[0] || {};
+    const unit = String(referenceSource.unit || '').trim();
+
+    return {
+      annotationId,
+      uid: annotationId,
+      workflow: VIEWER_MEASUREMENTS_WORKFLOW,
+      role: data.label || referenceSource.measurementType || '',
+      measurementRole: data.label || referenceSource.measurementType || '',
+      label: data.label || referenceSource.measurementType || '',
+      toolName: metadata.toolName || referenceSource.toolName || 'Length',
+      StudyInstanceUID: metadata.StudyInstanceUID || '',
+      SeriesInstanceUID: metadata.SeriesInstanceUID || '',
+      SOPInstanceUID: metadata.SOPInstanceUID || '',
+      FrameOfReferenceUID: metadata.FrameOfReferenceUID || '',
+      displaySetInstanceUID: metadata.displaySetInstanceUID || '',
+      referencedImageId: metadata.referencedImageId || '',
+      frameNumber: getFrameNumberFromReferencedImageId(metadata.referencedImageId || ''),
+      points: Array.isArray(handles.points) ? handles.points : [],
+      measurements:
+        referenceValue !== null
+          ? {
+              value: referenceValue,
+              length: referenceValue,
+              unit,
+              lengthUnit: unit,
+            }
+          : {},
+      displayText: referenceValue !== null ? [`${referenceValue}${unit ? ` ${unit}` : ''}`] : [],
+    };
+  }
+
+  async function getViewerQuizMeasurementSeriesDocs() {
+    const saveTarget = getArViewerSaveTargetFromUrl();
+    const learnerSeriesId = saveTarget.learnerSeriesId || saveTarget.seriesId;
+    let learnerSeriesDoc = null;
+    let baseSeriesDoc = null;
+
+    try {
+      learnerSeriesDoc = learnerSeriesId
+        ? await fetchSeriesDocById(learnerSeriesId)
+        : await fetchSeriesDocForActiveStudy(servicesManager);
+    } catch (error) {
+      console.warn('[ViewerQuiz] learner series lookup failed for measurement review', error);
+    }
+
+    const baseSeriesId = String(
+      saveTarget.baseSeriesId ||
+        learnerSeriesDoc?.derivedFrom ||
+        learnerSeriesDoc?.baseSeriesId ||
+        ''
+    ).trim();
+
+    if (baseSeriesId && baseSeriesId !== String(learnerSeriesDoc?._id || '')) {
+      try {
+        baseSeriesDoc = await fetchSeriesDocById(baseSeriesId);
+      } catch (error) {
+        console.warn('[ViewerQuiz] base series lookup failed for measurement review', error);
+      }
+    }
+
+    return {
+      learnerSeriesDoc,
+      baseSeriesDoc,
+    };
+  }
+
+  function clearViewerQuizMeasurementComparisonAnnotations() {
+    for (const annotationId of viewerQuizMeasurementComparisonAnnotationIds) {
+      try {
+        annotation.state.removeAnnotation?.(annotationId);
+      } catch {}
+    }
+
+    viewerQuizMeasurementComparisonAnnotationIds.clear();
+
+    try {
+      const activeViewportId = viewportGridService.getActiveViewportId();
+      const viewport = cornerstoneViewportService.getCornerstoneViewport(activeViewportId);
+      viewport?.render?.();
+    } catch {}
   }
 
   function _getActiveSegmentationInfo() {
@@ -6181,7 +6768,12 @@ function commandsModule({
         };
       }
 
-      return jumpViewportToViewerQuizTargetImage(viewport, target);
+      const jumpResult = await jumpViewportToViewerQuizTargetImage(viewport, target);
+
+      return {
+        ...jumpResult,
+        viewportId: targetViewportId,
+      };
     },
     clearViewerQuizMarkerOptions: () => {
       clearAllViewerQuizMarkerOverlays();
@@ -6191,15 +6783,21 @@ function commandsModule({
     },
     showViewerQuizMarkerOptions: async ({
       viewerTarget,
+      viewportId = '',
       markerOptions = [],
       questionKey = '',
     } = {}) => {
+      let resolvedViewportId = viewportId || viewportGridService.getActiveViewportId();
+
       if (viewerTarget) {
-        await actions.jumpToViewerQuizTarget({ viewerTarget, questionKey });
+        const navigationResult = await actions.jumpToViewerQuizTarget({
+          viewerTarget,
+          questionKey,
+        });
+        resolvedViewportId = navigationResult?.viewportId || resolvedViewportId;
       }
 
-      const activeViewportId = viewportGridService.getActiveViewportId();
-      const viewport = cornerstoneViewportService.getCornerstoneViewport(activeViewportId);
+      const viewport = cornerstoneViewportService.getCornerstoneViewport(resolvedViewportId);
 
       if (!viewport) {
         return {
@@ -6213,6 +6811,216 @@ function commandsModule({
         viewport,
         markerOptions,
       });
+    },
+    showViewerQuizLearnerMeasurement: async ({
+      learnerMeasurement = {},
+      viewerTarget = null,
+      questionKey = '',
+    } = {}) => {
+      clearViewerQuizMeasurementComparisonAnnotations();
+      clearAllViewerQuizMarkerOverlays();
+
+      const { learnerSeriesDoc, baseSeriesDoc } = await getViewerQuizMeasurementSeriesDocs();
+      const learnerAnnotation =
+        findViewerQuizMeasurementAnnotationInSeriesDocs(learnerMeasurement, [
+          learnerSeriesDoc,
+          baseSeriesDoc,
+        ]) || getViewerQuizMeasurementAnnotationFromService(learnerMeasurement);
+
+      if (!learnerAnnotation) {
+        if (viewerTarget) {
+          await actions.jumpToViewerQuizTarget({
+            viewerTarget,
+            questionKey,
+          });
+        }
+
+        return {
+          ok: false,
+          reason: 'learner-measurement-annotation-not-found',
+          learnerRendered: false,
+        };
+      }
+
+      await actions.jumpToSavedViewerAnnotation({
+        annotation: learnerAnnotation,
+      });
+
+      const learnerAnnotationId = getMeasurementAnnotationId(learnerAnnotation);
+      const renderedAnnotation = learnerAnnotationId
+        ? annotation.state.getAnnotation?.(learnerAnnotationId)
+        : null;
+
+      if (renderedAnnotation) {
+        renderedAnnotation.isVisible = true;
+        renderedAnnotation.isLocked = true;
+        cornerstoneTools.annotation.selection.setAnnotationSelected?.(learnerAnnotationId, true);
+      }
+
+      return {
+        ok: !!renderedAnnotation,
+        reason: renderedAnnotation ? '' : 'learner-measurement-hydration-failed',
+        learnerRendered: !!renderedAnnotation,
+        annotationId: learnerAnnotationId,
+      };
+    },
+    clearViewerQuizMeasurementComparison: () => {
+      clearViewerQuizMeasurementComparisonAnnotations();
+      return {
+        ok: true,
+      };
+    },
+    showViewerQuizMeasurementComparison: async ({
+      learnerMeasurement = {},
+      rubricMeasurement = {},
+      viewerTarget = null,
+      questionKey = '',
+    } = {}) => {
+      clearViewerQuizMeasurementComparisonAnnotations();
+      clearAllViewerQuizMarkerOverlays();
+
+      const { learnerSeriesDoc, baseSeriesDoc } = await getViewerQuizMeasurementSeriesDocs();
+
+      const learnerAnnotation =
+        findViewerQuizMeasurementAnnotationInSeriesDocs(learnerMeasurement, [
+          learnerSeriesDoc,
+          baseSeriesDoc,
+        ]) || getViewerQuizMeasurementAnnotationFromService(learnerMeasurement);
+      const rubricAnnotation =
+        findViewerQuizMeasurementAnnotationInSeriesDocs(rubricMeasurement, [
+          baseSeriesDoc,
+          learnerSeriesDoc,
+        ]) || getViewerQuizMeasurementAnnotationFromService(rubricMeasurement);
+
+      if (!learnerAnnotation && !rubricAnnotation) {
+        return {
+          ok: false,
+          reason: 'measurement-annotations-not-found',
+          renderedCount: 0,
+        };
+      }
+
+      const comparisonTarget =
+        viewerTarget ||
+        getViewerQuizMeasurementReferenceTarget(rubricMeasurement, rubricAnnotation) ||
+        getViewerQuizMeasurementReferenceTarget(learnerMeasurement, learnerAnnotation);
+
+      let comparisonViewportId = viewportGridService.getActiveViewportId();
+
+      if (comparisonTarget) {
+        const navigationResult = await actions.jumpToViewerQuizTarget({
+          viewerTarget: comparisonTarget,
+          questionKey,
+        });
+        comparisonViewportId = navigationResult?.viewportId || comparisonViewportId;
+      }
+
+      const viewport = cornerstoneViewportService.getCornerstoneViewport(comparisonViewportId);
+
+      if (!viewport) {
+        return {
+          ok: false,
+          reason: 'viewport-not-found',
+          renderedCount: 0,
+        };
+      }
+
+      const frameOfReferenceId =
+        viewport?.getFrameOfReferenceUID?.() ||
+        viewport?.getImageData?.()?.metadata?.FrameOfReferenceUID ||
+        viewport?.getImageData?.()?.metadata?.frameOfReferenceUID ||
+        '';
+      const learnerSourceAnnotationId =
+        getViewerQuizMeasurementSourceAnnotationId(learnerMeasurement);
+      const existingLearnerAnnotation = learnerSourceAnnotationId
+        ? annotation.state.getAnnotation?.(learnerSourceAnnotationId)
+        : null;
+      let learnerRendered = false;
+      let rubricRendered = false;
+      let renderedCount = 0;
+
+      if (existingLearnerAnnotation) {
+        existingLearnerAnnotation.isVisible = true;
+        existingLearnerAnnotation.isLocked = true;
+        cornerstoneTools.annotation.selection.setAnnotationSelected?.(
+          learnerSourceAnnotationId,
+          false
+        );
+        learnerRendered = true;
+        renderedCount += 1;
+      }
+
+      const entries = [
+        {
+          sourceAnnotation: learnerRendered ? null : learnerAnnotation,
+          variant: 'learner' as const,
+        },
+        {
+          sourceAnnotation: rubricAnnotation,
+          variant: 'rubric' as const,
+        },
+      ].filter(entry => !!entry.sourceAnnotation);
+
+      for (const entry of entries) {
+        const comparisonAnnotation = buildViewerQuizMeasurementComparisonAnnotation({
+          sourceAnnotation: entry.sourceAnnotation,
+          variant: entry.variant,
+          questionKey,
+        });
+        const match = await waitForSavedAnnotationImageMatch(viewport, comparisonAnnotation);
+        const hydrated = hydrateViewerQuizMeasurementComparisonAnnotation({
+          comparisonAnnotation,
+          viewport,
+          viewportId: comparisonViewportId,
+          referencedImageIdOverride: match.imageId || comparisonAnnotation.referencedImageId || '',
+          fallbackFrameOfReferenceUID: frameOfReferenceId,
+        });
+        const comparisonAnnotationId = String(
+          hydrated?.annotationUID || hydrated?.uid || ''
+        ).trim();
+        const hydratedAnnotation = comparisonAnnotationId
+          ? annotation.state.getAnnotation?.(comparisonAnnotationId) || hydrated
+          : null;
+
+        if (!comparisonAnnotationId || !hydratedAnnotation) {
+          continue;
+        }
+
+        hydratedAnnotation.isLocked = true;
+        hydratedAnnotation.isVisible = true;
+        annotation.config.style.setAnnotationStyles(
+          comparisonAnnotationId,
+          VIEWER_QUIZ_MEASUREMENT_COMPARISON_STYLES[entry.variant]
+        );
+        cornerstoneTools.annotation.selection.setAnnotationSelected?.(
+          comparisonAnnotationId,
+          false
+        );
+        viewerQuizMeasurementComparisonAnnotationIds.add(comparisonAnnotationId);
+        renderedCount += 1;
+        if (entry.variant === 'learner') {
+          learnerRendered = true;
+        } else if (entry.variant === 'rubric') {
+          rubricRendered = true;
+        }
+      }
+
+      try {
+        const { triggerAnnotationRenderForViewportIds } = await import(
+          '@cornerstonejs/tools/utilities'
+        );
+        triggerAnnotationRenderForViewportIds([comparisonViewportId]);
+      } catch {}
+
+      viewport.render?.();
+
+      return {
+        ok: renderedCount > 0,
+        reason: renderedCount > 0 ? '' : 'measurement-hydration-failed',
+        renderedCount,
+        learnerRendered,
+        rubricRendered,
+      };
     },
     getCurrentViewerQuizFrameAnswer: async () => {
       const activeViewportId = viewportGridService.getActiveViewportId();
@@ -6953,6 +7761,15 @@ function commandsModule({
     },
     clearViewerQuizMarkerOptions: {
       commandFn: actions.clearViewerQuizMarkerOptions,
+    },
+    showViewerQuizLearnerMeasurement: {
+      commandFn: actions.showViewerQuizLearnerMeasurement,
+    },
+    clearViewerQuizMeasurementComparison: {
+      commandFn: actions.clearViewerQuizMeasurementComparison,
+    },
+    showViewerQuizMeasurementComparison: {
+      commandFn: actions.showViewerQuizMeasurementComparison,
     },
     getCurrentViewerQuizFrameAnswer: {
       commandFn: actions.getCurrentViewerQuizFrameAnswer,
