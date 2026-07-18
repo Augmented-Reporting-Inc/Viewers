@@ -2347,7 +2347,7 @@ function buildViewerQuizPointAnswer({ event, viewport, displaySet, viewportId = 
     displaySet?.SOPInstanceUID ||
     displaySet?.sopInstanceUID ||
     '';
-
+  const pixelSpacing = getCornerstonePixelSpacingMM(imageInfo.imageId);
   const selectedTarget = {
     studyInstanceUID: displaySet?.StudyInstanceUID || displaySet?.studyInstanceUID || '',
     seriesInstanceUID: displaySet?.SeriesInstanceUID || displaySet?.seriesInstanceUID || '',
@@ -2377,7 +2377,8 @@ function buildViewerQuizPointAnswer({ event, viewport, displaySet, viewportId = 
       : {
           x: roundQuizCoordinateValue(canvasPoint.x),
           y: roundQuizCoordinateValue(canvasPoint.y),
-          coordinateSpace: 'canvas',
+          coordinateSpace: 'imagePixels',
+          ...(pixelSpacing ? { pixelSpacing } : {}),
         };
 
   return {
@@ -2399,6 +2400,7 @@ function buildViewerQuizPointAnswer({ event, viewport, displaySet, viewportId = 
       frameNumber,
       imageIndex: imageInfo.imageIndex,
       imageCount: imageInfo.imageIds.length,
+      ...(pixelSpacing ? { pixelSpacing } : {}),
     },
     reviewPayload: {
       capturedAt: new Date().toISOString(),
@@ -2884,11 +2886,37 @@ function getViewerQuizMarkerToleranceRadiusPx(viewport, marker = {}, canvasPoint
     .trim()
     .toLowerCase();
 
-  if (radiusUnit === 'canvas' || radiusUnit === 'pixel' || radiusUnit === 'pixels') {
+  if (
+    radiusUnit === 'canvas' ||
+    radiusUnit === 'pixel' ||
+    radiusUnit === 'pixels' ||
+    radiusUnit === 'imagepixel' ||
+    radiusUnit === 'imagepixels'
+  ) {
     return radius;
   }
 
   const point = marker?.point || marker;
+  const pointCoordinateSpace = String(point?.coordinateSpace || marker?.coordinateSpace || '')
+    .trim()
+    .toLowerCase();
+  const pixelSpacing =
+    point?.pixelSpacing || marker?.pixelSpacing || marker?.sourceRefs?.pixelSpacing || null;
+  const rowSpacing = Number(pixelSpacing?.row ?? pixelSpacing?.rowPixelSpacing);
+  const columnSpacing = Number(pixelSpacing?.column ?? pixelSpacing?.columnPixelSpacing);
+
+  if (
+    (radiusUnit === 'mm' || radiusUnit === 'world') &&
+    ['canvas', 'pixel', 'pixels', 'imagepixel', 'imagepixels'].includes(pointCoordinateSpace) &&
+    Number.isFinite(rowSpacing) &&
+    Number.isFinite(columnSpacing) &&
+    rowSpacing > 0 &&
+    columnSpacing > 0
+  ) {
+    const averageSpacing = (rowSpacing + columnSpacing) / 2;
+    return radius / averageSpacing;
+  }
+
   const worldPoint = [Number(point?.x), Number(point?.y), Number(point?.z || 0)];
 
   if (
@@ -2923,6 +2951,118 @@ function getViewerQuizMarkerToleranceRadiusPx(viewport, marker = {}, canvasPoint
   } catch {}
 
   return radius;
+}
+
+function appendViewerQuizToleranceCircle({ viewport, point, radius, radiusUnit = 'world' } = {}) {
+  const element = viewport?.element;
+
+  if (!element || !point) {
+    return false;
+  }
+
+  const canvasPoint = getCanvasPointForViewerQuizMarker(viewport, {
+    point,
+    coordinateSpace: point.coordinateSpace || 'world',
+  });
+
+  if (!canvasPoint) {
+    return false;
+  }
+
+  const toleranceRadiusPx = getViewerQuizMarkerToleranceRadiusPx(
+    viewport,
+    {
+      point,
+      coordinateSpace: point.coordinateSpace || 'world',
+      toleranceRadius: radius,
+      toleranceRadiusUnit: radiusUnit,
+    },
+    canvasPoint
+  );
+
+  if (!(toleranceRadiusPx > 0)) {
+    return false;
+  }
+
+  const previousPosition = element.style.position;
+  if (!previousPosition || previousPosition === 'static') {
+    element.style.position = 'relative';
+  }
+
+  const toleranceNode = document.createElement('div');
+  toleranceNode.className = VIEWER_QUIZ_MARKER_OVERLAY_CLASS;
+  toleranceNode.dataset.reviewState = 'gold-tolerance';
+  toleranceNode.style.position = 'absolute';
+  toleranceNode.style.left = `${canvasPoint.x}px`;
+  toleranceNode.style.top = `${canvasPoint.y}px`;
+  toleranceNode.style.width = `${toleranceRadiusPx * 2}px`;
+  toleranceNode.style.height = `${toleranceRadiusPx * 2}px`;
+  toleranceNode.style.transform = 'translate(-50%, -50%)';
+  toleranceNode.style.zIndex = '29';
+  toleranceNode.style.pointerEvents = 'none';
+  toleranceNode.style.border = '2px dashed #c084fc';
+  toleranceNode.style.background = 'rgba(192, 132, 252, 0.08)';
+  toleranceNode.style.borderRadius = '9999px';
+  element.appendChild(toleranceNode);
+
+  return true;
+}
+
+function getViewerQuizMeasurementPoints(value = {}) {
+  const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  const reviewPayload =
+    source.reviewPayload &&
+    typeof source.reviewPayload === 'object' &&
+    !Array.isArray(source.reviewPayload)
+      ? source.reviewPayload
+      : {};
+  const annotationSnapshot =
+    source.annotation ||
+    source.annotationSnapshot ||
+    reviewPayload.annotation ||
+    reviewPayload.annotationSnapshot ||
+    source;
+  const handlePoints = annotationSnapshot?.data?.handles?.points;
+  const points = Array.isArray(annotationSnapshot?.points)
+    ? annotationSnapshot.points
+    : Array.isArray(handlePoints)
+      ? handlePoints
+      : Array.isArray(source?.points)
+        ? source.points
+        : [];
+
+  return points.filter(
+    point =>
+      Array.isArray(point) &&
+      point.length >= 2 &&
+      Number.isFinite(Number(point[0])) &&
+      Number.isFinite(Number(point[1]))
+  );
+}
+
+function getViewerQuizMeasurementCenterPoint(value = {}) {
+  const points = getViewerQuizMeasurementPoints(value);
+
+  if (!points.length) {
+    return null;
+  }
+
+  const totals = points.reduce(
+    (result, point) => {
+      result.x += Number(point[0]);
+      result.y += Number(point[1]);
+      result.z += Number(point[2] || 0);
+      return result;
+    },
+    { x: 0, y: 0, z: 0 }
+  );
+
+  return {
+    x: totals.x / points.length,
+    y: totals.y / points.length,
+    z: totals.z / points.length,
+    coordinateSpace: 'world',
+  };
 }
 
 function drawViewerQuizMarkerOptions({ viewport, markerOptions = [] } = {}) {
@@ -2970,25 +3110,13 @@ function drawViewerQuizMarkerOptions({ viewport, markerOptions = [] } = {}) {
     const overlapOffset =
       overlapOffsets[Math.min(overlappingMarkerCount, overlapOffsets.length - 1)];
     const reviewStyle = getViewerQuizMarkerReviewStyle(marker);
-    const toleranceRadiusPx = getViewerQuizMarkerToleranceRadiusPx(viewport, marker, canvasPoint);
 
-    if (toleranceRadiusPx > 0) {
-      const toleranceNode = document.createElement('div');
-      toleranceNode.className = VIEWER_QUIZ_MARKER_OVERLAY_CLASS;
-      toleranceNode.dataset.reviewState = 'gold-tolerance';
-      toleranceNode.style.position = 'absolute';
-      toleranceNode.style.left = `${canvasPoint.x}px`;
-      toleranceNode.style.top = `${canvasPoint.y}px`;
-      toleranceNode.style.width = `${toleranceRadiusPx * 2}px`;
-      toleranceNode.style.height = `${toleranceRadiusPx * 2}px`;
-      toleranceNode.style.transform = 'translate(-50%, -50%)';
-      toleranceNode.style.zIndex = '29';
-      toleranceNode.style.pointerEvents = 'none';
-      toleranceNode.style.border = '2px dashed #c084fc';
-      toleranceNode.style.background = 'rgba(192, 132, 252, 0.08)';
-      toleranceNode.style.borderRadius = '9999px';
-      element.appendChild(toleranceNode);
-    }
+    appendViewerQuizToleranceCircle({
+      viewport,
+      point: marker?.point || marker,
+      radius: marker?.toleranceRadius,
+      radiusUnit: marker?.toleranceRadiusUnit,
+    });
 
     const node = document.createElement('div');
     node.className = VIEWER_QUIZ_MARKER_OVERLAY_CLASS;
@@ -5132,6 +5260,46 @@ function commandsModule({
         ],
       });
     },
+    activateViewerQuizMeasurementTool: ({ toolName = 'Length' } = {}) => {
+      const activeViewportId = viewportGridService.getActiveViewportId();
+      const toolGroupReference = toolGroupService.getToolGroupForViewport(activeViewportId);
+      const toolGroup =
+        typeof toolGroupReference === 'string'
+          ? toolGroupService.getToolGroup(toolGroupReference)
+          : toolGroupReference;
+      const toolGroupId =
+        typeof toolGroupReference === 'string' ? toolGroupReference : toolGroupReference?.id || '';
+
+      if (!toolGroup) {
+        return {
+          ok: false,
+          reason: 'tool-group-not-found',
+          activeViewportId,
+          toolGroupId,
+        };
+      }
+
+      if (!toolGroup.hasTool?.(toolName)) {
+        return {
+          ok: false,
+          reason: 'tool-not-found',
+          toolName,
+          toolGroupId,
+        };
+      }
+
+      actions.setToolActive({
+        toolName,
+        toolGroupId,
+      });
+
+      return {
+        ok: true,
+        toolName,
+        toolGroupId,
+        activeViewportId,
+      };
+    },
     releaseViewerQuizDrawingTool: () => {
       const activeViewportId = viewportGridService.getActiveViewportId();
       const toolGroupReference = toolGroupService.getToolGroupForViewport(activeViewportId);
@@ -6875,6 +7043,8 @@ function commandsModule({
       rubricMeasurement = {},
       viewerTarget = null,
       questionKey = '',
+      radius = null,
+      radiusUnit = 'world',
     } = {}) => {
       clearViewerQuizMeasurementComparisonAnnotations();
       clearAllViewerQuizMarkerOverlays();
@@ -7005,6 +7175,32 @@ function commandsModule({
         }
       }
 
+      const rubricCenter =
+        getViewerQuizMeasurementCenterPoint(rubricAnnotation) ||
+        getViewerQuizMeasurementCenterPoint(rubricMeasurement);
+      const numericRadius = Number(radius);
+      let toleranceCircleRendered = false;
+
+      if (rubricCenter && Number.isFinite(numericRadius) && numericRadius > 0) {
+        toleranceCircleRendered = appendViewerQuizToleranceCircle({
+          viewport,
+          point: rubricCenter,
+          radius: numericRadius,
+          radiusUnit,
+        });
+      }
+
+      if (!toleranceCircleRendered) {
+        console.warn('[ViewerQuiz] measurement tolerance circle was not rendered', {
+          questionKey,
+          hasRubricCenter: !!rubricCenter,
+          radius,
+          radiusUnit,
+          numericRadius,
+          rubricAnnotationId: getAnnotationId(rubricAnnotation),
+        });
+      }
+
       try {
         const { triggerAnnotationRenderForViewportIds } = await import(
           '@cornerstonejs/tools/utilities'
@@ -7020,6 +7216,7 @@ function commandsModule({
         renderedCount,
         learnerRendered,
         rubricRendered,
+        toleranceCircleRendered,
       };
     },
     getCurrentViewerQuizFrameAnswer: async () => {
@@ -7209,6 +7406,9 @@ function commandsModule({
     },
     setToolActive: {
       commandFn: actions.setToolActive,
+    },
+    activateViewerQuizMeasurementTool: {
+      commandFn: actions.activateViewerQuizMeasurementTool,
     },
     releaseViewerQuizDrawingTool: {
       commandFn: actions.releaseViewerQuizDrawingTool,

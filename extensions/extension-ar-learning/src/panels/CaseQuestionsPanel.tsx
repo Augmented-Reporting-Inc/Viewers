@@ -674,7 +674,14 @@ function compareViewerTargetInstances(leftValue: any, rightValue: any) {
 }
 
 function isQuizReviewItemCorrect(question: QuizQuestion, scoreItem: any) {
-  const reviewDetails = plainObject(scoreItem?.reviewDetails);
+  const reviewDetails = {
+    ...plainObject(scoreItem?.scoringDetails),
+    ...plainObject(scoreItem?.reviewDetails),
+  };
+
+  if (question.type === 'measurementNumeric' && typeof reviewDetails.matched === 'boolean') {
+    return reviewDetails.matched;
+  }
 
   if (question.type === 'frameSelection' && reviewDetails.mode === 'frameSelection') {
     const frameDelta = Number(reviewDetails.frameDelta);
@@ -726,6 +733,156 @@ function formatReviewNumber(value: any, decimalPlaces = 0): string {
   }
 
   return decimalPlaces > 0 ? numericValue.toFixed(decimalPlaces) : String(numericValue);
+}
+
+function normalizeReviewDistanceUnit(value: any): string {
+  const unit = cleanString(value);
+  const normalized = unit.toLowerCase();
+
+  if (normalized === 'world' || normalized === 'millimeter' || normalized === 'millimeters') {
+    return 'mm';
+  }
+
+  if (normalized === 'imagepixels' || normalized === 'imagepixel') {
+    return 'pixels';
+  }
+
+  return unit;
+}
+
+function getReviewDistanceDisplay(
+  reviewDetails: Record<string, any>,
+  valueKey: string,
+  mmValueKey: string
+) {
+  const mmValue = Number(reviewDetails?.[mmValueKey]);
+
+  if (Number.isFinite(mmValue)) {
+    return {
+      value: mmValue,
+      unit: 'mm',
+    };
+  }
+
+  return {
+    value: reviewDetails?.[valueKey],
+    unit: normalizeReviewDistanceUnit(reviewDetails?.radiusUnit),
+  };
+}
+
+function getMeasurementReviewPoints(value: any): any[] {
+  const source = plainObject(value);
+  const reviewPayload = plainObject(source.reviewPayload);
+  const annotation = plainObject(
+    source.annotation ||
+      source.annotationSnapshot ||
+      reviewPayload.annotation ||
+      reviewPayload.annotationSnapshot
+  );
+  const handlePoints = annotation?.data?.handles?.points;
+  const points = Array.isArray(annotation.points)
+    ? annotation.points
+    : Array.isArray(handlePoints)
+      ? handlePoints
+      : Array.isArray(source.points)
+        ? source.points
+        : [];
+
+  return points.filter(
+    point =>
+      Array.isArray(point) &&
+      point.length >= 2 &&
+      Number.isFinite(Number(point[0])) &&
+      Number.isFinite(Number(point[1]))
+  );
+}
+
+function getMeasurementReviewMidpoint(value: any) {
+  const directPoint = plainObject(value);
+  const directX = Number(directPoint.x);
+  const directY = Number(directPoint.y);
+
+  if (Number.isFinite(directX) && Number.isFinite(directY)) {
+    const directZ = Number(directPoint.z);
+
+    return {
+      x: directX,
+      y: directY,
+      z: Number.isFinite(directZ) ? directZ : 0,
+    };
+  }
+
+  const points = getMeasurementReviewPoints(value);
+
+  if (!points.length) {
+    return null;
+  }
+
+  const totals = points.reduce(
+    (result, point) => {
+      result.x += Number(point[0]);
+      result.y += Number(point[1]);
+      result.z += Number(point[2] || 0);
+      return result;
+    },
+    { x: 0, y: 0, z: 0 }
+  );
+
+  return {
+    x: totals.x / points.length,
+    y: totals.y / points.length,
+    z: totals.z / points.length,
+  };
+}
+
+function getMeasurementMidpointDistance(leftValue: any, rightValue: any): number | null {
+  const left = getMeasurementReviewMidpoint(leftValue);
+  const right = getMeasurementReviewMidpoint(rightValue);
+
+  if (!left || !right) {
+    return null;
+  }
+
+  return Math.hypot(left.x - right.x, left.y - right.y, left.z - right.z);
+}
+
+function formatMeasurementReviewMidpoint(value: any): string {
+  const midpoint = getMeasurementReviewMidpoint(value);
+
+  if (!midpoint) {
+    return 'Unavailable';
+  }
+
+  return `(${formatReviewNumber(midpoint.x, 2)}, ${formatReviewNumber(
+    midpoint.y,
+    2
+  )}, ${formatReviewNumber(midpoint.z, 2)}) mm`;
+}
+
+function getMeasurementReviewLength(...values: any[]): number | null {
+  for (const value of values) {
+    const source = plainObject(value);
+    const measurements = plainObject(source.measurements);
+    const numericValue = Number(
+      source.value ?? source.goldValue ?? source.length ?? measurements.value ?? measurements.length
+    );
+
+    if (Number.isFinite(numericValue)) {
+      return numericValue;
+    }
+  }
+
+  return null;
+}
+
+function formatMeasurementReviewLength(value: any, unit = ''): string {
+  const numericValue = Number(value);
+
+  if (!Number.isFinite(numericValue)) {
+    return 'Unavailable';
+  }
+
+  return `${numericValue.toFixed(2)}${unit ? ` ${unit}` : ''}`;
 }
 
 function getQuestionChoiceLabel(question: QuizQuestion, value: any) {
@@ -950,14 +1107,15 @@ function getLearnerMarkerOverlayOptions(question: QuizQuestion, learnerAnswer: a
   const selectedMarkerIds = new Set(normalizeMarkerIdList(learnerAnswer));
 
   return normalizeMarkerOptions(getMarkerOptions(question))
-    .filter(marker => {
+    .filter(isMarkerOptionPlaced)
+    .map(marker => {
       const markerId = cleanString(marker.markerId || marker.markerKey || marker.value);
-      return isMarkerOptionPlaced(marker) && selectedMarkerIds.has(markerId);
-    })
-    .map(marker => ({
-      ...marker,
-      reviewState: 'learner',
-    }));
+
+      return {
+        ...marker,
+        reviewState: selectedMarkerIds.has(markerId) ? 'learner' : 'neutral',
+      };
+    });
 }
 
 function getDefinitionId(definition: any): string {
@@ -1125,8 +1283,28 @@ function normalizeMarkerOptions(markerOptions: any[] = []) {
 }
 
 function getNextMarkerId(markerOptions: any[] = []) {
-  const index = markerOptions.length;
-  return `marker-${String.fromCharCode(97 + index)}`;
+  const highestLetter = normalizeMarkerOptions(markerOptions).reduce(
+    (highest, marker) => {
+      const id = cleanString(marker.markerId || marker.markerKey || marker.value);
+      const label = cleanString(marker.label);
+
+      const candidates = [
+        id.match(/^marker-([a-z])$/i)?.[1],
+        label.match(/^marker\s+([a-z])$/i)?.[1],
+      ].filter(Boolean);
+
+      candidates.forEach(letter => {
+        highest = Math.max(highest, letter!.toUpperCase().charCodeAt(0));
+      });
+
+      return highest;
+    },
+    64 // before 'A'
+  );
+
+  const nextLetter = String.fromCharCode(Math.min(highestLetter + 1, 90));
+
+  return `marker-${nextLetter.toLowerCase()}`;
 }
 
 function getDisplayFrameFromTarget(target: any) {
@@ -1303,12 +1481,18 @@ function getOverlayMarkerOptionsForQuestion(
   const includeGoldMarker = options.includeGoldMarker === true;
 
   if (isMarkerChoiceQuestionType(question)) {
+    const correctMarkerIds = new Set(getCorrectMarkerIdsFromAnswerConfig(answerConfig));
+
     return normalizeMarkerOptions(answerConfig.markerOptions)
       .filter(isMarkerOptionPlaced)
-      .map(marker => ({
-        ...marker,
-        reviewState: 'neutral',
-      }));
+      .map(marker => {
+        const markerId = cleanString(marker.markerId || marker.markerKey || marker.value);
+
+        return {
+          ...marker,
+          reviewState: correctMarkerIds.has(markerId) ? 'correct' : 'neutral',
+        };
+      });
   }
 
   if (isPlaceMarkerQuestionType(question)) {
@@ -1650,6 +1834,37 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     return getOverlayMarkerOptionsForQuestion(question);
   }
 
+  async function showAuthoringGoldMeasurement(question: QuizQuestion) {
+    if (!authoringMode || question.type !== 'measurementNumeric') {
+      return null;
+    }
+
+    const answerConfig = plainObject(question.answerConfig);
+    const scoringConfig = plainObject(question.scoringConfig);
+    const goldMeasurement = plainObject(answerConfig.goldMeasurement);
+
+    if (!hasMeasurementComparisonReference(goldMeasurement)) {
+      return null;
+    }
+
+    const result = await runViewerCommand(commandsManager, 'showViewerQuizMeasurementComparison', {
+      rubricMeasurement: goldMeasurement,
+      viewerTarget: getNestedViewerTarget(goldMeasurement) || getQuestionViewerTarget(question),
+      questionKey: question.questionKey,
+      radius: scoringConfig.radius,
+      radiusUnit: cleanString(scoringConfig.radiusUnit) || 'world',
+    });
+
+    if (result?.rubricRendered !== true) {
+      console.warn('[CaseQuestionsPanel] authoring gold measurement was not displayed', {
+        questionKey: question.questionKey,
+        result,
+      });
+    }
+
+    return result;
+  }
+
   async function selectQuestion(
     quiz: QuizDefinition,
     question: QuizQuestion,
@@ -1661,8 +1876,27 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       await runViewerCommand(commandsManager, 'clearViewerQuizMeasurementComparison', {});
     } catch {}
 
-    if (question.type !== 'measurementNumeric') {
+    if (question.type === 'measurementNumeric') {
+      await runViewerCommand(commandsManager, 'activateViewerQuizMeasurementTool', {
+        toolName: 'Length',
+        questionKey: question.questionKey,
+      });
+    } else {
       await runViewerCommand(commandsManager, 'releaseViewerQuizDrawingTool', {});
+    }
+
+    if (authoringMode && question.type === 'measurementNumeric') {
+      setActiveQuestionKey(nextActiveQuestionKey);
+
+      try {
+        const authoringMeasurementResult = await showAuthoringGoldMeasurement(question);
+
+        if (authoringMeasurementResult?.rubricRendered === true) {
+          return;
+        }
+      } catch (error) {
+        console.warn('[CaseQuestionsPanel] authoring gold measurement display failed:', error);
+      }
     }
 
     if (!options.force && activeQuestionKey === nextActiveQuestionKey) {
@@ -1687,13 +1921,20 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
           )
         : {};
     const hasViewerTargetOverride = Object.prototype.hasOwnProperty.call(options, 'viewerTarget');
+    const learnerFrameTarget =
+      question.type === 'frameSelection'
+        ? getNestedViewerTarget(reviewQuestionAnswer) ||
+          getNestedViewerTarget(questionAnswer) ||
+          getNestedViewerTarget(scoreItem?.learnerResponse)
+        : null;
     const viewerTarget = hasViewerTargetOverride
       ? options.viewerTarget
-      : scoreItem
-        ? getReviewAnswerTarget(question, reviewQuestionAnswer) ||
-          getCorrectReviewTarget(question, scoreItem) ||
-          getQuestionViewerTarget(question)
-        : getQuestionViewerTarget(question);
+      : learnerFrameTarget ||
+        (scoreItem
+          ? getReviewAnswerTarget(question, reviewQuestionAnswer) ||
+            getCorrectReviewTarget(question, scoreItem) ||
+            getQuestionViewerTarget(question)
+          : getReviewAnswerTarget(question, questionAnswer) || getQuestionViewerTarget(question));
     const overlayMarkers = Array.isArray(options.markerOptions)
       ? options.markerOptions
       : getQuestionOverlayMarkerOptions(quiz, question, reviewQuestionAnswer, {
@@ -2259,7 +2500,11 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         throw new Error(result?.reason || 'marker capture failed');
       }
 
-      const answerConfig = plainObject(question.answerConfig);
+      const latestQuestion =
+        authoringQuestionsRef.current.find(
+          currentQuestion => currentQuestion.questionKey === question.questionKey
+        ) || question;
+      const answerConfig = plainObject(latestQuestion.answerConfig);
       const existingMarkers = normalizeMarkerOptions(answerConfig.markerOptions);
       const requestedMarkerId = cleanString(markerIdToUpdate);
       const requestedIndex = requestedMarkerId
@@ -2271,15 +2516,17 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       const firstUnplacedIndex = existingMarkers.findIndex(marker => !isMarkerOptionPlaced(marker));
       const markerIndexToUpdate = requestedIndex >= 0 ? requestedIndex : firstUnplacedIndex;
       const existingMarker = markerIndexToUpdate >= 0 ? existingMarkers[markerIndexToUpdate] : null;
-      const markerId =
+      const nextMarkerId =
         cleanString(
           existingMarker?.markerId || existingMarker?.markerKey || existingMarker?.value
         ) || getNextMarkerId(existingMarkers);
+      const markerId = nextMarkerId;
+
       const label =
         cleanString(existingMarker?.label) ||
-        `Marker ${String.fromCharCode(65 + existingMarkers.length)}`;
+        `Marker ${nextMarkerId.replace('marker-', '').toUpperCase()}`;
       const target =
-        result.answer.viewerTarget || result.answer.selectedTarget || question.viewerTarget;
+        result.answer.viewerTarget || result.answer.selectedTarget || latestQuestion.viewerTarget;
       const nextMarker = {
         ...(existingMarker || {}),
         markerId,
@@ -2298,7 +2545,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
             )
           : [...existingMarkers, nextMarker];
       const nextQuestion = {
-        ...question,
+        ...latestQuestion,
         viewerTarget: target,
         answerConfig: {
           ...answerConfig,
@@ -2310,10 +2557,14 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         },
       };
 
-      updateAuthoringQuestion(question.questionKey, () => nextQuestion);
+      const nextQuestions = authoringQuestionsRef.current.map(currentQuestion =>
+        currentQuestion.questionKey === question.questionKey ? nextQuestion : currentQuestion
+      );
+      authoringQuestionsRef.current = nextQuestions;
+      setAuthoringQuestions(nextQuestions);
 
       await runViewerCommand(commandsManager, 'showViewerQuizMarkerOptions', {
-        viewerTarget: target,
+        viewerTarget: null,
         markerOptions: getOverlayMarkerOptionsForQuestion(nextQuestion, {
           includeGoldMarker: true,
         }),
@@ -2344,7 +2595,11 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       return;
     }
 
-    const answerConfig = plainObject(question.answerConfig);
+    const latestQuestion =
+      authoringQuestionsRef.current.find(
+        currentQuestion => currentQuestion.questionKey === question.questionKey
+      ) || question;
+    const answerConfig = plainObject(latestQuestion.answerConfig);
     const nextMarkers = normalizeMarkerOptions(answerConfig.markerOptions).filter(
       marker => cleanString(marker.markerId || marker.markerKey || marker.value) !== markerId
     );
@@ -2352,7 +2607,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       id => id !== markerId
     );
     const nextQuestion = {
-      ...question,
+      ...latestQuestion,
       answerConfig: {
         ...answerConfig,
         markerOptions: nextMarkers,
@@ -2362,10 +2617,17 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       },
     };
 
-    updateAuthoringQuestion(question.questionKey, () => nextQuestion);
+    const nextQuestions = authoringQuestionsRef.current.map(currentQuestion =>
+      currentQuestion.questionKey === question.questionKey ? nextQuestion : currentQuestion
+    );
+
+    authoringQuestionsRef.current = nextQuestions;
+    setAuthoringQuestions(nextQuestions);
+
+    await runViewerCommand(commandsManager, 'clearViewerQuizMarkerOptions', {});
 
     await runViewerCommand(commandsManager, 'showViewerQuizMarkerOptions', {
-      viewerTarget: getQuestionViewerTarget(nextQuestion),
+      viewerTarget: null,
       markerOptions: getOverlayMarkerOptionsForQuestion(nextQuestion, {
         includeGoldMarker: true,
       }),
@@ -2439,6 +2701,19 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       };
 
       updateAuthoringQuestion(question.questionKey, () => nextQuestion);
+
+      try {
+        const displayResult = await showAuthoringGoldMeasurement(nextQuestion);
+
+        if (displayResult?.rubricRendered !== true) {
+          console.warn('[CaseQuestionsPanel] newly captured gold measurement was not displayed', {
+            questionKey: question.questionKey,
+            result: displayResult,
+          });
+        }
+      } catch (error) {
+        console.warn('[CaseQuestionsPanel] newly captured gold measurement display failed:', error);
+      }
 
       uiNotificationService.show({
         title: 'Quiz Authoring',
@@ -2648,18 +2923,32 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                   <input
                     type="checkbox"
                     checked={selected}
-                    onChange={() => {
+                    onChange={async () => {
                       const nextSelectedMarkerIds = toggleMarkerId(selectedMarkerIds, markerId);
                       const selectedMarkerSet = new Set(nextSelectedMarkerIds);
-
-                      setAnswer(quiz.quizKey, question, {
+                      const nextAnswer = {
                         selectedMarkerIds: nextSelectedMarkerIds,
                         selectedMarkers: markerOptions.filter(option =>
                           selectedMarkerSet.has(
                             cleanString(option.markerId || option.markerKey || option.value)
                           )
                         ),
-                      });
+                      };
+
+                      setAnswer(quiz.quizKey, question, nextAnswer);
+
+                      try {
+                        await runViewerCommand(commandsManager, 'showViewerQuizMarkerOptions', {
+                          viewerTarget: getQuestionViewerTarget(question),
+                          markerOptions: getLearnerMarkerOverlayOptions(question, nextAnswer),
+                          questionKey: question.questionKey,
+                        });
+                      } catch (error) {
+                        console.warn(
+                          '[CaseQuestionsPanel] marker selection overlay refresh failed:',
+                          error
+                        );
+                      }
                     }}
                     disabled={disabled}
                   />
@@ -2811,7 +3100,12 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       reviewMode: 'comparison',
     });
     const correct = isQuizReviewItemCorrect(question, scoreItem);
-    const reviewDetails = plainObject(scoreItem.reviewDetails);
+    const reviewDetails = {
+      ...plainObject(scoreItem.scoringDetails),
+      ...plainObject(scoreItem.reviewDetails),
+    };
+    const markerDistanceDisplay = getReviewDistanceDisplay(reviewDetails, 'distance', 'distanceMm');
+    const markerRadiusDisplay = getReviewDistanceDisplay(reviewDetails, 'radius', 'radiusMm');
     const learnerMeasurement = mergeReviewReferenceValues(
       persistedLearnerAnswer,
       scoreItem.learnerResponse,
@@ -2823,6 +3117,41 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       reviewDetails.goldMeasurement,
       reviewDetails.rubricMeasurement
     );
+    const measurementUnit = cleanString(
+      reviewDetails.unit ||
+        learnerMeasurement.unit ||
+        rubricMeasurement.unit ||
+        question?.answerConfig?.unit
+    );
+    const learnerMeasurementLength = getMeasurementReviewLength(
+      reviewDetails.learnerValue,
+      learnerMeasurement
+    );
+    const correctMeasurementLength = getMeasurementReviewLength(
+      reviewDetails.goldValue,
+      rubricMeasurement,
+      scoreItem.correctAnswer
+    );
+    const learnerMeasurementMidpoint =
+      getMeasurementReviewMidpoint(reviewDetails.learnerCenter) ||
+      getMeasurementReviewMidpoint(learnerMeasurement);
+    const correctMeasurementMidpoint =
+      getMeasurementReviewMidpoint(reviewDetails.goldCenter) ||
+      getMeasurementReviewMidpoint(rubricMeasurement);
+    const calculatedLengthDifference =
+      learnerMeasurementLength !== null && correctMeasurementLength !== null
+        ? Math.abs(learnerMeasurementLength - correctMeasurementLength)
+        : null;
+    const measurementLengthDifference = Number.isFinite(Number(reviewDetails.lengthDelta))
+      ? Number(reviewDetails.lengthDelta)
+      : calculatedLengthDifference;
+    const calculatedMidpointDistance = getMeasurementMidpointDistance(
+      learnerMeasurementMidpoint,
+      correctMeasurementMidpoint
+    );
+    const measurementMidpointDistance = Number.isFinite(Number(reviewDetails.centerDistance))
+      ? Number(reviewDetails.centerDistance)
+      : calculatedMidpointDistance;
 
     const canShowMarkerComparison =
       (isMarkerChoiceQuestionType(question) || isPlaceMarkerQuestionType(question)) &&
@@ -2840,6 +3169,11 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       !!learnerTarget &&
       question.type !== 'measurementNumeric' &&
       !isPlaceMarkerQuestionType(question);
+    const measurementRadius = reviewDetails.radius ?? plainObject(question.scoringConfig).radius;
+    const measurementRadiusUnit =
+      cleanString(reviewDetails.radiusUnit) ||
+      cleanString(plainObject(question.scoringConfig).radiusUnit) ||
+      'mm';
 
     return (
       <div
@@ -2856,19 +3190,45 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
           </div>
         </div>
 
-        <div className="mt-2">
-          <span className="font-semibold">Your answer:</span>{' '}
-          {formatReviewAnswer(question, learnerAnswer)}
-        </div>
+        {question.type === 'measurementNumeric' ? (
+          <>
+            <div className="mt-2">
+              <div className="font-semibold">Your answer</div>
+              <div className="mt-1 text-gray-300">
+                Length: {formatMeasurementReviewLength(learnerMeasurementLength, measurementUnit)}
+              </div>
+              <div className="text-gray-300">
+                Midpoint: {formatMeasurementReviewMidpoint(learnerMeasurementMidpoint)}
+              </div>
+            </div>
 
-        {correctAnswerVisible ? (
-          <div className="mt-1">
-            <span className="font-semibold">
-              {question.type === 'measurementNumeric' ? 'Rubric answer:' : 'Correct answer:'}
-            </span>{' '}
-            {formatCorrectReviewAnswer(question, scoreItem.correctAnswer)}
-          </div>
-        ) : null}
+            {correctAnswerVisible ? (
+              <div className="mt-2">
+                <div className="font-semibold">Correct answer</div>
+                <div className="mt-1 text-gray-300">
+                  Length: {formatMeasurementReviewLength(correctMeasurementLength, measurementUnit)}
+                </div>
+                <div className="text-gray-300">
+                  Midpoint: {formatMeasurementReviewMidpoint(correctMeasurementMidpoint)}
+                </div>
+              </div>
+            ) : null}
+          </>
+        ) : (
+          <>
+            <div className="mt-2">
+              <span className="font-semibold">Your answer:</span>{' '}
+              {formatReviewAnswer(question, learnerAnswer)}
+            </div>
+
+            {correctAnswerVisible ? (
+              <div className="mt-1">
+                <span className="font-semibold">Correct answer:</span>{' '}
+                {formatCorrectReviewAnswer(question, scoreItem.correctAnswer)}
+              </div>
+            ) : null}
+          </>
+        )}
 
         {reviewDetails.mode === 'frameSelection' ? (
           <div className="mt-1 text-gray-300">
@@ -2886,9 +3246,43 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
 
         {reviewDetails.mode === 'placeMarker' ? (
           <div className="mt-1 text-gray-300">
-            Distance from correct marker: {formatReviewNumber(reviewDetails.distance, 2)}{' '}
-            {cleanString(reviewDetails.radiusUnit)}; accepted radius:{' '}
-            {formatReviewNumber(reviewDetails.radius, 2)} {cleanString(reviewDetails.radiusUnit)}.
+            Distance from correct marker: {formatReviewNumber(markerDistanceDisplay.value, 2)}{' '}
+            {markerDistanceDisplay.unit}; accepted radius:{' '}
+            {formatReviewNumber(markerRadiusDisplay.value, 2)} {markerRadiusDisplay.unit}.
+          </div>
+        ) : null}
+
+        {reviewDetails.mode === 'measurementNumeric' ? (
+          <div className="mt-1 space-y-1 text-gray-300">
+            <div>
+              Length difference: {formatReviewNumber(measurementLengthDifference, 2)}{' '}
+              {measurementUnit}; accepted length tolerance: ±
+              {formatReviewNumber(reviewDetails.absoluteTolerance, 2)} {measurementUnit}.
+            </div>
+
+            <div>
+              Measurement length:{' '}
+              {reviewDetails.lengthMatched === true ? 'within tolerance' : 'outside tolerance'}.
+            </div>
+
+            {measurementRadius !== null && typeof measurementRadius !== 'undefined' ? (
+              <>
+                <div>
+                  Midpoint distance: {formatReviewNumber(measurementMidpointDistance, 2)}{' '}
+                  {normalizeReviewDistanceUnit(measurementRadiusUnit)}; accepted location radius:{' '}
+                  {formatReviewNumber(measurementRadius, 2)}{' '}
+                  {normalizeReviewDistanceUnit(measurementRadiusUnit)}.
+                </div>
+
+                <div>
+                  Location:{' '}
+                  {reviewDetails.positionMatched === true
+                    ? 'within tolerance'
+                    : 'outside tolerance'}
+                  .
+                </div>
+              </>
+            ) : null}
           </div>
         ) : null}
 
@@ -2946,6 +3340,8 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                           viewerTarget:
                             correctTarget || learnerTarget || getQuestionViewerTarget(question),
                           questionKey: question.questionKey,
+                          radius: measurementRadius,
+                          radiusUnit: measurementRadiusUnit,
                         }
                       );
 
@@ -3152,12 +3548,13 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
             )}
 
             <label className="mt-2 block text-xs font-semibold text-gray-200">
-              Absolute tolerance
+              Length tolerance
             </label>
             <input
               className="mt-1 w-36 rounded border border-gray-700 bg-black px-2 py-1 text-sm text-white"
               type="number"
               step="0.01"
+              min="0"
               value={numberOrEmpty(plainObject(question.scoringConfig).absoluteTolerance)}
               disabled={authoringSaving || !isDraftDefinition(authoringDefinition)}
               onChange={event =>
@@ -3171,6 +3568,32 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                 })
               }
             />
+
+            <label className="mt-3 block text-xs font-semibold text-gray-200">
+              Position radius tolerance
+            </label>
+            <input
+              className="mt-1 w-36 rounded border border-gray-700 bg-black px-2 py-1 text-sm text-white"
+              type="number"
+              step="0.01"
+              min="0"
+              value={numberOrEmpty(plainObject(question.scoringConfig).radius)}
+              disabled={authoringSaving || !isDraftDefinition(authoringDefinition)}
+              onChange={event =>
+                patchAuthoringQuestion(question, {
+                  scoringConfig: {
+                    ...plainObject(question.scoringConfig),
+                    radius: event.target.value,
+                    radiusUnit: plainObject(question.scoringConfig).radiusUnit || 'world',
+                  },
+                })
+              }
+            />
+
+            <div className="mt-1 text-[11px] text-gray-400">
+              The learner measurement must be within both the allowed length difference and this
+              radius from the center of the correct measurement.
+            </div>
           </div>
         ) : null}
 
@@ -3235,13 +3658,29 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                         type="checkbox"
                         checked={selected}
                         disabled={authoringSaving || !isDraftDefinition(authoringDefinition)}
-                        onChange={() =>
-                          patchAuthoringAnswerConfig(question, {
-                            correctMarkerIds: toggleMarkerId(correctMarkerIds, markerId),
-                            correctMarkerId: '',
-                            correctMarkerKey: '',
-                          })
-                        }
+                        onChange={async () => {
+                          const nextCorrectMarkerIds = toggleMarkerId(correctMarkerIds, markerId);
+
+                          const nextQuestion = {
+                            ...question,
+                            answerConfig: {
+                              ...answerConfig,
+                              correctMarkerIds: nextCorrectMarkerIds,
+                              correctMarkerId: '',
+                              correctMarkerKey: '',
+                            },
+                          };
+
+                          updateAuthoringQuestion(question.questionKey, () => nextQuestion);
+
+                          await runViewerCommand(commandsManager, 'showViewerQuizMarkerOptions', {
+                            viewerTarget: null,
+                            markerOptions: getOverlayMarkerOptionsForQuestion(nextQuestion, {
+                              includeGoldMarker: true,
+                            }),
+                            questionKey: question.questionKey,
+                          });
+                        }}
                       />
                       <span className="min-w-0 break-words font-semibold">
                         {marker.label || markerId}
@@ -3400,7 +3839,6 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     <div className="flex h-full min-h-0 flex-col bg-black text-white">
       <div className="shrink-0 border-b border-gray-700 p-3">
         <div className="text-base font-semibold">Case Questions</div>
-        <div className="mt-1 text-xs text-gray-400">Viewer-based questions for this case.</div>
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto p-3">
