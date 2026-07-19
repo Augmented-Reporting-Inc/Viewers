@@ -66,8 +66,12 @@ function getViewerMeasurementDomainFromPath() {
   return 'echo';
 }
 
-function isViewerMeasurementReadOnlyFromUrl() {
+function getViewerUrlSearchParams() {
   const params = new URLSearchParams();
+
+  if (typeof window === 'undefined') {
+    return params;
+  }
 
   try {
     const searchParams = new URLSearchParams(window.location?.search || '');
@@ -77,9 +81,7 @@ function isViewerMeasurementReadOnlyFromUrl() {
 
   try {
     const hash = String(window.location?.hash || '');
-
     const hashQuery = hash.includes('?') ? hash.slice(hash.indexOf('?') + 1).split('#')[0] : '';
-
     const hashParams = new URLSearchParams(hashQuery);
 
     hashParams.forEach((value, key) => {
@@ -89,12 +91,32 @@ function isViewerMeasurementReadOnlyFromUrl() {
     });
   } catch {}
 
+  return params;
+}
+
+function normalizeViewerUrlToken(value = '') {
+  return String(value || '')
+    .trim()
+    .replace(/[_\s-]+/g, '')
+    .toLowerCase();
+}
+
+function isViewerMeasurementReadOnlyFromUrl() {
+  const params = getViewerUrlSearchParams();
+
   return ['readonly', 'feedbackreadonly'].includes(
-    String(params.get('arMeasurementAccess') || '')
-      .trim()
-      .replace(/[_\s-]+/g, '')
-      .toLowerCase()
+    normalizeViewerUrlToken(params.get('arMeasurementAccess'))
   );
+}
+
+function isVirtualCoachingWorkflowFromUrl() {
+  const params = getViewerUrlSearchParams();
+
+  return normalizeViewerUrlToken(params.get('arReviewWorkflowType')) === 'virtualcoaching';
+}
+
+function shouldOpenARMeasurementsPanelByDefault() {
+  return isVirtualCoachingWorkflowFromUrl();
 }
 
 const AR_US_REGION_PIXEL_SPACING_PROVIDER_PRIORITY = 10000;
@@ -922,6 +944,16 @@ function modeFactory({ modeConfiguration }) {
       // Start with cine enabled so autoPlayCine triggers when display sets load
       cineService.setIsCineEnabled(true);
 
+      if (shouldOpenARMeasurementsPanelByDefault()) {
+        window.setTimeout(() => {
+          try {
+            panelService?.activatePanel?.(arMeasurements.panel, true);
+          } catch (error) {
+            console.warn('[AR Measurements] initial panel activation failed:', error);
+          }
+        }, 0);
+      }
+
       // // ActivatePanel event trigger for when a segmentation or measurement is added.
       // // Do not force activation so as to respect the state the user may have left the UI in.
       // _activatePanelTriggersSubscriptions = [
@@ -1011,7 +1043,7 @@ function modeFactory({ modeConfiguration }) {
               // Keep AR Measurements first so the right panel defaults to
               // Measurements when opened. Segmentation remains available as tab 2.
               rightPanels: [arMeasurements.panel, cornerstone.segmentation],
-              rightPanelClosed: true,
+              rightPanelClosed: !shouldOpenARMeasurementsPanelByDefault(),
               rightPanelResizable: true,
               viewports: [
                 {

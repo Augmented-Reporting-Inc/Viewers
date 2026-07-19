@@ -671,6 +671,10 @@ const arLearning = {
   caseQuestions: 'extension-ar-learning.panelModule.caseQuestions',
 };
 
+function isVirtualCoachingWorkflowFromUrl() {
+  return getLearningUrlParam('arReviewWorkflowType').replace(/[_\s-]+/g, '') === 'virtualcoaching';
+}
+
 function getLearningInitialPanelFromUrl() {
   if (typeof window === 'undefined') {
     return '';
@@ -688,6 +692,10 @@ function getLearningInitialPanelFromUrl() {
     }
 
     if (['armeasurements', 'measurements'].includes(raw)) {
+      return 'arMeasurements';
+    }
+
+    if (isVirtualCoachingWorkflowFromUrl()) {
       return 'arMeasurements';
     }
 

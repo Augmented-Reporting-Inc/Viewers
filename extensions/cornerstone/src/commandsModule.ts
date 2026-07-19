@@ -5260,7 +5260,7 @@ function commandsModule({
         ],
       });
     },
-    activateViewerQuizMeasurementTool: ({ toolName = 'Length' } = {}) => {
+    activateViewerMeasurementTool: ({ toolName = 'Length', stopCine = false } = {}) => {
       const activeViewportId = viewportGridService.getActiveViewportId();
       const toolGroupReference = toolGroupService.getToolGroupForViewport(activeViewportId);
       const toolGroup =
@@ -5293,13 +5293,30 @@ function commandsModule({
         toolGroupId,
       });
 
+      if (stopCine) {
+        const cineState = cineService.getState();
+        const currentCineState = cineState.cines?.[activeViewportId];
+
+        cineService.setCine({
+          id: activeViewportId,
+          frameRate: currentCineState?.frameRate ?? cineState.default?.frameRate ?? 24,
+          isPlaying: false,
+        });
+      }
+
       return {
         ok: true,
         toolName,
         toolGroupId,
         activeViewportId,
+        cineStopped: stopCine,
       };
     },
+    activateViewerQuizMeasurementTool: ({ toolName = 'Length' } = {}) =>
+      actions.activateViewerMeasurementTool({
+        toolName,
+        stopCine: true,
+      }),
     releaseViewerQuizDrawingTool: () => {
       const activeViewportId = viewportGridService.getActiveViewportId();
       const toolGroupReference = toolGroupService.getToolGroupForViewport(activeViewportId);
@@ -7406,6 +7423,9 @@ function commandsModule({
     },
     setToolActive: {
       commandFn: actions.setToolActive,
+    },
+    activateViewerMeasurementTool: {
+      commandFn: actions.activateViewerMeasurementTool,
     },
     activateViewerQuizMeasurementTool: {
       commandFn: actions.activateViewerQuizMeasurementTool,

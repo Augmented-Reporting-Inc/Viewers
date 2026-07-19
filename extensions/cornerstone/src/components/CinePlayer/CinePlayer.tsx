@@ -9,7 +9,7 @@ import { useAppConfig } from '@state';
 // from logs which CinePlayer + whether the decode patch is included.
 // ---------------------------------------------------------------------------
 const CINE_PLAYER_VERSION =
-  'rviewer bviewer adaptive-prefetch-100 + global-prefetch-limit-4 + small-window-1 + learning-no-autoplay v5';
+  'rviewer bviewer adaptive-prefetch-100 + global-prefetch-limit-4 + small-window-1 + learning-no-autoplay + length-no-autoplay v6';
 
 function shouldAutoPlayCineForCurrentRoute(autoPlayCine): boolean {
   if (!autoPlayCine) {
@@ -24,6 +24,20 @@ function shouldAutoPlayCineForCurrentRoute(autoPlayCine): boolean {
   const isLearningRoute = /(?:^|\/)learning(?:\/|$)/.test(pathname);
 
   return !isLearningRoute;
+}
+
+function getActivePrimaryToolNameForViewport(toolGroupService, viewportId = ''): string {
+  const toolGroupReference = toolGroupService?.getToolGroupForViewport?.(viewportId);
+  const toolGroup =
+    typeof toolGroupReference === 'string'
+      ? toolGroupService?.getToolGroup?.(toolGroupReference)
+      : toolGroupReference;
+
+  return String(toolGroup?.getActivePrimaryMouseButtonTool?.() || '');
+}
+
+function isLengthMeasurementToolActiveForViewport(toolGroupService, viewportId = ''): boolean {
+  return getActivePrimaryToolNameForViewport(toolGroupService, viewportId) === 'Length';
 }
 
 // ---------------------------------------------------------------------------
@@ -231,7 +245,8 @@ function WrappedCinePlayer({
   enabledVPElement: HTMLElement;
   viewportId: string;
 }>) {
-  const { customizationService, displaySetService, viewportGridService } = servicesManager.services;
+  const { customizationService, displaySetService, viewportGridService, toolGroupService } =
+    servicesManager.services;
   const [{ isCineEnabled, cines }, cineService] = useCine();
   const [newStackFrameRate, setNewStackFrameRate] = useState(24);
   const [dynamicInfo, setDynamicInfo] = useState(null);
@@ -264,6 +279,16 @@ function WrappedCinePlayer({
     (frameRate: number) => {
       cancelPendingPlay();
 
+      if (isLengthMeasurementToolActiveForViewport(toolGroupService, viewportId)) {
+        setBufferingProgress(null);
+        cineService.setCine({
+          id: viewportId,
+          isPlaying: false,
+          frameRate,
+        });
+        return;
+      }
+
       const getDisplaySets = () => {
         const { viewports } = viewportGridService.getState();
         const vp = viewports.get(viewportId);
@@ -286,11 +311,33 @@ function WrappedCinePlayer({
         }
         cancelPendingPlay();
 
+        if (isLengthMeasurementToolActiveForViewport(toolGroupService, viewportId)) {
+          setBufferingProgress(null);
+          cineService.setCine({
+            id: viewportId,
+            isPlaying: false,
+            frameRate,
+          });
+          return;
+        }
+
         const { monitorCache = true } = options;
 
         if (monitorCache) {
           cacheMonitorRef.current = setInterval(() => {
+            if (isLengthMeasurementToolActiveForViewport(toolGroupService, viewportId)) {
+              cancelPendingPlay();
+              setBufferingProgress(null);
+              cineService.setCine({
+                id: viewportId,
+                isPlaying: false,
+                frameRate,
+              });
+              return;
+            }
+
             const dsets = getDisplaySets();
+
             if (!dsets.length) {
               return;
             }
@@ -367,6 +414,17 @@ function WrappedCinePlayer({
       let firstFrameTime: number | null = null;
 
       const poll = setInterval(() => {
+        if (isLengthMeasurementToolActiveForViewport(toolGroupService, viewportId)) {
+          cancelPendingPlay();
+          setBufferingProgress(null);
+          cineService.setCine({
+            id: viewportId,
+            isPlaying: false,
+            frameRate,
+          });
+          return;
+        }
+
         elapsed += POLL_INTERVAL_MS;
 
         const currentDsets = getDisplaySets();
@@ -409,6 +467,7 @@ function WrappedCinePlayer({
       enabledVPElement,
       viewportGridService,
       displaySetService,
+      toolGroupService,
     ]
   );
 
@@ -427,7 +486,18 @@ function WrappedCinePlayer({
     let frameRate = 24;
     let isPlaying = cinesRef.current[viewportId]?.isPlaying || false;
     let shouldAutoPlay = false;
-    const autoPlayCine = shouldAutoPlayCineForCurrentRoute(appConfig.autoPlayCine);
+
+    const isLengthMeasurementActive = isLengthMeasurementToolActiveForViewport(
+      toolGroupService,
+      viewportId
+    );
+
+    const autoPlayCine =
+      shouldAutoPlayCineForCurrentRoute(appConfig.autoPlayCine) && !isLengthMeasurementActive;
+
+    if (isLengthMeasurementActive) {
+      isPlaying = false;
+    }
 
     displaySetInstanceUIDs.forEach(displaySetInstanceUID => {
       const displaySet = displaySetService.getDisplaySetByUID(displaySetInstanceUID);
@@ -483,11 +553,20 @@ function WrappedCinePlayer({
     isCineEnabled,
     enabledVPElement,
     appConfig,
+    toolGroupService,
   ]);
 
   useEffect(() => {
     cinesRef.current = cines;
-  }, [cines]);
+
+    if (
+      cines?.[viewportId]?.isPlaying === false &&
+      isLengthMeasurementToolActiveForViewport(toolGroupService, viewportId)
+    ) {
+      cancelPendingPlay();
+      setBufferingProgress(null);
+    }
+  }, [cines, viewportId, toolGroupService, cancelPendingPlay]);
 
   useEffect(() => {
     isMountedRef.current = true;

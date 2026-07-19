@@ -633,6 +633,49 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
   }, []);
 
   useEffect(() => {
+    if (isReviewWorkflowReadOnly) {
+      return;
+    }
+
+    let cancelled = false;
+    let activated = false;
+    const retryDelays = [0, 150, 500];
+
+    const timers = retryDelays.map((delay, index) =>
+      window.setTimeout(async () => {
+        if (cancelled || activated) {
+          return;
+        }
+
+        try {
+          const result = await commandsManager.runCommand('activateViewerMeasurementTool', {
+            toolName: 'Length',
+            stopCine: true,
+          });
+
+          if (result?.ok) {
+            activated = true;
+            return;
+          }
+
+          if (index === retryDelays.length - 1) {
+            console.warn('[ARMeasurementsPanel] could not activate Length:', result);
+          }
+        } catch (error) {
+          if (!cancelled && index === retryDelays.length - 1) {
+            console.warn('[ARMeasurementsPanel] Length activation failed:', error);
+          }
+        }
+      }, delay)
+    );
+
+    return () => {
+      cancelled = true;
+      timers.forEach(timer => window.clearTimeout(timer));
+    };
+  }, [commandsManager, isReviewWorkflowReadOnly]);
+
+  useEffect(() => {
     const refresh = () => {
       setMeasurements([...(measurementService.getMeasurements?.() || [])]);
     };
