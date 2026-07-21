@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { calculateLVSimpson, LV_SIMPSON_SLOT_ORDER } from '../utils/lvSimpson';
 
 function getMeasurementLabel(measurement) {
@@ -578,6 +578,85 @@ function isMeasurementEditable(measurement: any, saveTarget: any) {
   return workflow === writableWorkflow && measurement?.isLocked !== true;
 }
 
+function isVirtualCoachingReviewWorkflow(saveTarget: any = {}) {
+  return (
+    isReviewWorkflowMeasurementsTarget(saveTarget) &&
+    normalizeMeasurementScoringToken(saveTarget.reviewWorkflowType) === 'virtualcoaching'
+  );
+}
+
+function isSavedReviewWorkflowMeasurement(measurement: any = {}) {
+  const sourceRole = normalizeMeasurementScoringToken(measurement?.sourceRole);
+  const workflow = String(measurement?.workflow || '').trim();
+
+  return (
+    (sourceRole === 'learner' && workflow === VIEWER_MEASUREMENTS_WORKFLOW) ||
+    (sourceRole === 'educator' && workflow === REVIEWER_MEASUREMENTS_WORKFLOW)
+  );
+}
+
+function getAutoDisplayPeerMeasurements(measurements: any[] = [], saveTarget: any = {}) {
+  const viewerRole = normalizeMeasurementScoringToken(saveTarget.measurementWorkflowRole);
+
+  const expectedSourceRole =
+    viewerRole === 'educator' ? 'learner' : viewerRole === 'learner' ? 'educator' : '';
+
+  if (!expectedSourceRole) {
+    return [];
+  }
+
+  const candidates = (Array.isArray(measurements) ? measurements : []).filter(
+    measurement =>
+      measurement?.isSavedAnnotation === true &&
+      isSavedReviewWorkflowMeasurement(measurement) &&
+      normalizeMeasurementScoringToken(measurement?.sourceRole) === expectedSourceRole
+  );
+
+  const latestReviewRound = candidates.reduce(
+    (latestRound, measurement) => Math.max(latestRound, Number(measurement?.reviewRound || 0)),
+    0
+  );
+
+  return candidates.filter(
+    measurement => Number(measurement?.reviewRound || 0) === latestReviewRound
+  );
+}
+
+function getAutoDisplayAnnotationsForReferenceImage(
+  measurements: any[] = [],
+  saveTarget: any = {},
+  peerMeasurements: any[] = []
+) {
+  const viewerRole = normalizeMeasurementScoringToken(saveTarget.measurementWorkflowRole);
+
+  if (viewerRole !== 'learner') {
+    return peerMeasurements;
+  }
+
+  const peerMeasurementKeys = new Set(
+    (Array.isArray(peerMeasurements) ? peerMeasurements : []).map(getMeasurementKey).filter(Boolean)
+  );
+
+  const seen = new Set();
+
+  return (Array.isArray(measurements) ? measurements : []).filter(measurement => {
+    const measurementKey = getMeasurementKey(measurement);
+    const sourceRole = normalizeMeasurementScoringToken(measurement?.sourceRole);
+
+    const shouldInclude =
+      measurement?.isSavedAnnotation === true &&
+      isSavedReviewWorkflowMeasurement(measurement) &&
+      (sourceRole === 'learner' || peerMeasurementKeys.has(measurementKey));
+
+    if (!shouldInclude || !measurementKey || seen.has(measurementKey)) {
+      return false;
+    }
+
+    seen.add(measurementKey);
+    return true;
+  });
+}
+
 export default function ARMeasurementsPanel({ servicesManager, commandsManager }) {
   const { measurementService, uiNotificationService } = servicesManager.services;
   const saveTarget = useMemo(getArViewerSaveTargetFromUrl, []);
@@ -592,6 +671,10 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
   const isSaving = !!savingAction;
   const [domain, setDomain] = useState('generic');
   const [savedAnnotations, setSavedAnnotations] = useState([]);
+  const autoDisplayPeerMeasurementStateRef = useRef({
+    key: '',
+    status: 'idle',
+  });
   const [isLearnerMeasurementWorkflow, setIsLearnerMeasurementWorkflow] = useState(
     isLearnerViewerMeasurementWorkflowFromUrl
   );
@@ -757,6 +840,10 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
     const byKey = new Map();
 
     for (const annotation of savedAnnotations) {
+      if (isReviewWorkflow && !isSavedReviewWorkflowMeasurement(annotation)) {
+        continue;
+      }
+
       const key = getMeasurementKey(annotation);
 
       if (key) {
@@ -899,48 +986,167 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
     }
   };
 
-  const jumpToMeasurement = measurement => {
-    const uid = measurement?.uid || measurement?.annotationId;
+  const jumpToMeasurement = useCallback(
+    async measurement => {
+      const uid = measurement?.uid || measurement?.annotationId;
 
-    if (!uid) {
-      return;
-    }
+      if (!uid) {
+        return {
+          ok: false,
+          reason: 'missing-measurement-id',
+        };
+      }
 
-    try {
-      const liveMeasurement = measurementService.getMeasurement?.(uid);
+      try {
+        if (measurement?.isSavedAnnotation === true) {
+          console.info('[ARMeasurementsPanel] displaying saved annotations for image', {
+            uid,
+            referencedImageId: measurement.referencedImageId,
+            displaySetInstanceUID: measurement.displaySetInstanceUID,
+          });
 
-      if (liveMeasurement) {
-        commandsManager.runCommand('toggleVisibilityMeasurement', {
-          uid,
-          visibility: true,
-        });
+          const result = await commandsManager.runCommand(
+            'showSavedViewerAnnotationsForSameImage',
+            {
+              annotations: savedAnnotations,
+              referenceAnnotation: measurement,
+              selectReferenceAnnotation: true,
+            }
+          );
 
-        commandsManager.runCommand('jumpToMeasurement', { uid });
+          return (
+            result || {
+              ok: true,
+              source: 'saved-annotation-image-group',
+              annotationId: uid,
+            }
+          );
+        }
 
-        setTimeout(() => {
+        const liveMeasurement = measurementService.getMeasurement?.(uid);
+
+        if (liveMeasurement) {
           commandsManager.runCommand('toggleVisibilityMeasurement', {
             uid,
             visibility: true,
           });
-          commandsManager.runCommand('jumpToMeasurement', { uid });
-        }, 150);
+
+          commandsManager.runCommand('jumpToMeasurement', {
+            uid,
+          });
+
+          window.setTimeout(() => {
+            commandsManager.runCommand('toggleVisibilityMeasurement', {
+              uid,
+              visibility: true,
+            });
+
+            commandsManager.runCommand('jumpToMeasurement', {
+              uid,
+            });
+          }, 150);
+
+          return {
+            ok: true,
+            source: 'live-measurement',
+            annotationId: uid,
+          };
+        }
+
+        return {
+          ok: false,
+          reason: 'measurement-not-hydrated',
+          annotationId: uid,
+        };
+      } catch (error) {
+        console.warn('[ARMeasurementsPanel] jump failed:', error);
+
+        return {
+          ok: false,
+          reason: 'jump-failed',
+          error,
+        };
+      }
+    },
+    [commandsManager, measurementService, savedAnnotations]
+  );
+
+  useEffect(() => {
+    if (!isVirtualCoachingReviewWorkflow(saveTarget)) {
+      return;
+    }
+
+    const targetMeasurements = getAutoDisplayPeerMeasurements(visibleMeasurements, saveTarget);
+
+    const referenceMeasurement = targetMeasurements[0];
+
+    const autoDisplayAnnotations = getAutoDisplayAnnotationsForReferenceImage(
+      visibleMeasurements,
+      saveTarget,
+      targetMeasurements
+    );
+
+    const targetKeys = autoDisplayAnnotations.map(getMeasurementKey).filter(Boolean).sort();
+
+    const referenceKey = getMeasurementKey(referenceMeasurement);
+
+    const targetKey = [referenceKey, ...targetKeys].filter(Boolean).join('|');
+
+    if (!referenceMeasurement || !autoDisplayAnnotations.length || !targetKey) {
+      return;
+    }
+
+    const currentState = autoDisplayPeerMeasurementStateRef.current;
+
+    if (
+      currentState.key === targetKey &&
+      (currentState.status === 'pending' || currentState.status === 'complete')
+    ) {
+      return;
+    }
+
+    const timer = window.setTimeout(async () => {
+      const latestState = autoDisplayPeerMeasurementStateRef.current;
+
+      if (
+        latestState.key === targetKey &&
+        (latestState.status === 'pending' || latestState.status === 'complete')
+      ) {
+        return;
+      }
+
+      autoDisplayPeerMeasurementStateRef.current = {
+        key: targetKey,
+        status: 'pending',
+      };
+
+      const result = await commandsManager.runCommand('showSavedViewerAnnotationsForSameImage', {
+        annotations: autoDisplayAnnotations,
+        referenceAnnotation: referenceMeasurement,
+      });
+
+      if (result?.ok === false) {
+        autoDisplayPeerMeasurementStateRef.current = {
+          key: '',
+          status: 'idle',
+        };
+
+        console.warn('[ARMeasurementsPanel] automatic peer measurement display failed:', {
+          targetKey,
+          reason: result.reason,
+        });
 
         return;
       }
 
-      console.info('[ARMeasurementsPanel] jumping to saved annotation fallback', {
-        uid,
-        referencedImageId: measurement.referencedImageId,
-        displaySetInstanceUID: measurement.displaySetInstanceUID,
-      });
+      autoDisplayPeerMeasurementStateRef.current = {
+        key: targetKey,
+        status: 'complete',
+      };
+    }, 350);
 
-      commandsManager.runCommand('jumpToSavedViewerAnnotation', {
-        annotation: measurement,
-      });
-    } catch (error) {
-      console.warn('[ARMeasurementsPanel] jump failed:', error);
-    }
-  };
+    return () => window.clearTimeout(timer);
+  }, [commandsManager, saveTarget, visibleMeasurements]);
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-black text-white">

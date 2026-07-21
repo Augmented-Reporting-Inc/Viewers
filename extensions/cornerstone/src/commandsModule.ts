@@ -297,6 +297,34 @@ function getViewportImageIds(viewport) {
   }
 }
 
+async function waitForCurrentSavedAnnotationViewport({
+  cornerstoneViewportService,
+  viewportGridService,
+  viewportId,
+  annotation,
+  attempts = 150,
+}) {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const activeViewportId = viewportGridService.getActiveViewportId();
+
+    const latestViewport =
+      cornerstoneViewportService.getCornerstoneViewport(viewportId) ||
+      cornerstoneViewportService.getCornerstoneViewport(activeViewportId) ||
+      null;
+
+    if (
+      latestViewport &&
+      findImageIdIndexForSavedAnnotation(latestViewport, annotation).index >= 0
+    ) {
+      return latestViewport;
+    }
+
+    await sleep(100);
+  }
+
+  return null;
+}
+
 function findImageIdIndexForSavedAnnotation(viewport, annotation) {
   const imageIds = getViewportImageIds(viewport);
   const sopInstanceId = annotation?.SOPInstanceUID;
@@ -334,7 +362,7 @@ function findImageIdIndexForSavedAnnotation(viewport, annotation) {
   };
 }
 
-async function waitForSavedAnnotationImageMatch(viewport, annotation, attempts = 30) {
+async function waitForSavedAnnotationImageMatch(viewport, annotation, attempts = 150) {
   let lastMatch = {
     index: -1,
     imageId: '',
@@ -398,8 +426,80 @@ async function jumpViewportToSavedAnnotationImage(viewport, annotation) {
   }
 }
 
+async function waitForViewportImageReady(viewport, expectedImageId = '', attempts = 50) {
+  const normalizedExpectedImageId = normalizeImageIdForCompare(expectedImageId);
+  let currentImageId = '';
+
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    currentImageId = String(viewport?.getCurrentImageId?.() || '').trim();
+    const normalizedCurrentImageId = normalizeImageIdForCompare(currentImageId);
+
+    const imageMatches =
+      !normalizedExpectedImageId ||
+      (!!normalizedCurrentImageId &&
+        (normalizedCurrentImageId === normalizedExpectedImageId ||
+          normalizedCurrentImageId.endsWith(normalizedExpectedImageId) ||
+          normalizedExpectedImageId.endsWith(normalizedCurrentImageId)));
+
+    if (imageMatches && viewport?.getImageData?.()) {
+      return currentImageId || expectedImageId;
+    }
+
+    await sleep(100);
+  }
+
+  return '';
+}
+
 function sleep(ms: number) {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function cloneSavedAnnotationPoints(points = []) {
+  return Array.isArray(points)
+    ? points.map(point => (Array.isArray(point) ? [...point] : point))
+    : [];
+}
+
+function getSavedAnnotationImageKey(annotation: any = {}) {
+  const referencedImageId = normalizeImageIdForCompare(annotation?.referencedImageId || '');
+
+  if (referencedImageId) {
+    return `image:${referencedImageId}`;
+  }
+
+  const sopInstanceId = String(annotation?.SOPInstanceUID || '')
+    .trim()
+    .toLowerCase();
+
+  const frameNumber = getFrameNumberForAnnotation(annotation);
+
+  return sopInstanceId ? `sop:${sopInstanceId}|frame:${frameNumber}` : '';
+}
+
+function getSavedAnnotationsForSameImage(annotations: any[] = [], referenceAnnotation: any = null) {
+  const reference = referenceAnnotation || annotations[0];
+  const imageKey = getSavedAnnotationImageKey(reference);
+  const seen = new Set<string>();
+
+  if (!imageKey) {
+    return [];
+  }
+
+  return (Array.isArray(annotations) ? annotations : []).filter(annotation => {
+    const annotationId = getAnnotationId(annotation);
+
+    if (
+      !annotationId ||
+      seen.has(annotationId) ||
+      getSavedAnnotationImageKey(annotation) !== imageKey
+    ) {
+      return false;
+    }
+
+    seen.add(annotationId);
+    return true;
+  });
 }
 
 function buildHydrationMetadata(annotation, displaySet) {
@@ -436,33 +536,32 @@ function hydrateSavedLengthAnnotationForActiveViewport({
   annotation: savedAnnotation,
   activeViewportId,
   referencedImageIdOverride = '',
+  selectAnnotation = true,
 }) {
   const annotationId = getAnnotationId(savedAnnotation);
-  const points = Array.isArray(savedAnnotation?.points) ? savedAnnotation.points : [];
+  const points = cloneSavedAnnotationPoints(savedAnnotation?.points);
   const referencedImageId = referencedImageIdOverride || savedAnnotation.referencedImageId;
 
   if (!annotationId || points.length !== 2) {
     return null;
   }
 
-  const existing = cornerstoneTools.annotation.state.getAnnotation?.(annotationId);
-  if (existing) {
-    cornerstoneTools.annotation.state.removeAnnotation?.(annotationId);
-  }
+  let hydrated = cornerstoneTools.annotation.state.getAnnotation?.(annotationId) || null;
 
-  let hydrated = null;
-
-  try {
-    if (cornerstoneTools.LengthTool?.hydrate) {
-      hydrated = cornerstoneTools.LengthTool.hydrate(activeViewportId, points, {
-        annotationUID: annotationId,
-      });
+  if (!hydrated) {
+    try {
+      if (cornerstoneTools.LengthTool?.hydrate) {
+        hydrated = cornerstoneTools.LengthTool.hydrate(activeViewportId, points, {
+          annotationUID: annotationId,
+        });
+      }
+    } catch (error) {
+      console.warn('[MeasurementAnnotations] LengthTool.hydrate failed:', error);
     }
-  } catch (error) {
-    console.warn('[MeasurementAnnotations] LengthTool.hydrate failed:', error);
   }
 
   const hydratedId = hydrated?.annotationUID || hydrated?.uid || annotationId;
+
   const targetAnnotation =
     cornerstoneTools.annotation.state.getAnnotation?.(hydratedId) || hydrated;
 
@@ -516,7 +615,9 @@ function hydrateSavedLengthAnnotationForActiveViewport({
     measurementOwner: savedAnnotation.measurementOwner,
   });
 
-  cornerstoneTools.annotation.selection.setAnnotationSelected(hydratedId, true);
+  if (selectAnnotation) {
+    cornerstoneTools.annotation.selection.setAnnotationSelected(hydratedId, true);
+  }
 
   return targetAnnotation;
 }
@@ -1789,6 +1890,12 @@ function forceSavedAnnotationMeasurementServiceDisplay({
   const displayText = getSavedAnnotationDisplayText(savedAnnotation);
   const stats = buildSavedAnnotationStatsForMeasurementService(savedAnnotation, referencedImageId);
 
+  const resolvedReferencedImageId =
+    referencedImageId ||
+    savedAnnotation.referencedImageId ||
+    currentMeasurement.referencedImageId ||
+    '';
+
   const nextMeasurement = {
     ...currentMeasurement,
     label:
@@ -1797,6 +1904,16 @@ function forceSavedAnnotationMeasurementServiceDisplay({
       savedAnnotation.role ||
       currentMeasurement.label,
     displayText,
+    points: cloneSavedAnnotationPoints(savedAnnotation.points),
+    referencedImageId: resolvedReferencedImageId,
+    SOPInstanceUID: savedAnnotation.SOPInstanceUID || currentMeasurement.SOPInstanceUID,
+    referenceSeriesUID:
+      savedAnnotation.referenceSeriesUID ||
+      savedAnnotation.SeriesInstanceUID ||
+      currentMeasurement.referenceSeriesUID,
+    referenceStudyUID: savedAnnotation.StudyInstanceUID || currentMeasurement.referenceStudyUID,
+    FrameOfReferenceUID:
+      savedAnnotation.FrameOfReferenceUID || currentMeasurement.FrameOfReferenceUID || '',
     data: {
       ...(currentMeasurement.data || {}),
       ...stats,
@@ -1928,6 +2045,22 @@ function getDisplaySetForSavedAnnotation(displaySetService, annotation) {
 
       return false;
     }) || seriesDisplaySets[0]
+  );
+}
+
+function displaySetContainsSavedAnnotation(displaySet, annotation) {
+  const sopInstanceId = String(annotation?.SOPInstanceUID || '').trim();
+
+  if (!displaySet || !sopInstanceId) {
+    return false;
+  }
+
+  if (String(displaySet?.SOPInstanceUID || '').trim() === sopInstanceId) {
+    return true;
+  }
+
+  return getDisplaySetInstances(displaySet).some(
+    instance => String(getSopInstanceIdFromSource(instance) || '').trim() === sopInstanceId
   );
 }
 
@@ -2221,7 +2354,10 @@ function getInstanceNumberForViewerQuizTarget({
 }
 
 function getActiveViewportDisplaySet({ viewportGridService, displaySetService, viewportId }) {
-  const viewportState = viewportGridService.getState?.()?.viewports?.get?.(viewportId);
+  const viewports = viewportGridService.getState?.()?.viewports;
+
+  const viewportState = viewports?.get?.(viewportId) ?? viewports?.[viewportId];
+
   const displaySetInstanceId = viewportState?.displaySetInstanceUIDs?.[0] || '';
 
   if (!displaySetInstanceId || !displaySetService?.getDisplaySetByUID) {
@@ -6733,19 +6869,36 @@ function commandsModule({
         annotations,
       };
     },
-    jumpToSavedViewerAnnotation: async ({ annotation: savedAnnotation } = {}) => {
+    jumpToSavedViewerAnnotation: async ({
+      annotation: savedAnnotation,
+      selectAnnotation = true,
+      runDelayedDisplayRefresh = true,
+    } = {}) => {
       const annotationId = getAnnotationId(savedAnnotation);
 
       if (!annotationId) {
         console.warn('[MeasurementAnnotations] jumpToSavedViewerAnnotation missing annotation id');
-        return;
+
+        return {
+          ok: false,
+          reason: 'missing-annotation-id',
+        };
       }
 
       const activeViewportId = viewportGridService.getActiveViewportId();
+
       const seriesInstanceId =
         savedAnnotation.SeriesInstanceUID || savedAnnotation.referenceSeriesUID;
 
-      const displaySet = getDisplaySetForSavedAnnotation(displaySetService, savedAnnotation);
+      const activeDisplaySet = getActiveViewportDisplaySet({
+        viewportGridService,
+        displaySetService,
+        viewportId: activeViewportId,
+      });
+
+      const displaySet = displaySetContainsSavedAnnotation(activeDisplaySet, savedAnnotation)
+        ? activeDisplaySet
+        : getDisplaySetForSavedAnnotation(displaySetService, savedAnnotation);
 
       if (!displaySet) {
         console.warn('[MeasurementAnnotations] no displaySet for saved annotation', {
@@ -6753,8 +6906,14 @@ function commandsModule({
           seriesInstanceId,
           SOPInstanceUID: savedAnnotation.SOPInstanceUID,
         });
-        return;
+
+        return {
+          ok: false,
+          reason: 'display-set-not-found',
+          annotationId,
+        };
       }
+
       console.info('[MeasurementAnnotations] resolved saved annotation displaySet', {
         annotationId,
         savedSOPInstanceUID: savedAnnotation.SOPInstanceUID,
@@ -6763,56 +6922,97 @@ function commandsModule({
         imageCount:
           displaySet.images?.length || displaySet.instances?.length || displaySet.numImageFrames,
       });
-      const viewportToUpdate = cornerstoneViewportService.findUpdateableViewportConfiguration(
-        activeViewportId,
-        {
-          displaySetInstanceUID: displaySet.displaySetInstanceUID,
-          metadata: buildHydrationMetadata(savedAnnotation, displaySet),
-          referencedImageId: savedAnnotation.referencedImageId,
-        }
-      );
+
+      const activeDisplaySetAlreadyMatches =
+        activeDisplaySet?.displaySetInstanceUID === displaySet.displaySetInstanceUID;
+
+      const viewportToUpdate = activeDisplaySetAlreadyMatches
+        ? null
+        : cornerstoneViewportService.findUpdateableViewportConfiguration(activeViewportId, {
+            displaySetInstanceUID: displaySet.displaySetInstanceUID,
+            metadata: buildHydrationMetadata(savedAnnotation, displaySet),
+            referencedImageId: savedAnnotation.referencedImageId,
+          });
 
       const targetViewportId = viewportToUpdate?.viewportId || activeViewportId;
 
-      const updatedViewports = hangingProtocolService.getViewportsRequireUpdate(
-        targetViewportId,
-        displaySet.displaySetInstanceUID
-      );
-
-      if (updatedViewports?.[0]) {
-        if (viewportToUpdate?.viewportOptions) {
-          updatedViewports[0].viewportOptions = viewportToUpdate.viewportOptions;
-        }
-
-        commandsManager.run('setDisplaySetsForViewports', {
-          viewportsToUpdate: updatedViewports,
-        });
-
-        await sleep(150);
-      }
-
-      const viewport =
-        cornerstoneViewportService.getCornerstoneViewport(targetViewportId) ||
-        cornerstoneViewportService.getCornerstoneViewport(
-          viewportGridService.getActiveViewportId()
+      if (!activeDisplaySetAlreadyMatches) {
+        const updatedViewports = hangingProtocolService.getViewportsRequireUpdate(
+          targetViewportId,
+          displaySet.displaySetInstanceUID
         );
 
-      if (!viewport) {
-        console.warn('[MeasurementAnnotations] no viewport after displaySet update', {
-          annotationId,
-          targetViewportId,
-        });
-        return;
+        if (updatedViewports?.[0]) {
+          if (viewportToUpdate?.viewportOptions) {
+            updatedViewports[0].viewportOptions = viewportToUpdate.viewportOptions;
+          }
+
+          commandsManager.run('setDisplaySetsForViewports', {
+            viewportsToUpdate: updatedViewports,
+          });
+        }
       }
 
-      // Jump to the saved frame, then hydrate/render the saved annotation.
+      const viewport = await waitForCurrentSavedAnnotationViewport({
+        cornerstoneViewportService,
+        viewportGridService,
+        viewportId: targetViewportId,
+        annotation: savedAnnotation,
+      });
+
+      if (!viewport) {
+        console.warn(
+          '[MeasurementAnnotations] target saved image not ready after displaySet update',
+          {
+            annotationId,
+            targetViewportId,
+            SeriesInstanceUID: seriesInstanceId,
+            SOPInstanceUID: savedAnnotation.SOPInstanceUID,
+            frameNumber: getFrameNumberForAnnotation(savedAnnotation),
+          }
+        );
+
+        return {
+          ok: false,
+          reason: 'viewport-target-image-not-ready',
+          retryable: true,
+          annotationId,
+          viewportId: targetViewportId,
+        };
+      }
 
       const actualReferencedImageId = await jumpViewportToSavedAnnotationImage(
         viewport,
         savedAnnotation
       );
 
-      await sleep(250);
+      if (!actualReferencedImageId) {
+        return {
+          ok: false,
+          reason: 'saved-image-not-ready',
+          retryable: true,
+          annotationId,
+          viewportId: targetViewportId,
+        };
+      }
+
+      const readyReferencedImageId = await waitForViewportImageReady(
+        viewport,
+        actualReferencedImageId
+      );
+
+      if (!readyReferencedImageId) {
+        return {
+          ok: false,
+          reason: 'saved-image-render-not-ready',
+          retryable: true,
+          annotationId,
+          viewportId: targetViewportId,
+          referencedImageId: actualReferencedImageId,
+        };
+      }
+
+      await sleep(50);
 
       const hydratedViewport =
         cornerstoneViewportService.getCornerstoneViewport(targetViewportId) ||
@@ -6821,35 +7021,56 @@ function commandsModule({
         ) ||
         viewport;
 
-      if (savedAnnotation.toolName === 'Length') {
-        hydrateSavedLengthAnnotationForActiveViewport({
-          annotation: savedAnnotation,
-          activeViewportId: hydratedViewport.id || targetViewportId,
-          referencedImageIdOverride: actualReferencedImageId || '',
+      const hydratedAnnotation =
+        savedAnnotation.toolName === 'Length'
+          ? hydrateSavedLengthAnnotationForActiveViewport({
+              annotation: savedAnnotation,
+              activeViewportId: hydratedViewport.id || targetViewportId,
+              referencedImageIdOverride: readyReferencedImageId || actualReferencedImageId || '',
+              selectAnnotation,
+            })
+          : hydrateSavedViewerAnnotationForViewport({
+              annotation: savedAnnotation,
+              viewport: hydratedViewport,
+              viewportId: hydratedViewport.id || targetViewportId,
+              referencedImageIdOverride: readyReferencedImageId || actualReferencedImageId || '',
+              fallbackFrameOfReferenceUID:
+                hydratedViewport.getFrameOfReferenceUID?.() ||
+                savedAnnotation.FrameOfReferenceUID ||
+                '',
+              selectAnnotation,
+            });
+
+      if (!hydratedAnnotation) {
+        console.warn('[MeasurementAnnotations] saved annotation hydration failed', {
+          annotationId,
+          toolName: savedAnnotation.toolName,
+          targetViewportId: hydratedViewport.id || targetViewportId,
         });
-      } else {
-        hydrateSavedViewerAnnotationForViewport({
-          annotation: savedAnnotation,
-          viewport: hydratedViewport,
+
+        return {
+          ok: false,
+          reason: 'annotation-hydration-failed',
+          annotationId,
           viewportId: hydratedViewport.id || targetViewportId,
-          referencedImageIdOverride: actualReferencedImageId || '',
-          fallbackFrameOfReferenceUID:
-            hydratedViewport.getFrameOfReferenceUID?.() ||
-            savedAnnotation.FrameOfReferenceUID ||
-            '',
-        });
+        };
       }
 
       forceSavedAnnotationDisplayEverywhere({
         measurementService,
         savedAnnotation,
-        referencedImageId: actualReferencedImageId || savedAnnotation.referencedImageId || '',
+        referencedImageId:
+          readyReferencedImageId ||
+          actualReferencedImageId ||
+          savedAnnotation.referencedImageId ||
+          '',
       });
 
       try {
         const { triggerAnnotationRenderForViewportIds } = await import(
           '@cornerstonejs/tools/utilities'
         );
+
         triggerAnnotationRenderForViewportIds([hydratedViewport.id || targetViewportId]);
       } catch (error) {
         console.warn('[MeasurementAnnotations] trigger render failed:', error);
@@ -6857,28 +7078,162 @@ function commandsModule({
 
       hydratedViewport.render?.();
 
-      // SplineROI can recalculate cachedStats multiple times after hydrate/render.
-      // Re-assert the saved AR/Mongo mm² display across that recalculation window.
-      for (const delayMs of [50, 150, 300, 600, 1000]) {
-        await sleep(delayMs);
+      if (runDelayedDisplayRefresh && isViewerContourTool(savedAnnotation.toolName)) {
+        for (const delayMs of [50, 150, 300, 600, 1000]) {
+          await sleep(delayMs);
+
+          forceSavedAnnotationDisplayEverywhere({
+            measurementService,
+            savedAnnotation,
+            referencedImageId:
+              readyReferencedImageId ||
+              actualReferencedImageId ||
+              savedAnnotation.referencedImageId ||
+              '',
+          });
+
+          try {
+            const { triggerAnnotationRenderForViewportIds } = await import(
+              '@cornerstonejs/tools/utilities'
+            );
+
+            triggerAnnotationRenderForViewportIds([hydratedViewport.id || targetViewportId]);
+          } catch (error) {
+            console.warn('[MeasurementAnnotations] delayed trigger render failed:', error);
+          }
+
+          hydratedViewport.render?.();
+        }
+      }
+
+      return {
+        ok: true,
+        annotationId,
+        viewportId: hydratedViewport.id || targetViewportId,
+        referencedImageId:
+          readyReferencedImageId ||
+          actualReferencedImageId ||
+          savedAnnotation.referencedImageId ||
+          '',
+      };
+    },
+    showSavedViewerAnnotationsForSameImage: async ({
+      annotations: savedAnnotations = [],
+      referenceAnnotation: requestedReferenceAnnotation = null,
+      selectReferenceAnnotation = false,
+    } = {}) => {
+      const sameImageAnnotations = getSavedAnnotationsForSameImage(
+        savedAnnotations,
+        requestedReferenceAnnotation
+      );
+
+      const referenceAnnotation = requestedReferenceAnnotation || sameImageAnnotations[0];
+
+      const referenceAnnotationId = getAnnotationId(referenceAnnotation);
+
+      const orderedAnnotations = referenceAnnotation
+        ? [
+            referenceAnnotation,
+            ...sameImageAnnotations.filter(
+              annotation => getAnnotationId(annotation) !== referenceAnnotationId
+            ),
+          ]
+        : [];
+
+      if (!referenceAnnotation || !orderedAnnotations.length) {
+        return {
+          ok: false,
+          reason: 'no-saved-annotations',
+          hydratedCount: 0,
+        };
+      }
+
+      const navigationResult = await actions.jumpToSavedViewerAnnotation({
+        annotation: referenceAnnotation,
+        selectAnnotation: selectReferenceAnnotation,
+        runDelayedDisplayRefresh: false,
+      });
+
+      if (navigationResult?.ok === false) {
+        return navigationResult;
+      }
+
+      const viewportId = navigationResult?.viewportId || viewportGridService.getActiveViewportId();
+
+      const viewport = cornerstoneViewportService.getCornerstoneViewport(viewportId);
+
+      const referencedImageId =
+        navigationResult?.referencedImageId || referenceAnnotation.referencedImageId || '';
+
+      if (!viewport) {
+        return {
+          ok: false,
+          reason: 'viewport-not-found-after-navigation',
+          viewportId,
+          hydratedCount: 0,
+        };
+      }
+
+      let hydratedCount = 1;
+
+      for (const savedAnnotation of orderedAnnotations.slice(1)) {
+        const hydratedAnnotation =
+          savedAnnotation.toolName === 'Length'
+            ? hydrateSavedLengthAnnotationForActiveViewport({
+                annotation: savedAnnotation,
+                activeViewportId: viewport.id || viewportId,
+                referencedImageIdOverride: referencedImageId,
+                selectAnnotation: false,
+              })
+            : hydrateSavedViewerAnnotationForViewport({
+                annotation: savedAnnotation,
+                viewport,
+                viewportId: viewport.id || viewportId,
+                referencedImageIdOverride: referencedImageId,
+                fallbackFrameOfReferenceUID:
+                  viewport.getFrameOfReferenceUID?.() || savedAnnotation.FrameOfReferenceUID || '',
+                selectAnnotation: false,
+              });
+
+        if (!hydratedAnnotation) {
+          console.warn('[MeasurementAnnotations] batch annotation hydration failed', {
+            annotationId: getAnnotationId(savedAnnotation),
+            toolName: savedAnnotation.toolName,
+            viewportId: viewport.id || viewportId,
+          });
+
+          continue;
+        }
 
         forceSavedAnnotationDisplayEverywhere({
           measurementService,
           savedAnnotation,
-          referencedImageId: actualReferencedImageId || savedAnnotation.referencedImageId || '',
+          referencedImageId,
         });
 
-        try {
-          const { triggerAnnotationRenderForViewportIds } = await import(
-            '@cornerstonejs/tools/utilities'
-          );
-          triggerAnnotationRenderForViewportIds([hydratedViewport.id || targetViewportId]);
-        } catch (error) {
-          console.warn('[MeasurementAnnotations] delayed trigger render failed:', error);
-        }
-
-        hydratedViewport.render?.();
+        hydratedCount += 1;
       }
+
+      try {
+        const { triggerAnnotationRenderForViewportIds } = await import(
+          '@cornerstonejs/tools/utilities'
+        );
+
+        triggerAnnotationRenderForViewportIds([viewport.id || viewportId]);
+      } catch (error) {
+        console.warn('[MeasurementAnnotations] batch trigger render failed:', error);
+      }
+
+      viewport.render?.();
+
+      return {
+        ok: true,
+        viewportId: viewport.id || viewportId,
+        referencedImageId,
+        hydratedCount,
+        requestedCount: orderedAnnotations.length,
+        annotationIds: orderedAnnotations.map(getAnnotationId),
+      };
     },
     jumpToViewerQuizTarget: async ({ viewerTarget, questionKey = '' } = {}) => {
       const target = normalizeViewerQuizTarget(viewerTarget);
@@ -7972,6 +8327,9 @@ function commandsModule({
     },
     jumpToSavedViewerAnnotation: {
       commandFn: actions.jumpToSavedViewerAnnotation,
+    },
+    showSavedViewerAnnotationsForSameImage: {
+      commandFn: actions.showSavedViewerAnnotationsForSameImage,
     },
     jumpToViewerQuizTarget: {
       commandFn: actions.jumpToViewerQuizTarget,
