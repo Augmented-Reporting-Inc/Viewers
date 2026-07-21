@@ -6,12 +6,41 @@ function getMeasurementLabel(measurement) {
     measurement?.label ||
     measurement?.measurementRole ||
     measurement?.description ||
+    getArrowAnnotateText(measurement) ||
     measurement?.toolName ||
     'Unlabelled measurement'
   );
 }
 
 const AR_SAVED_ANNOTATIONS_REFRESH_EVENT = 'ar-measurements:saved-annotations-updated';
+
+function isArrowAnnotateMeasurement(measurement) {
+  return String(measurement?.toolName || '') === 'ArrowAnnotate';
+}
+
+function getArrowAnnotateText(measurement) {
+  if (!isArrowAnnotateMeasurement(measurement)) {
+    return '';
+  }
+
+  const directText = [measurement?.text, measurement?.measurements?.text]
+    .map(value => String(value || '').trim())
+    .find(Boolean);
+
+  if (directText) {
+    return directText;
+  }
+
+  const primaryDisplayText = Array.isArray(measurement?.displayText?.primary)
+    ? measurement.displayText.primary
+    : Array.isArray(measurement?.displayText)
+      ? measurement.displayText
+      : Array.isArray(measurement?.measurements?.displayText)
+        ? measurement.measurements.displayText
+        : [];
+
+  return primaryDisplayText.map(value => String(value || '').trim()).find(Boolean) || '';
+}
 
 function finiteNumberOrNull(value) {
   const numberValue = Number(value);
@@ -110,6 +139,9 @@ function getFirstMeasurementStats(measurement) {
 }
 
 function getMeasurementValue(measurement) {
+  if (isArrowAnnotateMeasurement(measurement)) {
+    return '';
+  }
   const unitType = getMeasurementUnitType(measurement);
 
   const displayText = flattenDisplayText(measurement?.displayText, unitType);
@@ -222,8 +254,25 @@ function normalizeDisplayTextUnits(displayText = [], unitType = 'length') {
 }
 
 function normalizeMeasurementForDisplay(measurement) {
-  const unitType = getMeasurementUnitType(measurement);
   const measurements = measurement?.measurements || {};
+
+  if (isArrowAnnotateMeasurement(measurement)) {
+    const text = getArrowAnnotateText(measurement);
+    const displayText = text ? [text] : [];
+
+    return {
+      ...measurement,
+      text,
+      displayText,
+      measurements: {
+        ...measurements,
+        text,
+        displayText,
+      },
+    };
+  }
+
+  const unitType = getMeasurementUnitType(measurement);
 
   return {
     ...measurement,
@@ -267,7 +316,8 @@ function hasSemanticLabel(measurement) {
     measurement?.label ||
     measurement?.measurementRole ||
     measurement?.role ||
-    measurement?.slot
+    measurement?.slot ||
+    getArrowAnnotateText(measurement)
   );
 }
 
@@ -918,8 +968,8 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
         key: 'learner',
         title:
           String(saveTarget.measurementWorkflowRole || '').toLowerCase() === 'learner'
-            ? 'My measurements'
-            : 'Learner measurements',
+            ? 'My measurements & annotations'
+            : 'Learner measurements & annotations',
         measurements: visibleMeasurements.filter(
           measurement => measurement?.workflow !== REVIEWER_MEASUREMENTS_WORKFLOW
         ),
@@ -928,8 +978,8 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
         key: 'coach',
         title:
           String(saveTarget.measurementWorkflowRole || '').toLowerCase() === 'educator'
-            ? 'My measurements'
-            : 'Coach measurements',
+            ? 'My measurements & annotations'
+            : 'Coach measurements & annotations',
         measurements: visibleMeasurements.filter(
           measurement => measurement?.workflow === REVIEWER_MEASUREMENTS_WORKFLOW
         ),
@@ -948,7 +998,7 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
   const handleSave = async (scoreNow = false) => {
     if (scoreNow && isMeasurementScoringDisabled) {
       uiNotificationService.show({
-        title: 'AR Measurements',
+        title: 'AR Measurements & Annotations',
         message: 'Measurement scoring is disabled for this viewer quiz workflow.',
         type: 'warning',
         duration: 5000,
@@ -976,7 +1026,7 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
     } catch (error) {
       console.error('[ARMeasurementsPanel] save failed:', error);
       uiNotificationService.show({
-        title: 'AR Measurements',
+        title: 'AR Measurements & Annotations',
         message: `Save failed: ${error?.message || error}`,
         type: 'error',
         duration: 5000,
@@ -1078,13 +1128,13 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
 
     const targetMeasurements = getAutoDisplayPeerMeasurements(visibleMeasurements, saveTarget);
 
-    const referenceMeasurement = targetMeasurements[0];
-
     const autoDisplayAnnotations = getAutoDisplayAnnotationsForReferenceImage(
       visibleMeasurements,
       saveTarget,
       targetMeasurements
     );
+
+    const referenceMeasurement = targetMeasurements[0] || autoDisplayAnnotations[0];
 
     const targetKeys = autoDisplayAnnotations.map(getMeasurementKey).filter(Boolean).sort();
 
@@ -1151,7 +1201,7 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
   return (
     <div className="flex h-full min-h-0 flex-col bg-black text-white">
       <div className="shrink-0 border-b border-gray-700 p-3">
-        <div className="text-base font-semibold">AR Measurements</div>
+        <div className="text-base font-semibold">AR Measurements &amp; Annotations</div>
         <div className="mt-1 text-xs text-gray-400">
           {isReviewWorkflow
             ? `Virtual coaching • ${
@@ -1167,7 +1217,7 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
         {domain === 'echo' ? <LVSimpsonSummary result={lvSimpsonResult} /> : null}
 
         {visibleMeasurements.length === 0 ? (
-          <div className="text-sm text-gray-400">No viewer measurements yet.</div>
+          <div className="text-sm text-gray-400">No viewer measurements or annotations yet.</div>
         ) : (
           <div className="space-y-2">
             <div className="space-y-4">
@@ -1180,7 +1230,9 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
                   ) : null}
 
                   {group.measurements.length === 0 ? (
-                    <div className="text-sm text-gray-500">No measurements in this section.</div>
+                    <div className="text-sm text-gray-500">
+                      No measurements or annotations in this section.
+                    </div>
                   ) : (
                     <div className="space-y-2">
                       {group.measurements.map(measurement => {
@@ -1198,7 +1250,7 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
                             type="button"
                             className="w-full rounded border border-gray-700 p-2 text-left hover:border-blue-400 hover:bg-gray-900"
                             onClick={() => jumpToMeasurement(measurement)}
-                            title="Jump to measurement"
+                            title="Jump to measurement or annotation"
                           >
                             <div className="text-sm font-semibold">{label}</div>
 
@@ -1221,7 +1273,7 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
         {isReviewWorkflow ? (
           isReviewWorkflowReadOnly ? (
             <div className="text-center text-xs text-gray-400">
-              Measurements are read-only for this coaching review.
+              Measurements and annotations are read-only for this coaching review.
             </div>
           ) : (
             <button
@@ -1233,8 +1285,8 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
               {savingAction === 'draft'
                 ? 'Saving…'
                 : String(saveTarget.measurementWorkflowRole || '').toLowerCase() === 'educator'
-                  ? 'Save Coach Measurements'
-                  : 'Save Learner Measurements'}
+                  ? 'Save Coach Measurements & Annotations'
+                  : 'Save Learner Measurements & Annotations'}
             </button>
           )
         ) : isLearnerMeasurementWorkflow ? (
@@ -1272,7 +1324,7 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
             disabled={isSaving || visibleMeasurements.length === 0}
             onClick={() => handleSave(false)}
           >
-            {savingAction === 'draft' ? 'Saving…' : 'Save Measurements'}
+            {savingAction === 'draft' ? 'Saving…' : 'Save Measurements & Annotations'}
           </button>
         )}
       </div>

@@ -25,7 +25,7 @@ const ArrowAnnotate = {
     const isLocked = getIsLocked(annotationUID);
     const isVisible = getIsVisible(annotationUID);
     if (!metadata || !data) {
-      console.warn('Length tool: Missing metadata or data');
+      console.warn('ArrowAnnotate tool: Missing metadata or data');
       return null;
     }
 

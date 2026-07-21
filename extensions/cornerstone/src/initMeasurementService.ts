@@ -17,6 +17,10 @@ const { CORNERSTONE_3D_TOOLS_SOURCE_NAME, CORNERSTONE_3D_TOOLS_SOURCE_VERSION } 
 const { removeAnnotation } = annotation.state;
 const csToolsEvents = Enums.Events;
 
+function shouldCreateMeasurementOnCompletion(toolName) {
+  return toolName === toolNames.Length || toolName === toolNames.ArrowAnnotate;
+}
+
 const initMeasurementService = (
   measurementService,
   displaySetService,
@@ -229,7 +233,12 @@ const connectToolsToMeasurementService = ({
         annotation: { metadata, annotationUID },
       } = annotationAddedEventDetail;
       const { toolName } = metadata;
-
+      if (
+        csToolsEvent.type === csToolsEvents.ANNOTATION_ADDED &&
+        shouldCreateMeasurementOnCompletion(toolName)
+      ) {
+        return;
+      }
       if (csToolsEvent.type === completedEvt && toolName === toolNames.CalibrationLine) {
         // show modal to input the measurement (mm)
         onCompletedCalibrationLine(servicesManager, csToolsEvent)
@@ -248,11 +257,15 @@ const connectToolsToMeasurementService = ({
             cornerstoneViewportService.resize();
           });
       } else {
-        // To force the measurementUID be the same as the annotationUID
-        // Todo: this should be changed when a measurement can include multiple annotations
-        // in the future
+        // Keep the MeasurementService id aligned with the Cornerstone annotation id.
         annotationAddedEventDetail.uid = annotationUID;
-        annotationToMeasurement(toolName, annotationAddedEventDetail);
+
+        // Most tools may emit more than one lifecycle event. Length and
+        // ArrowAnnotate are filtered above so their first MeasurementService
+        // representation is created only after completion.
+        const existingMeasurement = measurementService.getMeasurement(annotationUID);
+
+        annotationToMeasurement(toolName, annotationAddedEventDetail, !!existingMeasurement);
       }
     } catch (error) {
       console.warn('Failed to add measurement:', error);
@@ -502,12 +515,17 @@ const connectMeasurementServiceToTools = ({
         return;
       }
       const removedAnnotation = annotation.state.getAnnotation(removedMeasurementId);
-      removeAnnotation(removedMeasurementId);
-      commandsManager.run('triggerCreateAnnotationMemo', {
-        annotation: removedAnnotation,
-        FrameOfReferenceUID: removedAnnotation.metadata.FrameOfReferenceUID,
-        options: { deleting: true },
-      });
+
+      if (removedAnnotation) {
+        removeAnnotation(removedMeasurementId);
+
+        commandsManager.run('triggerCreateAnnotationMemo', {
+          annotation: removedAnnotation,
+          FrameOfReferenceUID: removedAnnotation.metadata?.FrameOfReferenceUID,
+          options: { deleting: true },
+        });
+      }
+
       const renderingEngine = cornerstoneViewportService.getRenderingEngine();
       // Note: We could do a better job by triggering the render on the
       // viewport itself, but the removeAnnotation does not include that info...

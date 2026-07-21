@@ -1,5 +1,9 @@
 import i18n from 'i18next';
-import { metaData } from '@cornerstonejs/core';
+import { eventTarget, metaData } from '@cornerstonejs/core';
+import {
+  Enums as CornerstoneToolsEnums,
+  annotation as cornerstoneAnnotation,
+} from '@cornerstonejs/tools';
 import { id } from './id';
 import initToolGroups from './initToolGroups';
 import toolbarButtons from './toolbarButtons';
@@ -555,7 +559,6 @@ function createARUSRegionCalibrationProvider({ displaySetService }) {
 const BASE_MEASUREMENT_TOOL_IDS = [
   'Length',
   'Bidirectional',
-  'ArrowAnnotate',
   'EllipticalROI',
   'RectangleROI',
   'CircleROI',
@@ -626,6 +629,33 @@ async function getLabelConfigForMeasurement(measurement, commandsManager) {
   return null;
 }
 
+async function waitForViewerMeasurementServiceEntry(
+  measurementService,
+  annotationId,
+  attempts = 40
+) {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const measurement = measurementService.getMeasurement?.(annotationId);
+
+    if (measurement) {
+      return measurement;
+    }
+
+    await new Promise(resolve => window.setTimeout(resolve, 25));
+  }
+
+  return null;
+}
+
+function isHydratedSavedWorkflowAnnotation(annotationId, fallbackAnnotation = null) {
+  const sourceAnnotation =
+    cornerstoneAnnotation.state.getAnnotation?.(annotationId) || fallbackAnnotation;
+
+  return !!(
+    sourceAnnotation?.data?.arMeasurementWorkflow || sourceAnnotation?.data?.arMeasurementReadOnly
+  );
+}
+
 // Allow this mode by excluding non-imaging modalities such as SR, SEG
 // Also, SM is not a simple imaging modalities, so exclude it.
 const NON_IMAGE_MODALITIES = ['ECG', 'SEG', 'RTSTRUCT', 'RTPLAN', 'PR'];
@@ -694,8 +724,8 @@ const extensionDependencies = {
 
 function modeFactory({ modeConfiguration }) {
   let _activatePanelTriggersSubscriptions = [];
-  let _measurementAddedSub = null;
-  let _suppressLabelPrompt = false;
+  let _annotationCompletedHandler: null | ((event: Event) => void) = null;
+  const _handledCompletedAnnotationIds = new Set<string>();
   let restoreConsoleWarn: null | (() => void) = null;
   let removeARUSRegionPixelSpacingProvider: null | (() => void) = null;
 
@@ -757,64 +787,103 @@ function modeFactory({ modeConfiguration }) {
       commandsManager.runCommand('clearViewerMeasurementsCreatedInSession');
       measurementService.clearMeasurements();
 
-      _measurementAddedSub?.unsubscribe?.();
-      _measurementAddedSub = null;
+      if (_annotationCompletedHandler) {
+        eventTarget.removeEventListener(
+          CornerstoneToolsEnums.Events.ANNOTATION_COMPLETED,
+          _annotationCompletedHandler
+        );
+      }
 
-      _measurementAddedSub = measurementService.subscribe(
-        measurementService.EVENTS.MEASUREMENT_ADDED,
-        async ({ measurement }) => {
-          if (_suppressLabelPrompt) {
-            return;
-          }
+      _handledCompletedAnnotationIds.clear();
 
-          if (!measurement?.uid || measurement?.label) {
-            return;
-          }
+      _annotationCompletedHandler = async (event: Event) => {
+        const eventDetail = (event as CustomEvent)?.detail || {};
+        const sourceAnnotation = eventDetail.annotation;
+        const annotationId = String(sourceAnnotation?.annotationUID || '').trim();
 
-          const labelOptions = await getLabelConfigForMeasurement(measurement, commandsManager);
-          if (!labelOptions) {
-            return;
-          }
+        if (!annotationId || _handledCompletedAnnotationIds.has(annotationId)) {
+          return;
+        }
 
-          try {
-            console.info('[AR Measurements] label prompt config', {
-              toolName: measurement?.toolName,
-              title: labelOptions.title,
-              placeholder: labelOptions.placeholder,
-              labelConfigId: labelOptions.labelConfigOverride?.id,
-              commandName: labelOptions.commandName,
-            });
+        // Let hydration finish applying its saved-workflow marker before
+        // deciding whether this is a new user-created annotation.
+        await new Promise(resolve => window.setTimeout(resolve, 0));
 
-            if (labelOptions.commandName) {
-              await commandsManager.runCommand(labelOptions.commandName, {
-                uid: measurement.uid,
+        if (isHydratedSavedWorkflowAnnotation(annotationId, sourceAnnotation)) {
+          return;
+        }
+
+        const measurement = await waitForViewerMeasurementServiceEntry(
+          measurementService,
+          annotationId
+        );
+
+        if (!measurement) {
+          console.warn('[AR Measurements] completed annotation was not mapped', {
+            annotationId,
+            toolName: sourceAnnotation?.metadata?.toolName,
+          });
+          return;
+        }
+
+        _handledCompletedAnnotationIds.add(annotationId);
+
+        commandsManager.runCommand('markViewerMeasurementCreatedInSession', {
+          uid: annotationId,
+        });
+
+        const currentMeasurement = measurementService.getMeasurement?.(annotationId) || measurement;
+
+        if (!currentMeasurement?.label) {
+          const labelOptions = await getLabelConfigForMeasurement(
+            currentMeasurement,
+            commandsManager
+          );
+
+          if (labelOptions) {
+            try {
+              console.info('[AR Measurements] label prompt config', {
+                toolName: currentMeasurement?.toolName,
+                title: labelOptions.title,
+                placeholder: labelOptions.placeholder,
+                labelConfigId: labelOptions.labelConfigOverride?.id,
+                commandName: labelOptions.commandName,
               });
-            } else {
-              await commandsManager.runCommand('setMeasurementLabel', {
-                uid: measurement.uid,
-                ...labelOptions,
-              });
+
+              if (labelOptions.commandName) {
+                await commandsManager.runCommand(labelOptions.commandName, {
+                  uid: annotationId,
+                });
+              } else {
+                await commandsManager.runCommand('setMeasurementLabel', {
+                  uid: annotationId,
+                  ...labelOptions,
+                });
+              }
+            } catch (error) {
+              console.warn('[AR Measurements] label prompt failed:', error);
             }
-
-            commandsManager.runCommand('markViewerMeasurementCreatedInSession', {
-              uid: measurement.uid,
-            });
-            panelService?.activatePanel?.(
-              'extension-ar-measurements.panelModule.arMeasurements',
-              true
-            );
-          } catch (error) {
-            console.warn('[AR Measurements] label prompt failed:', error);
           }
         }
+
+        panelService?.activatePanel?.('extension-ar-measurements.panelModule.arMeasurements', true);
+      };
+
+      eventTarget.addEventListener(
+        CornerstoneToolsEnums.Events.ANNOTATION_COMPLETED,
+        _annotationCompletedHandler
       );
 
       // Init Default and SR ToolGroups
       initToolGroups(extensionManager, toolGroupService, commandsManager);
 
       toolbarService.register(toolbarButtons);
+
+      const measurementToolsReadOnly = isViewerMeasurementReadOnlyFromUrl();
+
       toolbarService.updateSection(toolbarService.sections.primary, [
         'MeasurementTools',
+        ...(measurementToolsReadOnly ? [] : ['ArrowAnnotate']),
         'Zoom',
         'Pan',
         'TrackballRotate',
@@ -855,8 +924,6 @@ function modeFactory({ modeConfiguration }) {
       ]);
 
       const initialMeasurementDomain = getViewerMeasurementDomainFromPath();
-
-      const measurementToolsReadOnly = isViewerMeasurementReadOnlyFromUrl();
 
       toolbarService.updateSection(
         'MeasurementTools',
@@ -925,21 +992,15 @@ function modeFactory({ modeConfiguration }) {
         customizationService.Scope.Mode
       );
 
-      _suppressLabelPrompt = true;
-
       Promise.resolve(
         commandsManager.runCommand('hydrateMeasurementAnnotationsForActiveStudy', {
           workflows: ['viewerMeasurements'],
           domains: ['echo', 'bowel', 'generic'],
           notify: false,
         })
-      )
-        .catch(error => {
-          console.warn('[MeasurementAnnotations] longitudinal hydration failed:', error);
-        })
-        .finally(() => {
-          _suppressLabelPrompt = false;
-        });
+      ).catch(error => {
+        console.warn('[MeasurementAnnotations] longitudinal hydration failed:', error);
+      });
 
       // Start with cine enabled so autoPlayCine triggers when display sets load
       cineService.setIsCineEnabled(true);
@@ -997,9 +1058,15 @@ function modeFactory({ modeConfiguration }) {
       _activatePanelTriggersSubscriptions.forEach(sub => sub.unsubscribe());
       _activatePanelTriggersSubscriptions = [];
 
-      _measurementAddedSub?.unsubscribe?.();
-      _measurementAddedSub = null;
-      _suppressLabelPrompt = false;
+      if (_annotationCompletedHandler) {
+        eventTarget.removeEventListener(
+          CornerstoneToolsEnums.Events.ANNOTATION_COMPLETED,
+          _annotationCompletedHandler
+        );
+        _annotationCompletedHandler = null;
+      }
+
+      _handledCompletedAnnotationIds.clear();
 
       restoreConsoleWarn?.();
       removeARUSRegionPixelSpacingProvider?.();

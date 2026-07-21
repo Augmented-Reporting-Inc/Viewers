@@ -376,7 +376,12 @@ function inferToolName(annotation) {
 }
 
 function getViewportAnnotationLabel(annotation: any = {}) {
-  const label = annotation?.label || annotation?.measurementRole || annotation?.role || '';
+  const label =
+    annotation?.label ||
+    annotation?.measurementRole ||
+    annotation?.role ||
+    (inferToolName(annotation) === 'ArrowAnnotate' ? getSavedArrowAnnotateText(annotation) : '') ||
+    '';
 
   if (
     annotation?.workflow === REVIEWER_MEASUREMENTS_WORKFLOW &&
@@ -866,12 +871,54 @@ function cloneAnnotationPoints(points = []) {
     : [];
 }
 
+function cloneSavedAnnotationMetadataVector(value) {
+  if (Array.isArray(value)) {
+    return [...value];
+  }
+
+  if (ArrayBuffer.isView(value)) {
+    return Array.from(value as ArrayLike<number>);
+  }
+
+  return undefined;
+}
+
+function getSavedAnnotationMetadataVector(annotation: any = {}, key = '') {
+  return cloneSavedAnnotationMetadataVector(annotation?.[key] || annotation?.metadata?.[key]);
+}
+
+function getSavedArrowAnnotateText(annotation: any = {}) {
+  const directText = [annotation?.text, annotation?.measurements?.text]
+    .map(value => String(value || '').trim())
+    .find(Boolean);
+
+  if (directText) {
+    return directText;
+  }
+
+  const displayText = Array.isArray(annotation?.displayText?.primary)
+    ? annotation.displayText.primary
+    : Array.isArray(annotation?.displayText)
+      ? annotation.displayText
+      : Array.isArray(annotation?.measurements?.displayText)
+        ? annotation.measurements.displayText
+        : [];
+
+  return displayText.map(value => String(value || '').trim()).find(Boolean) || '';
+}
+
+function getSavedArrowAnnotateTextBox(annotation: any = {}) {
+  return isPlainObject(annotation?.textBox) ? annotation.textBox : {};
+}
+
 function buildCornerstoneAnnotation(annotation, fallbackFrameOfReferenceUID = '') {
   const annotationUID = annotation.uid || annotation.annotationId;
   const referencedImageId = annotation.referencedImageId;
   const points = cloneAnnotationPoints(annotation.points);
   const toolName = inferToolName(annotation);
+  const savedTextBox = getSavedArrowAnnotateTextBox(annotation);
   const FrameOfReferenceUID = annotation.FrameOfReferenceUID || fallbackFrameOfReferenceUID || '';
+
   if (!annotationUID || !toolName || !referencedImageId || points.length === 0) {
     return null;
   }
@@ -885,10 +932,15 @@ function buildCornerstoneAnnotation(annotation, fallbackFrameOfReferenceUID = ''
         hasMoved: false,
         worldPosition: points[0] || [0, 0, 0],
         worldBoundingBox: null,
+        ...savedTextBox,
       },
     },
     cachedStats: buildCachedStatsForAnnotation(annotation, toolName, referencedImageId),
   };
+
+  if (toolName === 'ArrowAnnotate') {
+    data.text = getSavedArrowAnnotateText(annotation);
+  }
 
   // Contour tools need contour geometry. Keeping handles too is harmless and
   // preserves compatibility with tools/mappers that read handles.
@@ -908,6 +960,8 @@ function buildCornerstoneAnnotation(annotation, fallbackFrameOfReferenceUID = ''
       SOPInstanceUID: annotation.SOPInstanceUID,
       SeriesInstanceUID: annotation.SeriesInstanceUID || annotation.referenceSeriesUID,
       StudyInstanceUID: annotation.StudyInstanceUID,
+      viewPlaneNormal: getSavedAnnotationMetadataVector(annotation, 'viewPlaneNormal'),
+      viewUp: getSavedAnnotationMetadataVector(annotation, 'viewUp'),
       arMeasurementWorkflow: annotation.workflow || '',
       arMeasurementReadOnly: !!annotation.isLocked,
       arMeasurementReviewRound: Number(annotation.reviewRound) || null,
@@ -935,6 +989,8 @@ function getToolClassForHydration(toolName) {
       return cornerstoneTools.LivewireContourTool;
     case 'Length':
       return cornerstoneTools.LengthTool;
+    case 'ArrowAnnotate':
+      return cornerstoneTools.ArrowAnnotateTool;
     default:
       return null;
   }
@@ -962,6 +1018,7 @@ function patchHydratedAnnotationFromSaved({
 
   const toolName = inferToolName(savedAnnotation);
   const points = cloneAnnotationPoints(savedAnnotation?.points);
+  const savedTextBox = getSavedArrowAnnotateTextBox(savedAnnotation);
 
   target.annotationUID = annotationUID;
   target.metadata = {
@@ -978,6 +1035,8 @@ function patchHydratedAnnotationFromSaved({
     SOPInstanceUID: savedAnnotation.SOPInstanceUID,
     SeriesInstanceUID: savedAnnotation.SeriesInstanceUID || savedAnnotation.referenceSeriesUID,
     StudyInstanceUID: savedAnnotation.StudyInstanceUID,
+    viewPlaneNormal: getSavedAnnotationMetadataVector(savedAnnotation, 'viewPlaneNormal'),
+    viewUp: getSavedAnnotationMetadataVector(savedAnnotation, 'viewUp'),
     arMeasurementWorkflow: savedAnnotation.workflow || '',
     arMeasurementReadOnly: !!savedAnnotation.isLocked,
     arMeasurementReviewRound: Number(savedAnnotation.reviewRound) || null,
@@ -998,6 +1057,7 @@ function patchHydratedAnnotationFromSaved({
         hasMoved: false,
         worldPosition: points[0] || [0, 0, 0],
         worldBoundingBox: null,
+        ...savedTextBox,
       },
     },
     cachedStats: buildCachedStatsForAnnotation(savedAnnotation, toolName, referencedImageId),
@@ -1005,6 +1065,10 @@ function patchHydratedAnnotationFromSaved({
     arMeasurementReadOnly: !!savedAnnotation.isLocked,
     arMeasurementReviewRound: Number(savedAnnotation.reviewRound) || null,
   };
+
+  if (toolName === 'ArrowAnnotate') {
+    target.data.text = getSavedArrowAnnotateText(savedAnnotation);
+  }
 
   if (CONTOUR_TOOL_NAMES.has(toolName)) {
     target.data.contour = {
@@ -1056,9 +1120,17 @@ function hydrateWithToolClass({
       });
     }
 
-    const hydrated = ToolClass.hydrate(viewportId, points, {
-      annotationUID,
-    });
+    const hydrated =
+      toolName === 'ArrowAnnotate'
+        ? ToolClass.hydrate(viewportId, points, getViewportAnnotationLabel(savedAnnotation), {
+            annotationUID,
+            referencedImageId,
+            viewplaneNormal: getSavedAnnotationMetadataVector(savedAnnotation, 'viewPlaneNormal'),
+            viewUp: getSavedAnnotationMetadataVector(savedAnnotation, 'viewUp'),
+          })
+        : ToolClass.hydrate(viewportId, points, {
+            annotationUID,
+          });
 
     return patchHydratedAnnotationFromSaved({
       hydrated,
@@ -1092,10 +1164,18 @@ export function hydrateSavedViewerAnnotationForViewport({
   fallbackFrameOfReferenceUID?: string;
   selectAnnotation?: boolean;
 }) {
+  const viewportCamera = viewport?.getCamera?.() || {};
+
   const annotationToHydrate = {
     ...annotation,
     referencedImageId: referencedImageIdOverride || annotation?.referencedImageId,
     points: cloneAnnotationPoints(annotation?.points),
+    viewPlaneNormal:
+      getSavedAnnotationMetadataVector(annotation, 'viewPlaneNormal') ||
+      cloneSavedAnnotationMetadataVector(viewportCamera.viewPlaneNormal),
+    viewUp:
+      getSavedAnnotationMetadataVector(annotation, 'viewUp') ||
+      cloneSavedAnnotationMetadataVector(viewportCamera.viewUp),
   };
 
   const cornerstoneAnnotation = buildCornerstoneAnnotation(

@@ -673,6 +673,67 @@ function getLengthMeasurementPayload(measurement) {
   };
 }
 
+function getArrowAnnotateText(measurement, existingAnnotation = null) {
+  const directText = [
+    measurement?.text,
+    measurement?.measurements?.text,
+    existingAnnotation?.text,
+    existingAnnotation?.measurements?.text,
+  ]
+    .map(value => String(value || '').trim())
+    .find(Boolean);
+
+  if (directText) {
+    return directText;
+  }
+
+  return (
+    [...getMeasurementDisplayText(measurement), ...getMeasurementDisplayText(existingAnnotation)]
+      .map(value => String(value || '').trim())
+      .find(Boolean) || ''
+  );
+}
+
+function getArrowAnnotateMeasurementPayload(measurement, existingAnnotation = null) {
+  const text = getArrowAnnotateText(measurement, existingAnnotation);
+
+  return {
+    text,
+    displayText: text ? [text] : [],
+  };
+}
+
+function cloneViewerMeasurementMetadataVector(value) {
+  if (Array.isArray(value)) {
+    return [...value];
+  }
+
+  if (ArrayBuffer.isView(value)) {
+    return Array.from(value as ArrayLike<number>);
+  }
+
+  return undefined;
+}
+
+function getViewerMeasurementMetadataVector(measurement, existingAnnotation, key) {
+  const value =
+    measurement?.metadata?.[key] ||
+    existingAnnotation?.[key] ||
+    existingAnnotation?.metadata?.[key];
+
+  return cloneViewerMeasurementMetadataVector(value);
+}
+
+function hasViewerMeasurementSemanticLabel(measurement) {
+  return !!(
+    measurement?.label ||
+    measurement?.measurementRole ||
+    measurement?.role ||
+    measurement?.slot ||
+    (measurement?.toolName === 'ArrowAnnotate' && getArrowAnnotateText(measurement))
+  );
+}
+
 function getExistingAnnotationsById(seriesDoc, workflow = VIEWER_MEASUREMENTS_WORKFLOW) {
   const annotations = getRequestedWorkflowAnnotations(seriesDoc?.MeasurementAnnotations, [
     workflow,
@@ -695,10 +756,7 @@ function getExistingScorableViewerAnnotations(seriesDoc, domain = '') {
       return false;
     }
 
-    if (
-      !annotation.toolName ||
-      !(annotation.label || annotation.measurementRole || annotation.role || annotation.slot)
-    ) {
+    if (!annotation.toolName || !hasViewerMeasurementSemanticLabel(annotation)) {
       return false;
     }
 
@@ -746,7 +804,11 @@ function getLVSimpsonMeasurementPayload(measurement, existingAnnotation = null) 
 }
 
 function serializeViewerMeasurement(measurement, domain, existingAnnotation = null, options = {}) {
-  const label = measurement?.label || '';
+  const isArrowAnnotateMeasurement = measurement?.toolName === 'ArrowAnnotate';
+  const arrowText = isArrowAnnotateMeasurement
+    ? getArrowAnnotateText(measurement, existingAnnotation)
+    : '';
+  const label = measurement?.label || arrowText || '';
   const isContourMeasurement = isViewerContourTool(measurement?.toolName);
   const lvTrace = domain === 'echo' && isContourMeasurement ? parseLVTraceLabel(label) : null;
   const lvSimpson = getLVSimpsonGeometry(measurement, existingAnnotation);
@@ -759,7 +821,9 @@ function serializeViewerMeasurement(measurement, domain, existingAnnotation = nu
   const nextMeasurements = {
     ...(isContourMeasurement
       ? buildContourMeasurementPayload(measurement, existingAnnotation, options.displaySetService)
-      : getLengthMeasurementPayload(measurement)),
+      : isArrowAnnotateMeasurement
+        ? getArrowAnnotateMeasurementPayload(measurement, existingAnnotation)
+        : getLengthMeasurementPayload(measurement)),
     ...(isLVSimpson ? getLVSimpsonMeasurementPayload(measurement, existingAnnotation) : {}),
   };
 
@@ -779,6 +843,13 @@ function serializeViewerMeasurement(measurement, domain, existingAnnotation = nu
     uid: measurement.uid,
     label,
     toolName: measurement.toolName,
+
+    ...(isArrowAnnotateMeasurement
+      ? {
+          text: arrowText,
+          textBox: measurement?.textBox || existingAnnotation?.textBox || null,
+        }
+      : {}),
 
     ...(lvTrace
       ? {
@@ -808,6 +879,12 @@ function serializeViewerMeasurement(measurement, domain, existingAnnotation = nu
     referencedImageId: measurement.referencedImageId,
     frameNumber,
     points: measurement.points,
+    viewPlaneNormal: getViewerMeasurementMetadataVector(
+      measurement,
+      existingAnnotation,
+      'viewPlaneNormal'
+    ),
+    viewUp: getViewerMeasurementMetadataVector(measurement, existingAnnotation, 'viewUp'),
 
     measurements: {
       ...(existingAnnotation?.measurements || {}),
@@ -1590,6 +1667,10 @@ function getSavedContourAreaForDisplay(savedAnnotation, referencedImageId = '') 
 }
 
 function getSavedAnnotationDisplayText(savedAnnotation) {
+  if (savedAnnotation?.toolName === 'ArrowAnnotate') {
+    const text = getArrowAnnotateText(savedAnnotation);
+    return text ? [text] : [];
+  }
   const measurements = savedAnnotation?.measurements || {};
   const unitType = isViewerContourTool(savedAnnotation?.toolName) ? 'area' : 'length';
 
@@ -1888,6 +1969,8 @@ function forceSavedAnnotationMeasurementServiceDisplay({
   }
 
   const displayText = getSavedAnnotationDisplayText(savedAnnotation);
+  const arrowText =
+    savedAnnotation?.toolName === 'ArrowAnnotate' ? getArrowAnnotateText(savedAnnotation) : '';
   const stats = buildSavedAnnotationStatsForMeasurementService(savedAnnotation, referencedImageId);
 
   const resolvedReferencedImageId =
@@ -1902,8 +1985,14 @@ function forceSavedAnnotationMeasurementServiceDisplay({
       savedAnnotation.label ||
       savedAnnotation.measurementRole ||
       savedAnnotation.role ||
+      arrowText ||
       currentMeasurement.label,
     displayText,
+    ...(savedAnnotation?.toolName === 'ArrowAnnotate'
+      ? {
+          textBox: savedAnnotation.textBox || currentMeasurement.textBox || null,
+        }
+      : {}),
     points: cloneSavedAnnotationPoints(savedAnnotation.points),
     referencedImageId: resolvedReferencedImageId,
     SOPInstanceUID: savedAnnotation.SOPInstanceUID || currentMeasurement.SOPInstanceUID,
@@ -2046,6 +2135,88 @@ function getDisplaySetForSavedAnnotation(displaySetService, annotation) {
       return false;
     }) || seriesDisplaySets[0]
   );
+}
+
+async function waitForDisplaySetForSavedAnnotation({
+  displaySetService,
+  viewportGridService,
+  annotation,
+  attempts = 150,
+}) {
+  let activeDisplaySet = null;
+
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const activeViewportId = viewportGridService.getActiveViewportId();
+
+    activeDisplaySet = getActiveViewportDisplaySet({
+      viewportGridService,
+      displaySetService,
+      viewportId: activeViewportId,
+    });
+
+    const displaySet = displaySetContainsSavedAnnotation(activeDisplaySet, annotation)
+      ? activeDisplaySet
+      : getDisplaySetForSavedAnnotation(displaySetService, annotation);
+
+    if (displaySet) {
+      return {
+        activeDisplaySet,
+        displaySet,
+      };
+    }
+
+    await sleep(100);
+  }
+
+  return {
+    activeDisplaySet,
+    displaySet: null,
+  };
+}
+
+function getViewportsToUpdateSafely({
+  hangingProtocolService,
+  viewportId,
+  displaySetInstanceId,
+  viewportOptions,
+  context = 'ViewerNavigation',
+}) {
+  let viewportsToUpdate = [];
+
+  try {
+    const hangingProtocolViewports = hangingProtocolService?.getViewportsRequireUpdate?.(
+      viewportId,
+      displaySetInstanceId
+    );
+
+    if (Array.isArray(hangingProtocolViewports) && hangingProtocolViewports.length > 0) {
+      viewportsToUpdate = hangingProtocolViewports;
+    }
+  } catch (error) {
+    console.warn(`[${context}] hanging protocol update unavailable; using direct viewport update`, {
+      viewportId,
+      displaySetInstanceId,
+      error,
+    });
+  }
+
+  if (!viewportsToUpdate.length && viewportId && displaySetInstanceId) {
+    viewportsToUpdate = [
+      {
+        viewportId,
+        displaySetInstanceUIDs: [displaySetInstanceId],
+      },
+    ];
+  }
+
+  if (viewportsToUpdate[0] && viewportOptions) {
+    viewportsToUpdate[0] = {
+      ...viewportsToUpdate[0],
+      viewportOptions,
+    };
+  }
+
+  return viewportsToUpdate;
 }
 
 function displaySetContainsSavedAnnotation(displaySet, annotation) {
@@ -3802,9 +3973,18 @@ function decorateReviewWorkflowAnnotations({ annotations, seriesDoc, saveTarget 
 
     const isWritable = workflow === writableWorkflow && isCurrentReviewerRound;
 
+    const sourceRole =
+      annotation?.sourceRole ||
+      (workflow === REVIEWER_MEASUREMENTS_WORKFLOW
+        ? 'educator'
+        : workflow === VIEWER_MEASUREMENTS_WORKFLOW
+          ? 'learner'
+          : '');
+
     return {
       ...annotation,
       workflow,
+      sourceRole,
       isLocked: !isWritable,
       measurementOwner: workflow === REVIEWER_MEASUREMENTS_WORKFLOW ? 'coach' : 'learner',
     };
@@ -3973,6 +4153,7 @@ function commandsModule({
   extensionManager,
 }: OhifTypes.Extensions.ExtensionParams): OhifTypes.Extensions.CommandsModule {
   const viewerMeasurementsCreatedInSession = new Set<string>();
+  const viewerMeasurementsDeletedInSession = new Set<string>();
   const viewerQuizMeasurementComparisonAnnotationIds = new Set<string>();
   const {
     viewportGridService,
@@ -4119,9 +4300,17 @@ function commandsModule({
     };
   }
 
+  function excludeViewerMeasurementsDeletedInSession(annotations = []) {
+    return (Array.isArray(annotations) ? annotations : []).filter(annotation => {
+      const annotationId = getMeasurementAnnotationId(annotation);
+      return !annotationId || !viewerMeasurementsDeletedInSession.has(annotationId);
+    });
+  }
+
   const actions = {
     clearViewerMeasurementsCreatedInSession: () => {
       viewerMeasurementsCreatedInSession.clear();
+      viewerMeasurementsDeletedInSession.clear();
     },
 
     markViewerMeasurementCreatedInSession: ({ uid }: { uid?: string } = {}) => {
@@ -4131,6 +4320,7 @@ function commandsModule({
         return '';
       }
 
+      viewerMeasurementsDeletedInSession.delete(measurementId);
       viewerMeasurementsCreatedInSession.add(measurementId);
 
       const saveTarget = getArViewerSaveTargetFromUrl();
@@ -4906,11 +5096,13 @@ function commandsModule({
           domains,
         });
 
-        const processedAnnotations = decorateReviewWorkflowAnnotations({
-          annotations: result.processedAnnotations || [],
-          seriesDoc: result.seriesDoc,
-          saveTarget,
-        });
+        const processedAnnotations = excludeViewerMeasurementsDeletedInSession(
+          decorateReviewWorkflowAnnotations({
+            annotations: result.processedAnnotations || [],
+            seriesDoc: result.seriesDoc,
+            saveTarget,
+          })
+        );
 
         const decoratedResult = {
           ...result,
@@ -5068,11 +5260,42 @@ function commandsModule({
     },
 
     removeMeasurement: ({ uid }) => {
-      if (Array.isArray(uid)) {
-        measurementService.removeMany(uid);
-      } else {
-        measurementService.remove(uid);
+      const measurementIds = (Array.isArray(uid) ? uid : [uid])
+        .map(value => String(value || '').trim())
+        .filter(Boolean);
+
+      for (const measurementId of measurementIds) {
+        const measurement = measurementService.getMeasurement?.(measurementId);
+        const sourceAnnotation = annotation.state.getAnnotation?.(measurementId);
+        const isReadOnly = !!(
+          measurement?.isLocked ||
+          sourceAnnotation?.isLocked ||
+          sourceAnnotation?.data?.arMeasurementReadOnly
+        );
+
+        if (isReadOnly) {
+          continue;
+        }
+
+        viewerMeasurementsCreatedInSession.delete(measurementId);
+        viewerMeasurementsDeletedInSession.add(measurementId);
+
+        if (sourceAnnotation) {
+          cornerstoneTools.annotation.selection.setAnnotationSelected?.(measurementId, false);
+        }
+
+        if (measurement) {
+          measurementService.remove(measurementId);
+        } else if (sourceAnnotation) {
+          annotation.state.removeAnnotation?.(measurementId);
+        }
       }
+
+      cornerstoneViewportService.getRenderingEngine()?.render?.();
+
+      dispatchSavedAnnotationsRefresh({
+        reason: 'viewer-measurement-deleted',
+      });
     },
 
     toggleLockMeasurement: ({ uid }) => {
@@ -5147,32 +5370,30 @@ function commandsModule({
       viewportGridService.setActiveViewportId(viewportId);
     },
     arrowTextCallback: async ({ callback, data }) => {
-      const labelConfig = customizationService.getCustomization('measurementLabels');
-      const renderContent = customizationService.getCustomization('ui.labellingComponent');
-      const normalizedLabelConfig = normalizeMeasurementLabelConfigForDialog(labelConfig);
-      const dialogTitle = getMeasurementLabelDialogTitle(normalizedLabelConfig);
+      const existingText = String(
+        data?.data?.text || data?.text || data?.data?.label || data?.label || ''
+      );
+      const isCoachingAnnotation = isReviewWorkflowMeasurementsSaveTarget(
+        getArViewerSaveTargetFromUrl()
+      );
 
-      if (!labelConfig) {
-        const label = await callInputDialog({
-          uiDialogService,
-          title: 'Edit Arrow Text',
-          placeholder: data?.data?.label || 'Enter new text',
-          defaultValue: data?.data?.label || '',
-        });
-
-        callback?.(label);
-        return;
-      }
-
-      const value = await callInputDialogAutoComplete({
+      const value = await callInputDialog({
         uiDialogService,
-        labelConfig: normalizedLabelConfig,
-        renderContent,
-        title: dialogTitle,
+        title: existingText
+          ? isCoachingAnnotation
+            ? 'Edit Coaching Annotation'
+            : 'Edit Image Annotation'
+          : isCoachingAnnotation
+            ? 'Add Coaching Annotation'
+            : 'Add Image Annotation',
+        placeholder: isCoachingAnnotation
+          ? 'Describe the finding or area of interest for review'
+          : 'Enter annotation text',
+        defaultValue: existingText,
       });
+
       callback?.(value);
     },
-
     toggleCine: () => {
       const { viewports } = viewportGridService.getState();
       const { isCineEnabled } = cineService.getState();
@@ -6856,11 +7077,13 @@ function commandsModule({
         return annotationDomain === domain || annotationDomain === 'generic';
       });
 
-      const annotations = decorateReviewWorkflowAnnotations({
-        annotations: requestedAnnotations,
-        seriesDoc,
-        saveTarget,
-      });
+      const annotations = excludeViewerMeasurementsDeletedInSession(
+        decorateReviewWorkflowAnnotations({
+          annotations: requestedAnnotations,
+          seriesDoc,
+          saveTarget,
+        })
+      );
 
       return {
         seriesDoc,
@@ -6890,15 +7113,11 @@ function commandsModule({
       const seriesInstanceId =
         savedAnnotation.SeriesInstanceUID || savedAnnotation.referenceSeriesUID;
 
-      const activeDisplaySet = getActiveViewportDisplaySet({
-        viewportGridService,
+      const { activeDisplaySet, displaySet } = await waitForDisplaySetForSavedAnnotation({
         displaySetService,
-        viewportId: activeViewportId,
+        viewportGridService,
+        annotation: savedAnnotation,
       });
-
-      const displaySet = displaySetContainsSavedAnnotation(activeDisplaySet, savedAnnotation)
-        ? activeDisplaySet
-        : getDisplaySetForSavedAnnotation(displaySetService, savedAnnotation);
 
       if (!displaySet) {
         console.warn('[MeasurementAnnotations] no displaySet for saved annotation', {
@@ -6937,19 +7156,16 @@ function commandsModule({
       const targetViewportId = viewportToUpdate?.viewportId || activeViewportId;
 
       if (!activeDisplaySetAlreadyMatches) {
-        const updatedViewports = hangingProtocolService.getViewportsRequireUpdate(
-          targetViewportId,
-          displaySet.displaySetInstanceUID
-        );
+        const viewportsToUpdate = getViewportsToUpdateSafely({
+          hangingProtocolService,
+          viewportId: targetViewportId,
+          displaySetInstanceId: displaySet.displaySetInstanceUID,
+          viewportOptions: viewportToUpdate?.viewportOptions,
+          context: 'MeasurementAnnotations',
+        });
 
-        if (updatedViewports?.[0]) {
-          if (viewportToUpdate?.viewportOptions) {
-            updatedViewports[0].viewportOptions = viewportToUpdate.viewportOptions;
-          }
-
-          commandsManager.run('setDisplaySetsForViewports', {
-            viewportsToUpdate: updatedViewports,
-          });
+        if (viewportsToUpdate.length) {
+          actions.setDisplaySetsForViewports({ viewportsToUpdate });
         }
       }
 
@@ -7122,12 +7338,22 @@ function commandsModule({
       referenceAnnotation: requestedReferenceAnnotation = null,
       selectReferenceAnnotation = false,
     } = {}) => {
+      const availableSavedAnnotations = excludeViewerMeasurementsDeletedInSession(savedAnnotations);
+
+      const availableReferenceAnnotation =
+        requestedReferenceAnnotation &&
+        !viewerMeasurementsDeletedInSession.has(
+          getMeasurementAnnotationId(requestedReferenceAnnotation)
+        )
+          ? requestedReferenceAnnotation
+          : null;
+
       const sameImageAnnotations = getSavedAnnotationsForSameImage(
-        savedAnnotations,
-        requestedReferenceAnnotation
+        availableSavedAnnotations,
+        availableReferenceAnnotation
       );
 
-      const referenceAnnotation = requestedReferenceAnnotation || sameImageAnnotations[0];
+      const referenceAnnotation = availableReferenceAnnotation || sameImageAnnotations[0];
 
       const referenceAnnotationId = getAnnotationId(referenceAnnotation);
 
@@ -7147,7 +7373,13 @@ function commandsModule({
           hydratedCount: 0,
         };
       }
+      for (const savedAnnotation of availableSavedAnnotations) {
+        const savedAnnotationId = getAnnotationId(savedAnnotation);
 
+        if (savedAnnotationId) {
+          annotation.state.removeAnnotation?.(savedAnnotationId);
+        }
+      }
       const navigationResult = await actions.jumpToSavedViewerAnnotation({
         annotation: referenceAnnotation,
         selectAnnotation: selectReferenceAnnotation,
@@ -7272,20 +7504,16 @@ function commandsModule({
 
         targetViewportId = viewportToUpdate?.viewportId || activeViewportId;
 
-        const updatedViewports = hangingProtocolService.getViewportsRequireUpdate(
-          targetViewportId,
-          displaySet.displaySetInstanceUID
-        );
+        const viewportsToUpdate = getViewportsToUpdateSafely({
+          hangingProtocolService,
+          viewportId: targetViewportId,
+          displaySetInstanceId: displaySet.displaySetInstanceUID,
+          viewportOptions: viewportToUpdate?.viewportOptions,
+          context: 'ViewerQuiz',
+        });
 
-        if (updatedViewports?.[0]) {
-          if (viewportToUpdate?.viewportOptions) {
-            updatedViewports[0].viewportOptions = viewportToUpdate.viewportOptions;
-          }
-
-          commandsManager.run('setDisplaySetsForViewports', {
-            viewportsToUpdate: updatedViewports,
-          });
-
+        if (viewportsToUpdate.length) {
+          actions.setDisplaySetsForViewports({ viewportsToUpdate });
           await sleep(300);
         }
       }
@@ -8044,7 +8272,7 @@ function commandsModule({
           const writableWorkflow = getWritableReviewMeasurementWorkflow(saveTarget);
 
           if (isReviewWorkflowSave && !writableWorkflow) {
-            throw new Error('Measurements are read-only for this coaching review.');
+            throw new Error('Measurements and annotations are read-only for this coaching review.');
           }
 
           let activeSeriesDoc = null;
@@ -8120,16 +8348,17 @@ function commandsModule({
             ? getCurrentReviewMeasurementRound(seriesDoc)
             : 0;
 
-          let annotations = measurements
+          const liveAnnotations = measurements
             .filter(measurement => {
               const measurementId = getMeasurementAnnotationId(measurement);
 
               return (
                 measurement?.toolName &&
-                (measurement?.label || measurement?.measurementRole || measurement?.role) &&
+                hasViewerMeasurementSemanticLabel(measurement) &&
+                !!measurementId &&
+                !viewerMeasurementsDeletedInSession.has(measurementId) &&
                 (!isReviewWorkflowSave ||
-                  (!!measurementId &&
-                    !blockedMeasurementIds.has(measurementId) &&
+                  (!blockedMeasurementIds.has(measurementId) &&
                     (writableExistingMeasurementIds.has(measurementId) ||
                       viewerMeasurementsCreatedInSession.has(measurementId))))
               );
@@ -8150,6 +8379,39 @@ function commandsModule({
             )
             .filter(annotation => annotation.referencedImageId || annotation.points?.length);
 
+          let annotations = liveAnnotations;
+
+          if (isReviewWorkflowSave) {
+            const annotationsById = new Map();
+
+            // Preserve writable saved annotations that are currently on other
+            // images and therefore may not be hydrated in MeasurementService.
+            for (const existingAnnotation of existingById.values()) {
+              const existingAnnotationId = getMeasurementAnnotationId(existingAnnotation);
+
+              if (
+                !existingAnnotationId ||
+                !writableExistingMeasurementIds.has(existingAnnotationId) ||
+                viewerMeasurementsDeletedInSession.has(existingAnnotationId)
+              ) {
+                continue;
+              }
+
+              annotationsById.set(existingAnnotationId, existingAnnotation);
+            }
+
+            // New or modified live annotations replace the saved version.
+            for (const liveAnnotation of liveAnnotations) {
+              const liveAnnotationId = getMeasurementAnnotationId(liveAnnotation);
+
+              if (liveAnnotationId) {
+                annotationsById.set(liveAnnotationId, liveAnnotation);
+              }
+            }
+
+            annotations = Array.from(annotationsById.values());
+          }
+
           if (
             annotations.length === 0 &&
             !isReviewWorkflowSave &&
@@ -8159,12 +8421,18 @@ function commandsModule({
             annotations = existingScorableAnnotations;
           }
 
-          if (annotations.length === 0) {
+          const hasPendingReviewDeletion =
+            isReviewWorkflowSave &&
+            Array.from(viewerMeasurementsDeletedInSession).some(measurementId =>
+              writableExistingMeasurementIds.has(measurementId)
+            );
+
+          if (annotations.length === 0 && !hasPendingReviewDeletion) {
             uiNotificationService.show({
-              title: 'AR Measurements',
+              title: 'AR Measurements & Annotations',
               message: shouldSubmitForScore
                 ? 'No saved viewer measurements to score.'
-                : 'No viewer measurements to save.',
+                : 'No viewer measurements or annotations to save.',
               type: 'warning',
               duration: 3000,
             });
@@ -8277,6 +8545,9 @@ function commandsModule({
             }
           }
 
+          viewerMeasurementsCreatedInSession.clear();
+          viewerMeasurementsDeletedInSession.clear();
+
           dispatchSavedAnnotationsRefresh({
             seriesDoc: savedSeriesDoc,
             saveTarget,
@@ -8286,14 +8557,14 @@ function commandsModule({
           });
 
           uiNotificationService.show({
-            title: 'AR Measurements',
+            title: 'AR Measurements & Annotations',
             message: isReviewWorkflowSave
               ? normalizeReviewMeasurementRole(saveTarget.measurementWorkflowRole) === 'educator'
-                ? 'Coach measurements saved.'
-                : 'Learner measurements saved.'
+                ? 'Coach measurements and annotations saved.'
+                : 'Learner measurements and annotations saved.'
               : shouldSubmitForScore
                 ? 'Viewer measurements saved and submitted for scoring.'
-                : 'Viewer measurements saved.',
+                : 'Viewer measurements and annotations saved.',
             type: 'success',
             duration: 3000,
           });
@@ -8309,7 +8580,7 @@ function commandsModule({
           );
 
           uiNotificationService.show({
-            title: 'AR Measurements',
+            title: 'AR Measurements & Annotations',
             message: `Save failed: ${error?.message || error}`,
             type: 'error',
             duration: 5000,
