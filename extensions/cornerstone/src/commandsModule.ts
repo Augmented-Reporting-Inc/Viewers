@@ -146,6 +146,15 @@ function inferDomainWithoutSeriesDoc(explicitDomain) {
   }
 
   const params = getViewerUrlSearchParams();
+
+  const integration = String(params.get('arIntegration') || '')
+    .trim()
+    .toLowerCase();
+
+  if (integration === 'iuscan') {
+    return 'bowel';
+  }
+
   const urlDomain = String(
     params.get('arMeasurementDomain') ||
       params.get('arViewerDomain') ||
@@ -162,14 +171,15 @@ function inferDomainWithoutSeriesDoc(explicitDomain) {
   const path = String(window.location?.pathname || '').toLowerCase();
 
   if (path.includes('/bviewer/iuscan')) {
-    return 'iuscan';
+    return 'bowel';
   }
 
   if (path.includes('/bviewer')) {
     return 'bowel';
   }
 
-  // Local/dev longitudinal `/viewer` routes are echo unless explicitly bowel/iUSCAN.
+  // Local/dev longitudinal `/viewer` routes are echo unless explicitly
+  // identified as bowel/iUSCAN through the URL.
   return 'echo';
 }
 
@@ -8588,6 +8598,42 @@ function commandsModule({
 
           throw error;
         }
+      },
+    },
+    completeIuscanIntegrationSession: {
+      commandFn: async () => {
+        const params = getViewerUrlSearchParams();
+        const integration = String(params.get('arIntegration') || '')
+          .trim()
+          .toLowerCase();
+
+        if (integration !== 'iuscan') {
+          throw new Error('This viewer is not an external iUSCAN session.');
+        }
+
+        const response = await fetch('/formapi/api/integrations/iuscan/complete', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          credentials: 'include',
+          body: '{}',
+        });
+
+        const body = await response.json().catch(() => ({}));
+
+        if (!response.ok) {
+          throw new Error(body?.message || body?.error || `Completion failed: ${response.status}`);
+        }
+
+        if (!body?.returnUrl) {
+          throw new Error('The iUSCAN return URL is missing.');
+        }
+
+        window.sessionStorage.removeItem('iuscanIntegrationSession');
+        window.location.replace(body.returnUrl);
+
+        return body;
       },
     },
     getViewerMeasurementDomainForActiveStudy: {

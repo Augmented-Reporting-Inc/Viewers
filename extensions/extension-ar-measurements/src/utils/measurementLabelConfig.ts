@@ -41,6 +41,15 @@ function normalizeMeasurementDomain(domain = '') {
 
 export function getViewerMeasurementDomainFromPath() {
   const params = new URLSearchParams(window.location?.search || '');
+
+  const integration = String(params.get('arIntegration') || '')
+    .trim()
+    .toLowerCase();
+
+  if (integration === 'iuscan') {
+    return 'bowel';
+  }
+
   const urlDomain = normalizeMeasurementDomain(
     params.get('arMeasurementDomain') ||
       params.get('arViewerDomain') ||

@@ -177,7 +177,13 @@ module.exports = (env, argv) => {
       },
       proxy: [
         {
-          context: ['/orthanc', '/formapi'],
+          context: ['/formapi'],
+          target: 'https://dragonfoot.futurepacs.com',
+          changeOrigin: true,
+          secure: true,
+        },
+        {
+          context: ['/orthanc'],
           target: 'https://dragonfoot.futurepacs.com',
           changeOrigin: true,
           secure: true,

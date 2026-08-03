@@ -500,6 +500,7 @@ function getArViewerSaveTargetFromUrl() {
       measurementWorkflowRole: String(qs.get('arMeasurementWorkflowRole') || '').trim(),
       reviewWorkflowType: String(qs.get('arReviewWorkflowType') || '').trim(),
       measurementAccess: String(qs.get('arMeasurementAccess') || '').trim(),
+      integration: String(qs.get('arIntegration') || '').trim(),
     };
   } catch {
     return {
@@ -511,6 +512,7 @@ function getArViewerSaveTargetFromUrl() {
       measurementWorkflowRole: '',
       reviewWorkflowType: '',
       measurementAccess: '',
+      integration: '',
     };
   }
 }
@@ -635,6 +637,13 @@ function isVirtualCoachingReviewWorkflow(saveTarget: any = {}) {
   );
 }
 
+function isExternalIuscanViewer(saveTarget: any = {}) {
+  return (
+    normalizeMeasurementScoringToken(saveTarget.integration) === 'iuscan' &&
+    isVirtualCoachingReviewWorkflow(saveTarget)
+  );
+}
+
 function isSavedReviewWorkflowMeasurement(measurement: any = {}) {
   const sourceRole = normalizeMeasurementScoringToken(measurement?.sourceRole);
   const workflow = String(measurement?.workflow || '').trim();
@@ -712,6 +721,7 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
   const saveTarget = useMemo(getArViewerSaveTargetFromUrl, []);
 
   const isReviewWorkflow = isReviewWorkflowMeasurementsTarget(saveTarget);
+  const isExternalIuscanSession = isExternalIuscanViewer(saveTarget);
 
   const isReviewWorkflowReadOnly = isReviewWorkflow && !getWritableMeasurementWorkflow(saveTarget);
   const [measurements, setMeasurements] = useState(
@@ -995,6 +1005,23 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
     return calculateLVSimpson(visibleMeasurements);
   }, [domain, visibleMeasurements]);
 
+  const saveCurrentMeasurements = async (scoreNow = false) => {
+    await commandsManager.runCommand('saveViewerMeasurementsForActiveStudy', {
+      domain: domain === 'generic' ? undefined : domain,
+      scoringIntent: scoreNow ? 'score-attempt' : 'draft',
+      educationAttemptIntent: scoreNow ? 'score-attempt' : 'draft',
+    });
+
+    const result = await commandsManager.runCommand(
+      'getViewerMeasurementAnnotationsForActiveStudy',
+      {
+        domain: domain === 'generic' ? undefined : domain,
+      }
+    );
+
+    applySavedAnnotationsResult(result);
+  };
+
   const handleSave = async (scoreNow = false) => {
     if (scoreNow && isMeasurementScoringDisabled) {
       uiNotificationService.show({
@@ -1009,20 +1036,7 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
     setSavingAction(scoreNow ? 'score' : 'draft');
 
     try {
-      await commandsManager.runCommand('saveViewerMeasurementsForActiveStudy', {
-        domain: domain === 'generic' ? undefined : domain,
-        scoringIntent: scoreNow ? 'score-attempt' : 'draft',
-        educationAttemptIntent: scoreNow ? 'score-attempt' : 'draft',
-      });
-
-      const result = await commandsManager.runCommand(
-        'getViewerMeasurementAnnotationsForActiveStudy',
-        {
-          domain: domain === 'generic' ? undefined : domain,
-        }
-      );
-
-      applySavedAnnotationsResult(result);
+      await saveCurrentMeasurements(scoreNow);
     } catch (error) {
       console.error('[ARMeasurementsPanel] save failed:', error);
       uiNotificationService.show({
@@ -1032,6 +1046,31 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
         duration: 5000,
       });
     } finally {
+      setSavingAction('');
+    }
+  };
+
+  const handleIuscanDone = async () => {
+    if (!isExternalIuscanSession || isSaving) {
+      return;
+    }
+
+    setSavingAction('complete');
+
+    try {
+      if (!isReviewWorkflowReadOnly && editableMeasurements.length > 0) {
+        await saveCurrentMeasurements(false);
+      }
+
+      await commandsManager.runCommand('completeIuscanIntegrationSession');
+    } catch (error) {
+      console.error('[ARMeasurementsPanel] iUSCAN completion failed:', error);
+      uiNotificationService.show({
+        title: 'AR Measurements & Annotations',
+        message: `Unable to return to iUSCAN: ${error?.message || error}`,
+        type: 'error',
+        duration: 6000,
+      });
       setSavingAction('');
     }
   };
@@ -1271,7 +1310,24 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
 
       <div className="shrink-0 border-t border-gray-700 bg-black p-3">
         {isReviewWorkflow ? (
-          isReviewWorkflowReadOnly ? (
+          isExternalIuscanSession ? (
+            <div className="space-y-2">
+              {isReviewWorkflowReadOnly ? (
+                <div className="text-center text-xs text-gray-400">
+                  Measurements and annotations are read-only for this coaching review.
+                </div>
+              ) : null}
+
+              <button
+                type="button"
+                className="w-full rounded bg-green-600 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                disabled={isSaving}
+                onClick={handleIuscanDone}
+              >
+                {savingAction === 'complete' ? 'Saving and returning…' : 'Done and Return to iUSCAN'}
+              </button>
+            </div>
+          ) : isReviewWorkflowReadOnly ? (
             <div className="text-center text-xs text-gray-400">
               Measurements and annotations are read-only for this coaching review.
             </div>

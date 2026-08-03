@@ -46,6 +46,15 @@ const BOWEL_LENGTH_MEASUREMENT_LABELS_CONFIG = {
 
 function getViewerMeasurementDomainFromPath() {
   const params = new URLSearchParams(window.location?.search || '');
+
+  const integration = String(params.get('arIntegration') || '')
+    .trim()
+    .toLowerCase();
+
+  if (integration === 'iuscan') {
+    return 'bowel';
+  }
+
   const explicitDomain = String(
     params.get('arMeasurementDomain') ||
       params.get('arViewerDomain') ||
@@ -62,7 +71,7 @@ function getViewerMeasurementDomainFromPath() {
   const path = String(window.location?.pathname || '').toLowerCase();
 
   if (path.includes('/bviewer/iuscan')) {
-    return 'iuscan';
+    return 'bowel';
   }
 
   if (path.includes('/bviewer')) {
@@ -73,9 +82,6 @@ function getViewerMeasurementDomainFromPath() {
     return 'echo';
   }
 
-  // This is the longitudinal mode. If it is not explicitly a bowel/iUSCAN route,
-  // treat it as echo so echo-only tools such as LV Trace are available even when
-  // the dev/local route basename is '/'.
   return 'echo';
 }
 

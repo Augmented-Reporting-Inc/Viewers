@@ -50,10 +50,33 @@ const BOWEL_LENGTH_MEASUREMENT_LABELS_CONFIG = {
 };
 
 function getViewerMeasurementDomainFromPath() {
+  const params = getViewerUrlSearchParams();
+
+  const integration = String(params.get('arIntegration') || '')
+    .trim()
+    .toLowerCase();
+
+  if (integration === 'iuscan') {
+    return 'bowel';
+  }
+
+  const explicitDomain = String(
+    params.get('arMeasurementDomain') ||
+      params.get('arViewerDomain') ||
+      params.get('viewerDomain') ||
+      ''
+  )
+    .trim()
+    .toLowerCase();
+
+  if (['iuscan', 'bowel', 'echo', 'generic'].includes(explicitDomain)) {
+    return explicitDomain === 'iuscan' ? 'bowel' : explicitDomain;
+  }
+
   const path = String(window.location?.pathname || '').toLowerCase();
 
   if (path.includes('/bviewer/iuscan')) {
-    return 'iuscan';
+    return 'bowel';
   }
 
   if (path.includes('/bviewer')) {
@@ -64,9 +87,8 @@ function getViewerMeasurementDomainFromPath() {
     return 'echo';
   }
 
-  // This is the longitudinal mode. If it is not explicitly a bowel/iUSCAN route,
-  // treat it as echo so echo-only tools such as LV Trace are available even when
-  // the dev/local route basename is '/'.
+  // The generic local longitudinal route is Echo unless the URL explicitly
+  // identifies a bowel or iUSCAN session.
   return 'echo';
 }
 
@@ -119,8 +141,66 @@ function isVirtualCoachingWorkflowFromUrl() {
   return normalizeViewerUrlToken(params.get('arReviewWorkflowType')) === 'virtualcoaching';
 }
 
+function isEditableVirtualCoachingMeasurementWorkflowFromUrl() {
+  const params = getViewerUrlSearchParams();
+
+  return (
+    isVirtualCoachingWorkflowFromUrl() &&
+    normalizeViewerUrlToken(params.get('arSaveTarget')) === 'reviewworkflowmeasurements' &&
+    normalizeViewerUrlToken(params.get('arMeasurementAccess')) === 'edit'
+  );
+}
+
+function shouldEnableCineOnModeEnter() {
+  return !isVirtualCoachingWorkflowFromUrl();
+}
+
 function shouldOpenARMeasurementsPanelByDefault() {
   return isVirtualCoachingWorkflowFromUrl();
+}
+
+async function initializeEditableVirtualCoachingViewport(commandsManager, attempts = 40) {
+  if (!isEditableVirtualCoachingMeasurementWorkflowFromUrl()) {
+    return {
+      ok: false,
+      reason: 'not-editable-virtual-coaching-workflow',
+    };
+  }
+
+  let lastResult = null;
+
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      lastResult = await commandsManager.runCommand('activateViewerMeasurementTool', {
+        toolName: 'Length',
+        stopCine: true,
+      });
+
+      if (lastResult?.ok) {
+        return lastResult;
+      }
+    } catch (error) {
+      lastResult = {
+        ok: false,
+        reason: 'command-failed',
+        error,
+      };
+    }
+
+    await new Promise(resolve => window.setTimeout(resolve, 100));
+  }
+
+  console.warn(
+    '[AR Measurements] could not initialize virtual-coaching measurement tool',
+    lastResult
+  );
+
+  return (
+    lastResult || {
+      ok: false,
+      reason: 'initialization-timeout',
+    }
+  );
 }
 
 const AR_US_REGION_PIXEL_SPACING_PROVIDER_PRIORITY = 10000;
@@ -1002,8 +1082,13 @@ function modeFactory({ modeConfiguration }) {
         console.warn('[MeasurementAnnotations] longitudinal hydration failed:', error);
       });
 
-      // Start with cine enabled so autoPlayCine triggers when display sets load
-      cineService.setIsCineEnabled(true);
+      // Virtual-coaching studies must start paused. Other longitudinal viewers
+      // retain their existing automatic cine behaviour.
+      cineService.setIsCineEnabled(shouldEnableCineOnModeEnter());
+
+      if (isEditableVirtualCoachingMeasurementWorkflowFromUrl()) {
+        void initializeEditableVirtualCoachingViewport(commandsManager);
+      }
 
       if (shouldOpenARMeasurementsPanelByDefault()) {
         window.setTimeout(() => {
