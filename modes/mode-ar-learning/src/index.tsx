@@ -1,5 +1,9 @@
 import i18n from 'i18next';
-import { metaData } from '@cornerstonejs/core';
+import { eventTarget, metaData } from '@cornerstonejs/core';
+import {
+  Enums as CornerstoneToolsEnums,
+  annotation as cornerstoneAnnotation,
+} from '@cornerstonejs/tools';
 import { id } from './id';
 import { initToolGroups, toolbarButtons } from '@ohif/mode-longitudinal';
 
@@ -82,7 +86,9 @@ function getViewerMeasurementDomainFromPath() {
     return 'echo';
   }
 
-  return 'echo';
+  // Learning workflows may contain multiple clinical specialties.
+  // Do not silently default them to Echo when no study-level domain exists.
+  return 'generic';
 }
 
 function getLearningUrlParam(name) {
@@ -95,12 +101,54 @@ function getLearningUrlParam(name) {
   }
 }
 
+function normalizeLearningUrlToken(value = '') {
+  return String(value || '')
+    .trim()
+    .replace(/[_\s-]+/g, '')
+    .toLowerCase();
+}
+
+function isViewerMeasurementReadOnlyFromUrl() {
+  return ['readonly', 'feedbackreadonly'].includes(
+    normalizeLearningUrlToken(getLearningUrlParam('arMeasurementAccess'))
+  );
+}
+
+function isEditableReviewMeasurementWorkflowFromUrl() {
+  return (
+    normalizeLearningUrlToken(getLearningUrlParam('arReviewWorkflowType')) ===
+      'virtualcoaching' &&
+    normalizeLearningUrlToken(getLearningUrlParam('arSaveTarget')) ===
+      'reviewworkflowmeasurements' &&
+    normalizeLearningUrlToken(getLearningUrlParam('arMeasurementAccess')) === 'edit'
+  );
+}
+
 function isTruthyLearningUrlFlag(value = '') {
   return ['1', 'true', 'yes', 'y'].includes(
     String(value || '')
       .trim()
       .toLowerCase()
   );
+}
+
+function isViewerQuizAuthoringFromUrl() {
+  return isTruthyLearningUrlFlag(getLearningUrlParam('arQuizAuthoring'));
+}
+
+const AR_QUIZ_MEASUREMENT_DOMAIN_EVENT = 'ar-learning:quiz-measurement-domain';
+
+function normalizeQuizMeasurementDomain(value = '') {
+  const domain = String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[_\s]+/g, '-');
+
+  if (domain === 'iuscan') {
+    return 'bowel';
+  }
+
+  return ['echo', 'bowel'].includes(domain) ? domain : '';
 }
 
 function isViewerQuizMeasurementCaptureMode() {
@@ -574,7 +622,6 @@ function createARUSRegionCalibrationProvider({ displaySetService }) {
 const BASE_MEASUREMENT_TOOL_IDS = [
   'Length',
   'Bidirectional',
-  'ArrowAnnotate',
   'EllipticalROI',
   'RectangleROI',
   'CircleROI',
@@ -590,6 +637,43 @@ function getMeasurementToolIdsForDomain(domain) {
     ...(domain === 'echo' ? ECHO_ONLY_MEASUREMENT_TOOL_IDS : []),
     ...GENERIC_CONTOUR_TOOL_IDS,
   ];
+}
+
+function getRegisteredToolbarButtonIds(buttons = []) {
+  const entries = Array.isArray(buttons) ? buttons : [];
+
+  return new Set(
+    entries
+      .map(button => String(button?.id || '').trim())
+      .filter(Boolean)
+  );
+}
+
+function filterRegisteredToolbarButtonIds(
+  buttonIds = [],
+  registeredButtonIds = new Set(),
+  sectionName = ''
+) {
+  const requested = Array.isArray(buttonIds) ? buttonIds.filter(Boolean) : [];
+
+  if (!registeredButtonIds.size) {
+    console.warn('[AR Learning Toolbar] toolbar registry was empty', {
+      sectionName,
+      requested,
+    });
+    return [];
+  }
+
+  const missing = requested.filter(buttonId => !registeredButtonIds.has(buttonId));
+
+  if (missing.length) {
+    console.warn('[AR Learning Toolbar] skipped unregistered button ids', {
+      sectionName,
+      missing,
+    });
+  }
+
+  return requested.filter(buttonId => registeredButtonIds.has(buttonId));
 }
 
 async function resolveViewerMeasurementDomain(commandsManager) {
@@ -608,13 +692,29 @@ async function resolveViewerMeasurementDomain(commandsManager) {
   return getViewerMeasurementDomainFromPath();
 }
 
-async function getLabelConfigForMeasurement(measurement, commandsManager) {
+async function getLabelConfigForMeasurement(
+  measurement,
+  commandsManager,
+  { quizMeasurementDomain = '' } = {}
+) {
   const toolName = measurement?.toolName;
-  const domain = await resolveViewerMeasurementDomain(commandsManager);
+  const viewerQuizMeasurementWorkflow = isViewerQuizMeasurementCaptureMode();
+  const resolvedStudyDomain = viewerQuizMeasurementWorkflow
+    ? normalizeQuizMeasurementDomain(quizMeasurementDomain) ||
+      normalizeQuizMeasurementDomain(getViewerMeasurementDomainFromPath()) ||
+      normalizeQuizMeasurementDomain(await resolveViewerMeasurementDomain(commandsManager))
+    : await resolveViewerMeasurementDomain(commandsManager);
+  const domain = resolvedStudyDomain === 'iuscan' ? 'bowel' : resolvedStudyDomain;
 
-  // Viewer-quiz measurements are associated with the active question rather
-  // than with the normal echo/bowel measurement-label workflow.
-  if (isViewerQuizMeasurementCaptureMode()) {
+  // Both quiz authoring and learner quiz answering use the clinical study type
+  // attached to the active quiz question. Do not silently fall back to the wrong
+  // specialty for mixed-specialty learning tenants.
+  if (viewerQuizMeasurementWorkflow && !['echo', 'bowel'].includes(domain)) {
+    console.warn('[AR Measurements] quiz measurement domain is not selected', {
+      domain,
+      quizMeasurementDomain,
+      urlDomain: getViewerMeasurementDomainFromPath(),
+    });
     return null;
   }
 
@@ -649,6 +749,72 @@ async function getLabelConfigForMeasurement(measurement, commandsManager) {
   }
 
   return null;
+}
+
+async function waitForViewerMeasurementServiceEntry(
+  measurementService,
+  annotationId,
+  attempts = 40
+) {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const measurement = measurementService.getMeasurement?.(annotationId);
+
+    if (measurement) {
+      return measurement;
+    }
+
+    await new Promise(resolve => window.setTimeout(resolve, 25));
+  }
+
+  return null;
+}
+
+function isHydratedSavedWorkflowAnnotation(annotationId, fallbackAnnotation = null) {
+  const sourceAnnotation =
+    cornerstoneAnnotation.state.getAnnotation?.(annotationId) || fallbackAnnotation;
+
+  return !!(
+    sourceAnnotation?.data?.arMeasurementWorkflow || sourceAnnotation?.data?.arMeasurementReadOnly
+  );
+}
+
+function getMeasurementAnnotationId(measurement = null) {
+  return String(
+    measurement?.uid ||
+      measurement?.annotationUID ||
+      measurement?.annotationId ||
+      measurement?.id ||
+      ''
+  ).trim();
+}
+
+function getMeasurementAnnotationForId(annotationId = '') {
+  const id = String(annotationId || '').trim();
+  return id ? cornerstoneAnnotation.state.getAnnotation?.(id) || null : null;
+}
+
+function isMeasurementDrawingComplete(measurement = null, sourceAnnotation = null) {
+  const toolName = String(
+    measurement?.toolName || sourceAnnotation?.metadata?.toolName || ''
+  ).trim();
+  const points = Array.isArray(measurement?.points)
+    ? measurement.points
+    : sourceAnnotation?.data?.handles?.points;
+  const activeHandleIndex = sourceAnnotation?.data?.handles?.activeHandleIndex;
+
+  if (!toolName) {
+    return false;
+  }
+
+  if (activeHandleIndex !== null && activeHandleIndex !== undefined) {
+    return false;
+  }
+
+  if (toolName === 'Length') {
+    return Array.isArray(points) && points.length >= 2;
+  }
+
+  return true;
 }
 
 // Allow this mode by excluding non-imaging modalities such as SR, SEG
@@ -793,7 +959,13 @@ const extensionDependencies = {
 function modeFactory({ modeConfiguration }) {
   let _activatePanelTriggersSubscriptions = [];
   let _measurementAddedSub = null;
+  let _measurementCompletionSubscriptions = [];
+  let _annotationCompletedHandler: null | ((event: Event) => void) = null;
+  const _measurementCompletionTimers = new Set<number>();
+  const _handledCompletedAnnotationIds = new Set<string>();
   let _suppressLabelPrompt = false;
+  let _quizMeasurementDomain = '';
+  let _quizMeasurementDomainHandler: null | ((event: Event) => void) = null;
   let restoreConsoleWarn: null | (() => void) = null;
   let removeARUSRegionPixelSpacingProvider: null | (() => void) = null;
 
@@ -852,145 +1024,440 @@ function modeFactory({ modeConfiguration }) {
         removeARUSRegionPixelSpacingProvider = null;
       };
 
+      commandsManager.runCommand('clearViewerMeasurementsCreatedInSession');
       measurementService.clearMeasurements();
 
       _measurementAddedSub?.unsubscribe?.();
       _measurementAddedSub = null;
 
-      _measurementAddedSub = measurementService.subscribe(
-        measurementService.EVENTS.MEASUREMENT_ADDED,
-        async ({ measurement }) => {
-          if (!measurement?.uid) {
-            return;
-          }
+      _measurementCompletionSubscriptions.forEach(subscription =>
+        subscription?.unsubscribe?.()
+      );
+      _measurementCompletionSubscriptions = [];
 
-          dispatchViewerQuizMeasurementAdded(measurement);
+      _measurementCompletionTimers.forEach(timerId => window.clearTimeout(timerId));
+      _measurementCompletionTimers.clear();
 
-          if (_suppressLabelPrompt || measurement?.label) {
-            return;
-          }
+      if (_annotationCompletedHandler) {
+        eventTarget.removeEventListener(
+          CornerstoneToolsEnums.Events.ANNOTATION_COMPLETED,
+          _annotationCompletedHandler
+        );
+      }
 
-          const labelOptions = await getLabelConfigForMeasurement(measurement, commandsManager);
-          if (!labelOptions) {
-            return;
-          }
+      _handledCompletedAnnotationIds.clear();
 
-          try {
-            console.info('[AR Measurements] label prompt config', {
-              toolName: measurement?.toolName,
-              title: labelOptions.title,
-              placeholder: labelOptions.placeholder,
-              labelConfigId: labelOptions.labelConfigOverride?.id,
-              commandName: labelOptions.commandName,
-            });
+      if (_quizMeasurementDomainHandler) {
+        window.removeEventListener(
+          AR_QUIZ_MEASUREMENT_DOMAIN_EVENT,
+          _quizMeasurementDomainHandler
+        );
+      }
 
-            if (labelOptions.commandName) {
-              await commandsManager.runCommand(labelOptions.commandName, {
-                uid: measurement.uid,
-              });
-            } else {
-              await commandsManager.runCommand('setMeasurementLabel', {
-                uid: measurement.uid,
-                ...labelOptions,
-              });
+      _quizMeasurementDomain = normalizeQuizMeasurementDomain(
+        getViewerMeasurementDomainFromPath()
+      );
+
+      _quizMeasurementDomainHandler = (event: Event) => {
+        const nextDomain = normalizeQuizMeasurementDomain(
+          (event as CustomEvent)?.detail?.domain
+        );
+
+        _quizMeasurementDomain = nextDomain;
+
+        console.info('[AR Measurements] quiz measurement domain updated', {
+          domain: _quizMeasurementDomain || '(none)',
+        });
+      };
+
+      window.addEventListener(
+        AR_QUIZ_MEASUREMENT_DOMAIN_EVENT,
+        _quizMeasurementDomainHandler
+      );
+
+      const measurementToolsReadOnly = isViewerMeasurementReadOnlyFromUrl();
+      const editableReviewWorkflow = isEditableReviewMeasurementWorkflowFromUrl();
+      const quizMeasurementWorkflow = isViewerQuizMeasurementCaptureMode();
+      const completionAwareMeasurementWorkflow =
+        editableReviewWorkflow || quizMeasurementWorkflow;
+
+      const handleCompletedViewerMeasurement = async ({
+        annotationId,
+        sourceAnnotation = null,
+        source = 'measurement-service',
+      } = {}) => {
+        const id = String(annotationId || '').trim();
+
+        if (
+          !completionAwareMeasurementWorkflow ||
+          measurementToolsReadOnly ||
+          _suppressLabelPrompt ||
+          !id ||
+          _handledCompletedAnnotationIds.has(id)
+        ) {
+          return false;
+        }
+
+        await new Promise(resolve => window.setTimeout(resolve, 0));
+
+        const resolvedAnnotation = getMeasurementAnnotationForId(id) || sourceAnnotation;
+
+        if (isHydratedSavedWorkflowAnnotation(id, resolvedAnnotation)) {
+          return false;
+        }
+
+        const measurement = await waitForViewerMeasurementServiceEntry(measurementService, id);
+
+        if (!measurement || !isMeasurementDrawingComplete(measurement, resolvedAnnotation)) {
+          return false;
+        }
+
+        _handledCompletedAnnotationIds.add(id);
+
+        commandsManager.runCommand('markViewerMeasurementCreatedInSession', {
+          uid: id,
+        });
+
+        const currentMeasurement = measurementService.getMeasurement?.(id) || measurement;
+
+        console.info('[AR Measurements] completed viewer measurement', {
+          annotationId: id,
+          source,
+          toolName: currentMeasurement?.toolName || resolvedAnnotation?.metadata?.toolName || '',
+        });
+
+        if (!currentMeasurement?.label) {
+          const labelOptions = await getLabelConfigForMeasurement(
+            currentMeasurement,
+            commandsManager,
+            {
+              quizMeasurementDomain: _quizMeasurementDomain,
             }
+          );
 
-            if (!isViewerQuizMeasurementCaptureMode()) {
-              panelService?.activatePanel?.(
-                'extension-ar-measurements.panelModule.arMeasurements',
-                true
-              );
+          if (labelOptions) {
+            try {
+              console.info('[AR Measurements] label prompt config', {
+                toolName: currentMeasurement?.toolName,
+                title: labelOptions.title,
+                placeholder: labelOptions.placeholder,
+                labelConfigId: labelOptions.labelConfigOverride?.id,
+                commandName: labelOptions.commandName,
+              });
+
+              if (labelOptions.commandName) {
+                await commandsManager.runCommand(labelOptions.commandName, {
+                  uid: id,
+                });
+              } else {
+                await commandsManager.runCommand('setMeasurementLabel', {
+                  uid: id,
+                  ...labelOptions,
+                });
+              }
+            } catch (error) {
+              console.warn('[AR Measurements] label prompt failed:', error);
             }
-          } catch (error) {
-            console.warn('[AR Measurements] label prompt failed:', error);
           }
         }
+
+        const completedMeasurement =
+          measurementService.getMeasurement?.(id) || currentMeasurement;
+
+        dispatchViewerQuizMeasurementAdded(completedMeasurement);
+
+        if (!isViewerQuizMeasurementCaptureMode()) {
+          panelService?.activatePanel?.(arMeasurements.panel, true);
+        }
+
+        return true;
+      };
+
+      const sweepCompletedViewerMeasurements = async (source = 'measurement-service') => {
+        if (!completionAwareMeasurementWorkflow || measurementToolsReadOnly || _suppressLabelPrompt) {
+          return;
+        }
+
+        const measurements = measurementService.getMeasurements?.() || [];
+
+        for (const measurement of measurements) {
+          const annotationId = getMeasurementAnnotationId(measurement);
+
+          if (!annotationId || _handledCompletedAnnotationIds.has(annotationId)) {
+            continue;
+          }
+
+          await handleCompletedViewerMeasurement({
+            annotationId,
+            sourceAnnotation: getMeasurementAnnotationForId(annotationId),
+            source,
+          });
+        }
+      };
+
+      const scheduleCompletedViewerMeasurementSweep = (
+        source = 'measurement-service'
+      ) => {
+        if (!completionAwareMeasurementWorkflow || measurementToolsReadOnly || _suppressLabelPrompt) {
+          return;
+        }
+
+        [0, 75, 200, 500].forEach(delay => {
+          const timerId = window.setTimeout(() => {
+            _measurementCompletionTimers.delete(timerId);
+            void sweepCompletedViewerMeasurements(source);
+          }, delay);
+
+          _measurementCompletionTimers.add(timerId);
+        });
+      };
+
+      _annotationCompletedHandler = async (event: Event) => {
+        const eventDetail = (event as CustomEvent)?.detail || {};
+        const sourceAnnotation = eventDetail.annotation;
+        const annotationId = String(sourceAnnotation?.annotationUID || '').trim();
+
+        const handled = await handleCompletedViewerMeasurement({
+          annotationId,
+          sourceAnnotation,
+          source: 'cornerstone-annotation-completed',
+        });
+
+        if (!handled) {
+          scheduleCompletedViewerMeasurementSweep('cornerstone-completion-fallback');
+        }
+      };
+
+      eventTarget.addEventListener(
+        CornerstoneToolsEnums.Events.ANNOTATION_COMPLETED,
+        _annotationCompletedHandler
       );
+
+      const measurementEvents = measurementService.EVENTS || {};
+
+      _measurementAddedSub = measurementEvents.MEASUREMENT_ADDED
+        ? measurementService.subscribe(measurementEvents.MEASUREMENT_ADDED, async event => {
+            const measurement = event?.measurement || event;
+
+            if (!measurement) {
+              return;
+            }
+
+            if (completionAwareMeasurementWorkflow) {
+              scheduleCompletedViewerMeasurementSweep(
+                `measurement-service:${measurementEvents.MEASUREMENT_ADDED}`
+              );
+              return;
+            }
+
+            dispatchViewerQuizMeasurementAdded(measurement);
+
+            if (measurementToolsReadOnly || _suppressLabelPrompt || measurement?.label) {
+              return;
+            }
+
+            const measurementId = getMeasurementAnnotationId(measurement);
+            if (!measurementId) {
+              return;
+            }
+
+            const labelOptions = await getLabelConfigForMeasurement(
+              measurement,
+              commandsManager,
+              {
+                quizMeasurementDomain: _quizMeasurementDomain,
+              }
+            );
+            if (!labelOptions) {
+              return;
+            }
+
+            try {
+              console.info('[AR Measurements] label prompt config', {
+                toolName: measurement?.toolName,
+                title: labelOptions.title,
+                placeholder: labelOptions.placeholder,
+                labelConfigId: labelOptions.labelConfigOverride?.id,
+                commandName: labelOptions.commandName,
+              });
+
+              if (labelOptions.commandName) {
+                await commandsManager.runCommand(labelOptions.commandName, {
+                  uid: measurementId,
+                });
+              } else {
+                await commandsManager.runCommand('setMeasurementLabel', {
+                  uid: measurementId,
+                  ...labelOptions,
+                });
+              }
+
+              if (!isViewerQuizMeasurementCaptureMode()) {
+                panelService?.activatePanel?.(arMeasurements.panel, true);
+              }
+            } catch (error) {
+              console.warn('[AR Measurements] label prompt failed:', error);
+            }
+          })
+        : null;
+
+      _measurementCompletionSubscriptions = [
+        measurementEvents.MEASUREMENT_UPDATED,
+        measurementEvents.RAW_MEASUREMENT_ADDED,
+      ]
+        .filter(Boolean)
+        .map(eventName =>
+          measurementService.subscribe(eventName, () => {
+            scheduleCompletedViewerMeasurementSweep(`measurement-service:${eventName}`);
+          })
+        );
 
       // Init Default and SR ToolGroups
       initToolGroups(extensionManager, toolGroupService, commandsManager);
 
       toolbarService.register(toolbarButtons);
-      toolbarService.updateSection(toolbarService.sections.primary, [
-        'MeasurementTools',
-        'Zoom',
-        'Pan',
-        'TrackballRotate',
-        'WindowLevel',
-        'Capture',
-        'Layout',
-        'Cine',
-        'Previous',
-        'Next',
-        'Crosshairs',
-        'MoreTools',
-      ]);
 
-      toolbarService.updateSection(toolbarService.sections.viewportActionMenu.topLeft, [
-        'orientationMenu',
-        'dataOverlayMenu',
-      ]);
+      const registeredToolbarButtonIds = getRegisteredToolbarButtonIds(toolbarButtons);
+      const safeToolbarIds = (buttonIds, sectionName) =>
+        filterRegisteredToolbarButtonIds(
+          buttonIds,
+          registeredToolbarButtonIds,
+          sectionName
+        );
 
-      toolbarService.updateSection(toolbarService.sections.viewportActionMenu.bottomMiddle, [
-        'AdvancedRenderingControls',
-      ]);
+      if (measurementToolsReadOnly) {
+        // Review-only sessions use a deliberately flat toolbar. This prevents
+        // ToolbarService from evaluating nested controls that are not registered
+        // in this build, while preserving essential navigation controls.
+        toolbarService.updateSection(
+          toolbarService.sections.primary,
+          safeToolbarIds(
+            ['Zoom', 'Pan', 'WindowLevel', 'Cine', 'Previous', 'Next'],
+            'primary-read-only'
+          )
+        );
 
-      toolbarService.updateSection('AdvancedRenderingControls', [
-        'windowLevelMenuEmbedded',
-        'voiManualControlMenu',
-        'Colorbar',
-        'opacityMenu',
-        'thresholdMenu',
-      ]);
+        toolbarService.updateSection(toolbarService.sections.viewportActionMenu.topLeft, []);
+        toolbarService.updateSection(toolbarService.sections.viewportActionMenu.bottomMiddle, []);
+        toolbarService.updateSection(toolbarService.sections.viewportActionMenu.topRight, []);
+        toolbarService.updateSection(toolbarService.sections.viewportActionMenu.bottomLeft, []);
+      } else {
+        toolbarService.updateSection(
+          toolbarService.sections.primary,
+          safeToolbarIds(
+            [
+              'MeasurementTools',
+              'ArrowAnnotate',
+              'Zoom',
+              'Pan',
+              'TrackballRotate',
+              'WindowLevel',
+              'Capture',
+              'Layout',
+              'Cine',
+              'Previous',
+              'Next',
+              'Crosshairs',
+              'MoreTools',
+            ],
+            'primary-editable'
+          )
+        );
 
-      toolbarService.updateSection(toolbarService.sections.viewportActionMenu.topRight, [
-        'modalityLoadBadge',
-        'navigationComponent',
-      ]);
+        toolbarService.updateSection(
+          toolbarService.sections.viewportActionMenu.topLeft,
+          safeToolbarIds(['orientationMenu', 'dataOverlayMenu'], 'viewport-top-left')
+        );
 
-      toolbarService.updateSection(toolbarService.sections.viewportActionMenu.bottomLeft, [
-        'windowLevelMenu',
-      ]);
+        toolbarService.updateSection(
+          toolbarService.sections.viewportActionMenu.bottomMiddle,
+          safeToolbarIds(['AdvancedRenderingControls'], 'viewport-bottom-middle')
+        );
 
-      const initialMeasurementDomain = getViewerMeasurementDomainFromPath();
+        if (registeredToolbarButtonIds.has('AdvancedRenderingControls')) {
+          toolbarService.updateSection(
+            'AdvancedRenderingControls',
+            safeToolbarIds(
+              [
+                'windowLevelMenuEmbedded',
+                'voiManualControlMenu',
+                'Colorbar',
+                'opacityMenu',
+                'thresholdMenu',
+              ],
+              'AdvancedRenderingControls'
+            )
+          );
+        }
 
-      toolbarService.updateSection(
-        'MeasurementTools',
-        getMeasurementToolIdsForDomain(initialMeasurementDomain)
-      );
+        toolbarService.updateSection(
+          toolbarService.sections.viewportActionMenu.topRight,
+          safeToolbarIds(['modalityLoadBadge', 'navigationComponent'], 'viewport-top-right')
+        );
 
-      Promise.resolve(resolveViewerMeasurementDomain(commandsManager))
-        .then(resolvedDomain => {
+        toolbarService.updateSection(
+          toolbarService.sections.viewportActionMenu.bottomLeft,
+          safeToolbarIds(['windowLevelMenu'], 'viewport-bottom-left')
+        );
+
+        const initialMeasurementDomain = getViewerMeasurementDomainFromPath();
+
+        if (registeredToolbarButtonIds.has('MeasurementTools')) {
           toolbarService.updateSection(
             'MeasurementTools',
-            getMeasurementToolIdsForDomain(resolvedDomain || initialMeasurementDomain)
+            safeToolbarIds(
+              getMeasurementToolIdsForDomain(initialMeasurementDomain),
+              'MeasurementTools-initial'
+            )
           );
-        })
-        .catch(error => {
-          console.warn('[AR Measurements] could not refresh measurement tools:', error);
-        });
 
-      toolbarService.updateSection('MoreTools', [
-        'Reset',
-        'rotate-right',
-        'flipHorizontal',
-        'ImageSliceSync',
-        'ReferenceLines',
-        'ImageOverlayViewer',
-        'StackScroll',
-        'invert',
-        'Probe',
-        'Cine',
-        'Angle',
-        'CobbAngle',
-        'Magnify',
-        'CalibrationLine',
-        'TagBrowser',
-        'AdvancedMagnify',
-        'UltrasoundDirectionalTool',
-        'WindowLevelRegion',
-        'SegmentLabelTool',
-      ]);
+          Promise.resolve(resolveViewerMeasurementDomain(commandsManager))
+            .then(resolvedDomain => {
+              toolbarService.updateSection(
+                'MeasurementTools',
+                safeToolbarIds(
+                  getMeasurementToolIdsForDomain(
+                    resolvedDomain || initialMeasurementDomain
+                  ),
+                  'MeasurementTools-resolved'
+                )
+              );
+            })
+            .catch(error => {
+              console.warn('[AR Measurements] could not refresh measurement tools:', error);
+            });
+        }
+
+        if (registeredToolbarButtonIds.has('MoreTools')) {
+          toolbarService.updateSection(
+            'MoreTools',
+            safeToolbarIds(
+              [
+                'Reset',
+                'rotate-right',
+                'flipHorizontal',
+                'ImageSliceSync',
+                'ReferenceLines',
+                'ImageOverlayViewer',
+                'StackScroll',
+                'invert',
+                'Probe',
+                'Cine',
+                'Angle',
+                'CobbAngle',
+                'Magnify',
+                'CalibrationLine',
+                'TagBrowser',
+                'AdvancedMagnify',
+                'UltrasoundDirectionalTool',
+                'WindowLevelRegion',
+                'SegmentLabelTool',
+              ],
+              'MoreTools'
+            )
+          );
+        }
+      }
 
       customizationService.setCustomizations(
         {
@@ -1078,7 +1545,34 @@ function modeFactory({ modeConfiguration }) {
 
       _measurementAddedSub?.unsubscribe?.();
       _measurementAddedSub = null;
+
+      _measurementCompletionSubscriptions.forEach(subscription =>
+        subscription?.unsubscribe?.()
+      );
+      _measurementCompletionSubscriptions = [];
+
+      _measurementCompletionTimers.forEach(timerId => window.clearTimeout(timerId));
+      _measurementCompletionTimers.clear();
+
+      if (_annotationCompletedHandler) {
+        eventTarget.removeEventListener(
+          CornerstoneToolsEnums.Events.ANNOTATION_COMPLETED,
+          _annotationCompletedHandler
+        );
+        _annotationCompletedHandler = null;
+      }
+
+      _handledCompletedAnnotationIds.clear();
       _suppressLabelPrompt = false;
+
+      if (_quizMeasurementDomainHandler) {
+        window.removeEventListener(
+          AR_QUIZ_MEASUREMENT_DOMAIN_EVENT,
+          _quizMeasurementDomainHandler
+        );
+        _quizMeasurementDomainHandler = null;
+      }
+      _quizMeasurementDomain = '';
 
       restoreConsoleWarn?.();
       removeARUSRegionPixelSpacingProvider?.();

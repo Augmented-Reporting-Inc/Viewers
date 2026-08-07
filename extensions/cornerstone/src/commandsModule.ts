@@ -53,11 +53,12 @@ import {
   hydrateSavedViewerAnnotationForViewport,
   hydrateMeasurementAnnotationsForActiveStudy as hydrateMeasurementAnnotationsForActiveStudyUtil,
 } from './utils/measurementAnnotationHydration';
-import { buildFormApiUrl } from './utils/formApi';
+import { buildFormApiFetchOptions, buildFormApiUrl } from './utils/formApi';
 import {
   LV_SIMPSON_MEASUREMENT_KIND,
   LV_TRACE_MEASUREMENT_LABELS_CONFIG,
   LV_TRACE_LABELS,
+  LV_TRACE_REQUIRED_SLOTS,
   getLVTraceLabelForSlot,
   normalizeLVTraceSelection,
   parseLVTraceLabel,
@@ -81,13 +82,176 @@ const VIEWER_CONTOUR_TOOL_NAMES = new Set(
   ].filter(Boolean)
 );
 
+const AR_LV_SIMPSON_SESSION_EVENT = 'ar-measurements:lv-simpson-session-updated';
+
+const lvSimpsonSessionMeasurementsByUid = new Map<string, any>();
+let activeLVSimpsonWorkflowSessionId = '';
+
+const LV_SIMPSON_MIN_AXIS_MM = 25;
+const LV_SIMPSON_MAX_AXIS_MM = 130;
+const LV_SIMPSON_SLOT_PAIR_AXIS_WARNING_RATIO = 0.35;
+const LV_SIMPSON_AUTO_CONTINUE_DELAY_MS = 250;
+
+function getLVSimpsonAxisLengthFromMeasurement(measurement: any = {}) {
+  const geometry = measurement?.lvSimpson || measurement?.measurements?.lvSimpson || {};
+  const value = Number(geometry.longAxisLengthMM);
+
+  return Number.isFinite(value) && value > 0 ? value : null;
+}
+
+function getLVSimpsonPairedSlot(slot = '') {
+  const normalizedSlot = normalizeLVSimpsonSlot(slot);
+
+  if (normalizedSlot === 'A4C_ED') {
+    return 'A2C_ED';
+  }
+  if (normalizedSlot === 'A2C_ED') {
+    return 'A4C_ED';
+  }
+  if (normalizedSlot === 'A4C_ES') {
+    return 'A2C_ES';
+  }
+  if (normalizedSlot === 'A2C_ES') {
+    return 'A4C_ES';
+  }
+
+  return '';
+}
+
+function getLVSimpsonAxisWarning({ slot, axisLengthMM, slotCandidates }) {
+  if (!Number.isFinite(axisLengthMM) || axisLengthMM <= 0) {
+    return 'Could not calculate the LV long-axis length.';
+  }
+
+  if (axisLengthMM < LV_SIMPSON_MIN_AXIS_MM || axisLengthMM > LV_SIMPSON_MAX_AXIS_MM) {
+    return `LV long-axis length is ${axisLengthMM.toFixed(
+      1
+    )} mm, which is outside the expected range. Replace this slot.`;
+  }
+
+  const pairedSlot = getLVSimpsonPairedSlot(slot);
+  const pairedMeasurements = pairedSlot ? slotCandidates.get(pairedSlot) || [] : [];
+  const pairedAxis = pairedMeasurements
+    .map(getLVSimpsonAxisLengthFromMeasurement)
+    .find(value => Number.isFinite(value) && value > 0);
+
+  if (!pairedAxis) {
+    return '';
+  }
+
+  const longerAxis = Math.max(axisLengthMM, pairedAxis);
+  const shorterAxis = Math.min(axisLengthMM, pairedAxis);
+  const mismatchRatio = longerAxis > 0 ? (longerAxis - shorterAxis) / longerAxis : 1;
+
+  if (mismatchRatio > LV_SIMPSON_SLOT_PAIR_AXIS_WARNING_RATIO) {
+    return `${slot.replace('_', ' ')} long-axis length is ${axisLengthMM.toFixed(
+      1
+    )} mm but ${pairedSlot.replace('_', ' ')} is ${pairedAxis.toFixed(
+      1
+    )} mm. Replace this slot before calculating EF.`;
+  }
+
+  return '';
+}
+
+function getLVSimpsonSessionMeasurements() {
+  return Array.from(lvSimpsonSessionMeasurementsByUid.values());
+}
+
+function dispatchLVSimpsonSessionMeasurements(detail = {}) {
+  try {
+    window.dispatchEvent(
+      new CustomEvent(AR_LV_SIMPSON_SESSION_EVENT, {
+        detail: {
+          ...detail,
+          measurements: getLVSimpsonSessionMeasurements(),
+        },
+      })
+    );
+  } catch {}
+}
+
+function upsertLVSimpsonSessionMeasurement(measurement) {
+  const uid = getMeasurementAnnotationId(measurement);
+
+  if (!uid) {
+    return;
+  }
+
+  lvSimpsonSessionMeasurementsByUid.set(uid, measurement);
+  dispatchLVSimpsonSessionMeasurements({
+    reason: 'lv-simpson-session-upsert',
+    uid,
+    slot: measurement?.slot || measurement?.lvSimpson?.slot || '',
+  });
+}
+
+function removeLVSimpsonSessionMeasurement(uid = '') {
+  const measurementUid = String(uid || '').trim();
+
+  if (!measurementUid) {
+    return;
+  }
+
+  const existing = lvSimpsonSessionMeasurementsByUid.get(measurementUid);
+  lvSimpsonSessionMeasurementsByUid.delete(measurementUid);
+
+  dispatchLVSimpsonSessionMeasurements({
+    reason: 'lv-simpson-session-remove',
+    uid: measurementUid,
+    slot: existing?.slot || existing?.lvSimpson?.slot || '',
+  });
+}
+
 function isViewerContourTool(toolName) {
   return VIEWER_CONTOUR_TOOL_NAMES.has(toolName);
 }
 
+function normalizeViewerMeasurementDomain(value = '') {
+  const domain = String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[_\s]+/g, '-');
+
+  if (domain === 'iuscan') {
+    return 'bowel';
+  }
+
+  return ['generic', 'echo', 'bowel'].includes(domain) ? domain : '';
+}
+
+function getExplicitViewerMeasurementDomain(explicitDomain = '') {
+  const direct = normalizeViewerMeasurementDomain(explicitDomain);
+  if (direct) {
+    return direct;
+  }
+
+  try {
+    const params = getViewerUrlSearchParams();
+    return normalizeViewerMeasurementDomain(
+      params.get('arMeasurementDomain') ||
+        params.get('arViewerDomain') ||
+        params.get('viewerDomain') ||
+        ''
+    );
+  } catch {
+    return '';
+  }
+}
+
 function inferDomainFromSeriesDoc(seriesDoc, explicitDomain) {
-  if (explicitDomain && explicitDomain !== 'generic') {
-    return explicitDomain;
+  const requestedDomain = getExplicitViewerMeasurementDomain(explicitDomain);
+
+  if (requestedDomain && requestedDomain !== 'generic') {
+    return requestedDomain;
+  }
+
+  const storedMeasurementDomain = normalizeViewerMeasurementDomain(
+    seriesDoc?.measurementDomain || seriesDoc?.studentPractice?.measurementDomain
+  );
+
+  if (storedMeasurementDomain && storedMeasurementDomain !== 'generic') {
+    return storedMeasurementDomain;
   }
 
   const reportType = String(seriesDoc?.reportType || '').toLowerCase();
@@ -141,8 +305,10 @@ function inferDomainFromSeriesDoc(seriesDoc, explicitDomain) {
 }
 
 function inferDomainWithoutSeriesDoc(explicitDomain) {
-  if (explicitDomain && explicitDomain !== 'generic') {
-    return explicitDomain;
+  const requestedDomain = getExplicitViewerMeasurementDomain(explicitDomain);
+
+  if (requestedDomain && requestedDomain !== 'generic') {
+    return requestedDomain;
   }
 
   const params = getViewerUrlSearchParams();
@@ -155,17 +321,10 @@ function inferDomainWithoutSeriesDoc(explicitDomain) {
     return 'bowel';
   }
 
-  const urlDomain = String(
-    params.get('arMeasurementDomain') ||
-      params.get('arViewerDomain') ||
-      params.get('viewerDomain') ||
-      ''
-  )
-    .trim()
-    .toLowerCase();
+  const urlDomain = getExplicitViewerMeasurementDomain();
 
-  if (['iuscan', 'bowel', 'echo', 'generic'].includes(urlDomain)) {
-    return urlDomain === 'iuscan' ? 'bowel' : urlDomain;
+  if (urlDomain) {
+    return urlDomain;
   }
 
   const path = String(window.location?.pathname || '').toLowerCase();
@@ -178,7 +337,11 @@ function inferDomainWithoutSeriesDoc(explicitDomain) {
     return 'bowel';
   }
 
-  // Local/dev longitudinal `/viewer` routes are echo unless explicitly
+  if (path.includes('/learning')) {
+    return 'generic';
+  }
+
+  // Local/dev longitudinal `/viewer` routes remain echo unless explicitly
   // identified as bowel/iUSCAN through the URL.
   return 'echo';
 }
@@ -2098,11 +2261,22 @@ const segmentAI = new ONNXSegmentationController({
 let segmentAIEnabled = false;
 
 const AR_SAVED_ANNOTATIONS_REFRESH_EVENT = 'ar-measurements:saved-annotations-updated';
+const AR_LIVE_MEASUREMENTS_REFRESH_EVENT = 'ar-measurements:live-measurements-updated';
 
 function dispatchSavedAnnotationsRefresh(detail = {}) {
   try {
     window.dispatchEvent(
       new CustomEvent(AR_SAVED_ANNOTATIONS_REFRESH_EVENT, {
+        detail,
+      })
+    );
+  } catch {}
+}
+
+function dispatchLiveMeasurementsRefresh(detail = {}) {
+  try {
+    window.dispatchEvent(
+      new CustomEvent(AR_LIVE_MEASUREMENTS_REFRESH_EVENT, {
         detail,
       })
     );
@@ -2983,7 +3157,7 @@ function installLVSimpsonContourTextCleanupForViewport({ viewport, viewportId = 
   toolInstance.__arLVSimpsonTextCleanupInstalled = true;
 }
 
-function captureLVSimpsonDrag({ viewport, onPreview }) {
+function captureLVSimpsonDrag({ viewport, onPreview, isCancelled }) {
   const element = viewport?.element;
 
   if (!element) {
@@ -3018,6 +3192,11 @@ function captureLVSimpsonDrag({ viewport, onPreview }) {
     }
 
     function handleMouseDown(event) {
+      if (isCancelled?.()) {
+        finish(null);
+        return;
+      }
+
       event.preventDefault();
       event.stopPropagation();
 
@@ -3033,6 +3212,11 @@ function captureLVSimpsonDrag({ viewport, onPreview }) {
     }
 
     function handleMouseMove(event) {
+      if (isCancelled?.()) {
+        finish(null);
+        return;
+      }
+
       if (!startWorld) {
         return;
       }
@@ -3044,6 +3228,11 @@ function captureLVSimpsonDrag({ viewport, onPreview }) {
     }
 
     function handleMouseUp(event) {
+      if (isCancelled?.()) {
+        finish(null);
+        return;
+      }
+
       if (!startWorld) {
         finish(null);
         return;
@@ -3059,6 +3248,111 @@ function captureLVSimpsonDrag({ viewport, onPreview }) {
   });
 }
 
+function normalizeLVSimpsonSlot(slot = '') {
+  const normalizedSlot = String(slot || '')
+    .trim()
+    .toUpperCase()
+    .replace(/[-\s]+/g, '_');
+
+  return LV_TRACE_REQUIRED_SLOTS.includes(normalizedSlot) ? normalizedSlot : '';
+}
+
+function getLVSimpsonSlotLabel(slot = '') {
+  return getLVTraceLabelForSlot(normalizeLVSimpsonSlot(slot));
+}
+
+function getLVSimpsonSlotDisplayName(slot = '') {
+  const normalizedSlot = normalizeLVSimpsonSlot(slot);
+  const label = getLVSimpsonSlotLabel(normalizedSlot);
+  const parsed = parseLVTraceLabel(label);
+
+  if (!parsed) {
+    return normalizedSlot.replace('_', ' ');
+  }
+
+  const viewLabel = parsed.view === 'A4C' ? 'Apical 4-chamber' : 'Apical 2-chamber';
+  const phaseLabel = parsed.phase === 'ED' ? 'end-diastole' : 'end-systole';
+
+  return `${viewLabel} ${phaseLabel}`;
+}
+
+function buildLVSimpsonSlotSelection(slot = '') {
+  const normalizedSlot = normalizeLVSimpsonSlot(slot);
+  const label = getLVSimpsonSlotLabel(normalizedSlot);
+  const slotInfo = parseLVTraceLabel(label);
+
+  return slotInfo ? { label, slotInfo } : null;
+}
+
+function isLVSimpsonMeasurement(measurement: any = {}) {
+  const measurementKind =
+    measurement?.measurementKind ||
+    measurement?.measurements?.measurementKind ||
+    measurement?.lvSimpson?.measurementKind ||
+    measurement?.measurements?.lvSimpson?.measurementKind;
+
+  return !!(
+    measurementKind === LV_SIMPSON_MEASUREMENT_KIND ||
+    measurement?.lvSimpson ||
+    measurement?.measurements?.lvSimpson
+  );
+}
+
+function getLVSimpsonSlotFromMeasurement(measurement: any = {}) {
+  if (!isLVSimpsonMeasurement(measurement)) {
+    return '';
+  }
+
+  const geometry = measurement?.lvSimpson || measurement?.measurements?.lvSimpson || {};
+  const directSlot = normalizeLVSimpsonSlot(geometry.slot || measurement?.slot);
+
+  if (directSlot) {
+    return directSlot;
+  }
+
+  const labelSlot = parseLVTraceLabel(
+    geometry.label || measurement?.measurementRole || measurement?.label || measurement?.role || ''
+  )?.slot;
+
+  return normalizeLVSimpsonSlot(labelSlot);
+}
+
+function getLVSimpsonSlotCandidates(measurements: any[] = []) {
+  const bySlot = new Map<string, any[]>();
+
+  for (const measurement of Array.isArray(measurements) ? measurements : []) {
+    const slot = getLVSimpsonSlotFromMeasurement(measurement);
+
+    if (!slot) {
+      continue;
+    }
+
+    if (!bySlot.has(slot)) {
+      bySlot.set(slot, []);
+    }
+
+    bySlot.get(slot).push(measurement);
+  }
+
+  return bySlot;
+}
+
+function getNextMissingLVSimpsonSlot(slotCandidates: Map<string, any[]>) {
+  return LV_TRACE_REQUIRED_SLOTS.find(slot => !slotCandidates.get(slot)?.length) || '';
+}
+
+function getLVSimpsonStepNumber(slot = '') {
+  const index = LV_TRACE_REQUIRED_SLOTS.indexOf(normalizeLVSimpsonSlot(slot));
+
+  return index >= 0 ? index + 1 : 1;
+}
+
+function getLVSimpsonExistingMeasurementIds(measurements: any[] = []) {
+  return (Array.isArray(measurements) ? measurements : [])
+    .map(getMeasurementAnnotationId)
+    .filter(Boolean);
+}
+
 function getLVSimpsonSlotDialogConfig() {
   return {
     ...LV_TRACE_MEASUREMENT_LABELS_CONFIG,
@@ -3067,25 +3361,31 @@ function getLVSimpsonSlotDialogConfig() {
   };
 }
 
-async function resolveLVSimpsonSlot({ uiDialogService, customizationService }) {
+async function resolveLVSimpsonSlot({
+  uiDialogService,
+  customizationService,
+  title = 'LV EF Slot',
+  defaultSlot = 'A4C_ED',
+} = {}) {
   const renderContent = customizationService.getCustomization('ui.labellingComponent');
   let value = null;
+  const defaultValue = getLVSimpsonSlotLabel(defaultSlot) || 'LV-A4C-ED';
 
   try {
     value = await callInputDialogAutoComplete({
       uiDialogService,
       labelConfig: getLVSimpsonSlotDialogConfig(),
       renderContent,
-      title: 'LV EF Slot',
+      title,
     });
   } catch (error) {
     console.warn('[LV EF] slot autocomplete failed; falling back to text input:', error);
 
     value = await callInputDialog({
       uiDialogService,
-      title: 'LV EF Slot',
+      title,
       placeholder: 'Choose LV-A4C-ED, LV-A4C-ES, LV-A2C-ED, or LV-A2C-ES',
-      defaultValue: 'LV-A4C-ED',
+      defaultValue,
     });
   }
 
@@ -4095,10 +4395,12 @@ async function fetchSeriesDocById(seriesId) {
     return null;
   }
 
-  const response = await fetch(buildFormApiUrl(`series/${encodeURIComponent(id)}`), {
-    method: 'GET',
-    credentials: 'include',
-  });
+  const response = await fetch(
+    buildFormApiUrl(`series/${encodeURIComponent(id)}`),
+    buildFormApiFetchOptions({
+      method: 'GET',
+    })
+  );
 
   if (!response.ok) {
     throw new Error(`Series lookup failed: ${response.status}`);
@@ -4108,14 +4410,15 @@ async function fetchSeriesDocById(seriesId) {
 }
 
 async function ensureLearnerCopyForViewerSave(saveTarget) {
-  const response = await fetch(buildFormApiUrl('series/ensure-learner-copy'), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    credentials: 'include',
-    body: JSON.stringify({
-      baseSeriesId: saveTarget.baseSeriesId,
-    }),
-  });
+  const response = await fetch(
+    buildFormApiUrl('series/ensure-learner-copy'),
+    buildFormApiFetchOptions({
+      method: 'POST',
+      body: JSON.stringify({
+        baseSeriesId: saveTarget.baseSeriesId,
+      }),
+    })
+  );
 
   if (!response.ok) {
     throw new Error(`Unable to resolve learner copy: ${response.status}`);
@@ -4778,7 +5081,18 @@ function commandsModule({
         normalizeLabel,
       });
     },
-    startLVSimpsonEFWorkflow: async () => {
+    startLVSimpsonEFWorkflow: async ({
+      slot: requestedSlot = '',
+      sessionId: requestedSessionId = '',
+      singleSlot = false,
+    } = {}) => {
+      const workflowSessionId = requestedSessionId || `${csUtils.uuidv4()}`;
+
+      if (!requestedSessionId) {
+        activeLVSimpsonWorkflowSessionId = workflowSessionId;
+      }
+
+      const isWorkflowCancelled = () => activeLVSimpsonWorkflowSessionId !== workflowSessionId;
       const { viewport } = _getActiveViewportEnabledElement() || {};
       const activeViewportId = viewportGridService.getActiveViewportId();
 
@@ -4789,30 +5103,102 @@ function commandsModule({
           type: 'warning',
           duration: 3500,
         });
+        if (!requestedSessionId) {
+          activeLVSimpsonWorkflowSessionId = '';
+        }
         return null;
       }
 
-      const slotSelection = await resolveLVSimpsonSlot({
-        uiDialogService,
-        customizationService,
-      });
+      if (isWorkflowCancelled()) {
+        return null;
+      }
+
+      const liveMeasurements = measurementService.getMeasurements?.() || [];
+      const sessionLVSimpsonMeasurements = getLVSimpsonSessionMeasurements();
+
+      const slotCandidates = getLVSimpsonSlotCandidates([
+        ...liveMeasurements,
+        ...sessionLVSimpsonMeasurements,
+      ]);
+      const explicitSlot = normalizeLVSimpsonSlot(requestedSlot);
+      const nextMissingSlot = getNextMissingLVSimpsonSlot(slotCandidates);
+
+      let slotSelection = explicitSlot ? buildLVSimpsonSlotSelection(explicitSlot) : null;
+
+      if (!slotSelection && nextMissingSlot) {
+        slotSelection = buildLVSimpsonSlotSelection(nextMissingSlot);
+      }
+
+      if (!slotSelection) {
+        uiNotificationService.show({
+          title: 'LV EF',
+          message: 'All four LV EF slots already exist. Choose a slot to replace.',
+          type: 'info',
+          duration: 4500,
+        });
+
+        slotSelection = await resolveLVSimpsonSlot({
+          uiDialogService,
+          customizationService,
+          title: 'Replace LV EF Slot',
+          defaultSlot: 'A4C_ED',
+        });
+      }
 
       if (!slotSelection) {
         return null;
       }
 
       const { label, slotInfo } = slotSelection;
+      const slotDisplayName = getLVSimpsonSlotDisplayName(slotInfo.slot);
+      const stepNumber = getLVSimpsonStepNumber(slotInfo.slot);
+      const existingSlotMeasurements = slotCandidates.get(slotInfo.slot) || [];
+      const existingSlotMeasurementIds =
+        getLVSimpsonExistingMeasurementIds(existingSlotMeasurements);
+      const retryCurrentLVSimpsonSlot = ({
+        message,
+        duration = 7000,
+      }: {
+        message: string;
+        duration?: number;
+      }) => {
+        if (isWorkflowCancelled()) {
+          return null;
+        }
+
+        uiNotificationService.show({
+          title: 'LV EF',
+          message,
+          type: 'warning',
+          duration,
+        });
+
+        window.setTimeout(() => {
+          if (activeLVSimpsonWorkflowSessionId !== workflowSessionId) {
+            return;
+          }
+
+          actions.startLVSimpsonEFWorkflow({
+            slot: slotInfo.slot,
+            sessionId: workflowSessionId,
+            singleSlot,
+          });
+        }, LV_SIMPSON_AUTO_CONTINUE_DELAY_MS);
+
+        return null;
+      };
       const overlay = createLVSimpsonPreviewOverlay(viewport.element);
 
       uiNotificationService.show({
-        title: 'LV EF',
-        message: 'Draw the mitral annular hinge line.',
+        title: `LV EF step ${stepNumber}/4`,
+        message: `Navigate to ${slotDisplayName}, then draw the mitral annular hinge line. Press Esc to cancel.`,
         type: 'info',
-        duration: 2500,
+        duration: 7000,
       });
 
       const hinge = await captureLVSimpsonDrag({
         viewport,
+        isCancelled: isWorkflowCancelled,
         onPreview: ({ startWorld, currentWorld }) => {
           drawLVSimpsonPreview({
             overlay,
@@ -4826,6 +5212,9 @@ function commandsModule({
       if (!hinge) {
         clearLVSimpsonPreviewOverlay(viewport.element);
         setLVSimpsonViewportCursor(viewport.element, 'default');
+        if (!requestedSessionId) {
+          activeLVSimpsonWorkflowSessionId = '';
+        }
         return null;
       }
 
@@ -4837,14 +5226,15 @@ function commandsModule({
       });
 
       uiNotificationService.show({
-        title: 'LV EF',
-        message: 'Drag from the hinge midpoint to the LV apex.',
+        title: `LV EF step ${stepNumber}/4`,
+        message: `Now drag from the hinge midpoint to the LV apex for ${slotDisplayName}.`,
         type: 'info',
-        duration: 2500,
+        duration: 7000,
       });
 
       const apexDrag = await captureLVSimpsonDrag({
         viewport,
+        isCancelled: isWorkflowCancelled,
         onPreview: ({ currentWorld }) => {
           drawLVSimpsonPreview({
             overlay,
@@ -4860,6 +5250,7 @@ function commandsModule({
       setLVSimpsonViewportCursor(viewport.element, 'default');
 
       if (!apexDrag?.endWorld) {
+        activeLVSimpsonWorkflowSessionId = '';
         return null;
       }
 
@@ -4868,16 +5259,33 @@ function commandsModule({
         baseRightPoint: hinge.endWorld,
         apexPoint: apexDrag.endWorld,
       });
+      const axisWarning = getLVSimpsonAxisWarning({
+        slot: slotInfo.slot,
+        axisLengthMM: geometry?.longAxisLengthMM,
+        slotCandidates,
+      });
 
-      if (!geometry?.points?.length) {
-        uiNotificationService.show({
-          title: 'LV EF',
-          message: 'Could not generate LV contour from hinge/apex geometry.',
-          type: 'warning',
-          duration: 3500,
+      if (axisWarning) {
+        return retryCurrentLVSimpsonSlot({
+          message: `${axisWarning} Redraw ${slotInfo.slot}; LV EF remains active.`,
         });
-        return null;
       }
+      if (!geometry?.points?.length) {
+        return retryCurrentLVSimpsonSlot({
+          message:
+            'Could not generate LV contour from hinge/apex geometry. Redraw the hinge line, then drag from the hinge midpoint to the LV apex; LV EF remains active.',
+        });
+      }
+
+      for (const existingMeasurementId of existingSlotMeasurementIds) {
+        actions.removeMeasurement({ uid: existingMeasurementId });
+        removeLVSimpsonSessionMeasurement(existingMeasurementId);
+      }
+
+      dispatchLiveMeasurementsRefresh({
+        reason: 'lv-simpson-slot-replaced',
+        slot: slotInfo.slot,
+      });
 
       const imageInfo = getCurrentViewportImageInfo(viewport);
       const displaySet = getActiveViewportDisplaySet({
@@ -4978,9 +5386,18 @@ function commandsModule({
 
       try {
         measurementService.update(annotationUID, measurement, true);
+        actions.markViewerMeasurementCreatedInSession?.({ uid: annotationUID });
       } catch (error) {
         console.warn('[LV EF] measurementService.update failed:', error);
       }
+
+      upsertLVSimpsonSessionMeasurement(measurement);
+
+      dispatchLiveMeasurementsRefresh({
+        reason: 'lv-simpson-slot-created',
+        annotationUID,
+        slot: slotInfo.slot,
+      });
 
       try {
         cornerstoneTools.annotation.selection.setAnnotationSelected(annotationUID, true);
@@ -4992,11 +5409,44 @@ function commandsModule({
         viewport.render?.();
       } catch {}
 
+      const remainingSlotCandidates = getLVSimpsonSlotCandidates([
+        ...measurementService.getMeasurements?.(),
+        ...getLVSimpsonSessionMeasurements(),
+      ]);
+      const nextSlot = getNextMissingLVSimpsonSlot(remainingSlotCandidates);
+
+      if (nextSlot && !singleSlot && !isWorkflowCancelled()) {
+        uiNotificationService.show({
+          title: 'LV EF',
+          message: `${slotInfo.slot} created. Next: navigate to ${getLVSimpsonSlotDisplayName(
+            nextSlot
+          )}. LV EF remains active; draw the hinge line when ready. Press Esc to cancel.`,
+          type: 'success',
+          duration: 7000,
+        });
+
+        window.setTimeout(() => {
+          if (activeLVSimpsonWorkflowSessionId !== workflowSessionId) {
+            return;
+          }
+
+          actions.startLVSimpsonEFWorkflow({
+            slot: nextSlot,
+            sessionId: workflowSessionId,
+            singleSlot,
+          });
+        }, LV_SIMPSON_AUTO_CONTINUE_DELAY_MS);
+
+        return measurement;
+      }
+
+      activeLVSimpsonWorkflowSessionId = '';
+
       uiNotificationService.show({
         title: 'LV EF',
-        message: `${slotInfo.slot} contour created.`,
+        message: `${slotInfo.slot} created. All four LV EF slots are now present.`,
         type: 'success',
-        duration: 2500,
+        duration: 5000,
       });
 
       return measurement;
@@ -5599,7 +6049,11 @@ function commandsModule({
         return;
       }
 
-      const toolGroup = toolGroupService.getToolGroup(toolGroupId);
+      const toolGroupReference = toolGroupId ?? _getActiveViewportToolGroupId();
+      const toolGroup =
+        typeof toolGroupReference === 'string'
+          ? toolGroupService.getToolGroup(toolGroupReference)
+          : toolGroupReference;
 
       if (!toolGroup) {
         return;
@@ -5657,7 +6111,7 @@ function commandsModule({
 
       actions.setToolActive({
         toolName,
-        toolGroupId,
+        toolGroupId: toolGroupReference,
       });
 
       if (stopCine) {
@@ -8466,19 +8920,15 @@ function commandsModule({
                   seriesDoc._id
                 )}/viewer-measurements?workflowType=${workflowType}`
               ),
-              {
+              buildFormApiFetchOptions({
                 method: 'PUT',
-                headers: {
-                  'Content-Type': 'application/json',
-                },
-                credentials: 'include',
                 body: JSON.stringify({
                   measurementWorkflowRole: normalizeReviewMeasurementRole(
                     saveTarget.measurementWorkflowRole
                   ),
                   annotations,
                 }),
-              }
+              })
             );
 
             if (!response.ok) {
@@ -8532,6 +8982,10 @@ function commandsModule({
 
                   const existingId = existing?.annotationId || existing?.uid;
 
+                  if (existingId && viewerMeasurementsDeletedInSession.has(existingId)) {
+                    return true;
+                  }
+
                   return !!existingId && savedAnnotationIds.has(existingId);
                 },
               }),
@@ -8541,14 +8995,13 @@ function commandsModule({
               educationAttemptIntent: shouldSubmitForScore ? 'score-attempt' : 'draft',
             };
 
-            const response = await fetch(buildFormApiUrl(`series/${seriesDoc._id}`), {
-              method: 'PUT',
-              headers: {
-                'Content-Type': 'application/json',
-              },
-              credentials: 'include',
-              body: JSON.stringify(payload),
-            });
+            const response = await fetch(
+              buildFormApiUrl(`series/${seriesDoc._id}`),
+              buildFormApiFetchOptions({
+                method: 'PUT',
+                body: JSON.stringify(payload),
+              })
+            );
 
             if (!response.ok) {
               throw new Error(`Save failed: ${response.status}`);

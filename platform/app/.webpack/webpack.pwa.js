@@ -24,7 +24,9 @@ const PROXY_TARGET = process.env.PROXY_TARGET;
 const PROXY_DOMAIN = process.env.PROXY_DOMAIN;
 const PROXY_PATH_REWRITE_FROM = process.env.PROXY_PATH_REWRITE_FROM;
 const PROXY_PATH_REWRITE_TO = process.env.PROXY_PATH_REWRITE_TO;
+const DEV_PROXY_COOKIE = process.env.DEV_PROXY_COOKIE || '';
 const IS_COVERAGE = process.env.COVERAGE === 'true';
+const DEV_PROXY_DEBUG = process.env.DEV_PROXY_DEBUG === '1';
 
 const OHIF_PORT = Number(process.env.OHIF_PORT || 3000);
 const ENTRY_TARGET = process.env.ENTRY_TARGET || `${SRC_DIR}/index.js`;
@@ -50,6 +52,108 @@ const setHeaders = (res, path) => {
     res.setHeader('Content-Type', 'application/json');
   }
 };
+
+function extractDevProxyJwt(cookieHeader = '') {
+  const raw = String(cookieHeader || '').trim();
+  const jwtRe = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
+
+  const idToken = raw.match(/(?:^|[;\s])idToken=([^;\s]+)/i)?.[1];
+  if (idToken && jwtRe.test(idToken)) {
+    return idToken;
+  }
+
+  const accessToken = raw.match(/(?:^|[;\s])accessToken=([^;\s]+)/i)?.[1];
+  if (accessToken && jwtRe.test(accessToken)) {
+    return accessToken;
+  }
+
+  return '';
+}
+
+const DEV_PROXY_RESPONSE_DEBUG = process.env.DEV_PROXY_RESPONSE_DEBUG === '1';
+
+function hardenDevProxyResponse(proxyRes, req) {
+  if (!proxyRes?.headers) {
+    return;
+  }
+
+  const originalHeaders = {
+    contentEncoding: proxyRes.headers['content-encoding'],
+    contentLength: proxyRes.headers['content-length'],
+    transferEncoding: proxyRes.headers['transfer-encoding'],
+    connection: proxyRes.headers.connection,
+  };
+
+  // Do not forward hop-by-hop headers from the upstream response through
+  // webpack-dev-server to the browser.
+  [
+    'connection',
+    'keep-alive',
+    'proxy-authenticate',
+    'proxy-authorization',
+    'te',
+    'trailer',
+    'transfer-encoding',
+    'upgrade',
+  ].forEach(headerName => {
+    delete proxyRes.headers[headerName];
+  });
+
+  // Avoid stale/mismatched lengths when the dev proxy forwards or rewrites
+  // a response stream. Let Node/dev-server stream the body safely.
+  delete proxyRes.headers['content-length'];
+
+  if (DEV_PROXY_RESPONSE_DEBUG) {
+    console.info('[dev-proxy] response hardened', {
+      url: req?.url,
+      statusCode: proxyRes.statusCode,
+      originalHeaders,
+    });
+  }
+}
+
+const DEV_PROXY_BEARER_TOKEN = extractDevProxyJwt(DEV_PROXY_COOKIE);
+const DEV_PROXY_HEADERS = DEV_PROXY_COOKIE
+  ? {
+      Cookie: DEV_PROXY_COOKIE,
+      ...(DEV_PROXY_BEARER_TOKEN ? { Authorization: `Bearer ${DEV_PROXY_BEARER_TOKEN}` } : {}),
+    }
+  : {};
+
+if (DEV_PROXY_DEBUG) {
+  console.info('[dev-proxy] startup auth config', {
+    hasDevProxyCookie: !!DEV_PROXY_COOKIE,
+    hasDevProxyBearer: !!DEV_PROXY_BEARER_TOKEN,
+    hasProxyOverride: !!(PROXY_TARGET && PROXY_DOMAIN),
+    proxyTarget: PROXY_TARGET || '',
+    proxyDomain: PROXY_DOMAIN || '',
+  });
+}
+
+function attachDevProxyAuth(proxyReq, req) {
+  proxyReq.setHeader('Accept-Encoding', 'identity');
+  if (!DEV_PROXY_COOKIE) {
+    if (DEV_PROXY_DEBUG) {
+      console.warn('[dev-proxy] DEV_PROXY_COOKIE is not set for', req?.url);
+    }
+    return;
+  }
+
+  proxyReq.setHeader('Cookie', DEV_PROXY_COOKIE);
+
+  const bearerToken = extractDevProxyJwt(DEV_PROXY_COOKIE);
+  if (bearerToken) {
+    proxyReq.setHeader('Authorization', `Bearer ${bearerToken}`);
+  }
+
+  if (DEV_PROXY_DEBUG) {
+    console.info('[dev-proxy] attached auth to request', {
+      url: req?.url,
+      hasCookie: true,
+      hasBearer: !!bearerToken,
+    });
+  }
+}
 
 module.exports = (env, argv) => {
   const baseConfig = webpackBase(env, argv, { SRC_DIR, DIST_DIR });
@@ -181,15 +285,17 @@ module.exports = (env, argv) => {
           target: 'https://dragonfoot.futurepacs.com',
           changeOrigin: true,
           secure: true,
+          headers: DEV_PROXY_HEADERS,
+          onProxyReq: attachDevProxyAuth,
+          onProxyRes: hardenDevProxyResponse,
         },
         {
           context: ['/orthanc'],
           target: 'https://dragonfoot.futurepacs.com',
           changeOrigin: true,
           secure: true,
-          headers: {
-            Cookie: process.env.DEV_PROXY_COOKIE || '',
-          },
+          headers: DEV_PROXY_HEADERS,
+          onProxyReq: attachDevProxyAuth,
         },
         {
           context: ['/dicomweb'],
@@ -228,16 +334,21 @@ module.exports = (env, argv) => {
   });
 
   if (hasProxy) {
-    mergedConfig.devServer.proxy = mergedConfig.devServer.proxy || {};
-    mergedConfig.devServer.proxy = {
-      [PROXY_TARGET]: {
-        target: PROXY_DOMAIN,
-        changeOrigin: true,
-        pathRewrite: {
-          [`^${PROXY_PATH_REWRITE_FROM}`]: PROXY_PATH_REWRITE_TO,
-        },
+    const overrideProxy = {
+      context: [PROXY_TARGET],
+      target: PROXY_DOMAIN,
+      changeOrigin: true,
+      secure: true,
+      headers: DEV_PROXY_HEADERS,
+      onProxyReq: attachDevProxyAuth,
+      pathRewrite: {
+        [`^${PROXY_PATH_REWRITE_FROM}`]: PROXY_PATH_REWRITE_TO,
       },
     };
+
+    mergedConfig.devServer.proxy = Array.isArray(mergedConfig.devServer.proxy)
+      ? [overrideProxy, ...mergedConfig.devServer.proxy]
+      : [overrideProxy];
   }
 
   if (isProdBuild) {

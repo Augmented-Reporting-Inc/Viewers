@@ -566,19 +566,9 @@ const toolbarButtons: Button[] = [
     props: {
       icon: 'icon-tool-spline-roi',
       label: 'LV EF',
-      tooltip: 'Measure LV volumes and EF: draw hinge, then drag to apex',
+      tooltip:
+        'Start guided biplane LV EF. The tool stays active through A4C ED, A4C ES, A2C ED, and A2C ES. Press Esc to cancel.',
       commands: 'startLVSimpsonEFWorkflow',
-      evaluate: 'evaluate.action',
-    },
-  },
-  {
-    id: 'LVTraceSlot',
-    uiType: 'ohif.toolButton',
-    props: {
-      icon: 'tool-annotate',
-      label: 'Set LV Slot',
-      tooltip: 'Assign selected LV trace to A4C/A2C ED/ES',
-      commands: 'setSelectedMeasurementLabel',
       evaluate: 'evaluate.action',
     },
   },

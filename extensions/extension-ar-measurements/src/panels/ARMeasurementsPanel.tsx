@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { calculateLVSimpson, LV_SIMPSON_SLOT_ORDER } from '../utils/lvSimpson';
+import { getViewerMeasurementDomainFromPath } from '../utils/measurementLabelConfig';
 
 function getMeasurementLabel(measurement) {
   return (
@@ -13,6 +14,24 @@ function getMeasurementLabel(measurement) {
 }
 
 const AR_SAVED_ANNOTATIONS_REFRESH_EVENT = 'ar-measurements:saved-annotations-updated';
+const AR_LIVE_MEASUREMENTS_REFRESH_EVENT = 'ar-measurements:live-measurements-updated';
+const AR_LV_SIMPSON_SESSION_EVENT = 'ar-measurements:lv-simpson-session-updated';
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  let timeoutId: number | undefined;
+
+  const timeoutPromise = new Promise<T>((_, reject) => {
+    timeoutId = window.setTimeout(() => {
+      reject(new Error(`${label} timed out. Check FormAPI connectivity and try again.`));
+    }, timeoutMs);
+  });
+
+  return Promise.race([promise, timeoutPromise]).finally(() => {
+    if (timeoutId !== undefined) {
+      window.clearTimeout(timeoutId);
+    }
+  });
+}
 
 function isArrowAnnotateMeasurement(measurement) {
   return String(measurement?.toolName || '') === 'ArrowAnnotate';
@@ -389,6 +408,42 @@ function formatSimpsonValue(value, digits = 1) {
   return Number.isFinite(Number(value)) ? Number(value).toFixed(digits) : '';
 }
 
+function formatSimpsonPercent(value) {
+  return Number.isFinite(Number(value)) ? `${(Number(value) * 100).toFixed(0)}%` : '';
+}
+
+function getLVSimpsonStatusClass(status = '') {
+  if (status === 'complete') {
+    return 'bg-green-900 text-green-100';
+  }
+
+  if (status === 'invalid') {
+    return 'bg-red-900 text-red-100';
+  }
+
+  return 'bg-yellow-900 text-yellow-100';
+}
+
+function getLVSimpsonSlotStatusText(slotResult) {
+  if (!slotResult) {
+    return 'missing';
+  }
+
+  const axisText = Number.isFinite(Number(slotResult.longAxisLengthMM))
+    ? `axis ${formatSimpsonValue(slotResult.longAxisLengthMM)} mm`
+    : '';
+
+  const coverageText = Number.isFinite(Number(slotResult.coverageRatio))
+    ? `coverage ${formatSimpsonPercent(slotResult.coverageRatio)}`
+    : '';
+
+  if (slotResult.complete) {
+    return ['complete', axisText, coverageText].filter(Boolean).join(' • ');
+  }
+
+  return ['incomplete', axisText, coverageText].filter(Boolean).join(' • ') || 'missing';
+}
+
 function LVSimpsonSummary({ result }) {
   if (!result) {
     return null;
@@ -396,7 +451,7 @@ function LVSimpsonSummary({ result }) {
 
   const values = result.values;
   const isComplete = result.status === 'complete';
-
+  const nextIncompleteSlot = LV_SIMPSON_SLOT_ORDER.find(slot => !result.slots?.[slot]?.complete);
   return (
     <div className="bg-gray-950 mb-3 rounded border border-gray-700 p-3">
       <div className="flex items-start justify-between gap-2">
@@ -405,9 +460,7 @@ function LVSimpsonSummary({ result }) {
           <div className="mt-1 text-xs text-gray-400">{result.method}</div>
         </div>
         <div
-          className={`rounded px-2 py-1 text-xs font-semibold ${
-            isComplete ? 'bg-green-900 text-green-100' : 'bg-yellow-900 text-yellow-100'
-          }`}
+          className={`rounded px-2 py-1 text-xs font-semibold ${getLVSimpsonStatusClass(result.status)}`}
         >
           {result.status}
         </div>
@@ -433,7 +486,12 @@ function LVSimpsonSummary({ result }) {
           </div>
         </div>
       ) : null}
-
+      {nextIncompleteSlot ? (
+        <div className="bg-blue-950 mt-3 rounded border border-blue-900 p-2 text-xs text-blue-100">
+          Next: navigate to {nextIncompleteSlot.replace('_', ' ')}. LV EF stays active during the
+          guided session; draw the hinge line when ready. Press Esc to cancel.
+        </div>
+      ) : null}
       <div className="mt-3 space-y-1">
         {LV_SIMPSON_SLOT_ORDER.map(slot => {
           const slotResult = result.slots?.[slot];
@@ -442,20 +500,27 @@ function LVSimpsonSummary({ result }) {
             <div key={slot} className="flex justify-between gap-2 text-xs">
               <span className="text-gray-300">{slot.replace('_', ' ')}</span>
               <span className={slotResult?.complete ? 'text-green-300' : 'text-yellow-300'}>
-                {slotResult?.complete
-                  ? `complete • axis ${formatSimpsonValue(slotResult.longAxisLengthMM)} mm`
-                  : 'missing/incomplete'}
+                {getLVSimpsonSlotStatusText(slotResult)}
               </span>
             </div>
           );
         })}
       </div>
 
-      {result.messages?.length ? (
-        <div className="mt-3 space-y-1 text-xs text-yellow-200">
-          {result.messages.slice(0, 6).map(message => (
-            <div key={message}>• {message}</div>
-          ))}
+      {result.guidance?.length ? (
+        <div
+          className={`mt-3 rounded border p-2 text-xs ${
+            result.status === 'invalid'
+              ? 'bg-red-950 border-red-900 text-red-100'
+              : 'bg-yellow-950 border-yellow-900 text-yellow-100'
+          }`}
+        >
+          <div className="mb-1 font-semibold">LV EF guidance</div>
+          <div className="space-y-1">
+            {result.guidance.slice(0, 6).map((message, index) => (
+              <div key={`${index}-${message}`}>• {message}</div>
+            ))}
+          </div>
         </div>
       ) : null}
     </div>
@@ -729,8 +794,10 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
   );
   const [savingAction, setSavingAction] = useState('');
   const isSaving = !!savingAction;
-  const [domain, setDomain] = useState('generic');
+  const [domain, setDomain] = useState(() => getViewerMeasurementDomainFromPath());
   const [savedAnnotations, setSavedAnnotations] = useState([]);
+  const [sessionLVSimpsonMeasurements, setSessionLVSimpsonMeasurements] = useState([]);
+  const saveInFlightRef = useRef(false);
   const autoDisplayPeerMeasurementStateRef = useRef({
     key: '',
     status: 'idle',
@@ -834,10 +901,30 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
       .filter(Boolean)
       .map(eventName => measurementService.subscribe(eventName, refresh));
 
+    window.addEventListener(AR_LIVE_MEASUREMENTS_REFRESH_EVENT, refresh);
+
     refresh();
 
     return () => {
       subscriptions.forEach(subscription => subscription?.unsubscribe?.());
+      window.removeEventListener(AR_LIVE_MEASUREMENTS_REFRESH_EVENT, refresh);
+    };
+  }, [measurementService]);
+
+  useEffect(() => {
+    const handleLVSimpsonSessionUpdated = event => {
+      const nextMeasurements = Array.isArray(event?.detail?.measurements)
+        ? event.detail.measurements
+        : [];
+
+      setSessionLVSimpsonMeasurements(nextMeasurements);
+      setMeasurements([...(measurementService.getMeasurements?.() || [])]);
+    };
+
+    window.addEventListener(AR_LV_SIMPSON_SESSION_EVENT, handleLVSimpsonSessionUpdated);
+
+    return () => {
+      window.removeEventListener(AR_LV_SIMPSON_SESSION_EVENT, handleLVSimpsonSessionUpdated);
     };
   }, [measurementService]);
 
@@ -940,7 +1027,17 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
         }
       }
     }
+    for (const measurement of sessionLVSimpsonMeasurements) {
+      if (!measurement?.toolName || !hasSemanticLabel(measurement)) {
+        continue;
+      }
 
+      const key = getMeasurementKey(measurement);
+
+      if (key) {
+        byKey.set(key, normalizeMeasurementForDisplay(measurement));
+      }
+    }
     const writableWorkflow = getWritableMeasurementWorkflow(saveTarget);
 
     return Array.from(byKey.values()).map(measurement => {
@@ -955,7 +1052,7 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
         isLocked: false,
       };
     });
-  }, [measurements, savedAnnotations, isReviewWorkflow, saveTarget]);
+  }, [measurements, savedAnnotations, sessionLVSimpsonMeasurements, isReviewWorkflow, saveTarget]);
 
   const editableMeasurements = useMemo(
     () => visibleMeasurements.filter(measurement => isMeasurementEditable(measurement, saveTarget)),
@@ -1006,23 +1103,34 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
   }, [domain, visibleMeasurements]);
 
   const saveCurrentMeasurements = async (scoreNow = false) => {
-    await commandsManager.runCommand('saveViewerMeasurementsForActiveStudy', {
-      domain: domain === 'generic' ? undefined : domain,
-      scoringIntent: scoreNow ? 'score-attempt' : 'draft',
-      educationAttemptIntent: scoreNow ? 'score-attempt' : 'draft',
-    });
-
-    const result = await commandsManager.runCommand(
-      'getViewerMeasurementAnnotationsForActiveStudy',
-      {
+    const result = await withTimeout(
+      commandsManager.runCommand('saveViewerMeasurementsForActiveStudy', {
         domain: domain === 'generic' ? undefined : domain,
-      }
+        scoringIntent: scoreNow ? 'score-attempt' : 'draft',
+        educationAttemptIntent: scoreNow ? 'score-attempt' : 'draft',
+      }),
+      30000,
+      'Save measurements'
     );
 
-    applySavedAnnotationsResult(result);
+    if (result?.annotations) {
+      applySavedAnnotationsResult({
+        annotations: result.annotations,
+        processedAnnotations: result.annotations,
+        seriesDoc: result.seriesDoc,
+        saveTarget,
+        domain,
+      });
+    }
+
+    return result;
   };
 
   const handleSave = async (scoreNow = false) => {
+    if (saveInFlightRef.current) {
+      return;
+    }
+
     if (scoreNow && isMeasurementScoringDisabled) {
       uiNotificationService.show({
         title: 'AR Measurements & Annotations',
@@ -1033,6 +1141,7 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
       return;
     }
 
+    saveInFlightRef.current = true;
     setSavingAction(scoreNow ? 'score' : 'draft');
 
     try {
@@ -1046,6 +1155,7 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
         duration: 5000,
       });
     } finally {
+      saveInFlightRef.current = false;
       setSavingAction('');
     }
   };
@@ -1324,7 +1434,9 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
                 disabled={isSaving}
                 onClick={handleIuscanDone}
               >
-                {savingAction === 'complete' ? 'Saving and returning…' : 'Done and Return to iUSCAN'}
+                {savingAction === 'complete'
+                  ? 'Saving and returning…'
+                  : 'Done and Return to iUSCAN'}
               </button>
             </div>
           ) : isReviewWorkflowReadOnly ? (

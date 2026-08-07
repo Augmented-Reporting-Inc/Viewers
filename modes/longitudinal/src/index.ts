@@ -644,7 +644,7 @@ const BASE_MEASUREMENT_TOOL_IDS = [
   'CircleROI',
 ];
 
-const ECHO_ONLY_MEASUREMENT_TOOL_IDS = ['LVSimpsonEF', 'LVTraceSlot'];
+const ECHO_ONLY_MEASUREMENT_TOOL_IDS = ['LVSimpsonEF'];
 
 const GENERIC_CONTOUR_TOOL_IDS = ['PlanarFreehandROI', 'SplineROI', 'LivewireContour'];
 

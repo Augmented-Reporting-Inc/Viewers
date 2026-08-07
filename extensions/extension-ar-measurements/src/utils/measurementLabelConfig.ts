@@ -71,7 +71,12 @@ export function getViewerMeasurementDomainFromPath() {
     return 'bowel';
   }
 
-  if (path.includes('/rviewer') || path.includes('/stressecho') || path.includes('/dobutamine')) {
+  if (
+    path.includes('/rviewer') ||
+    path.includes('/viewer') ||
+    path.includes('/stressecho') ||
+    path.includes('/dobutamine')
+  ) {
     return 'echo';
   }
 

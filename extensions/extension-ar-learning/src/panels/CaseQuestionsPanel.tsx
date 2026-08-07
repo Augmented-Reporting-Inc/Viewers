@@ -79,6 +79,141 @@ function cleanString(value: unknown): string {
   return String(value || '').trim();
 }
 
+function normalizeQuizMeasurementDomain(value: unknown): string {
+  const domain = cleanString(value)
+    .toLowerCase()
+    .replace(/[_\s]+/g, '-');
+
+  if (domain === 'iuscan') {
+    return 'bowel';
+  }
+
+  return ['echo', 'bowel'].includes(domain) ? domain : '';
+}
+
+function getQuizAuthoringMeasurementDomainFromUrl(): string {
+  try {
+    const params = new URLSearchParams(window.location?.search || '');
+
+    return normalizeQuizMeasurementDomain(
+      params.get('arMeasurementDomain') ||
+        params.get('arViewerDomain') ||
+        params.get('viewerDomain') ||
+        ''
+    );
+  } catch {
+    return '';
+  }
+}
+
+function inferLegacyQuizMeasurementDomain(
+  definition: QuizDefinition | null | undefined
+): string {
+  const text = [
+    definition?.title,
+    definition?.description,
+    definition?.quizKey,
+    ...(Array.isArray(definition?.questions)
+      ? definition.questions.flatMap(question => [
+          question?.title,
+          question?.prompt,
+          question?.answerConfig?.measurementType,
+        ])
+      : []),
+  ]
+    .map(cleanString)
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+
+  if (/\b(bowel|ileum|ileal|colon|colonic|cecum|cecal|rectum|rectal)\b/.test(text)) {
+    return 'bowel';
+  }
+
+  if (/\b(echo|echocardi|cardiac|ventric|atri|aortic|mitral|tricuspid|lvid|tapse|lvot)\b/.test(text)) {
+    return 'echo';
+  }
+
+  return '';
+}
+
+function resolveQuizAuthoringMeasurementDomain(
+  definition: QuizDefinition | null | undefined
+): string {
+  return (
+    getQuizAuthoringMeasurementDomainFromUrl() ||
+    normalizeQuizMeasurementDomain(definition?.domain) ||
+    inferLegacyQuizMeasurementDomain(definition)
+  );
+}
+
+const AR_QUIZ_MEASUREMENT_DOMAIN_EVENT = 'ar-learning:quiz-measurement-domain';
+
+function dispatchQuizMeasurementDomain(domain: string) {
+  try {
+    window.dispatchEvent(
+      new CustomEvent(AR_QUIZ_MEASUREMENT_DOMAIN_EVENT, {
+        detail: { domain },
+      })
+    );
+  } catch {}
+}
+
+function syncQuizAuthoringMeasurementDomainToUrl(
+  value: unknown,
+  { overwrite = false }: { overwrite?: boolean } = {}
+) {
+  const domain = normalizeQuizMeasurementDomain(value);
+
+  // The Learning mode consumes this synchronous event as the source of truth
+  // for authoring labels. URL synchronization is retained for inspectability and
+  // reloads, but label behavior no longer depends on history/router propagation.
+  dispatchQuizMeasurementDomain(domain);
+
+  try {
+    const url = new URL(window.location.href);
+
+    if (!domain) {
+      url.searchParams.delete('arMeasurementDomain');
+      window.history.replaceState(window.history.state, '', url.toString());
+      return;
+    }
+    const existingDomain = normalizeQuizMeasurementDomain(
+      url.searchParams.get('arMeasurementDomain') ||
+        url.searchParams.get('arViewerDomain') ||
+        url.searchParams.get('viewerDomain') ||
+        ''
+    );
+
+    if (existingDomain && !overwrite) {
+      return;
+    }
+
+    url.searchParams.set('arMeasurementDomain', domain);
+    window.history.replaceState(window.history.state, '', url.toString());
+  } catch {}
+}
+
+function looksLikeInternalQuizLabel(value: unknown): boolean {
+  const text = cleanString(value);
+  if (!text) return false;
+
+  const dicomUidLike = /(?:^|[^0-9])(?:\d+\.){4,}\d+(?:[^0-9]|$)/.test(text);
+  const longUnbrokenToken = /\S{72,}/.test(text);
+
+  return dicomUidLike || longUnbrokenToken;
+}
+
+function getLearnerQuizDescription(quiz: QuizDefinition | null | undefined): string {
+  const description = cleanString(quiz?.description);
+
+  if (!description || looksLikeInternalQuizLabel(description)) {
+    return '';
+  }
+
+  return description;
+}
+
 function numberOrEmpty(value: any) {
   if (value === null || typeof value === 'undefined') {
     return '';
@@ -1556,6 +1691,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
   );
   const [authoringSaving, setAuthoringSaving] = useState(false);
   const [capturingAuthoringKey, setCapturingAuthoringKey] = useState('');
+  const [authoringMeasurementDomain, setAuthoringMeasurementDomain] = useState('');
 
   const quizzes: QuizDefinition[] = useMemo(() => {
     return Array.isArray(payload?.quizzes) ? payload.quizzes : [];
@@ -1590,6 +1726,8 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       const definitions = Array.isArray(nextPayload?.definitions) ? nextPayload.definitions : [];
       const rubrics = Array.isArray(nextPayload?.rubrics) ? nextPayload.rubrics : [];
       const selectedDefinition = pickAuthoringDefinition(definitions, preferredDefinitionId);
+      const selectedMeasurementDomain = resolveQuizAuthoringMeasurementDomain(selectedDefinition);
+      syncQuizAuthoringMeasurementDomainToUrl(selectedMeasurementDomain);
       const selectedRubric = findRubricForDefinition(rubrics, selectedDefinition);
       const nextQuestions = Array.isArray(selectedDefinition?.questions)
         ? selectedDefinition.questions
@@ -1610,6 +1748,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
 
       setAuthoringPayload(nextPayload);
       setAuthoringDefinition(selectedDefinition);
+      setAuthoringMeasurementDomain(selectedMeasurementDomain);
       setAuthoringRubric(selectedRubric);
       authoringQuestionsRef.current = questionsToUse;
       setAuthoringQuestions(questionsToUse);
@@ -1621,6 +1760,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       setErrorMessage(error?.message || String(error));
       setAuthoringPayload(null);
       setAuthoringDefinition(null);
+      setAuthoringMeasurementDomain('');
       setAuthoringRubric(null);
     } finally {
       setLoading(false);
@@ -1877,10 +2017,29 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     } catch {}
 
     if (question.type === 'measurementNumeric') {
-      await runViewerCommand(commandsManager, 'activateViewerQuizMeasurementTool', {
-        toolName: 'Length',
-        questionKey: question.questionKey,
-      });
+      const quizMeasurementDomain = authoringMode
+        ? authoringMeasurementDomain || resolveQuizAuthoringMeasurementDomain(authoringDefinition)
+        : normalizeQuizMeasurementDomain(quiz?.domain) ||
+          inferLegacyQuizMeasurementDomain(quiz) ||
+          getQuizAuthoringMeasurementDomainFromUrl();
+
+      dispatchQuizMeasurementDomain(quizMeasurementDomain);
+
+      const activationResult = await runViewerCommand(
+        commandsManager,
+        'activateViewerQuizMeasurementTool',
+        {
+          toolName: 'Length',
+          questionKey: question.questionKey,
+        }
+      );
+
+      if (activationResult?.ok === false) {
+        console.warn('[CaseQuestionsPanel] could not activate Length for measurement question', {
+          questionKey: question.questionKey,
+          result: activationResult,
+        });
+      }
     } else {
       await runViewerCommand(commandsManager, 'releaseViewerQuizDrawingTool', {});
     }
@@ -2192,6 +2351,29 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         return;
       }
 
+      if (authoringMode) {
+        const authoringPrefix = 'authoring:';
+
+        if (!activeQuestionKey.startsWith(authoringPrefix)) {
+          return;
+        }
+
+        const questionKey = activeQuestionKey.slice(authoringPrefix.length);
+        const question = authoringQuestionsRef.current.find(
+          item => item.questionKey === questionKey
+        );
+
+        if (!question || question.type !== 'measurementNumeric') {
+          return;
+        }
+
+        void captureAuthoringMeasurement(question, {
+          measurementId,
+          silent: true,
+        });
+        return;
+      }
+
       const [quizKey, questionKey] = activeQuestionKey.split(':');
       const quiz = payload?.quizzes?.find(item => item.quizKey === quizKey);
       const question = quiz?.questions?.find(item => item.questionKey === questionKey);
@@ -2200,7 +2382,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         return;
       }
 
-      captureSelectedMeasurementAnswer(quiz, question, {
+      void captureSelectedMeasurementAnswer(quiz, question, {
         measurementId,
         silent: true,
       });
@@ -2211,7 +2393,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     return () => {
       window.removeEventListener(AR_QUIZ_MEASUREMENT_ADDED_EVENT, handleQuizMeasurementAdded);
     };
-  }, [activeQuestionKey, payload, answersByQuizKey]);
+  }, [activeQuestionKey, authoringMode, payload, answersByQuizKey]);
 
   async function saveQuiz(quiz: QuizDefinition, status: 'draft' | 'submitted') {
     const quizAnswers = answersByQuizKey[quiz.quizKey] || {};
@@ -2368,9 +2550,35 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
 
   async function captureAuthoringFrame(question: QuizQuestion) {
     const captureKey = `authoring-frame:${question.questionKey}`;
+    const activeAuthoringQuestionKey = `authoring:${question.questionKey}`;
+
+    setActiveQuestionKey(activeAuthoringQuestionKey);
     setCapturingAuthoringKey(captureKey);
 
     try {
+      if (question.type === 'measurementNumeric') {
+        if (!authoringMeasurementDomain) {
+          throw new Error('Choose Echo or Bowel as the study type before capturing a measurement.');
+        }
+
+        syncQuizAuthoringMeasurementDomainToUrl(authoringMeasurementDomain, { overwrite: true });
+
+        const activationResult = await runViewerCommand(
+          commandsManager,
+          'activateViewerQuizMeasurementTool',
+          {
+            toolName: 'Length',
+            questionKey: question.questionKey,
+          }
+        );
+
+        if (activationResult?.ok === false) {
+          throw new Error(
+            `Unable to activate Length: ${cleanString(activationResult?.reason) || 'unknown error'}`
+          );
+        }
+      }
+
       const result = await runViewerCommand(commandsManager, 'getCurrentViewerQuizFrameAnswer', {
         question,
       });
@@ -2658,10 +2866,14 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     });
   }
 
-  async function captureAuthoringMeasurement(question: QuizQuestion) {
+  async function captureAuthoringMeasurement(
+    question: QuizQuestion,
+    options: { measurementId?: string; silent?: boolean } = {}
+  ) {
     const captureKey = `authoring-measurement:${question.questionKey}`;
     const answerConfig = plainObject(question.answerConfig);
 
+    setActiveQuestionKey(`authoring:${question.questionKey}`);
     setCapturingAuthoringKey(captureKey);
 
     try {
@@ -2672,6 +2884,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
           question,
           measurementType: cleanString(answerConfig.measurementType),
           unit: cleanString(answerConfig.unit),
+          measurementId: cleanString(options.measurementId),
         }
       );
 
@@ -2715,19 +2928,25 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         console.warn('[CaseQuestionsPanel] newly captured gold measurement display failed:', error);
       }
 
-      uiNotificationService.show({
-        title: 'Quiz Authoring',
-        message: `Gold measurement captured: ${answer.value} ${unit}`,
-        type: 'success',
-        duration: 3000,
-      });
+      if (!options.silent) {
+        uiNotificationService.show({
+          title: 'Quiz Authoring',
+          message: `Gold measurement captured: ${answer.value} ${unit}`,
+          type: 'success',
+          duration: 3000,
+        });
+      }
     } catch (error) {
-      uiNotificationService.show({
-        title: 'Quiz Authoring',
-        message: `Measurement capture failed: ${error?.message || error}`,
-        type: 'error',
-        duration: 6000,
-      });
+      if (options.silent) {
+        console.warn('[CaseQuestionsPanel] automatic gold measurement capture failed:', error);
+      } else {
+        uiNotificationService.show({
+          title: 'Quiz Authoring',
+          message: `Measurement capture failed: ${error?.message || error}`,
+          type: 'error',
+          duration: 6000,
+        });
+      }
     } finally {
       setCapturingAuthoringKey('');
     }
@@ -2744,13 +2963,20 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     try {
       const definitionId = getDefinitionId(authoringDefinition);
       const questionsToSave = authoringQuestionsRef.current;
+      const hasMeasurementQuestions = questionsToSave.some(
+        question => question.type === 'measurementNumeric'
+      );
+
+      if (hasMeasurementQuestions && !authoringMeasurementDomain) {
+        throw new Error('Choose Echo or Bowel as the study type before saving measurement questions.');
+      }
 
       const result = await saveViewerQuizAuthoringDraft({
         definitionId,
         title: authoringDefinition.title || '',
         description: authoringDefinition.description || '',
         changeSummary: 'Viewer authoring update',
-        domain: authoringDefinition.domain || 'iuscan',
+        domain: authoringMeasurementDomain || normalizeQuizMeasurementDomain(authoringDefinition.domain),
         workflow: authoringDefinition.workflow || 'library',
         viewerMode: authoringDefinition.viewerMode || 'iuscan',
         questions: questionsToSave,
@@ -3787,6 +4013,29 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                   Content key: {authoringPayload?.libraryContentKey || 'unknown'} · v
                   {Number(authoringDefinition.quizVersion || 1)}
                 </div>
+                <label className="mt-2 block text-xs font-semibold text-purple-100">
+                  Study type
+                </label>
+                <select
+                  className="mt-1 w-full rounded border border-purple-700 bg-black px-2 py-1 text-sm text-white"
+                  value={authoringMeasurementDomain}
+                  disabled={authoringSaving || !canEditDraft}
+                  onChange={event => {
+                    const nextDomain = normalizeQuizMeasurementDomain(event.target.value);
+                    setAuthoringMeasurementDomain(nextDomain);
+                    setAuthoringDefinition(current =>
+                      current ? { ...current, domain: nextDomain } : current
+                    );
+                    syncQuizAuthoringMeasurementDomainToUrl(nextDomain, { overwrite: true });
+                  }}
+                >
+                  <option value="">Choose Echo or Bowel</option>
+                  <option value="bowel">Bowel</option>
+                  <option value="echo">Echo</option>
+                </select>
+                <div className="mt-1 text-[11px] text-purple-200">
+                  Controls the measurement labels used while authoring this quiz.
+                </div>
               </div>
 
               <div className="space-y-3">
@@ -3835,13 +4084,21 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       })
     : [];
 
+  const learnerPanelTitle =
+    quizzes.length === 1 ? cleanString(quizzes[0]?.title) || 'Case Questions' : 'Case Questions';
+
   return (
-    <div className="flex h-full min-h-0 flex-col bg-black text-white">
-      <div className="shrink-0 border-b border-gray-700 p-3">
-        <div className="text-base font-semibold">Case Questions</div>
+    <div className="flex h-full min-h-0 min-w-0 max-w-full flex-col overflow-x-hidden bg-black text-white">
+      <div className="min-w-0 shrink-0 border-b border-gray-700 p-3">
+        <div
+          className="min-w-0 max-w-full text-base font-semibold"
+          style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}
+        >
+          {learnerPanelTitle}
+        </div>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto p-3">
+      <div className="min-h-0 min-w-0 max-w-full flex-1 overflow-x-hidden overflow-y-auto p-3">
         {loading ? (
           <div className="text-sm text-gray-400">Loading case questions…</div>
         ) : errorMessage ? (
@@ -3864,6 +4121,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
             {quizzes.map(quiz => {
               const quizSaving = savingQuizKey === quiz.quizKey;
               const quizScoring = scoringQuizKey === quiz.quizKey;
+              const learnerQuizDescription = getLearnerQuizDescription(quiz);
               const questions = [...(quiz.questions || [])].sort(
                 (a, b) => Number(a.sortOrder || 0) - Number(b.sortOrder || 0)
               );
@@ -3873,15 +4131,27 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               return (
                 <div
                   key={`${quiz.quizKey}-${quiz.quizVersion}`}
-                  className="rounded border border-gray-700 p-3"
+                  className="min-w-0 max-w-full overflow-hidden rounded border border-gray-700 p-3"
                 >
-                  <div className="text-sm font-semibold">{quiz.title || 'Case Questions'}</div>
-
-                  {quiz.description ? (
-                    <div className="mt-1 text-xs text-gray-400">{quiz.description}</div>
+                  {quizzes.length > 1 ? (
+                    <div
+                      className="min-w-0 max-w-full text-sm font-semibold"
+                      style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}
+                    >
+                      {quiz.title || 'Case Questions'}
+                    </div>
                   ) : null}
 
-                  <div className="bg-blue-950/30 mt-3 rounded border border-blue-700 p-2 text-xs text-blue-100">
+                  {learnerQuizDescription ? (
+                    <div
+                      className={`${quizzes.length > 1 ? 'mt-1' : ''} min-w-0 max-w-full text-xs text-gray-400`}
+                      style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}
+                    >
+                      {learnerQuizDescription}
+                    </div>
+                  ) : null}
+
+                  <div className="bg-blue-950/30 mt-3 min-w-0 max-w-full rounded border border-blue-700 p-2 text-xs text-blue-100">
                     Click each question before answering. Questions marked “Opens question image”
                     will move the viewer to the image/frame for that question.
                   </div>
@@ -3905,7 +4175,10 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                           onClick={() => selectQuestion(quiz, question)}
                           onFocusCapture={() => selectQuestion(quiz, question)}
                         >
-                          <div className="text-sm font-semibold">
+                          <div
+                            className="min-w-0 max-w-full text-sm font-semibold"
+                            style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}
+                          >
                             {index + 1}. {question.title || question.prompt}
                             {question.required ? <span className="text-red-300"> *</span> : null}
                           </div>
@@ -3917,11 +4190,21 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                           ) : null}
 
                           {question.title ? (
-                            <div className="mt-1 text-xs text-gray-300">{question.prompt}</div>
+                            <div
+                              className="mt-1 min-w-0 max-w-full text-xs text-gray-300"
+                              style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}
+                            >
+                              {question.prompt}
+                            </div>
                           ) : null}
 
                           {question.helpText ? (
-                            <div className="mt-1 text-xs text-gray-400">{question.helpText}</div>
+                            <div
+                              className="mt-1 min-w-0 max-w-full text-xs text-gray-400"
+                              style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}
+                            >
+                              {question.helpText}
+                            </div>
                           ) : null}
 
                           {renderQuestion(quiz, question, submitted)}

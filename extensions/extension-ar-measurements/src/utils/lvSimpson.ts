@@ -1,5 +1,6 @@
 const SAMPLE_COUNT = 20;
-const MAX_AXIS_MISMATCH_RATIO = 0.15;
+const AXIS_MISMATCH_WARNING_RATIO = 0.15;
+const AXIS_MISMATCH_BLOCK_RATIO = 0.35;
 const MIN_WIDTH_COVERAGE_RATIO = 0.8;
 
 export const LV_SIMPSON_SLOT_ORDER = ['A4C_ED', 'A4C_ES', 'A2C_ED', 'A2C_ES'];
@@ -87,6 +88,36 @@ function getBaseMidpoint(baseLeft, baseRight) {
     (baseLeft[1] + baseRight[1]) / 2,
     (baseLeft[2] + baseRight[2]) / 2,
   ];
+}
+
+function formatMM(value) {
+  return Number.isFinite(Number(value)) ? Number(value).toFixed(1) : '';
+}
+
+function formatPercent(ratio) {
+  return Number.isFinite(Number(ratio)) ? `${(Number(ratio) * 100).toFixed(0)}%` : '';
+}
+
+function buildAxisMismatchMessage({ phase, a4c, a2c, axisMismatchRatio, isBlocking }) {
+  const a4cLength = Number(a4c?.longAxisLengthMM);
+  const a2cLength = Number(a2c?.longAxisLengthMM);
+  const shorterSlot = a4cLength < a2cLength ? `A4C ${phase}` : `A2C ${phase}`;
+  const longerSlot = a4cLength < a2cLength ? `A2C ${phase}` : `A4C ${phase}`;
+  const action = isBlocking
+    ? 'Replace the outlier contour before calculating volume.'
+    : 'EF was calculated with caution; consider redrawing the outlier if the result looks wrong.';
+
+  return `${phase}: A4C axis ${formatMM(a4cLength)} mm vs A2C axis ${formatMM(
+    a2cLength
+  )} mm (${formatPercent(
+    axisMismatchRatio
+  )} mismatch). ${shorterSlot} is shorter than ${longerSlot}; recheck hinge placement and apex depth. ${action}`;
+}
+
+function buildCoverageMessage({ display, coverageRatio }) {
+  return `${display}: contour only covers ${formatPercent(
+    coverageRatio
+  )} of the LV long axis. It is likely too short, open, or not enclosing the cavity from mitral hinge line to apex. Redraw hinge-to-hinge and include the apex.`;
 }
 
 function projectContourToAxis(contourPoints, baseLeft, baseRight, apex, longAxisLengthMM) {
@@ -179,15 +210,21 @@ function buildSlotGeometry(measurement, slot) {
   const messages = [];
 
   if (contourPoints.length < 6) {
-    messages.push(`${display}: missing final contour`);
+    messages.push(
+      `${display}: contour was not completed. Redraw this slot by first drawing the mitral hinge line, then dragging from the hinge midpoint to the LV apex.`
+    );
   }
 
   if (!baseLeft || !baseRight || !apex) {
-    messages.push(`${display}: missing hinge/apex geometry`);
+    messages.push(
+      `${display}: missing hinge/apex geometry. Use the LV EF workflow rather than a generic ROI so the hinge points and apex are stored.`
+    );
   }
 
   if (!longAxisLengthMM || longAxisLengthMM <= 0) {
-    messages.push(`${display}: missing calibrated long-axis length`);
+    messages.push(
+      `${display}: could not measure calibrated long-axis length. Confirm the image is calibrated and redraw the slot.`
+    );
   }
 
   if (messages.length) {
@@ -206,7 +243,9 @@ function buildSlotGeometry(measurement, slot) {
     return {
       ...LV_SIMPSON_SLOT_INFO[slot],
       complete: false,
-      messages: [`${display}: could not project contour to long axis`],
+      messages: [
+        `${display}: contour geometry could not be projected onto the LV long axis. Redraw with clearly separated hinge points and an apex away from the hinge line.`,
+      ],
     };
   }
 
@@ -219,7 +258,8 @@ function buildSlotGeometry(measurement, slot) {
       complete: false,
       longAxisLengthMM,
       widths,
-      messages: [`${display}: contour does not cover enough of the long axis`],
+      coverageRatio,
+      messages: [buildCoverageMessage({ display, coverageRatio })],
     };
   }
 
@@ -228,8 +268,24 @@ function buildSlotGeometry(measurement, slot) {
     complete: true,
     longAxisLengthMM,
     widths,
+    coverageRatio,
     messages: [],
   };
+}
+
+function uniqueMessages(messages = []) {
+  const seen = new Set();
+
+  return messages.filter(message => {
+    const key = String(message || '').trim();
+
+    if (!key || seen.has(key)) {
+      return false;
+    }
+
+    seen.add(key);
+    return true;
+  });
 }
 
 function calculatePhaseVolume(slots, phase) {
@@ -248,17 +304,35 @@ function calculatePhaseVolume(slots, phase) {
   const shorterAxis = Math.min(a4c.longAxisLengthMM, a2c.longAxisLengthMM);
   const axisMismatchRatio = longerAxis > 0 ? (longerAxis - shorterAxis) / longerAxis : 1;
 
-  if (axisMismatchRatio > MAX_AXIS_MISMATCH_RATIO) {
+  const messages = [];
+
+  if (axisMismatchRatio > AXIS_MISMATCH_BLOCK_RATIO) {
     return {
       complete: false,
       phase,
       axisMismatchRatio,
       messages: [
-        `${phase}: A4C/A2C long-axis mismatch is ${(axisMismatchRatio * 100).toFixed(
-          0
-        )}%; not calculating volume`,
+        buildAxisMismatchMessage({
+          phase,
+          a4c,
+          a2c,
+          axisMismatchRatio,
+          isBlocking: true,
+        }),
       ],
     };
+  }
+
+  if (axisMismatchRatio > AXIS_MISMATCH_WARNING_RATIO) {
+    messages.push(
+      buildAxisMismatchMessage({
+        phase,
+        a4c,
+        a2c,
+        axisMismatchRatio,
+        isBlocking: false,
+      })
+    );
   }
 
   const commonAxisLengthMM = (a4c.longAxisLengthMM + a2c.longAxisLengthMM) / 2;
@@ -274,12 +348,14 @@ function calculatePhaseVolume(slots, phase) {
     complete: true,
     phase,
     volumeML: volumeMM3 / 1000,
-    messages: [],
+    axisMismatchRatio,
+    messages,
   };
 }
 
 export function calculateLVSimpson(measurements = []) {
   const slots = {};
+  let hasAnyLVSimpsonSlot = false;
 
   for (const measurement of measurements || []) {
     const geometry = getGeometry(measurement);
@@ -299,7 +375,16 @@ export function calculateLVSimpson(measurements = []) {
       continue;
     }
 
+    hasAnyLVSimpsonSlot = true;
     slots[slot] = buildSlotGeometry(measurement, slot);
+  }
+
+  // Do not show the LV Simpson summary before the LV contour workflow has
+  // actually been used. Once at least one LV Simpson slot exists, continue
+  // returning an incomplete result so the panel can show which slots are
+  // still missing.
+  if (!hasAnyLVSimpsonSlot) {
+    return null;
   }
 
   for (const slot of LV_SIMPSON_SLOT_ORDER) {
@@ -314,20 +399,24 @@ export function calculateLVSimpson(measurements = []) {
 
   const ed = calculatePhaseVolume(slots, 'ED');
   const es = calculatePhaseVolume(slots, 'ES');
-  const messages = [
-    ...LV_SIMPSON_SLOT_ORDER.flatMap(slot => slots[slot]?.messages || []),
+  const messages = uniqueMessages([
+    ...LV_SIMPSON_SLOT_ORDER.flatMap(slot =>
+      slots[slot]?.complete ? [] : slots[slot]?.messages || []
+    ),
     ...(ed.messages || []),
     ...(es.messages || []),
-  ];
+  ]);
+  const allSlotsComplete = LV_SIMPSON_SLOT_ORDER.every(slot => slots[slot]?.complete);
 
   if (!ed.complete || !es.complete) {
     return {
-      status: 'incomplete',
+      status: allSlotsComplete ? 'invalid' : 'incomplete',
       method: 'Biplane Simpson from explicit hinge, apex, and LV contour geometry.',
       slots,
       phases: { ED: ed, ES: es },
       values: null,
       messages,
+      guidance: messages,
     };
   }
 
@@ -338,7 +427,14 @@ export function calculateLVSimpson(measurements = []) {
       slots,
       phases: { ED: ed, ES: es },
       values: null,
-      messages: [...messages, 'Calculated EDV/ESV relationship is not physiologic.'],
+      messages: [
+        ...messages,
+        'Calculated EDV/ESV relationship is not physiologic. ESV is greater than or equal to EDV; recheck the ED and ES frame selection or redraw the outlier contour.',
+      ],
+      guidance: [
+        ...messages,
+        'Calculated EDV/ESV relationship is not physiologic. ESV is greater than or equal to EDV; recheck the ED and ES frame selection or redraw the outlier contour.',
+      ],
     };
   }
 
@@ -357,5 +453,6 @@ export function calculateLVSimpson(measurements = []) {
       ejectionFraction,
     },
     messages,
+    guidance: messages,
   };
 }

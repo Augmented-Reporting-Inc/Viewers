@@ -6,7 +6,7 @@ import {
   getRequestedWorkflowAnnotations,
   isViewerMeasurementWorkflow,
 } from './measurementAnnotations';
-import { buildFormApiUrl } from './formApi';
+import { buildFormApiFetchOptions, buildFormApiUrl } from './formApi';
 
 const CONTOUR_TOOL_NAMES = new Set(['SplineROI', 'PlanarFreehandROI', 'LivewireContour']);
 
@@ -15,6 +15,22 @@ const COACH_MEASUREMENT_HIGHLIGHT_COLOR = 'rgb(125, 211, 252)';
 const COACH_MEASUREMENT_SELECTED_COLOR = 'rgb(186, 230, 253)';
 const COACH_MEASUREMENT_LINE_DASH = '4,3';
 const COACH_MEASUREMENT_TEXT_BACKGROUND = 'rgba(8, 47, 73, 0.85)';
+
+function isMeasurementAnnotationDebugEnabled() {
+  try {
+    return window.localStorage?.getItem('AR_MEASUREMENT_ANNOTATION_DEBUG') === '1';
+  } catch {
+    return false;
+  }
+}
+
+function debugMeasurementAnnotationLog(level: 'info' | 'warn', ...args: any[]) {
+  if (!isMeasurementAnnotationDebugEnabled()) {
+    return;
+  }
+
+  console[level](...args);
+}
 
 function buildAnnotationStateStyle(
   property: string,
@@ -174,7 +190,7 @@ async function waitForActiveDisplaySet(servicesManager) {
 }
 
 async function fetchJsonIfOk(url: string) {
-  const response = await fetch(url, { credentials: 'include' });
+  const response = await fetch(url, buildFormApiFetchOptions());
 
   if (!response.ok) {
     return {
@@ -321,7 +337,7 @@ export async function fetchSeriesDocForActiveStudy(servicesManager) {
     throw new Error('Cannot determine active study or series.');
   }
 
-  console.info('[MeasurementAnnotations] resolving series document', {
+  debugMeasurementAnnotationLog('info', '[MeasurementAnnotations] resolving series document', {
     StudyInstanceUID: studyInstanceId || '',
     SeriesInstanceUID: seriesInstanceId || '',
   });
@@ -332,18 +348,26 @@ export async function fetchSeriesDocForActiveStudy(servicesManager) {
     );
 
     if (seriesResult.ok) {
-      console.info('[MeasurementAnnotations] resolved by SeriesInstanceUID', {
-        seriesId: seriesResult.data?._id,
-        hasMeasurementAnnotations: !!seriesResult.data?.MeasurementAnnotations,
-      });
+      debugMeasurementAnnotationLog(
+        'info',
+        '[MeasurementAnnotations] resolved by SeriesInstanceUID',
+        {
+          seriesId: seriesResult.data?._id,
+          hasMeasurementAnnotations: !!seriesResult.data?.MeasurementAnnotations,
+        }
+      );
 
       return seriesResult.data;
     }
 
-    console.warn('[MeasurementAnnotations] SeriesInstanceUID lookup failed', {
-      status: seriesResult.status,
-      url: seriesResult.url,
-    });
+    debugMeasurementAnnotationLog(
+      'warn',
+      '[MeasurementAnnotations] SeriesInstanceUID lookup failed',
+      {
+        status: seriesResult.status,
+        url: seriesResult.url,
+      }
+    );
   }
 
   if (studyInstanceId) {
@@ -360,10 +384,14 @@ export async function fetchSeriesDocForActiveStudy(servicesManager) {
       return studyResult.data;
     }
 
-    console.warn('[MeasurementAnnotations] StudyInstanceUID lookup failed', {
-      status: studyResult.status,
-      url: studyResult.url,
-    });
+    debugMeasurementAnnotationLog(
+      'warn',
+      '[MeasurementAnnotations] StudyInstanceUID lookup failed',
+      {
+        status: studyResult.status,
+        url: studyResult.url,
+      }
+    );
   }
 
   throw new Error(
