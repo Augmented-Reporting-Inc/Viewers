@@ -1,5 +1,5 @@
 import i18n from 'i18next';
-import { eventTarget, metaData } from '@cornerstonejs/core';
+import { eventTarget, metaData, utilities as csUtils } from '@cornerstonejs/core';
 import {
   Enums as CornerstoneToolsEnums,
   annotation as cornerstoneAnnotation,
@@ -204,6 +204,71 @@ async function initializeEditableVirtualCoachingViewport(commandsManager, attemp
 }
 
 const AR_US_REGION_PIXEL_SPACING_PROVIDER_PRIORITY = 10000;
+
+function stripViewerLengthCalibrationSuffix(value = '') {
+  return String(value || '')
+    .replace(/\s+\bUS Region\b/gi, '')
+    .replace(/\s+\bAR_US_REGION_CALIBRATION\b/gi, '')
+    .trim();
+}
+
+function getViewerLengthTextLinesInMillimeters(data, targetId) {
+  const stats = data?.cachedStats?.[targetId];
+  const rawLength = Number(stats?.length);
+  const rawUnit = stripViewerLengthCalibrationSuffix(stats?.unit || '');
+
+  if (!Number.isFinite(rawLength)) {
+    return null;
+  }
+
+  if (/^cm$/i.test(rawUnit)) {
+    return [`${csUtils.roundNumber(rawLength * 10)} mm`];
+  }
+
+  if (/^mm$/i.test(rawUnit)) {
+    return [`${csUtils.roundNumber(rawLength)} mm`];
+  }
+
+  return null;
+}
+
+function installViewerLengthTextNormalization(toolGroupService) {
+  const toolGroupIds = toolGroupService?.getToolGroupIds?.() || [];
+
+  for (const toolGroupId of toolGroupIds) {
+    const toolGroup = toolGroupService.getToolGroup?.(toolGroupId);
+    const toolInstance = toolGroup?.getToolInstance?.('Length');
+
+    if (!toolInstance || toolInstance.__arLengthTextNormalizationInstalled) {
+      continue;
+    }
+
+    const previousGetTextLines = toolInstance.configuration?.getTextLines;
+    const nextConfiguration = {
+      ...(toolInstance.configuration || {}),
+      getTextLines: function (data, targetId) {
+        const normalizedLines = getViewerLengthTextLinesInMillimeters(data, targetId);
+
+        if (normalizedLines) {
+          return normalizedLines;
+        }
+
+        const existingLines =
+          typeof previousGetTextLines === 'function'
+            ? previousGetTextLines.call(this, data, targetId)
+            : [];
+
+        return Array.isArray(existingLines)
+          ? existingLines.map(line => stripViewerLengthCalibrationSuffix(line)).filter(Boolean)
+          : existingLines;
+      },
+    };
+
+    toolInstance.configuration = nextConfiguration;
+    toolGroup.setToolConfiguration?.('Length', nextConfiguration, true);
+    toolInstance.__arLengthTextNormalizationInstalled = true;
+  }
+}
 
 function readRawDicomValue(source, keys = []) {
   if (!source) {
@@ -638,6 +703,7 @@ function createARUSRegionCalibrationProvider({ displaySetService }) {
 
 const BASE_MEASUREMENT_TOOL_IDS = [
   'Length',
+  'LengthMeasureOnly',
   'Bidirectional',
   'EllipticalROI',
   'RectangleROI',
@@ -684,6 +750,16 @@ async function getLabelConfigForMeasurement(measurement, commandsManager) {
 
   if (toolName !== 'Length') {
     return null;
+  }
+
+  try {
+    const labelMode = await commandsManager.runCommand('getViewerLengthLabelMode');
+
+    if (String(labelMode || '').trim().toLowerCase() === 'measure-only') {
+      return null;
+    }
+  } catch (error) {
+    console.warn('[AR Measurements] could not resolve Length label mode:', error);
   }
 
   if (domain === 'iuscan') {
@@ -850,6 +926,12 @@ function modeFactory({ modeConfiguration }) {
         displaySetService,
       } = servicesManager.services;
 
+      try {
+        commandsManager.runCommand('resetViewerLengthLabelMode');
+      } catch (error) {
+        console.warn('[AR Measurements] could not reset Length label mode:', error);
+      }
+
       const arUSRegionPixelSpacingProvider = createARUSRegionCalibrationProvider({
         displaySetService,
       });
@@ -956,6 +1038,7 @@ function modeFactory({ modeConfiguration }) {
 
       // Init Default and SR ToolGroups
       initToolGroups(extensionManager, toolGroupService, commandsManager);
+      installViewerLengthTextNormalization(toolGroupService);
 
       toolbarService.register(toolbarButtons);
 

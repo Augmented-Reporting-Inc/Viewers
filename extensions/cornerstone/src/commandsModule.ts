@@ -690,17 +690,19 @@ function buildLengthCachedStats(annotation, referencedImageIdOverride = '') {
   const referencedImageId = referencedImageIdOverride || annotation?.referencedImageId;
   const targetId = referencedImageId ? `imageId:${referencedImageId}` : '';
   const measurements = annotation?.measurements || {};
+  const normalized = normalizeLengthValueAndUnit(
+    measurements.length ?? measurements.value,
+    measurements.lengthUnit || measurements.unit || ''
+  );
 
-  const length = Number(measurements.length ?? measurements.value);
-
-  if (!targetId || !Number.isFinite(length)) {
+  if (!targetId || normalized.value == null) {
     return {};
   }
 
   return {
     [targetId]: {
-      length,
-      unit: normalizeDisplayLengthUnit(measurements.lengthUnit || measurements.unit || ''),
+      length: normalized.value,
+      unit: normalized.unit,
     },
   };
 }
@@ -829,12 +831,14 @@ function getLengthMeasurementPayload(measurement) {
   const displayText = getMeasurementDisplayText(measurement);
   const parsed = parseLengthDisplayText(displayText);
 
-  const value = measurement?.value ?? parsed.value;
+  const rawValue = measurement?.value ?? parsed.value;
   const rawUnit = measurement?.unit || parsed.unit || '';
-  const unit = normalizeDisplayLengthUnit(rawUnit);
+  const normalized = normalizeLengthValueAndUnit(rawValue, rawUnit);
+  const value = normalized.value ?? rawValue;
+  const unit = normalized.unit;
   const nextDisplayText =
-    /px/i.test(String(rawUnit || '')) && Number.isFinite(Number(value))
-      ? [`${formatLengthMM(Number(value))} ${unit}`]
+    Number.isFinite(Number(value)) && unit === 'mm'
+      ? [`${formatLengthMM(Number(value))} mm`]
       : normalizeDisplayTextUnits(displayText, 'length');
 
   return {
@@ -907,6 +911,12 @@ function hasViewerMeasurementSemanticLabel(measurement) {
   );
 }
 
+function isPersistableViewerMeasurement(measurement) {
+  return !!(
+    measurement?.toolName === 'Length' || hasViewerMeasurementSemanticLabel(measurement)
+  );
+}
+
 function getExistingAnnotationsById(seriesDoc, workflow = VIEWER_MEASUREMENTS_WORKFLOW) {
   const annotations = getRequestedWorkflowAnnotations(seriesDoc?.MeasurementAnnotations, [
     workflow,
@@ -929,7 +939,7 @@ function getExistingScorableViewerAnnotations(seriesDoc, domain = '') {
       return false;
     }
 
-    if (!annotation.toolName || !hasViewerMeasurementSemanticLabel(annotation)) {
+    if (!annotation.toolName || !isPersistableViewerMeasurement(annotation)) {
       return false;
     }
 
@@ -1151,16 +1161,19 @@ function getMeasurementValueAndUnitForQuiz(measurement) {
     finiteNumberOrNull(parsed.value);
 
   if (lengthValue != null) {
+    const normalized = normalizeLengthValueAndUnit(
+      lengthValue,
+      measurement?.unit ||
+        measurement?.lengthUnit ||
+        stats?.unit ||
+        stats?.lengthUnit ||
+        parsed.unit ||
+        ''
+    );
+
     return {
-      value: lengthValue,
-      unit: normalizeDisplayLengthUnit(
-        measurement?.unit ||
-          measurement?.lengthUnit ||
-          stats?.unit ||
-          stats?.lengthUnit ||
-          parsed.unit ||
-          ''
-      ),
+      value: normalized.value ?? lengthValue,
+      unit: normalized.unit,
       measurementKind: 'length',
     };
   }
@@ -1744,7 +1757,8 @@ function formatLengthMM(length) {
 }
 
 function normalizeDisplayLengthUnit(unit = '') {
-  return /px/i.test(String(unit || '')) ? 'mm' : unit || 'mm';
+  const normalizedUnit = stripMeasurementSourceSuffix(unit);
+  return /px/i.test(normalizedUnit) ? 'mm' : normalizedUnit || 'mm';
 }
 
 function normalizeDisplayAreaUnit(unit = '') {
@@ -1758,18 +1772,56 @@ function stripMeasurementSourceSuffix(text = '') {
     .trim();
 }
 
+function normalizeLengthValueAndUnit(value, unit = '') {
+  const numericValue = finiteNumberOrNull(value);
+  const normalizedUnit = normalizeDisplayLengthUnit(unit);
+  const sourceUnit = stripMeasurementSourceSuffix(unit);
+
+  if (numericValue == null) {
+    return {
+      value: null,
+      unit: normalizedUnit,
+    };
+  }
+
+  if (/^cm$/i.test(sourceUnit)) {
+    return {
+      value: numericValue * 10,
+      unit: 'mm',
+    };
+  }
+
+  return {
+    value: numericValue,
+    unit: normalizedUnit,
+  };
+}
+
+function normalizeLengthDisplayTextLine(text = '') {
+  return stripMeasurementSourceSuffix(text)
+    .replace(/(-?\d+(?:\.\d+)?)\s*cm\b/gi, (_match, value) => {
+      const millimeters = Number(value) * 10;
+      return Number.isFinite(millimeters) ? `${formatLengthMM(millimeters)} mm` : _match;
+    })
+    .replace(/\bpx\b/gi, 'mm');
+}
+
 function normalizeDisplayTextUnits(displayText = [], unitType = 'length') {
   const nextUnit = unitType === 'area' ? 'mm²' : 'mm';
 
   return (Array.isArray(displayText) ? displayText : [String(displayText || '')])
     .filter(Boolean)
-    .map(text =>
-      stripMeasurementSourceSuffix(
+    .map(text => {
+      if (unitType === 'length') {
+        return normalizeLengthDisplayTextLine(text);
+      }
+
+      return stripMeasurementSourceSuffix(
         String(text)
           .replace(/\bpx²\b/gi, nextUnit)
           .replace(/\bpx\b/gi, nextUnit)
-      )
-    );
+      );
+    });
 }
 
 function buildContourMeasurementPayload(
@@ -1855,11 +1907,15 @@ function getSavedAnnotationDisplayText(savedAnnotation) {
     return normalizeDisplayTextUnits(savedAnnotation.displayText, unitType);
   }
 
-  if (
-    savedAnnotation?.toolName === 'Length' &&
-    Number.isFinite(Number(measurements.length ?? measurements.value))
-  ) {
-    return [`${formatLengthMM(Number(measurements.length ?? measurements.value))} mm`];
+  if (savedAnnotation?.toolName === 'Length') {
+    const normalized = normalizeLengthValueAndUnit(
+      measurements.length ?? measurements.value,
+      measurements.lengthUnit || measurements.unit || ''
+    );
+
+    if (normalized.value != null) {
+      return [`${formatLengthMM(normalized.value)} ${normalized.unit}`];
+    }
   }
 
   if (isViewerContourTool(savedAnnotation?.toolName)) {
@@ -1883,16 +1939,19 @@ function buildSavedAnnotationStatsForMeasurementService(savedAnnotation, referen
   }
 
   if (savedAnnotation?.toolName === 'Length') {
-    const length = finiteNumberOrNull(measurements.length ?? measurements.value);
+    const normalized = normalizeLengthValueAndUnit(
+      measurements.length ?? measurements.value,
+      measurements.lengthUnit || measurements.unit || ''
+    );
 
-    if (length == null) {
+    if (normalized.value == null) {
       return {};
     }
 
     return {
       [statsKey]: {
-        length,
-        unit: normalizeDisplayLengthUnit(measurements.lengthUnit || measurements.unit || ''),
+        length: normalized.value,
+        unit: normalized.unit,
       },
     };
   }
@@ -1961,9 +2020,12 @@ function buildSavedAnnotationStatsForCornerstone(savedAnnotation, referencedImag
   }
 
   if (savedAnnotation?.toolName === 'Length') {
-    const length = finiteNumberOrNull(measurements.length ?? measurements.value);
+    const normalized = normalizeLengthValueAndUnit(
+      measurements.length ?? measurements.value,
+      measurements.lengthUnit || measurements.unit || ''
+    );
 
-    if (length == null) {
+    if (normalized.value == null) {
       return {};
     }
 
@@ -1971,11 +2033,9 @@ function buildSavedAnnotationStatsForCornerstone(savedAnnotation, referencedImag
       targetIds.map(targetId => [
         targetId,
         {
-          length,
-          unit: normalizeDisplayLengthUnit(measurements.lengthUnit || measurements.unit || ''),
-          lengthUnit: normalizeDisplayLengthUnit(
-            measurements.lengthUnit || measurements.unit || ''
-          ),
+          length: normalized.value,
+          unit: normalized.unit,
+          lengthUnit: normalized.unit,
         },
       ])
     );
@@ -2184,11 +2244,14 @@ function forceSavedAnnotationMeasurementServiceDisplay({
 
   if (savedAnnotation.toolName === 'Length') {
     const measurements = savedAnnotation.measurements || {};
-    const length = finiteNumberOrNull(measurements.length ?? measurements.value);
+    const normalized = normalizeLengthValueAndUnit(
+      measurements.length ?? measurements.value,
+      measurements.lengthUnit || measurements.unit || ''
+    );
 
-    if (length != null) {
-      nextMeasurement.value = length;
-      nextMeasurement.unit = 'mm';
+    if (normalized.value != null) {
+      nextMeasurement.value = normalized.value;
+      nextMeasurement.unit = normalized.unit;
     }
   }
 
@@ -2262,6 +2325,16 @@ let segmentAIEnabled = false;
 
 const AR_SAVED_ANNOTATIONS_REFRESH_EVENT = 'ar-measurements:saved-annotations-updated';
 const AR_LIVE_MEASUREMENTS_REFRESH_EVENT = 'ar-measurements:live-measurements-updated';
+
+const VIEWER_LENGTH_LABEL_MODE_PROMPT = 'prompt';
+const VIEWER_LENGTH_LABEL_MODE_MEASURE_ONLY = 'measure-only';
+let viewerLengthLabelMode = VIEWER_LENGTH_LABEL_MODE_PROMPT;
+
+function normalizeViewerLengthLabelMode(value = '') {
+  return String(value || '').trim().toLowerCase() === VIEWER_LENGTH_LABEL_MODE_MEASURE_ONLY
+    ? VIEWER_LENGTH_LABEL_MODE_MEASURE_ONLY
+    : VIEWER_LENGTH_LABEL_MODE_PROMPT;
+}
 
 function dispatchSavedAnnotationsRefresh(detail = {}) {
   try {
@@ -6042,6 +6115,31 @@ function commandsModule({
         actions.setToolActive({ toolName, toolGroupId });
       });
     },
+    setViewerLengthLabelMode: ({ labelMode = VIEWER_LENGTH_LABEL_MODE_PROMPT } = {}) => {
+      viewerLengthLabelMode = normalizeViewerLengthLabelMode(labelMode);
+      return viewerLengthLabelMode;
+    },
+    getViewerLengthLabelMode: () => viewerLengthLabelMode,
+    resetViewerLengthLabelMode: () => {
+      viewerLengthLabelMode = VIEWER_LENGTH_LABEL_MODE_PROMPT;
+      return viewerLengthLabelMode;
+    },
+    activateViewerLengthMeasurementMode: ({
+      labelMode = VIEWER_LENGTH_LABEL_MODE_PROMPT,
+      toolGroupIds = [],
+    } = {}) => {
+      viewerLengthLabelMode = normalizeViewerLengthLabelMode(labelMode);
+      actions.setToolActiveToolbar({
+        toolName: 'Length',
+        toolGroupIds,
+      });
+
+      return {
+        ok: true,
+        toolName: 'Length',
+        labelMode: viewerLengthLabelMode,
+      };
+    },
     setToolActive: ({ toolName, toolGroupId = null }) => {
       const { viewports } = viewportGridService.getState();
 
@@ -8483,6 +8581,18 @@ function commandsModule({
     setToolActiveToolbar: {
       commandFn: actions.setToolActiveToolbar,
     },
+    setViewerLengthLabelMode: {
+      commandFn: actions.setViewerLengthLabelMode,
+    },
+    getViewerLengthLabelMode: {
+      commandFn: actions.getViewerLengthLabelMode,
+    },
+    resetViewerLengthLabelMode: {
+      commandFn: actions.resetViewerLengthLabelMode,
+    },
+    activateViewerLengthMeasurementMode: {
+      commandFn: actions.activateViewerLengthMeasurementMode,
+    },
     setToolEnabled: {
       commandFn: actions.setToolEnabled,
     },
@@ -8818,7 +8928,7 @@ function commandsModule({
 
               return (
                 measurement?.toolName &&
-                hasViewerMeasurementSemanticLabel(measurement) &&
+                isPersistableViewerMeasurement(measurement) &&
                 !!measurementId &&
                 !viewerMeasurementsDeletedInSession.has(measurementId) &&
                 (!isReviewWorkflowSave ||

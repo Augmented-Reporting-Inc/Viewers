@@ -499,10 +499,31 @@ const toolbarButtons: Button[] = [
     uiType: 'ohif.toolButton',
     props: {
       icon: 'tool-length',
-      label: 'Length',
-      tooltip: 'Length Tool',
-      commands: setToolActiveToolbar,
+      label: 'Measure + Label',
+      tooltip: 'Length measurement with label prompt',
+      commands: {
+        commandName: 'activateViewerLengthMeasurementMode',
+        commandOptions: {
+          labelMode: 'prompt',
+        },
+      },
       evaluate: 'evaluate.cornerstoneTool',
+    },
+  },
+  {
+    id: 'LengthMeasureOnly',
+    uiType: 'ohif.toolButton',
+    props: {
+      icon: 'tool-length',
+      label: 'Measure Only',
+      tooltip: 'Length measurement without label prompt',
+      commands: {
+        commandName: 'activateViewerLengthMeasurementMode',
+        commandOptions: {
+          labelMode: 'measure-only',
+        },
+      },
+      evaluate: 'evaluate.action',
     },
   },
   {

@@ -45,7 +45,7 @@
 FROM node:20.18.1-slim AS builder
 
 ARG APP_CONFIG=config/default.js
-ARG PUBLIC_URL=/bviewer/
+ARG PUBLIC_URL=/rviewer/
 ARG BUILD_COMMIT=unknown
 ARG BUILD_DATE=unknown
 
@@ -95,7 +95,7 @@ ENV PUBLIC_URL=${PUBLIC_URL}
 ENV PORT=${PORT}
 
 LABEL org.opencontainers.image.title="AR OHIF Echo Viewer"
-LABEL org.opencontainers.image.description="Static OHIF viewer image for AR echo/rviewer deployment"
+LABEL org.opencontainers.image.description="Static OHIF viewer image for AR deployment"
 LABEL org.opencontainers.image.vendor="Augmented Reporting"
 LABEL org.opencontainers.image.revision="${BUILD_COMMIT}"
 LABEL org.opencontainers.image.created="${BUILD_DATE}"
