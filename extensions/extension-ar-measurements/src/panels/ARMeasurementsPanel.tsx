@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { calculateLVSimpson, LV_SIMPSON_SLOT_ORDER } from '../utils/lvSimpson';
+import { calculateLAVolume, LA_VOLUME_SLOT_ORDER } from '../utils/laVolume';
 import { getViewerMeasurementDomainFromPath } from '../utils/measurementLabelConfig';
 
 function getMeasurementLabel(measurement) {
@@ -16,6 +17,7 @@ function getMeasurementLabel(measurement) {
 const AR_SAVED_ANNOTATIONS_REFRESH_EVENT = 'ar-measurements:saved-annotations-updated';
 const AR_LIVE_MEASUREMENTS_REFRESH_EVENT = 'ar-measurements:live-measurements-updated';
 const AR_LV_SIMPSON_SESSION_EVENT = 'ar-measurements:lv-simpson-session-updated';
+const AR_LA_VOLUME_SESSION_EVENT = 'ar-measurements:la-volume-session-updated';
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
   let timeoutId: number | undefined;
@@ -382,14 +384,17 @@ function normalizeMeasurementForDisplay(measurement) {
 }
 
 function mergeLiveMeasurementIntoSavedAnnotation(savedAnnotation, liveMeasurement) {
-  // Keep saved AR/Mongo display values as the user-facing source of truth.
-  // Live MeasurementService objects are still useful for visibility/jump state,
-  // but their px/px² display text should not replace saved AR units.
+  // Keep saved AR/Mongo metadata and calibrated display values as the user-facing
+  // source of truth, but never let the saved contour replace an actively edited
+  // live contour. LA/LV calculations need the current MeasurementService points.
   const normalizedSaved = normalizeMeasurementForDisplay(savedAnnotation);
+  const normalizedLive = normalizeMeasurementForDisplay(liveMeasurement);
+  const livePoints = Array.isArray(liveMeasurement?.points) ? liveMeasurement.points : [];
 
   return {
-    ...liveMeasurement,
+    ...normalizedLive,
     ...normalizedSaved,
+    ...(livePoints.length >= 3 ? { points: livePoints } : {}),
     uid: normalizedSaved.uid || normalizedSaved.annotationId || liveMeasurement.uid,
     isSavedAnnotation: true,
   };
@@ -511,6 +516,79 @@ function getLVSimpsonSlotStatusText(slotResult) {
   }
 
   return ['incomplete', axisText, coverageText].filter(Boolean).join(' • ') || 'missing';
+}
+
+function LAVolumeSummary({ result }) {
+  if (!result) {
+    return null;
+  }
+
+  const values = result.values;
+  const nextIncompleteSlot = LA_VOLUME_SLOT_ORDER.find(slot => !result.slots?.[slot]?.complete);
+
+  return (
+    <div className="bg-gray-950 mb-3 rounded border border-gray-700 p-3">
+      <div className="flex items-start justify-between gap-2">
+        <div>
+          <div className="text-sm font-semibold">LA Volume (Biplane)</div>
+          <div className="mt-1 text-xs text-gray-400">{result.method}</div>
+        </div>
+        <div
+          className={`rounded px-2 py-1 text-xs font-semibold ${getLVSimpsonStatusClass(result.status)}`}
+        >
+          {result.status}
+        </div>
+      </div>
+
+      {values ? (
+        <div className="mt-3 rounded bg-black p-2">
+          <div className="text-xs text-gray-400">Biplane LA volume</div>
+          <div className="text-lg font-semibold">{formatSimpsonValue(values.volumeML)} mL</div>
+        </div>
+      ) : null}
+
+      {nextIncompleteSlot ? (
+        <div className="bg-blue-950 mt-3 rounded border border-blue-900 p-2 text-xs text-blue-100">
+          Next: navigate to {nextIncompleteSlot} at maximum LA volume (end-systole). LA Volume
+          remains active; draw the mitral annular closure line when ready. After both views are
+          created, adjust the splines to the LA blood-tissue border and exclude pulmonary veins and
+          the LA appendage.
+        </div>
+      ) : null}
+
+      <div className="mt-3 space-y-1">
+        {LA_VOLUME_SLOT_ORDER.map(slot => {
+          const slotResult = result.slots?.[slot];
+
+          return (
+            <div key={slot} className="flex justify-between gap-2 text-xs">
+              <span className="text-gray-300">{slot}</span>
+              <span className={slotResult?.complete ? 'text-green-300' : 'text-yellow-300'}>
+                {getLVSimpsonSlotStatusText(slotResult)}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+
+      {result.guidance?.length ? (
+        <div
+          className={`mt-3 rounded border p-2 text-xs ${
+            result.status === 'invalid'
+              ? 'bg-red-950 border-red-900 text-red-100'
+              : 'bg-yellow-950 border-yellow-900 text-yellow-100'
+          }`}
+        >
+          <div className="mb-1 font-semibold">LA volume guidance</div>
+          <div className="space-y-1">
+            {result.guidance.slice(0, 6).map((message, index) => (
+              <div key={`${index}-${message}`}>• {message}</div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 function LVSimpsonSummary({ result }) {
@@ -866,6 +944,7 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
   const [domain, setDomain] = useState(() => getViewerMeasurementDomainFromPath());
   const [savedAnnotations, setSavedAnnotations] = useState([]);
   const [sessionLVSimpsonMeasurements, setSessionLVSimpsonMeasurements] = useState([]);
+  const [sessionLAVolumeMeasurements, setSessionLAVolumeMeasurements] = useState([]);
   const saveInFlightRef = useRef(false);
   const autoDisplayPeerMeasurementStateRef = useRef({
     key: '',
@@ -998,6 +1077,23 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
   }, [measurementService]);
 
   useEffect(() => {
+    const handleLAVolumeSessionUpdated = event => {
+      const nextMeasurements = Array.isArray(event?.detail?.measurements)
+        ? event.detail.measurements
+        : [];
+
+      setSessionLAVolumeMeasurements(nextMeasurements);
+      setMeasurements([...(measurementService.getMeasurements?.() || [])]);
+    };
+
+    window.addEventListener(AR_LA_VOLUME_SESSION_EVENT, handleLAVolumeSessionUpdated);
+
+    return () => {
+      window.removeEventListener(AR_LA_VOLUME_SESSION_EVENT, handleLAVolumeSessionUpdated);
+    };
+  }, [measurementService]);
+
+  useEffect(() => {
     let cancelled = false;
 
     const refreshSavedAnnotations = async () => {
@@ -1107,6 +1203,20 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
         byKey.set(key, normalizeMeasurementForDisplay(measurement));
       }
     }
+    for (const measurement of sessionLAVolumeMeasurements) {
+      if (!measurement?.toolName || !hasSemanticLabel(measurement)) {
+        continue;
+      }
+
+      const key = getMeasurementKey(measurement);
+
+      if (key && !byKey.has(key)) {
+        // The guided-session object preserves LA anatomical landmarks, but its
+        // contour points are only a creation-time fallback. Once MeasurementService
+        // has the same annotation, keep the live edited contour already in byKey.
+        byKey.set(key, normalizeMeasurementForDisplay(measurement));
+      }
+    }
     const writableWorkflow = getWritableMeasurementWorkflow(saveTarget);
 
     return Array.from(byKey.values()).map(measurement => {
@@ -1121,7 +1231,14 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
         isLocked: false,
       };
     });
-  }, [measurements, savedAnnotations, sessionLVSimpsonMeasurements, isReviewWorkflow, saveTarget]);
+  }, [
+    measurements,
+    savedAnnotations,
+    sessionLVSimpsonMeasurements,
+    sessionLAVolumeMeasurements,
+    isReviewWorkflow,
+    saveTarget,
+  ]);
 
   const editableMeasurements = useMemo(
     () => visibleMeasurements.filter(measurement => isMeasurementEditable(measurement, saveTarget)),
@@ -1169,6 +1286,14 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
     }
 
     return calculateLVSimpson(visibleMeasurements);
+  }, [domain, visibleMeasurements]);
+
+  const laVolumeResult = useMemo(() => {
+    if (domain !== 'echo') {
+      return null;
+    }
+
+    return calculateLAVolume(visibleMeasurements);
   }, [domain, visibleMeasurements]);
 
   const saveCurrentMeasurements = async (scoreNow = false) => {
@@ -1432,6 +1557,7 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto p-3">
+        {domain === 'echo' ? <LAVolumeSummary result={laVolumeResult} /> : null}
         {domain === 'echo' ? <LVSimpsonSummary result={lvSimpsonResult} /> : null}
 
         {visibleMeasurements.length === 0 ? (

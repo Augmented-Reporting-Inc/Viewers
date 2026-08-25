@@ -1,14 +1,24 @@
 import { Types } from '@ohif/core';
 import { annotation as csToolsAnnotation } from '@cornerstonejs/tools';
 import { id } from './id';
-import IUScanAssignmentService from './services/IUScanAssignmentService';
 import StudyPrefetchService from './services/StudyPrefetchService/StudyPrefetchService';
 import getSopClassHandlerModule from './sopClassHandler/getSopClassHandlerModule';
 import hpIUScan from './hangingProtocols/hpIUScan';
 import getCommandsModule from './getCommandsModule';
 import getToolbarModule from './getToolbarModule';
 import getPanelModule from './panels/getPanelModule';
-import { MEASUREMENT_LABELS, MEASUREMENT_SLOT_KEYS } from './utils/labelMap';
+import { LABEL_MAP, MEASUREMENT_LABELS } from './utils/labelMap';
+import { decorateIuscanRepeatedMeasurement, normalizeSavedIuscanRepeatedAnnotations } from './utils/repeatedMeasurements';
+import {
+  getActiveResearchContext,
+  getActiveResearchReview,
+  getResearchMeasurementLabels,
+  getResearchRepeatedSlotCount,
+  loadActiveResearchReviewFromViewer,
+  getResearchVisibleMeasurementGroups,
+  loadResearchContextFromViewer,
+} from './utils/researchProtocol';
+import { getLegacyIuscanMeasurementPlaceholders } from './utils/reportBuilder';
 
 const sanitizeMeasurementUnit = unit =>
   String(unit || 'mm')
@@ -159,6 +169,7 @@ function sanitizeMeasurementForIuscan(measurement) {
 // without relying on `this` binding (OHIF calls lifecycle methods unbound)
 let _measurementAddedSub = null;
 let _measurementUpdatedSub = null;
+let _savedRepeatedAnnotations = [];
 
 function scrubUsRegionDisplayText(value) {
   if (Array.isArray(value)) {
@@ -176,73 +187,6 @@ function scrubUsRegionDisplayText(value) {
   }
 
   return value;
-}
-
-function parseMaybeJson(value) {
-  if (!value) {
-    return null;
-  }
-
-  if (typeof value !== 'string') {
-    return value;
-  }
-
-  try {
-    return JSON.parse(value);
-  } catch {
-    return null;
-  }
-}
-
-function getAnnotationKey(annotation) {
-  return annotation?.annotationId || annotation?.uid || annotation?.id || '';
-}
-
-function getViewerMeasurementAnnotationsFromSeriesDoc(doc) {
-  const parsed = parseMaybeJson(doc?.MeasurementAnnotations);
-  const annotations = parsed?.workflows?.viewerMeasurements?.annotations;
-
-  if (!Array.isArray(annotations)) {
-    return [];
-  }
-
-  return annotations.filter(annotation => {
-    return (
-      annotation?.workflow === 'viewerMeasurements' &&
-      annotation?.domain === 'iuscan' &&
-      annotation?.mode === 'repeated' &&
-      annotation?.repeatedMeasurement
-    );
-  });
-}
-
-function mergeRepeatedAnnotations(...annotationLists) {
-  const out = [];
-  const seen = new Set();
-
-  for (const annotationList of annotationLists) {
-    for (const annotation of annotationList || []) {
-      const key =
-        getAnnotationKey(annotation) ||
-        [
-          annotation?.label || annotation?.measurementRole || annotation?.role || '',
-          annotation?.repeatedMeasurement?.groupKey || '',
-          annotation?.value ||
-            annotation?.measurements?.value ||
-            annotation?.measurements?.length ||
-            '',
-        ].join('|');
-
-      if (!key || seen.has(key)) {
-        continue;
-      }
-
-      seen.add(key);
-      out.push(annotation);
-    }
-  }
-
-  return out;
 }
 
 function sanitizeMeasurementDisplay(measurement) {
@@ -324,79 +268,65 @@ function sanitizeViewportAnnotationForIuscan(measurement, servicesManager) {
   }
 }
 
-function sanitizeHydratedViewportAnnotationsForIuscan(annotations, servicesManager) {
-  let changed = false;
-
-  for (const item of annotations || []) {
-    const annotationKey = item?.annotationId || item?.annotationUID || item?.uid || item?.id;
-    changed = sanitizeCornerstoneAnnotationByKey(annotationKey) || changed;
-  }
-
-  if (changed) {
-    rerenderVisibleViewports(servicesManager);
-  }
-}
-
-async function hydrateFromSeriesDoc(servicesManager, commandsManager, assignSvc) {
-  let result = null;
-
+async function hydrateFromSeriesDoc(servicesManager, commandsManager) {
   try {
-    result = await commandsManager.runCommand('hydrateMeasurementAnnotationsForActiveStudy', {
+    const researchContext = await loadResearchContextFromViewer().catch(() => getActiveResearchContext());
+
+    if (researchContext?.preview) {
+      _savedRepeatedAnnotations = [];
+      return { researchContext, processedAnnotations: [] };
+    }
+
+    if (researchContext?.reviewKey) {
+      const review =
+        getActiveResearchReview() || (await loadActiveResearchReviewFromViewer({ forceRefresh: true }));
+      const repeatedAnnotations = (review?.measurementAnnotations || []).filter(
+        annotation => annotation?.mode === 'repeated' || annotation?.repeatedMeasurement
+      );
+      _savedRepeatedAnnotations = normalizeSavedIuscanRepeatedAnnotations(repeatedAnnotations);
+
+      console.info('[iUSCAN] research review annotations loaded', {
+        reviewKey: researchContext.reviewKey,
+        repeatedCount: _savedRepeatedAnnotations.length,
+      });
+
+      return {
+        researchContext,
+        review,
+        processedAnnotations: _savedRepeatedAnnotations,
+      };
+    }
+
+    const result = await commandsManager.runCommand('hydrateMeasurementAnnotationsForActiveStudy', {
       workflows: ['viewerMeasurements'],
-      domains: ['iuscan'],
+      domains: ['iuscan', 'bowel'],
       notify: false,
     });
-  } catch (error) {
-    console.warn(
-      '[iUSCAN] generic MeasurementAnnotations hydration threw:',
-      error?.message || error
-    );
-    return;
-  }
 
-  if (result?.error || !result?.seriesDoc) {
-    console.warn('[iUSCAN] hydration skipped: no series document resolved', {
-      restoredCount: result?.restoredCount || 0,
-      skippedCount: result?.skippedCount || 0,
+    const repeatedAnnotations = (result?.processedAnnotations || []).filter(annotation =>
+      annotation?.mode === 'repeated' || annotation?.repeatedMeasurement
+    );
+
+    const canonicalRepeatedAnnotations = normalizeSavedIuscanRepeatedAnnotations(repeatedAnnotations);
+    const legacyPlaceholders = getLegacyIuscanMeasurementPlaceholders(
+      result?.seriesDoc || {},
+      canonicalRepeatedAnnotations
+    );
+    _savedRepeatedAnnotations = [...canonicalRepeatedAnnotations, ...legacyPlaceholders];
+
+    console.info('[iUSCAN] generic annotation hydration complete', {
+      processedCount: result?.processedAnnotations?.length || 0,
+      repeatedCount: canonicalRepeatedAnnotations.length,
+      legacyPlaceholderCount: legacyPlaceholders.length,
       hasSeriesDoc: !!result?.seriesDoc,
-      error: result?.error?.message || result?.error || '',
     });
-    return;
+
+    return result;
+  } catch (error) {
+    console.warn('[iUSCAN] generic MeasurementAnnotations hydration threw:', error?.message || error);
+    _savedRepeatedAnnotations = [];
+    return null;
   }
-
-  const doc = result.seriesDoc;
-
-  const hydratedCommandAnnotations = (
-    result?.processedAnnotations ||
-    result?.restoredAnnotations ||
-    []
-  ).filter(annotation => {
-    return (
-      annotation?.workflow === 'viewerMeasurements' &&
-      annotation?.domain === 'iuscan' &&
-      annotation?.mode === 'repeated' &&
-      annotation?.repeatedMeasurement
-    );
-  });
-
-  const docRepeatedAnnotations = getViewerMeasurementAnnotationsFromSeriesDoc(doc);
-  const canonicalRepeatedAnnotations = mergeRepeatedAnnotations(
-    docRepeatedAnnotations,
-    hydratedCommandAnnotations
-  );
-
-  sanitizeHydratedViewportAnnotationsForIuscan(canonicalRepeatedAnnotations, servicesManager);
-
-  assignSvc.hydrateFromSeriesDoc(doc);
-
-  console.info('[iUSCAN] hydration complete', {
-    restoredCount: result.restoredCount || 0,
-    skippedCount: result.skippedCount || 0,
-    processedCount: result.processedAnnotations?.length || 0,
-    docRepeatedCount: docRepeatedAnnotations.length,
-    canonicalRepeatedCount: canonicalRepeatedAnnotations.length,
-    hasSeriesDoc: true,
-  });
 }
 
 const iuscanExtension = {
@@ -406,12 +336,10 @@ const iuscanExtension = {
 
   /**
    * preRegistration: runs once on app init before any mode loads.
-   * Register IUScanAssignmentService here so it is available to all
-   * components regardless of which mode is active.
+   * Measurement persistence is owned by extension-cornerstone; iUSCAN only
+   * registers its study prefetch helper here.
    */
   preRegistration({ servicesManager }) {
-    servicesManager.registerService(IUScanAssignmentService.REGISTRATION);
-
     // Register StudyPrefetchService — used by pviewer/iuscan build to prefetch
     // all study frames before playback begins, guaranteeing stutter-free first cycle
     if (!servicesManager.services.studyPrefetchService) {
@@ -425,90 +353,87 @@ const iuscanExtension = {
    * auto-assignment subscriber.
    */
   onModeEnter({ servicesManager, commandsManager }) {
-    const { measurementService, customizationService } = servicesManager.services;
-    const assignSvc = servicesManager.services.iuscanAssignmentService;
+    const { measurementService, customizationService, panelService } = servicesManager.services;
 
     _measurementAddedSub?.unsubscribe?.();
     _measurementAddedSub = null;
-
     _measurementUpdatedSub?.unsubscribe?.();
     _measurementUpdatedSub = null;
+    _savedRepeatedAnnotations = [];
 
-    // Clear previous study's state
-    assignSvc.clearAll();
-
-    // Register anatomical label list — shown after each caliper is drawn.
-    // Clinician selects the label → MEASUREMENT_ADDED subscriber auto-assigns.
-    customizationService.setCustomizations(
-      {
-        measurementLabels: {
-          $set: {
-            domain: 'iuscan',
-            dialogTitle: 'Bowel Annotation',
-            annotationTitle: 'Bowel Annotation',
-            labelOnMeasure: true,
-            exclusive: false,
-            items: MEASUREMENT_LABELS,
+    const applyMeasurementLabels = researchContext => {
+      const researchItems = getResearchMeasurementLabels(researchContext);
+      customizationService.setCustomizations(
+        {
+          measurementLabels: {
+            $set: {
+              domain: 'iuscan',
+              dialogTitle: researchContext ? 'Research Bowel Measurement' : 'Bowel Annotation',
+              annotationTitle: researchContext ? 'Research Bowel Measurement' : 'Bowel Annotation',
+              labelOnMeasure: true,
+              exclusive: false,
+              items: researchItems || MEASUREMENT_LABELS,
+            },
           },
         },
-      },
-      customizationService.Scope.Mode
-    );
+        customizationService.Scope.Mode
+      );
+    };
 
-    // Auto-assign labelled calipers to the correct (site, axis, slot)
+    applyMeasurementLabels(getActiveResearchContext());
+    loadResearchContextFromViewer()
+      .then(researchContext => applyMeasurementLabels(researchContext))
+      .catch(error => {
+        console.warn('[iUSCAN] research protocol load failed:', error?.message || error);
+        applyMeasurementLabels(null);
+      });
+
+    const decorateMeasurement = measurement => {
+      sanitizeMeasurementDisplay(measurement);
+      sanitizeViewportAnnotationForIuscan(measurement, servicesManager);
+
+      if (!measurement?.label) {
+        return null;
+      }
+
+      const researchContext = getActiveResearchContext();
+      const mapping = LABEL_MAP?.[measurement.label];
+      const stateKey = mapping?.stateKey || mapping?.axis || '';
+      const siteKey = mapping?.site || '';
+      const researchGroup = getResearchVisibleMeasurementGroups(researchContext, siteKey).find(
+        group => group.stateKey === stateKey
+      );
+      const maxSlots = researchContext
+        ? getResearchRepeatedSlotCount(researchContext, siteKey, researchGroup)
+        : 3;
+
+      return decorateIuscanRepeatedMeasurement({
+        measurementService,
+        measurement,
+        savedAnnotations: _savedRepeatedAnnotations,
+        maxSlots,
+      });
+    };
+
     _measurementAddedSub = measurementService.subscribe(
       measurementService.EVENTS.MEASUREMENT_ADDED,
       ({ measurement }) => {
-        sanitizeMeasurementDisplay(measurement);
-        sanitizeViewportAnnotationForIuscan(measurement, servicesManager);
-
-        if (!measurement?.label) {
-          return;
+        const decorated = decorateMeasurement(measurement);
+        if (decorated) {
+          panelService?.activatePanel?.('extension-iuscan.panelModule.iuscanMeasurements', true);
         }
-        assignSvc.autoAssignByLabel(measurement.uid, measurement.label);
       }
     );
 
     _measurementUpdatedSub = measurementService.subscribe(
       measurementService.EVENTS.MEASUREMENT_UPDATED,
       ({ measurement }) => {
-        sanitizeMeasurementDisplay(measurement);
-        sanitizeViewportAnnotationForIuscan(measurement, servicesManager);
-
-        if (!measurement?.label) {
-          return;
-        }
-        // Only auto-assign if not already assigned anywhere
-        const state = assignSvc.getFullState();
-        const alreadyAssigned = Object.values(state).some(site =>
-          MEASUREMENT_SLOT_KEYS.some(axis =>
-            site[axis].slots.some(slot => {
-              if (slot === measurement.uid) {
-                return true;
-              }
-
-              return (
-                slot &&
-                typeof slot === 'object' &&
-                (slot.uid === measurement.uid || slot.annotationId === measurement.uid)
-              );
-            })
-          )
-        );
-
-        if (!alreadyAssigned) {
-          assignSvc.autoAssignByLabel(measurement.uid, measurement.label);
-          // Directly open the panel after assignment
-          const { panelService } = servicesManager.services;
-          panelService.activatePanel('extension-iuscan.panelModule.iuscanMeasurements', true);
-        }
+        decorateMeasurement(measurement);
       }
     );
 
-    // Pre-populate panel from any existing Bowel* fields in the series doc.
-    // Non-fatal: silently skipped if the study isn't yet linked to a series doc.
-    hydrateFromSeriesDoc(servicesManager, commandsManager, assignSvc).catch(e => {
-      console.warn('[iUSCAN] hydrateFromSeriesDoc failed:', e?.message || e);
+    hydrateFromSeriesDoc(servicesManager, commandsManager).catch(error => {
+      console.warn('[iUSCAN] hydrateFromSeriesDoc failed:', error?.message || error);
     });
   },
 
@@ -518,8 +443,6 @@ const iuscanExtension = {
    */
   onModeExit({ servicesManager }) {
     const { customizationService } = servicesManager.services;
-    const assignSvc = servicesManager.services.iuscanAssignmentService;
-
     // Unsubscribe MEASUREMENT_ADDED listener
     _measurementAddedSub?.unsubscribe?.();
     _measurementAddedSub = null;
@@ -531,8 +454,7 @@ const iuscanExtension = {
     // into the longitudinal or stress-echo modes
     customizationService.onModeExit();
 
-    // Clear assignment state (clean slate for next study)
-    assignSvc.clearAll();
+    _savedRepeatedAnnotations = [];
   },
 
   // ── Modules ─────────────────────────────────────────────────────────────────

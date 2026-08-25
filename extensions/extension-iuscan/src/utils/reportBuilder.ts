@@ -1,4 +1,5 @@
 import { SITES, DOPPLER_MAP, MEASUREMENT_GROUPS } from './labelMap';
+import { buildIuscanSiteMeasurementState } from './repeatedMeasurements';
 
 const hasStrictureSelected = obs =>
   Array.isArray(obs?.complicationTypes) && obs.complicationTypes.includes('stricture');
@@ -23,122 +24,84 @@ const formatMm = value => {
   return Number.isFinite(numeric) ? numeric.toFixed(2) : '';
 };
 
-const resolveSlotMeasurement = (slot, measurementService) => {
-  if (slot === null) {
+const resolveMeasurementValue = value => {
+  if (!value) {
     return null;
   }
 
-  // Numeric hydrated values are already canonical millimetres.
-  if (typeof slot === 'number') {
-    return { value: slot, unit: 'mm' };
-  }
+  const stats = value?.data && typeof value.data === 'object' ? Object.values(value.data)[0] : null;
+  const measurements = value?.measurements || {};
+  const numeric = toMillimeters(
+    value.value ?? value.length ?? measurements.length ?? measurements.value ?? stats?.length,
+    value.unit ?? value.lengthUnit ?? measurements.lengthUnit ?? measurements.unit ?? stats?.unit
+  );
 
-  if (typeof slot === 'object' && slot !== null) {
-    const value = toMillimeters(slot.value ?? slot.length, slot.unit ?? slot.lengthUnit);
-
-    if (value == null) {
-      return null;
-    }
-
-    return { value, unit: 'mm' };
-  }
-
-  // slot is a measurement id string
-  const measurement = measurementService.getMeasurement(slot);
-  if (!measurement?.data) {
-    return null;
-  }
-
-  const firstKey = Object.keys(measurement.data)[0];
-  if (!firstKey) {
-    return null;
-  }
-
-  const { length, unit } = measurement.data[firstKey] ?? {};
-  const value = toMillimeters(length, unit);
-
-  return value == null ? null : { value, unit: 'mm' };
+  return numeric == null ? null : numeric;
 };
 
 const mean = values => values.reduce((a, b) => a + b, 0) / values.length;
 
-/**
- * Builds the PUT body for /formapi/api/series/:id from the full
- * IUScanAssignmentService state.
- *
- * Slot values are either:
- *   - null          → skip
- *   - number        → raw mm from SR hydration (use directly)
- *   - string (UID)  → resolve via measurementService.getMeasurement(uid).value
- *
- * Average of filled slots is written to split fields, e.g. BWTLong/BWTCross
- * and SubmucosaLong/SubmucosaCross. Existing combined BWT/Submucosa fields are
- * also written for backward compatibility with existing report templates.
- */
-export function buildReportPayload(state, measurementService) {
+export function buildReportPayload({
+  liveMeasurements = [],
+  savedAnnotations = [],
+  removedAnnotationIds = [],
+  observationsBySite = {},
+} = {}) {
   const payload = {};
+  const measurementState = buildIuscanSiteMeasurementState({
+    liveMeasurements,
+    savedAnnotations,
+    removedAnnotationIds,
+  });
 
   for (const siteConfig of SITES) {
     const { key, mongoPrefix } = siteConfig;
-    const siteState = state[key];
-    if (!siteState) {
-      continue;
-    }
-
-    // ── Measurements ────────────────────────────────────────────────────────
+    const siteState = measurementState[key] || {};
     const groupMeans = {};
 
     for (const group of MEASUREMENT_GROUPS) {
-      const slots = siteState[group.stateKey]?.slots ?? [];
-      const resolved = slots
-        .map(slot => resolveSlotMeasurement(slot, measurementService))
-        .filter(Boolean);
-      const numericValues = resolved.map(item => item.value);
-      if (numericValues.length === 0) {
+      const values = (siteState[group.stateKey]?.slots || [])
+        .map(resolveMeasurementValue)
+        .filter(value => value !== null);
+
+      if (!values.length) {
         continue;
       }
 
-      const avg = mean(numericValues);
+      const avg = mean(values);
       groupMeans[group.stateKey] = { avg, role: group.role };
-
       payload[`${mongoPrefix}${group.suffix}`] = formatMm(avg);
       payload[`${mongoPrefix}${group.suffix}UOM`] = 'mm';
     }
 
-    // Combined BWT = average across BWT longitudinal + cross-section groups.
     const bwtMeans = Object.values(groupMeans).filter(item => item.role === 'bwt');
-    if (bwtMeans.length > 0) {
+    if (bwtMeans.length) {
       payload[`${mongoPrefix}BWT`] = formatMm(mean(bwtMeans.map(item => item.avg)));
       payload[`${mongoPrefix}BWTUOM`] = 'mm';
     }
 
-    // Combined Submucosa = average across submucosa longitudinal + cross-section groups.
     const submucosaMeans = Object.values(groupMeans).filter(item => item.role === 'submucosa');
-    if (submucosaMeans.length > 0) {
+    if (submucosaMeans.length) {
       payload[`${mongoPrefix}Submucosa`] = formatMm(mean(submucosaMeans.map(item => item.avg)));
       payload[`${mongoPrefix}SubmucosaUOM`] = 'mm';
     }
 
-    // ── Observations ─────────────────────────────────────────────────────────
-    const obs = siteState.observations;
-    if (!obs) {
-      continue;
-    }
+    const obs = observationsBySite[key] || {};
 
     if (obs.doppler != null) {
-      payload[`${mongoPrefix}ColorDopplerSignal`] = DOPPLER_MAP[obs.doppler] ?? '0 Absent';
+      payload[`${mongoPrefix}ColorDopplerSignal`] = DOPPLER_MAP[obs.doppler] ?? '0';
     }
     if (obs.inflammatoryFat != null) {
-      const FAT_LABELS = ['None', 'Partial', 'Complete'];
+      const labels = ['None', 'Partial', 'Complete'];
       payload[`${mongoPrefix}InflammatoryMesentericFat`] =
-        FAT_LABELS[obs.inflammatoryFat] ?? 'None';
+        labels[obs.inflammatoryFat] ?? 'None';
     }
     if (obs.lymphadenopathy != null) {
       payload[`${mongoPrefix}Lymphadenopathy`] = obs.lymphadenopathy > 0 ? 'Yes' : 'No';
     }
     if (obs.stratification != null) {
-      const STRAT_LABELS = ['Normal', 'Focal', 'Complete'];
-      payload[`${mongoPrefix}LossOfStratification`] = STRAT_LABELS[obs.stratification] ?? 'Normal';
+      const labels = ['Normal', 'Focal', 'Complete'];
+      payload[`${mongoPrefix}LossOfStratification`] = labels[obs.stratification] ?? 'Normal';
     }
     if (siteConfig.hasHaustrations && obs.haustrations != null) {
       payload[`${mongoPrefix}Haustrations`] = obs.haustrations > 0 ? 'Present' : 'Absent';
@@ -146,7 +109,6 @@ export function buildReportPayload(state, measurementService) {
 
     if (siteConfig.hasSegmentLength) {
       const segmentLength = String(obs.segmentLength ?? '').trim();
-
       if (segmentLength) {
         payload[`${mongoPrefix}SegmentLength`] = segmentLength;
         payload[`${mongoPrefix}SegmentLengthUOM`] = 'cm';
@@ -155,7 +117,6 @@ export function buildReportPayload(state, measurementService) {
 
     if (siteConfig.hasComplications && obs.complications != null) {
       const hasComplications = obs.complications > 0;
-
       payload[`${mongoPrefix}Complications`] = hasComplications ? 'Yes' : 'No';
       payload[`${mongoPrefix}ComplicationTypes`] = hasComplications
         ? (obs.complicationTypes ?? []).join(', ')
@@ -165,7 +126,6 @@ export function buildReportPayload(state, measurementService) {
         : '';
 
       const shouldWriteStrictureDetails = hasComplications && hasStrictureSelected(obs);
-
       const writeStrictureField = (suffix, value) => {
         const normalized = String(value ?? '').trim();
         payload[`${mongoPrefix}${suffix}`] = shouldWriteStrictureDetails ? normalized : '';
@@ -180,6 +140,147 @@ export function buildReportPayload(state, measurementService) {
     }
   }
 
-  payload.accessType = 'update';
   return payload;
+}
+
+export function hydrateBowelObservationsFromSeriesDoc(seriesDoc = {}) {
+  const result = {};
+
+  for (const site of SITES) {
+    const prefix = site.mongoPrefix;
+    const doppler = seriesDoc[`${prefix}ColorDopplerSignal`];
+    const inflammatoryFat = seriesDoc[`${prefix}InflammatoryMesentericFat`];
+    const lymphadenopathy = seriesDoc[`${prefix}Lymphadenopathy`];
+    const stratification = seriesDoc[`${prefix}LossOfStratification`];
+    const haustrations = seriesDoc[`${prefix}Haustrations`];
+    const complicationTypes = seriesDoc[`${prefix}ComplicationTypes`];
+
+    result[site.key] = {
+      doppler:
+        doppler === 'III' || doppler === '3'
+          ? 3
+          : doppler === 'II' || doppler === '2'
+            ? 2
+            : doppler === 'I' || doppler === '1'
+              ? 1
+              : doppler === '0'
+                ? 0
+                : null,
+      inflammatoryFat:
+        inflammatoryFat === 'Complete' || inflammatoryFat === 2 || inflammatoryFat === '2'
+          ? 2
+          : inflammatoryFat === 'Partial' || inflammatoryFat === 1 || inflammatoryFat === '1'
+            ? 1
+            : inflammatoryFat === 'None' || inflammatoryFat === 0 || inflammatoryFat === '0'
+              ? 0
+              : inflammatoryFat === 'Yes'
+                ? 2
+                : inflammatoryFat === 'No'
+                  ? 0
+                  : null,
+      lymphadenopathy:
+        lymphadenopathy === 'Yes' ? 1 : lymphadenopathy === 'No' ? 0 : null,
+      stratification:
+        ['Complete', 'Extensive disruption', 2, '2', 'Yes'].includes(stratification)
+          ? 2
+          : ['Focal', 'Focal disruption', 1, '1'].includes(stratification)
+            ? 1
+            : ['Normal', 0, '0', 'No'].includes(stratification)
+              ? 0
+              : null,
+      haustrations:
+        haustrations === 'Present' ? 1 : haustrations === 'Absent' ? 0 : null,
+      segmentLength: String(seriesDoc[`${prefix}SegmentLength`] ?? ''),
+      complications:
+        seriesDoc[`${prefix}Complications`] === 'Yes'
+          ? 1
+          : seriesDoc[`${prefix}Complications`] === 'No'
+            ? 0
+            : null,
+      complicationTypes: Array.isArray(complicationTypes)
+        ? complicationTypes
+        : String(complicationTypes || '')
+            .split(',')
+            .map(value => value.trim())
+            .filter(Boolean),
+      complicationText: String(seriesDoc[`${prefix}ComplicationText`] ?? ''),
+      strictureMaxBWT: String(seriesDoc[`${prefix}StrictureMaxBWT`] ?? ''),
+      strictureMinimalLuminalDiameter: String(
+        seriesDoc[`${prefix}StrictureMinimalLuminalDiameter`] ?? ''
+      ),
+      strictureLength: String(seriesDoc[`${prefix}StrictureLength`] ?? ''),
+      strictureUpstreamDilation: String(seriesDoc[`${prefix}StrictureUpstreamDilation`] ?? ''),
+    };
+  }
+
+  return result;
+}
+
+export function getLegacyIuscanMeasurementPlaceholders(seriesDoc = {}, savedAnnotations = []) {
+  const occupiedGroups = new Set(
+    (savedAnnotations || []).flatMap(annotation => {
+      const repeated = annotation?.repeatedMeasurement || {};
+      const groupKey = String(repeated.groupKey || '').trim();
+      const label = String(annotation?.label || annotation?.measurementRole || annotation?.role || '').trim();
+      return [groupKey, label].filter(Boolean);
+    })
+  );
+
+  const placeholders = [];
+
+  for (const site of SITES) {
+    for (const group of MEASUREMENT_GROUPS) {
+      const groupKey = `${site.code}:${group.stateKey}`;
+      const label = `${site.code}-${group.labelSuffix || group.suffix}`;
+
+      if (occupiedGroups.has(groupKey) || occupiedGroups.has(label)) {
+        continue;
+      }
+
+      const fieldName = `${site.mongoPrefix}${group.suffix}`;
+      const rawValue = seriesDoc[fieldName];
+      const value = toMillimeters(rawValue, seriesDoc[`${fieldName}UOM`] || 'mm');
+
+      if (value == null) {
+        continue;
+      }
+
+      placeholders.push({
+        annotationId: `legacy:${fieldName}`,
+        uid: `legacy:${fieldName}`,
+        workflow: 'viewerMeasurements',
+        domain: 'bowel',
+        mode: 'repeated',
+        role: label,
+        label,
+        measurementRole: label,
+        toolName: 'Length',
+        repeatedMeasurement: {
+          groupKey,
+          siteKey: site.key,
+          stateKey: group.stateKey,
+          axis: group.axis,
+          measurementType: group.role,
+          slotIndex: 0,
+          pairIndex: 0,
+          maxSlots: 3,
+          aggregation: 'average',
+        },
+        value,
+        unit: 'mm',
+        source: 'legacy-series-field',
+        sourceField: fieldName,
+        measurements: {
+          value,
+          length: value,
+          unit: 'mm',
+          lengthUnit: 'mm',
+          displayText: [`${value.toFixed(2)} mm`],
+        },
+        displayText: [`${value.toFixed(2)} mm`],
+      });
+    }
+  }
+
+  return placeholders;
 }

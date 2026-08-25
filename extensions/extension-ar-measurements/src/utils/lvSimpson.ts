@@ -78,7 +78,10 @@ function getSlot(measurement) {
 
 function getContourPoints(measurement) {
   const geometry = getGeometry(measurement);
-  const points = geometry.contourPoints || geometry.points || measurement?.points || [];
+  const livePoints = Array.isArray(measurement?.points) ? measurement.points : [];
+  const storedPoints = geometry.contourPoints || geometry.points || [];
+  const points = livePoints.length >= 6 ? livePoints : storedPoints;
+
   return (Array.isArray(points) ? points : []).map(getPoint).filter(Boolean);
 }
 
@@ -202,10 +205,26 @@ function sampleWidths(projectedPoints, longAxisLengthMM) {
 function buildSlotGeometry(measurement, slot) {
   const geometry = getGeometry(measurement);
   const contourPoints = getContourPoints(measurement);
-  const baseLeft = getPoint(geometry.baseLeftPoint);
-  const baseRight = getPoint(geometry.baseRightPoint);
-  const apex = getPoint(geometry.apexPoint);
-  const longAxisLengthMM = finiteNumber(geometry.longAxisLengthMM);
+  const hasLiveContour = Array.isArray(measurement?.points) && measurement.points.length >= 6;
+  const configuredAxisPointIndex = Number(geometry.axisPointIndex);
+  const fallbackAxisPointIndex = Math.floor((contourPoints.length - 1) / 2);
+  const axisPointIndex =
+    Number.isInteger(configuredAxisPointIndex) &&
+    configuredAxisPointIndex > 0 &&
+    configuredAxisPointIndex < contourPoints.length - 1
+      ? configuredAxisPointIndex
+      : fallbackAxisPointIndex;
+  const baseLeft = hasLiveContour ? contourPoints[0] : getPoint(geometry.baseLeftPoint);
+  const baseRight = hasLiveContour
+    ? contourPoints[contourPoints.length - 1]
+    : getPoint(geometry.baseRightPoint);
+  const apex = hasLiveContour ? contourPoints[axisPointIndex] : getPoint(geometry.apexPoint);
+  const liveBaseMidpoint =
+    baseLeft && baseRight ? getBaseMidpoint(baseLeft, baseRight) : null;
+  const liveAxisLength = liveBaseMidpoint && apex ? length(subtract(apex, liveBaseMidpoint)) : null;
+  const longAxisLengthMM = hasLiveContour
+    ? finiteNumber(liveAxisLength)
+    : finiteNumber(geometry.longAxisLengthMM);
   const display = LV_SIMPSON_SLOT_INFO[slot].display;
   const messages = [];
 

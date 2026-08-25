@@ -1,5 +1,5 @@
 import React from 'react';
-import { MEASUREMENT_SLOT_KEYS } from '../../utils/labelMap';
+import { decorateIuscanRepeatedMeasurement, getIuscanRepeatedAnnotationId } from '../../utils/repeatedMeasurements';
 
 const sanitizeMeasurementUnit = unit =>
   String(unit || 'mm')
@@ -21,136 +21,80 @@ const normalizeResolvedMeasurement = value => {
     return null;
   }
 
-  if (typeof value === 'number') {
-    return { value, unit: 'mm' };
-  }
-
-  const valueInMm = toMillimeters(
-    value.value ?? value.length ?? value.measurements?.length ?? value.measurements?.value,
-    value.unit ?? value.lengthUnit ?? value.measurements?.lengthUnit ?? value.measurements?.unit
+  const firstStats = value?.data && typeof value.data === 'object' ? Object.values(value.data)[0] : null;
+  const numeric = toMillimeters(
+    value.value ?? value.length ?? value.measurements?.length ?? value.measurements?.value ?? firstStats?.length,
+    value.unit ?? value.lengthUnit ?? value.measurements?.lengthUnit ?? value.measurements?.unit ?? firstStats?.unit
   );
 
-  return valueInMm == null ? null : { ...value, value: valueInMm, unit: 'mm' };
+  return numeric == null ? null : { ...value, value: numeric, unit: 'mm' };
 };
 
-/**
- * One measurement row for a single anatomical site.
- *
- * slots: array of 3 items, each null | measurement-id string | number | hydrated annotation object
- * valueByUID: { [measurementId]: { value, unit } } — derived from useMeasurements() in the parent panel
- *
- * Slot click → jumpToMeasurement (highlights annotation in viewport)
- * "+ Latest" button → assigns most-recent unassigned caliper to next empty slot
- */
 export default function MeasurementGroup({
   label,
   site,
-  axis,
+  group,
   slots,
-  valueByUID,
   measurements,
-  assignSvc,
+  savedAnnotations,
   measurementService,
   commandsManager,
+  onRemove,
 }) {
-  const slotList = slots ?? [null, null, null];
-
-  // Resolve display value for each slot
-  const resolved = slotList.map(slot => {
-    if (slot === null) {
-      return null;
-    }
-    if (typeof slot === 'object' && slot !== null && 'value' in slot) {
-      return normalizeResolvedMeasurement(slot);
-    } // hydrated { value, unit }
-    return normalizeResolvedMeasurement(valueByUID[slot] ?? null); // live caliper value
-  });
-
-  function getSlotMeasurementId(slot) {
-    if (!slot) {
-      return '';
-    }
-
-    if (typeof slot === 'string') {
-      return slot;
-    }
-
-    if (typeof slot === 'object') {
-      return slot.uid || slot.annotationId || '';
-    }
-
-    return '';
-  }
-
-  function isNavigableSlot(slot) {
-    if (typeof slot === 'string') {
-      return true;
-    }
-
-    return !!(
-      slot &&
-      typeof slot === 'object' &&
-      (slot.uid || slot.annotationId) &&
-      slot.referencedImageId
-    );
-  }
+  const slotList = Array.isArray(slots) ? slots : [null, null, null];
+  const resolved = slotList.map(normalizeResolvedMeasurement);
+  const filled = resolved.filter(Boolean);
+  const average =
+    filled.length > 0
+      ? (filled.reduce((sum, item) => sum + item.value, 0) / filled.length).toFixed(2)
+      : null;
 
   function jumpToSlot(slot) {
-    const measurementId = getSlotMeasurementId(slot);
-
+    const measurementId = getIuscanRepeatedAnnotationId(slot);
     if (!measurementId) {
       return;
     }
 
-    if (typeof slot === 'string') {
+    const liveMeasurement = measurementService.getMeasurement?.(measurementId);
+    if (liveMeasurement) {
       measurementService.jumpToMeasurement(null, measurementId);
       return;
     }
 
-    commandsManager?.runCommand?.('jumpToSavedViewerAnnotation', {
-      annotation: slot,
-    });
+    commandsManager?.runCommand?.('jumpToSavedViewerAnnotation', { annotation: slot });
   }
 
-  const filled = resolved.filter(v => v !== null);
-  const average =
-    filled.length > 0
-      ? (
-          filled.reduce((a, b) => a + (typeof b === 'number' ? b : b.value), 0) / filled.length
-        ).toFixed(2)
-      : null;
-
-  const unit = 'mm';
-
   function handleAssignNext() {
-    // Collect all UIDs already assigned anywhere across all sites/axes
-    const allAssigned = new Set();
-    const state = assignSvc.getFullState();
-    Object.values(state).forEach(siteState => {
-      MEASUREMENT_SLOT_KEYS.forEach(ax => {
-        siteState?.[ax]?.slots?.forEach(s => {
-          const measurementId = getSlotMeasurementId(s);
-
-          if (measurementId) {
-            allAssigned.add(measurementId);
-          }
-        });
-      });
-    });
-
-    const nextSlot = slotList.findIndex(s => s === null);
-    if (nextSlot === -1) {
+    const nextSlot = slotList.findIndex(slot => slot == null);
+    if (nextSlot < 0) {
       return;
-    } // all slots full
+    }
 
-    // Pick the most recently added unassigned measurement
-    const candidates = measurements
-      .filter(m => !allAssigned.has(m.uid))
+    const assignedIds = new Set(
+      slotList.map(getIuscanRepeatedAnnotationId).filter(Boolean)
+    );
+
+    const candidates = (measurements || [])
+      .filter(measurement => measurement?.uid && !assignedIds.has(measurement.uid))
       .sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0));
 
-    if (candidates.length > 0) {
-      assignSvc.assign(site, axis, nextSlot, candidates[0].uid);
-      measurementService.jumpToMeasurement(null, candidates[0].uid);
+    const candidate = candidates[0];
+    if (!candidate) {
+      return;
+    }
+
+    const decorated = decorateIuscanRepeatedMeasurement({
+      measurementService,
+      measurement: candidate,
+      savedAnnotations,
+      siteKey: site.key,
+      stateKey: group.stateKey,
+      slotIndex: nextSlot,
+      maxSlots: 3,
+    });
+
+    if (decorated?.uid) {
+      measurementService.jumpToMeasurement(null, decorated.uid);
     }
   }
 
@@ -161,41 +105,36 @@ export default function MeasurementGroup({
         <span className="text-xs text-gray-300">
           Avg:{' '}
           <strong className={average !== null ? 'text-primary-light' : 'text-gray-500'}>
-            {average !== null ? `${average} ${unit}` : '—'}
+            {average !== null ? `${average} mm` : '—'}
           </strong>
         </span>
       </div>
 
       <div className="flex flex-wrap items-center gap-1 overflow-x-hidden">
-        {slotList.map((slot, i) => {
-          const val = resolved[i];
-          const isNavigable = isNavigableSlot(slot);
+        {slotList.map((slot, index) => {
+          const value = resolved[index];
+          const measurementId = getIuscanRepeatedAnnotationId(slot);
+          const isNavigable = !!measurementId && !!(slot?.referencedImageId || measurementService.getMeasurement?.(measurementId));
+
           return (
             <div
-              key={i}
-              className={[
-                'gi-slot flex min-w-[52px] max-w-[64px] items-center justify-between rounded border px-2 py-1 text-xs',
-              ].join(' ')}
+              key={index}
+              className="gi-slot flex min-w-[52px] max-w-[64px] items-center justify-between rounded border px-2 py-1 text-xs"
             >
-              {val !== null ? (
+              {value ? (
                 <>
                   <span
                     className={isNavigable ? 'hover:text-primary-light cursor-pointer' : ''}
-                    title={
-                      isNavigable ? 'Click to jump to annotation' : 'Pre-populated from report'
-                    }
-                    onClick={() => {
-                      if (isNavigable) {
-                        jumpToSlot(slot);
-                      }
-                    }}
+                    title={isNavigable ? 'Click to jump to annotation' : ''}
+                    onClick={() => isNavigable && jumpToSlot(slot)}
                   >
-                    {(typeof val === 'number' ? val : val.value).toFixed(2)}
+                    {value.value.toFixed(2)}
                   </span>
                   <button
+                    type="button"
                     className="ml-1 leading-none text-gray-400 hover:text-red-400"
                     title="Remove"
-                    onClick={() => assignSvc.unassign(site, axis, i)}
+                    onClick={() => onRemove?.(slot)}
                   >
                     ✕
                   </button>
@@ -208,6 +147,7 @@ export default function MeasurementGroup({
         })}
 
         <button
+          type="button"
           className={[
             'gi-assign-btn rounded border px-2 py-1 text-xs transition-colors',
             filled.length >= 3

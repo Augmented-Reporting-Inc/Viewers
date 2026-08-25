@@ -594,6 +594,30 @@ const toolbarButtons: Button[] = [
     },
   },
   {
+    id: 'LAVolume',
+    uiType: 'ohif.toolButton',
+    props: {
+      icon: 'icon-tool-spline-roi',
+      label: 'LA Volume',
+      tooltip:
+        'Start guided biplane LA volume. Trace maximum LA volume in A4C and A2C; exclude pulmonary veins and the LA appendage. Press Esc to cancel.',
+      commands: 'startLAVolumeWorkflow',
+      evaluate: 'evaluate.action',
+    },
+  },
+  {
+    id: 'SpectralDopplerVTI',
+    uiType: 'ohif.toolButton',
+    props: {
+      icon: 'icon-tool-freehand-roi',
+      label: 'VTI Trace',
+      tooltip:
+        'Trace one calibrated PW/CW spectral Doppler envelope to calculate VTI and peak velocity. Press Esc to cancel.',
+      commands: 'startSpectralDopplerVTIWorkflow',
+      evaluate: 'evaluate.action',
+    },
+  },
+  {
     id: 'PlanarFreehandROI',
     uiType: 'ohif.toolButton',
     props: {

@@ -1,24 +1,22 @@
 import React from 'react';
 import MeasurementGroup from './MeasurementGroup';
+import ResearchPairedMeasurementGrid from './ResearchPairedMeasurementGrid';
 import ScoreSelector from './ScoreSelector';
 import { COMPLICATION_TYPES, MEASUREMENT_GROUPS } from '../../utils/labelMap';
+import {
+  getResearchVisibleMeasurementGroups,
+  researchComponentEnabled,
+} from '../../utils/researchProtocol';
 
 const HAUSTRATION_OPTIONS = [
   { value: 1, label: 'Present' },
   { value: 0, label: 'Absent' },
 ];
-
 const COMPLICATION_OPTIONS = [
   { value: 0, label: 'No' },
   { value: 1, label: 'Yes' },
 ];
-
-const DOPPLER_OPTIONS = [
-  { value: 0, label: '0' },
-  { value: 1, label: '1' },
-  { value: 2, label: '2' },
-  { value: 3, label: '3' },
-];
+const DOPPLER_OPTIONS = [0, 1, 2, 3].map(value => ({ value, label: String(value) }));
 const FAT_OPTIONS = [
   { value: 0, label: 'None' },
   { value: 1, label: 'Partial' },
@@ -28,142 +26,117 @@ const LYMPH_OPTIONS = [
   { value: 0, label: 'No' },
   { value: 1, label: 'Yes' },
 ];
-
 const STRAT_OPTIONS = [
   { value: 0, label: 'Normal' },
   { value: 1, label: 'Focal' },
   { value: 2, label: 'Complete' },
 ];
-
-const sanitizeMeasurementUnit = unit =>
-  String(unit || 'mm')
-    .replace(/\s*US Region\s*/gi, '')
-    .trim() || 'mm';
-
-const toMillimeters = (value, unit) => {
-  const numeric = Number(value);
-  if (!Number.isFinite(numeric)) {
-    return null;
-  }
-
-  const cleanUnit = sanitizeMeasurementUnit(unit);
-  return /^cm\b/i.test(cleanUnit) ? numeric * 10 : numeric;
-};
-
-const resolveSlotValueInMm = (slot, valueByMeasurementId) => {
-  if (slot === null) {
-    return null;
-  }
-
-  if (typeof slot === 'number') {
-    return slot;
-  }
-
-  if (typeof slot === 'object' && slot !== null) {
-    return toMillimeters(
-      slot.value ?? slot.length ?? slot.measurements?.length ?? slot.measurements?.value,
-      slot.unit ?? slot.lengthUnit ?? slot.measurements?.lengthUnit ?? slot.measurements?.unit
-    );
-  }
-
-  const entry = valueByMeasurementId[slot];
-  return entry != null
-    ? toMillimeters(entry.value ?? entry.length, entry.unit ?? entry.lengthUnit)
-    : null;
-};
-
-const EMPTY_MEASUREMENT_SLOTS = [null, null, null];
-
-const normalizeSlotArray = slots => (Array.isArray(slots) ? slots : EMPTY_MEASUREMENT_SLOTS);
-
-const getCurrentAssignmentSlots = ({ assignSvc, siteKey, stateKey, siteState }) => {
-  const directSlots = assignSvc?.getSlots?.(siteKey, stateKey);
-  if (Array.isArray(directSlots)) {
-    return directSlots;
-  }
-
-  const fullStateSlots = assignSvc?.getFullState?.()?.[siteKey]?.[stateKey]?.slots;
-  if (Array.isArray(fullStateSlots)) {
-    return fullStateSlots;
-  }
-
-  return normalizeSlotArray(siteState?.[stateKey]?.slots);
-};
+const CINE_QUALITY_OPTIONS = [1, 2, 3, 4, 5].map(value => ({
+  value,
+  label: value === 1 ? '1 Terrible' : value === 5 ? '5 Optimal' : String(value),
+}));
 
 const STRICTURE_FIELDS = [
-  {
-    key: 'strictureMaxBWT',
-    label: 'Maximum bowel wall thickness (cm)',
-    placeholder: 'e.g. 0.45',
-  },
-  {
-    key: 'strictureMinimalLuminalDiameter',
-    label: 'Minimal luminal diameter (cm)',
-    placeholder: 'e.g. 0.8',
-  },
-  {
-    key: 'strictureLength',
-    label: 'Stricture length (cm)',
-    placeholder: 'e.g. 3.5',
-  },
-  {
-    key: 'strictureUpstreamDilation',
-    label: 'Upstream dilation (cm)',
-    placeholder: 'e.g. 2.1',
-  },
+  { key: 'strictureMaxBWT', label: 'Maximum bowel wall thickness (cm)', placeholder: 'e.g. 0.45' },
+  { key: 'strictureMinimalLuminalDiameter', label: 'Minimal luminal diameter (cm)', placeholder: 'e.g. 0.8' },
+  { key: 'strictureLength', label: 'Stricture length (cm)', placeholder: 'e.g. 3.5' },
+  { key: 'strictureUpstreamDilation', label: 'Upstream dilation (cm)', placeholder: 'e.g. 2.1' },
 ];
 
 const hasStrictureSelected = obs =>
   Array.isArray(obs?.complicationTypes) && obs.complicationTypes.includes('stricture');
 
-/**
- * Accordion section for a single anatomical site.
- * Renders all measurement groups and observation controls.
- *
- * Collapsed header shows a BWT badge (⚠ if > 3 mm) and Doppler score
- * for at-a-glance review without opening every section.
- */
 export default function SiteAccordion({
-  site, // { key, label }
+  site,
   isOpen,
   onToggle,
-  siteState, // from IUScanAssignmentService.getFullState()[site.key]
-  valueByUID,
+  siteState,
+  observations,
   measurements,
-  assignSvc,
+  savedAnnotations,
   measurementService,
   commandsManager,
+  onObservationChange,
+  onObservationsChange,
+  onRemoveMeasurement,
+  researchContext = null,
 }) {
-  const obs = siteState?.observations ?? {};
+  const obs = observations ?? {};
+  const isResearch = !!researchContext;
+  const pairedMeasurements = isResearch && researchComponentEnabled(
+    researchContext,
+    'pairedBwtSubmucosa',
+    site.key
+  );
+  const visibleGroups = isResearch
+    ? getResearchVisibleMeasurementGroups(researchContext, site.key)
+    : MEASUREMENT_GROUPS;
 
   const slotsByGroup = MEASUREMENT_GROUPS.reduce((acc, group) => {
-    acc[group.stateKey] = getCurrentAssignmentSlots({
-      assignSvc,
-      siteKey: site.key,
-      stateKey: group.stateKey,
-      siteState,
-    });
-
+    acc[group.stateKey] = siteState?.[group.stateKey]?.slots ?? [null, null, null];
     return acc;
   }, {});
 
-  const bwtSlots = MEASUREMENT_GROUPS.filter(group => group.role === 'bwt').flatMap(
-    group => slotsByGroup[group.stateKey]
-  );
-  const allResolvedBwt = bwtSlots
-    .map(slot => resolveSlotValueInMm(slot, valueByUID))
-    .filter(v => v !== null);
+  const resolveValueInMm = slot => {
+    if (!slot) return null;
+    const stats = slot?.data && typeof slot.data === 'object' ? Object.values(slot.data)[0] : null;
+    const raw = Number(
+      slot.value ?? slot.length ?? slot.measurements?.length ?? slot.measurements?.value ?? stats?.length
+    );
+    if (!Number.isFinite(raw)) return null;
+    const unit = String(
+      slot.unit ?? slot.lengthUnit ?? slot.measurements?.lengthUnit ?? slot.measurements?.unit ?? stats?.unit ?? 'mm'
+    );
+    return /^cm\b/i.test(unit) ? raw * 10 : raw;
+  };
+
+  const bwtSlots = visibleGroups
+    .filter(group => group.role === 'bwt')
+    .flatMap(group => slotsByGroup[group.stateKey]);
+  const allResolvedBwt = bwtSlots.map(resolveValueInMm).filter(value => value !== null);
   const maxBWT = allResolvedBwt.length ? Math.max(...allResolvedBwt) : null;
   const isAbnormal = maxBWT !== null && maxBWT > 3.0;
+
+  const showSegmentLength = isResearch
+    ? researchComponentEnabled(researchContext, 'segmentLength', site.key)
+    : site.hasSegmentLength;
+  const showDoppler = !isResearch || researchComponentEnabled(researchContext, 'dopplerFlow', site.key);
+  const showFat = !isResearch || researchComponentEnabled(researchContext, 'inflammatoryFat', site.key);
+  const showStratification = !isResearch || researchComponentEnabled(researchContext, 'stratification', site.key);
+  const showLymph = !isResearch || researchComponentEnabled(researchContext, 'lymphadenopathy', site.key);
+  const showHaustration = isResearch
+    ? researchComponentEnabled(researchContext, 'haustration', site.key)
+    : site.hasHaustrations;
+  const showCineQuality = isResearch && researchComponentEnabled(researchContext, 'cineQuality', site.key);
+  const showComplications = isResearch
+    ? researchComponentEnabled(researchContext, 'complications', site.key)
+    : site.hasComplications;
+  const showObservations = showDoppler || showFat || showStratification || showLymph || showHaustration || showCineQuality;
+
+  const hasObservationData =
+    obs.doppler != null ||
+    obs.inflammatoryFat != null ||
+    obs.lymphadenopathy != null ||
+    obs.stratification != null ||
+    obs.haustrations != null ||
+    obs.cineQuality != null ||
+    String(obs.cineQualityComment || '').trim() !== '' ||
+    String(obs.segmentLength || '').trim() !== '' ||
+    obs.complications != null ||
+    (obs.complicationTypes ?? []).length > 0 ||
+    String(obs.complicationText || '').trim() !== '' ||
+    String(obs.strictureMaxBWT || '').trim() !== '' ||
+    String(obs.strictureMinimalLuminalDiameter || '').trim() !== '' ||
+    String(obs.strictureLength || '').trim() !== '' ||
+    String(obs.strictureUpstreamDilation || '').trim() !== '';
+
   return (
     <div className={`gi-accordion border-b border-gray-700 ${isOpen ? 'gi-accordion--open' : ''}`}>
-      {/* ── Header ─────────────────────────────────────────────────────── */}
       <button
         className="flex w-full items-center justify-between px-3 py-2 text-left transition-colors hover:bg-gray-800"
         onClick={onToggle}
       >
         <span className="text-sm font-medium text-gray-200">{site.label}</span>
-
         <div className="flex items-center gap-2">
           {maxBWT !== null && (
             <span
@@ -171,112 +144,101 @@ export default function SiteAccordion({
                 'rounded px-1.5 py-0.5 font-mono text-xs',
                 isAbnormal ? 'bg-red-900 text-red-300' : 'bg-gray-700 text-gray-300',
               ].join(' ')}
-              title="Max BWT across longitudinal + cross-section"
+              title="Max BWT"
             >
-              {maxBWT.toFixed(2)} mm
-              {isAbnormal ? ' ⚠' : ''}
+              {maxBWT.toFixed(2)} mm{isAbnormal ? ' ⚠' : ''}
             </span>
           )}
-          {(obs.doppler != null ||
-            obs.inflammatoryFat != null ||
-            obs.lymphadenopathy != null ||
-            obs.stratification != null ||
-            obs.haustrations != null ||
-            String(obs.segmentLength || '').trim() !== '' ||
-            obs.complications != null ||
-            (obs.complicationTypes ?? []).length > 0 ||
-            String(obs.complicationText || '').trim() !== '' ||
-            String(obs.strictureMaxBWT || '').trim() !== '' ||
-            String(obs.strictureMinimalLuminalDiameter || '').trim() !== '' ||
-            String(obs.strictureLength || '').trim() !== '' ||
-            String(obs.strictureUpstreamDilation || '').trim() !== '') && (
-            <span
-              className="h-2 w-2 shrink-0 rounded-full bg-blue-500"
-              title="Observations recorded"
-            />
+          {hasObservationData && (
+            <span className="h-2 w-2 shrink-0 rounded-full bg-blue-500" title="Observations recorded" />
           )}
           <span className="ml-1 text-xs text-gray-500">{isOpen ? '▼' : '▶'}</span>
         </div>
       </button>
 
-      {/* ── Body ───────────────────────────────────────────────────────── */}
       {isOpen && (
         <div className="space-y-3 overflow-x-hidden bg-gray-900 px-3 pb-3 pt-1">
-          {MEASUREMENT_GROUPS.map(group => (
-            <MeasurementGroup
-              key={group.stateKey}
-              label={`${group.label} (mm)`}
-              site={site.key}
-              axis={group.stateKey}
-              slots={slotsByGroup[group.stateKey]}
-              valueByUID={valueByUID}
-              measurements={measurements}
-              assignSvc={assignSvc}
+          {pairedMeasurements ? (
+            <ResearchPairedMeasurementGrid
+              siteState={siteState}
               measurementService={measurementService}
               commandsManager={commandsManager}
+              onRemove={onRemoveMeasurement}
             />
-          ))}
-          {site.hasSegmentLength && (
+          ) : (
+            visibleGroups.map(group => (
+              <MeasurementGroup
+                key={group.stateKey}
+                label={`${group.label} (mm)`}
+                site={site}
+                group={group}
+                slots={slotsByGroup[group.stateKey]}
+                measurements={measurements}
+                savedAnnotations={savedAnnotations}
+                measurementService={measurementService}
+                commandsManager={commandsManager}
+                onRemove={onRemoveMeasurement}
+              />
+            ))
+          )}
+
+          {showSegmentLength && (
             <div className="border-t border-gray-700 pt-2">
-              <label className="mb-1 block text-xs text-gray-400">
-                Segment length involved (cm)
-              </label>
+              <label className="mb-1 block text-xs text-gray-400">Segment length involved (cm)</label>
               <input
                 type="number"
                 min="0"
                 step="0.1"
                 className="w-full rounded border border-gray-600 bg-gray-800 px-2 py-1 text-xs text-gray-100"
                 value={obs.segmentLength ?? ''}
-                onChange={e => assignSvc.setObservation(site.key, 'segmentLength', e.target.value)}
+                onChange={event => onObservationChange?.(site.key, 'segmentLength', event.target.value)}
                 placeholder="e.g. 5.0"
               />
             </div>
           )}
-          <div className="gi-observations space-y-1 border-t border-gray-700 pt-2">
-            <p className="mb-1 text-xs uppercase tracking-wide text-gray-500">Observations</p>
-            <ScoreSelector
-              label="Doppler Vascularity"
-              options={DOPPLER_OPTIONS}
-              value={obs.doppler ?? null}
-              onChange={v => assignSvc.setObservation(site.key, 'doppler', v)}
-            />
-            <ScoreSelector
-              label="Inflammatory Fat"
-              options={FAT_OPTIONS}
-              value={obs.inflammatoryFat ?? null}
-              onChange={v => assignSvc.setObservation(site.key, 'inflammatoryFat', v)}
-            />
-            <ScoreSelector
-              label="Wall Stratification"
-              options={STRAT_OPTIONS}
-              value={obs.stratification ?? null}
-              onChange={v => assignSvc.setObservation(site.key, 'stratification', v)}
-            />
-            <ScoreSelector
-              label="Lymphadenopathy"
-              options={LYMPH_OPTIONS}
-              value={obs.lymphadenopathy ?? null}
-              onChange={v => assignSvc.setObservation(site.key, 'lymphadenopathy', v)}
-            />
-            {site.hasHaustrations && (
-              <ScoreSelector
-                label="Haustrations"
-                options={HAUSTRATION_OPTIONS}
-                value={obs.haustrations ?? null}
-                onChange={v => assignSvc.setObservation(site.key, 'haustrations', v)}
-              />
-            )}
-          </div>
-          {site.hasComplications && (
+
+          {showObservations && (
+            <div className="gi-observations space-y-1 border-t border-gray-700 pt-2">
+              <p className="mb-1 text-xs uppercase tracking-wide text-gray-500">Observations</p>
+              {showDoppler && (
+                <ScoreSelector label="Doppler Vascularity" options={DOPPLER_OPTIONS} value={obs.doppler ?? null} onChange={value => onObservationChange?.(site.key, 'doppler', value)} />
+              )}
+              {showFat && (
+                <ScoreSelector label="Inflammatory Fat" options={FAT_OPTIONS} value={obs.inflammatoryFat ?? null} onChange={value => onObservationChange?.(site.key, 'inflammatoryFat', value)} />
+              )}
+              {showStratification && (
+                <ScoreSelector label="Wall Stratification" options={STRAT_OPTIONS} value={obs.stratification ?? null} onChange={value => onObservationChange?.(site.key, 'stratification', value)} />
+              )}
+              {showLymph && (
+                <ScoreSelector label="Lymphadenopathy" options={LYMPH_OPTIONS} value={obs.lymphadenopathy ?? null} onChange={value => onObservationChange?.(site.key, 'lymphadenopathy', value)} />
+              )}
+              {showHaustration && (
+                <ScoreSelector label="Haustration" options={HAUSTRATION_OPTIONS} value={obs.haustrations ?? null} onChange={value => onObservationChange?.(site.key, 'haustrations', value)} />
+              )}
+              {showCineQuality && (
+                <div className="mt-2 border-t border-gray-800 pt-2">
+                  <ScoreSelector label="Segment Cine Quality" options={CINE_QUALITY_OPTIONS} value={obs.cineQuality ?? null} onChange={value => onObservationChange?.(site.key, 'cineQuality', value)} />
+                  <textarea
+                    className="mt-2 min-h-[52px] w-full rounded border border-gray-600 bg-gray-800 px-2 py-1 text-xs text-gray-100"
+                    value={obs.cineQualityComment ?? ''}
+                    onChange={event => onObservationChange?.(site.key, 'cineQualityComment', event.target.value)}
+                    placeholder="Cine quality comments..."
+                  />
+                </div>
+              )}
+            </div>
+          )}
+
+          {showComplications && (
             <div className="mt-2 border-t border-gray-700 pt-2">
               <ScoreSelector
                 label="Complications"
                 options={COMPLICATION_OPTIONS}
                 value={obs.complications ?? null}
-                onChange={v => {
-                  if (v === 0 || v == null) {
-                    assignSvc.setObservations(site.key, {
-                      complications: v,
+                onChange={value => {
+                  if (value === 0 || value == null) {
+                    onObservationsChange?.(site.key, {
+                      complications: value,
                       complicationTypes: [],
                       complicationText: '',
                       strictureMaxBWT: '',
@@ -285,7 +247,7 @@ export default function SiteAccordion({
                       strictureUpstreamDilation: '',
                     });
                   } else {
-                    assignSvc.setObservation(site.key, 'complications', v);
+                    onObservationChange?.(site.key, 'complications', value);
                   }
                 }}
               />
@@ -308,10 +270,10 @@ export default function SiteAccordion({
                           onClick={() => {
                             const current = obs.complicationTypes ?? [];
                             const next = selected
-                              ? current.filter(v => v !== item.value)
+                              ? current.filter(value => value !== item.value)
                               : [...current, item.value];
                             if (selected && item.value === 'stricture') {
-                              assignSvc.setObservations(site.key, {
+                              onObservationsChange?.(site.key, {
                                 complicationTypes: next,
                                 strictureMaxBWT: '',
                                 strictureMinimalLuminalDiameter: '',
@@ -319,7 +281,7 @@ export default function SiteAccordion({
                                 strictureUpstreamDilation: '',
                               });
                             } else {
-                              assignSvc.setObservation(site.key, 'complicationTypes', next);
+                              onObservationChange?.(site.key, 'complicationTypes', next);
                             }
                           }}
                         >
@@ -331,9 +293,7 @@ export default function SiteAccordion({
 
                   {hasStrictureSelected(obs) && (
                     <div className="bg-gray-950/40 rounded border border-gray-700 p-2">
-                      <div className="mb-2 text-xs font-semibold text-gray-300">
-                        Stricture measurements
-                      </div>
+                      <div className="mb-2 text-xs font-semibold text-gray-300">Stricture measurements</div>
                       <div className="grid grid-cols-1 gap-2">
                         {STRICTURE_FIELDS.map(field => (
                           <label key={field.key} className="block">
@@ -344,9 +304,7 @@ export default function SiteAccordion({
                               step="0.1"
                               className="w-full rounded border border-gray-600 bg-gray-800 px-2 py-1 text-xs text-gray-100"
                               value={obs[field.key] ?? ''}
-                              onChange={e =>
-                                assignSvc.setObservation(site.key, field.key, e.target.value)
-                              }
+                              onChange={event => onObservationChange?.(site.key, field.key, event.target.value)}
                               placeholder={field.placeholder}
                             />
                           </label>
@@ -358,9 +316,7 @@ export default function SiteAccordion({
                   <textarea
                     className="min-h-[56px] w-full rounded border border-gray-600 bg-gray-800 px-2 py-1 text-xs text-gray-100"
                     value={obs.complicationText ?? ''}
-                    onChange={e =>
-                      assignSvc.setObservation(site.key, 'complicationText', e.target.value)
-                    }
+                    onChange={event => onObservationChange?.(site.key, 'complicationText', event.target.value)}
                     placeholder="Describe complication findings..."
                   />
                 </div>

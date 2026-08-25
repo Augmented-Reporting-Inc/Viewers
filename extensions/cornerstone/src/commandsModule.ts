@@ -8,6 +8,7 @@ import {
   Types as CoreTypes,
   BaseVolumeViewport,
   getRenderingEngines,
+  eventTarget,
 } from '@cornerstonejs/core';
 import {
   ToolGroupManager,
@@ -45,10 +46,13 @@ import {
   REVIEWER_MEASUREMENTS_WORKFLOW,
   VIEWER_MEASUREMENTS_WORKFLOW,
   getRequestedWorkflowAnnotations,
+  getViewerRepeatedMeasurementMetadata,
+  isRepeatedViewerMeasurement,
   upsertViewerMeasurementAnnotations,
 } from './utils/measurementAnnotations';
 import {
   applyReviewMeasurementAnnotationStyle,
+  ensureSeriesDocForActiveStudy,
   fetchSeriesDocForActiveStudy,
   hydrateSavedViewerAnnotationForViewport,
   hydrateMeasurementAnnotationsForActiveStudy as hydrateMeasurementAnnotationsForActiveStudyUtil,
@@ -63,7 +67,32 @@ import {
   normalizeLVTraceSelection,
   parseLVTraceLabel,
 } from './utils/lvTraceLabels';
-import { buildLVSimpsonContourFromHingeApex } from './utils/lvSimpsonContour';
+import {
+  LA_VOLUME_LABELS,
+  LA_VOLUME_MEASUREMENT_KIND,
+  LA_VOLUME_MEASUREMENT_LABELS_CONFIG,
+  LA_VOLUME_REQUIRED_SLOTS,
+  getLAVolumeLabelForSlot,
+  normalizeLAVolumeSelection,
+  parseLAVolumeLabel,
+} from './utils/laVolumeLabels';
+import {
+  buildEchoVolumeContourFromBaseAxis,
+  buildLVSimpsonContourFromHingeApex,
+} from './utils/lvSimpsonContour';
+import {
+  SPECTRAL_DOPPLER_LABEL,
+  SPECTRAL_DOPPLER_MEASUREMENT_KIND,
+  buildSpectralDopplerDisplayText,
+  calculateSpectralDopplerVTI,
+  getSpectralDopplerSummaryText,
+} from './utils/spectralDoppler';
+import {
+  buildViewerReportFieldUpdates,
+  buildViewerReportMapping,
+  getSpectralDopplerVtiTargetOptions,
+  normalizeSpectralDopplerVtiTargetSelection,
+} from './utils/viewerReportMapping';
 
 const { DefaultHistoryMemo } = csUtils.HistoryMemo;
 const toggleSyncFunctions = {
@@ -83,14 +112,18 @@ const VIEWER_CONTOUR_TOOL_NAMES = new Set(
 );
 
 const AR_LV_SIMPSON_SESSION_EVENT = 'ar-measurements:lv-simpson-session-updated';
+const AR_LA_VOLUME_SESSION_EVENT = 'ar-measurements:la-volume-session-updated';
 
 const lvSimpsonSessionMeasurementsByUid = new Map<string, any>();
+const laVolumeSessionMeasurementsByUid = new Map<string, any>();
 let activeLVSimpsonWorkflowSessionId = '';
+let activeLAVolumeWorkflowSessionId = '';
 
 const LV_SIMPSON_MIN_AXIS_MM = 25;
 const LV_SIMPSON_MAX_AXIS_MM = 130;
 const LV_SIMPSON_SLOT_PAIR_AXIS_WARNING_RATIO = 0.35;
 const LV_SIMPSON_AUTO_CONTINUE_DELAY_MS = 250;
+const LA_VOLUME_AUTO_CONTINUE_DELAY_MS = 250;
 
 function getLVSimpsonAxisLengthFromMeasurement(measurement: any = {}) {
   const geometry = measurement?.lvSimpson || measurement?.measurements?.lvSimpson || {};
@@ -203,6 +236,124 @@ function removeLVSimpsonSessionMeasurement(uid = '') {
   });
 }
 
+function getLAVolumeSessionMeasurements() {
+  return Array.from(laVolumeSessionMeasurementsByUid.values());
+}
+
+function dispatchLAVolumeSessionMeasurements(detail = {}) {
+  try {
+    window.dispatchEvent(
+      new CustomEvent(AR_LA_VOLUME_SESSION_EVENT, {
+        detail: {
+          ...detail,
+          measurements: getLAVolumeSessionMeasurements(),
+        },
+      })
+    );
+  } catch {}
+}
+
+function upsertLAVolumeSessionMeasurement(measurement) {
+  const uid = getMeasurementAnnotationId(measurement);
+
+  if (!uid) {
+    return;
+  }
+
+  laVolumeSessionMeasurementsByUid.set(uid, measurement);
+  dispatchLAVolumeSessionMeasurements({
+    reason: 'la-volume-session-upsert',
+    uid,
+    slot: measurement?.slot || measurement?.laVolume?.slot || '',
+  });
+}
+
+function removeLAVolumeSessionMeasurement(uid = '') {
+  const measurementUid = String(uid || '').trim();
+
+  if (!measurementUid) {
+    return;
+  }
+
+  const existing = laVolumeSessionMeasurementsByUid.get(measurementUid);
+  laVolumeSessionMeasurementsByUid.delete(measurementUid);
+
+  dispatchLAVolumeSessionMeasurements({
+    reason: 'la-volume-session-remove',
+    uid: measurementUid,
+    slot: existing?.slot || existing?.laVolume?.slot || '',
+  });
+}
+
+function mergeViewerMeasurementSnapshots(...sources: any[][]) {
+  const measurementsWithoutId: any[] = [];
+  const measurementsById = new Map<string, any>();
+
+  for (const source of sources) {
+    for (const measurement of Array.isArray(source) ? source : []) {
+      const measurementId = getMeasurementAnnotationId(measurement);
+
+      if (!measurementId) {
+        measurementsWithoutId.push(measurement);
+        continue;
+      }
+
+      // Later sources are more authoritative. Session measurements are used
+      // only as a fallback until MeasurementService has caught up.
+      measurementsById.set(measurementId, measurement);
+    }
+  }
+
+  return [...measurementsWithoutId, ...measurementsById.values()];
+}
+
+function synchronizeViewerMeasurementSessionFallbacks(liveMeasurements: any[] = []) {
+  let lvSimpsonChanged = false;
+  let laVolumeChanged = false;
+
+  for (const liveMeasurement of Array.isArray(liveMeasurements) ? liveMeasurements : []) {
+    const measurementId = getMeasurementAnnotationId(liveMeasurement);
+
+    if (!measurementId) {
+      continue;
+    }
+
+    if (lvSimpsonSessionMeasurementsByUid.has(measurementId)) {
+      lvSimpsonSessionMeasurementsByUid.set(measurementId, liveMeasurement);
+      lvSimpsonChanged = true;
+    }
+
+    if (laVolumeSessionMeasurementsByUid.has(measurementId)) {
+      laVolumeSessionMeasurementsByUid.set(measurementId, liveMeasurement);
+      laVolumeChanged = true;
+    }
+  }
+
+  if (lvSimpsonChanged) {
+    dispatchLVSimpsonSessionMeasurements({
+      reason: 'measurement-service-synchronized',
+    });
+  }
+
+  if (laVolumeChanged) {
+    dispatchLAVolumeSessionMeasurements({
+      reason: 'measurement-service-synchronized',
+    });
+  }
+}
+
+function getCurrentViewerMeasurementSnapshot(measurementService: any) {
+  const liveMeasurements = measurementService?.getMeasurements?.() || [];
+
+  synchronizeViewerMeasurementSessionFallbacks(liveMeasurements);
+
+  return mergeViewerMeasurementSnapshots(
+    getLVSimpsonSessionMeasurements(),
+    getLAVolumeSessionMeasurements(),
+    liveMeasurements
+  );
+}
+
 function isViewerContourTool(toolName) {
   return VIEWER_CONTOUR_TOOL_NAMES.has(toolName);
 }
@@ -218,6 +369,13 @@ function normalizeViewerMeasurementDomain(value = '') {
   }
 
   return ['generic', 'echo', 'bowel'].includes(domain) ? domain : '';
+}
+
+function viewerMeasurementDomainsMatch(annotationDomain = '', requestedDomain = '') {
+  const annotation = normalizeViewerMeasurementDomain(annotationDomain || 'generic') || 'generic';
+  const requested = normalizeViewerMeasurementDomain(requestedDomain || 'generic') || 'generic';
+
+  return requested === 'generic' || annotation === requested || annotation === 'generic';
 }
 
 function getExplicitViewerMeasurementDomain(explicitDomain = '') {
@@ -969,6 +1127,60 @@ function getLVSimpsonGeometry(measurement, existingAnnotation = null) {
   );
 }
 
+function updateEchoVolumeGeometryFromMeasurement(geometry = {}, measurement: any = {}) {
+  const points = Array.isArray(measurement?.points) ? measurement.points : [];
+
+  if (points.length < 3) {
+    return geometry;
+  }
+
+  const baseLeftPoint = points[0];
+  const baseRightPoint = points[points.length - 1];
+  const configuredAxisPointIndex = Number(geometry?.axisPointIndex);
+  const fallbackAxisPointIndex = Math.floor((points.length - 1) / 2);
+  const axisPointIndex =
+    Number.isInteger(configuredAxisPointIndex) &&
+    configuredAxisPointIndex > 0 &&
+    configuredAxisPointIndex < points.length - 1
+      ? configuredAxisPointIndex
+      : fallbackAxisPointIndex;
+  const axisPoint = points[axisPointIndex];
+
+  if (
+    !Array.isArray(baseLeftPoint) ||
+    !Array.isArray(baseRightPoint) ||
+    !Array.isArray(axisPoint)
+  ) {
+    return {
+      ...geometry,
+      contourPoints: points,
+    };
+  }
+
+  const baseMidpoint = [
+    (Number(baseLeftPoint[0]) + Number(baseRightPoint[0])) / 2,
+    (Number(baseLeftPoint[1]) + Number(baseRightPoint[1])) / 2,
+    (Number(baseLeftPoint[2] || 0) + Number(baseRightPoint[2] || 0)) / 2,
+  ];
+  const dx = Number(axisPoint[0]) - baseMidpoint[0];
+  const dy = Number(axisPoint[1]) - baseMidpoint[1];
+  const dz = Number(axisPoint[2] || 0) - baseMidpoint[2];
+  const longAxisLengthMM = Math.sqrt(dx * dx + dy * dy + dz * dz);
+
+  return {
+    ...geometry,
+    baseLeftPoint,
+    baseRightPoint,
+    baseMidpoint,
+    axisPoint,
+    axisPointIndex,
+    contourPoints: points,
+    ...(Number.isFinite(longAxisLengthMM) && longAxisLengthMM > 0
+      ? { longAxisLengthMM }
+      : {}),
+  };
+}
+
 function getLVSimpsonMeasurementPayload(measurement, existingAnnotation = null) {
   const lvSimpson = getLVSimpsonGeometry(measurement, existingAnnotation);
 
@@ -976,13 +1188,121 @@ function getLVSimpsonMeasurementPayload(measurement, existingAnnotation = null) 
     return {};
   }
 
+  const contourPoints = Array.isArray(measurement?.points) ? measurement.points : [];
+
+  // SplineROI is a closed contour. Preserve the user-confirmed hinge/apex
+  // geometry as the long-axis source of truth and update only the editable
+  // contour shape. Re-deriving the hinge/apex from sampled spline endpoints
+  // can collapse or move the axis and produce report values that disagree
+  // with the guided LV Simpson workflow.
+  const updatedGeometry = {
+    ...(existingAnnotation?.measurements?.lvSimpson || {}),
+    ...lvSimpson,
+    ...(contourPoints.length >= 3 ? { contourPoints } : {}),
+  };
+
   return {
     measurementKind: LV_SIMPSON_MEASUREMENT_KIND,
     lvSimpson: {
-      ...(existingAnnotation?.measurements?.lvSimpson || {}),
-      ...lvSimpson,
+      ...updatedGeometry,
+      apexPoint: updatedGeometry.apexPoint || updatedGeometry.axisPoint,
+      axisPoint: updatedGeometry.axisPoint || updatedGeometry.apexPoint,
       measurementKind: LV_SIMPSON_MEASUREMENT_KIND,
     },
+  };
+}
+
+function getLAVolumeGeometry(measurement, existingAnnotation = null) {
+  return (
+    measurement?.laVolume ||
+    measurement?.measurements?.laVolume ||
+    measurement?.geometry?.laVolume ||
+    existingAnnotation?.laVolume ||
+    existingAnnotation?.measurements?.laVolume ||
+    null
+  );
+}
+
+function getLAVolumeMeasurementPayload(measurement, existingAnnotation = null) {
+  const laVolume = getLAVolumeGeometry(measurement, existingAnnotation);
+
+  if (!laVolume) {
+    return {};
+  }
+
+  const contourPoints = Array.isArray(measurement?.points) ? measurement.points : [];
+
+  // SplineROI is a closed contour. Its first and last sampled points can be the
+  // same point and its resampling can move indices, so the contour must never
+  // redefine the user-confirmed annular endpoints or superior long-axis point.
+  // Preserve the guided geometry and update only the editable contour shape.
+  const updatedGeometry = {
+    ...(existingAnnotation?.measurements?.laVolume || {}),
+    ...laVolume,
+    ...(contourPoints.length >= 3 ? { contourPoints } : {}),
+  };
+
+  return {
+    measurementKind: LA_VOLUME_MEASUREMENT_KIND,
+    laVolume: {
+      ...updatedGeometry,
+      superiorPoint: updatedGeometry.superiorPoint || updatedGeometry.axisPoint,
+      axisPoint: updatedGeometry.axisPoint || updatedGeometry.superiorPoint,
+      measurementKind: LA_VOLUME_MEASUREMENT_KIND,
+    },
+  };
+}
+
+function getSpectralDopplerGeometry(measurement, existingAnnotation = null) {
+  return (
+    measurement?.spectralDoppler ||
+    measurement?.measurements?.spectralDoppler ||
+    existingAnnotation?.spectralDoppler ||
+    existingAnnotation?.measurements?.spectralDoppler ||
+    null
+  );
+}
+
+function isSpectralDopplerViewerMeasurement(measurement: any = {}) {
+  const spectralDoppler = getSpectralDopplerGeometry(measurement, measurement);
+
+  return (
+    measurement?.measurementKind === SPECTRAL_DOPPLER_MEASUREMENT_KIND ||
+    spectralDoppler?.measurementKind === SPECTRAL_DOPPLER_MEASUREMENT_KIND
+  );
+}
+
+function getSpectralDopplerMeasurementPayload(
+  measurement,
+  existingAnnotation = null,
+  displaySetService = null
+) {
+  const spectralDoppler = getSpectralDopplerGeometry(measurement, existingAnnotation);
+
+  if (!spectralDoppler) {
+    return {};
+  }
+
+  const dicomSource = displaySetService
+    ? getInstanceForViewerMeasurement(displaySetService, measurement)
+    : null;
+  const recalculated = calculateSpectralDopplerVTI({
+    points: measurement?.points || existingAnnotation?.points || [],
+    referencedImageId:
+      measurement?.referencedImageId || existingAnnotation?.referencedImageId || '',
+    dicomSource,
+  });
+  const nextSpectralDoppler = {
+    ...(existingAnnotation?.measurements?.spectralDoppler || {}),
+    ...spectralDoppler,
+    ...recalculated,
+    measurementKind: SPECTRAL_DOPPLER_MEASUREMENT_KIND,
+  };
+
+  return {
+    measurementKind: SPECTRAL_DOPPLER_MEASUREMENT_KIND,
+    spectralDoppler: nextSpectralDoppler,
+    displayText: buildSpectralDopplerDisplayText(nextSpectralDoppler),
   };
 }
 
@@ -995,19 +1315,42 @@ function serializeViewerMeasurement(measurement, domain, existingAnnotation = nu
   const isContourMeasurement = isViewerContourTool(measurement?.toolName);
   const lvTrace = domain === 'echo' && isContourMeasurement ? parseLVTraceLabel(label) : null;
   const lvSimpson = getLVSimpsonGeometry(measurement, existingAnnotation);
+  const laVolume = getLAVolumeGeometry(measurement, existingAnnotation);
+  const spectralDoppler = getSpectralDopplerGeometry(measurement, existingAnnotation);
+  const reportMapping =
+    measurement?.reportMapping ||
+    spectralDoppler?.reportMapping ||
+    existingAnnotation?.reportMapping ||
+    existingAnnotation?.spectralDoppler?.reportMapping ||
+    existingAnnotation?.measurements?.spectralDoppler?.reportMapping ||
+    null;
   const isLVSimpson = domain === 'echo' && !!lvSimpson;
+  const isLAVolume = domain === 'echo' && !!laVolume;
+  const isSpectralDoppler =
+    measurement?.measurementKind === SPECTRAL_DOPPLER_MEASUREMENT_KIND ||
+    spectralDoppler?.measurementKind === SPECTRAL_DOPPLER_MEASUREMENT_KIND;
   const frameNumber =
     measurement.frameNumber && measurement.frameNumber > 1
       ? measurement.frameNumber
       : getFrameNumberFromReferencedImageId(measurement.referencedImageId);
 
   const nextMeasurements = {
-    ...(isContourMeasurement
+    ...(isContourMeasurement && !isSpectralDoppler
       ? buildContourMeasurementPayload(measurement, existingAnnotation, options.displaySetService)
       : isArrowAnnotateMeasurement
         ? getArrowAnnotateMeasurementPayload(measurement, existingAnnotation)
-        : getLengthMeasurementPayload(measurement)),
+        : !isContourMeasurement
+          ? getLengthMeasurementPayload(measurement)
+          : {}),
     ...(isLVSimpson ? getLVSimpsonMeasurementPayload(measurement, existingAnnotation) : {}),
+    ...(isLAVolume ? getLAVolumeMeasurementPayload(measurement, existingAnnotation) : {}),
+    ...(isSpectralDoppler
+      ? getSpectralDopplerMeasurementPayload(
+          measurement,
+          existingAnnotation,
+          options.displaySetService
+        )
+      : {}),
   };
 
   const finalDisplayText =
@@ -1015,13 +1358,17 @@ function serializeViewerMeasurement(measurement, domain, existingAnnotation = nu
       ? nextMeasurements.displayText
       : existingAnnotation?.displayText || [];
 
+  const repeatedMeasurement = getViewerRepeatedMeasurementMetadata(measurement);
+  const measurementMode = repeatedMeasurement ? 'repeated' : 'single';
+
   return {
     annotationId: measurement.uid,
     workflow: options.workflow || VIEWER_MEASUREMENTS_WORKFLOW,
     role: lvTrace?.slot || measurement?.slot || label,
     domain,
-    mode: 'single',
+    mode: measurementMode,
     measurementRole: lvTrace?.label || measurement?.measurementRole || label,
+    ...(repeatedMeasurement ? { repeatedMeasurement } : {}),
 
     uid: measurement.uid,
     label,
@@ -1049,6 +1396,24 @@ function serializeViewerMeasurement(measurement, domain, existingAnnotation = nu
           view: lvSimpson.view || lvTrace?.view || measurement?.view,
           phase: lvSimpson.phase || lvTrace?.phase || measurement?.phase,
           lvSimpson: nextMeasurements.lvSimpson,
+        }
+      : {}),
+
+    ...(isLAVolume
+      ? {
+          measurementKind: LA_VOLUME_MEASUREMENT_KIND,
+          slot: laVolume.slot || measurement?.slot,
+          view: laVolume.view || measurement?.view,
+          phase: laVolume.phase || measurement?.phase || 'ES',
+          laVolume: nextMeasurements.laVolume,
+        }
+      : {}),
+
+    ...(isSpectralDoppler
+      ? {
+          measurementKind: SPECTRAL_DOPPLER_MEASUREMENT_KIND,
+          spectralDoppler: nextMeasurements.spectralDoppler,
+          ...(reportMapping ? { reportMapping } : {}),
         }
       : {}),
 
@@ -1125,6 +1490,30 @@ function findMeasurementServiceMeasurementById(measurementService, measurementId
       return ids.includes(id);
     }) || null
   );
+}
+
+async function waitForViewerMeasurementServiceEntry(
+  measurementService,
+  measurementId = '',
+  attempts = 40
+) {
+  const id = String(measurementId || '').trim();
+
+  if (!id || !measurementService) {
+    return null;
+  }
+
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const measurement = findMeasurementServiceMeasurementById(measurementService, id);
+
+    if (measurement) {
+      return measurement;
+    }
+
+    await sleep(25);
+  }
+
+  return null;
 }
 
 function getSelectedMeasurementIdFromViewport(element) {
@@ -1892,6 +2281,15 @@ function getSavedContourAreaForDisplay(savedAnnotation, referencedImageId = '') 
 }
 
 function getSavedAnnotationDisplayText(savedAnnotation) {
+  const savedSpectralDoppler = getSpectralDopplerGeometry(savedAnnotation, savedAnnotation);
+
+  if (
+    savedAnnotation?.measurementKind === SPECTRAL_DOPPLER_MEASUREMENT_KIND ||
+    savedSpectralDoppler?.measurementKind === SPECTRAL_DOPPLER_MEASUREMENT_KIND
+  ) {
+    return buildSpectralDopplerDisplayText(savedSpectralDoppler || {});
+  }
+
   if (savedAnnotation?.toolName === 'ArrowAnnotate') {
     const text = getArrowAnnotateText(savedAnnotation);
     return text ? [text] : [];
@@ -1930,6 +2328,10 @@ function getSavedAnnotationDisplayText(savedAnnotation) {
 }
 
 function buildSavedAnnotationStatsForMeasurementService(savedAnnotation, referencedImageId = '') {
+  if (savedAnnotation?.measurementKind === SPECTRAL_DOPPLER_MEASUREMENT_KIND) {
+    return {};
+  }
+
   const targetId = referencedImageId || savedAnnotation?.referencedImageId;
   const measurements = savedAnnotation?.measurements || {};
   const statsKey = targetId ? `imageId:${targetId}` : '';
@@ -2012,6 +2414,10 @@ function removeInvalidCornerstoneCachedStatsKeys(cachedStats = {}) {
 }
 
 function buildSavedAnnotationStatsForCornerstone(savedAnnotation, referencedImageId = '') {
+  if (savedAnnotation?.measurementKind === SPECTRAL_DOPPLER_MEASUREMENT_KIND) {
+    return {};
+  }
+
   const targetIds = getSavedAnnotationStatsTargetIds(savedAnnotation, referencedImageId);
   const measurements = savedAnnotation?.measurements || {};
 
@@ -2236,6 +2642,12 @@ function forceSavedAnnotationMeasurementServiceDisplay({
     referenceStudyUID: savedAnnotation.StudyInstanceUID || currentMeasurement.referenceStudyUID,
     FrameOfReferenceUID:
       savedAnnotation.FrameOfReferenceUID || currentMeasurement.FrameOfReferenceUID || '',
+    ...(savedAnnotation?.measurementKind === SPECTRAL_DOPPLER_MEASUREMENT_KIND
+      ? {
+          measurementKind: SPECTRAL_DOPPLER_MEASUREMENT_KIND,
+          spectralDoppler: getSpectralDopplerGeometry(savedAnnotation, savedAnnotation),
+        }
+      : {}),
     data: {
       ...(currentMeasurement.data || {}),
       ...stats,
@@ -2255,7 +2667,10 @@ function forceSavedAnnotationMeasurementServiceDisplay({
     }
   }
 
-  if (isViewerContourTool(savedAnnotation.toolName)) {
+  if (
+    isViewerContourTool(savedAnnotation.toolName) &&
+    savedAnnotation?.measurementKind !== SPECTRAL_DOPPLER_MEASUREMENT_KIND
+  ) {
     const measurements = savedAnnotation.measurements || {};
     const area = getSavedContourAreaForDisplay(
       savedAnnotation,
@@ -3230,6 +3645,69 @@ function installLVSimpsonContourTextCleanupForViewport({ viewport, viewportId = 
   toolInstance.__arLVSimpsonTextCleanupInstalled = true;
 }
 
+function installSpectralDopplerTextOverrideForViewport({ viewport, viewportId = '' }) {
+  if (!viewport) {
+    return;
+  }
+
+  let toolGroup = null;
+
+  try {
+    toolGroup =
+      ToolGroupManager.getToolGroupForViewport?.(
+        viewport.id || viewportId,
+        viewport.renderingEngineId
+      ) || ToolGroupManager.getToolGroupForViewport?.(viewport.id || viewportId);
+  } catch {
+    toolGroup = null;
+  }
+
+  const toolName = toolNames.PlanarFreehandROI || 'PlanarFreehandROI';
+  const toolInstance = toolGroup?.getToolInstance?.(toolName);
+
+  if (!toolInstance || toolInstance.__arSpectralDopplerTextOverrideInstalled) {
+    return;
+  }
+
+  const previousGetTextLines = toolInstance.configuration?.getTextLines;
+
+  const getOverrideText = (...args) => {
+    for (const arg of args) {
+      const candidates = [arg?.data, arg?.annotation?.data, arg?.annotationData, arg].filter(Boolean);
+
+      for (const candidate of candidates) {
+        const overrideText =
+          candidate?.arSpectralDopplerDisplayText || candidate?.arSavedMeasurementDisplayText;
+
+        if (Array.isArray(overrideText) && overrideText.length > 0) {
+          return overrideText;
+        }
+      }
+    }
+
+    return null;
+  };
+
+  const nextConfiguration = {
+    ...(toolInstance.configuration || {}),
+    getTextLines: function (...args) {
+      const overrideText = getOverrideText(...args);
+
+      if (overrideText) {
+        return overrideText;
+      }
+
+      return typeof previousGetTextLines === 'function'
+        ? previousGetTextLines.call(this, ...args)
+        : [];
+    },
+  };
+
+  toolInstance.configuration = nextConfiguration;
+  toolGroup?.setToolConfiguration?.(toolName, nextConfiguration, true);
+  toolInstance.__arSpectralDopplerTextOverrideInstalled = true;
+}
+
 function captureLVSimpsonDrag({ viewport, onPreview, isCancelled }) {
   const element = viewport?.element;
 
@@ -3466,6 +3944,182 @@ async function resolveLVSimpsonSlot({
   const slotInfo = parseLVTraceLabel(label);
 
   return slotInfo ? { label, slotInfo } : null;
+}
+
+function normalizeLAVolumeSlot(slot = '') {
+  const normalizedSlot = String(slot || '')
+    .trim()
+    .toUpperCase();
+
+  return LA_VOLUME_REQUIRED_SLOTS.includes(normalizedSlot) ? normalizedSlot : '';
+}
+
+function getLAVolumeSlotLabel(slot = '') {
+  return getLAVolumeLabelForSlot(normalizeLAVolumeSlot(slot));
+}
+
+function getLAVolumeSlotDisplayName(slot = '') {
+  const normalizedSlot = normalizeLAVolumeSlot(slot);
+  const viewLabel = normalizedSlot === 'A4C' ? 'Apical 4-chamber' : 'Apical 2-chamber';
+
+  return `${viewLabel} at maximum LA volume (end-systole)`;
+}
+
+function buildLAVolumeSlotSelection(slot = '') {
+  const normalizedSlot = normalizeLAVolumeSlot(slot);
+  const label = getLAVolumeSlotLabel(normalizedSlot);
+  const slotInfo = parseLAVolumeLabel(label);
+
+  return slotInfo ? { label, slotInfo } : null;
+}
+
+function isLAVolumeMeasurement(measurement: any = {}) {
+  const measurementKind =
+    measurement?.measurementKind ||
+    measurement?.measurements?.measurementKind ||
+    measurement?.laVolume?.measurementKind ||
+    measurement?.measurements?.laVolume?.measurementKind;
+
+  return !!(
+    measurementKind === LA_VOLUME_MEASUREMENT_KIND ||
+    measurement?.laVolume ||
+    measurement?.measurements?.laVolume
+  );
+}
+
+function getLAVolumeSlotFromMeasurement(measurement: any = {}) {
+  if (!isLAVolumeMeasurement(measurement)) {
+    return '';
+  }
+
+  const geometry = measurement?.laVolume || measurement?.measurements?.laVolume || {};
+  const directSlot = normalizeLAVolumeSlot(geometry.slot || measurement?.slot);
+
+  if (directSlot) {
+    return directSlot;
+  }
+
+  const labelSlot = parseLAVolumeLabel(
+    geometry.label || measurement?.measurementRole || measurement?.label || measurement?.role || ''
+  )?.slot;
+
+  return normalizeLAVolumeSlot(labelSlot);
+}
+
+function getLAVolumeSlotCandidates(measurements: any[] = []) {
+  const bySlot = new Map<string, any[]>();
+
+  for (const measurement of Array.isArray(measurements) ? measurements : []) {
+    const slot = getLAVolumeSlotFromMeasurement(measurement);
+
+    if (!slot) {
+      continue;
+    }
+
+    if (!bySlot.has(slot)) {
+      bySlot.set(slot, []);
+    }
+
+    bySlot.get(slot).push(measurement);
+  }
+
+  return bySlot;
+}
+
+function getNextMissingLAVolumeSlot(slotCandidates: Map<string, any[]>) {
+  return LA_VOLUME_REQUIRED_SLOTS.find(slot => !slotCandidates.get(slot)?.length) || '';
+}
+
+function getLAVolumeStepNumber(slot = '') {
+  const index = LA_VOLUME_REQUIRED_SLOTS.indexOf(normalizeLAVolumeSlot(slot));
+  return index >= 0 ? index + 1 : 1;
+}
+
+function getLAVolumeExistingMeasurementIds(measurements: any[] = []) {
+  return (Array.isArray(measurements) ? measurements : [])
+    .map(getMeasurementAnnotationId)
+    .filter(Boolean);
+}
+
+function getLAVolumeSlotDialogConfig() {
+  return {
+    ...LA_VOLUME_MEASUREMENT_LABELS_CONFIG,
+    labelOnMeasure: false,
+    items: LA_VOLUME_LABELS,
+  };
+}
+
+async function resolveLAVolumeSlot({
+  uiDialogService,
+  customizationService,
+  title = 'LA Volume Slot',
+  defaultSlot = 'A4C',
+} = {}) {
+  const renderContent = customizationService.getCustomization('ui.labellingComponent');
+  let value = null;
+  const defaultValue = getLAVolumeSlotLabel(defaultSlot) || 'LA-A4C-ES';
+
+  try {
+    value = await callInputDialogAutoComplete({
+      uiDialogService,
+      labelConfig: getLAVolumeSlotDialogConfig(),
+      renderContent,
+      title,
+    });
+  } catch (error) {
+    console.warn('[LA Volume] slot autocomplete failed; falling back to text input:', error);
+
+    value = await callInputDialog({
+      uiDialogService,
+      title,
+      placeholder: 'Choose LA-A4C-ES or LA-A2C-ES',
+      defaultValue,
+    });
+  }
+
+  const label = normalizeLAVolumeSelection(value);
+  const slotInfo = parseLAVolumeLabel(label);
+
+  return slotInfo ? { label, slotInfo } : null;
+}
+
+function getSpectralDopplerVtiTargetDialogConfig({ allowGeneric = false } = {}) {
+  return {
+    id: 'spectralDopplerVtiReportTarget',
+    labelOnMeasure: false,
+    exclusive: true,
+    items: getSpectralDopplerVtiTargetOptions({ includeGeneric: allowGeneric }),
+  };
+}
+
+async function resolveSpectralDopplerVtiTarget({
+  uiDialogService,
+  customizationService,
+  allowGeneric = false,
+} = {}) {
+  const renderContent = customizationService.getCustomization('ui.labellingComponent');
+  const options = getSpectralDopplerVtiTargetOptions({ includeGeneric: allowGeneric });
+  let value = null;
+
+  try {
+    value = await callInputDialogAutoComplete({
+      uiDialogService,
+      labelConfig: getSpectralDopplerVtiTargetDialogConfig({ allowGeneric }),
+      renderContent,
+      title: 'VTI Measurement Type',
+    });
+  } catch (error) {
+    console.warn('[VTI Trace] target autocomplete failed; falling back to text input:', error);
+
+    value = await callInputDialog({
+      uiDialogService,
+      title: 'VTI Measurement Type',
+      placeholder: options.map(option => option.label).join(', '),
+      defaultValue: options[0]?.label || 'LVOT VTI',
+    });
+  }
+
+  return normalizeSpectralDopplerVtiTargetSelection(value, { allowGeneric });
 }
 
 const VIEWER_QUIZ_MARKER_OVERLAY_CLASS = 'ar-viewer-quiz-marker-overlay';
@@ -4256,6 +4910,115 @@ function getArViewerSaveTargetFromUrl() {
 }
 
 const REVIEW_WORKFLOW_MEASUREMENTS_SAVE_TARGET = 'reviewWorkflowMeasurements';
+const CLINICAL_REPORT_MEASUREMENTS_SAVE_TARGET = 'clinicalReportMeasurements';
+const AR_REPORT_MEASUREMENTS_UPDATED_MESSAGE_TYPE = 'AR_REPORT_MEASUREMENTS_UPDATED';
+
+const AR_REPORT_REFRESH_IGNORED_FIELD_NAMES = new Set([
+  '_id',
+  'id',
+  '__v',
+  'tenantId',
+  'createdAt',
+  'updatedAt',
+  'audit',
+  'MeasurementAnnotations',
+  'viewerQuizResponses',
+  'lastSavedAt',
+  'lastTouchedAt',
+  'lastTouchedBy',
+  'lastViewedAt',
+  'lastPdfViewedAt',
+]);
+
+function areArReportFieldValuesEqual(left: any, right: any) {
+  if (Object.is(left, right)) {
+    return true;
+  }
+
+  if (left && right && typeof left === 'object' && typeof right === 'object') {
+    try {
+      return JSON.stringify(left) === JSON.stringify(right);
+    } catch {
+      return false;
+    }
+  }
+
+  return false;
+}
+
+function getChangedPersistedArReportFields(
+  previousSeriesDoc: any = {},
+  savedSeriesDoc: any = {}
+) {
+  if (
+    !previousSeriesDoc ||
+    typeof previousSeriesDoc !== 'object' ||
+    !savedSeriesDoc ||
+    typeof savedSeriesDoc !== 'object'
+  ) {
+    return {};
+  }
+
+  return Object.keys(savedSeriesDoc).reduce((updatedFields, fieldName) => {
+    if (
+      AR_REPORT_REFRESH_IGNORED_FIELD_NAMES.has(fieldName) ||
+      !/^[A-Za-z][A-Za-z0-9_]*$/.test(fieldName)
+    ) {
+      return updatedFields;
+    }
+
+    const previousValue = previousSeriesDoc[fieldName];
+    const savedValue = savedSeriesDoc[fieldName];
+
+    if (!areArReportFieldValuesEqual(previousValue, savedValue)) {
+      updatedFields[fieldName] = savedValue;
+    }
+
+    return updatedFields;
+  }, {} as Record<string, any>);
+}
+
+function postArReportMeasurementsUpdated({
+  seriesDoc,
+  fieldNames = [],
+  updatedFields = {},
+  source = 'viewer',
+}: {
+  seriesDoc?: any;
+  fieldNames?: string[];
+  updatedFields?: Record<string, any>;
+  source?: string;
+} = {}) {
+  const cleanFieldNames = Array.from(
+    new Set(
+      (Array.isArray(fieldNames) ? fieldNames : [])
+        .map(fieldName => String(fieldName || '').trim())
+        .filter(Boolean)
+    )
+  );
+
+  if (!seriesDoc || !cleanFieldNames.length) {
+    return;
+  }
+
+  try {
+    const message = {
+      type: AR_REPORT_MEASUREMENTS_UPDATED_MESSAGE_TYPE,
+      seriesKey: String(seriesDoc?._id || ''),
+      StudyInstanceUID: String(seriesDoc?.StudyInstanceUID || ''),
+      SeriesInstanceUID: String(seriesDoc?.SeriesInstanceUID || ''),
+      fieldNames: cleanFieldNames,
+      updatedFields,
+      updatedAt: seriesDoc?.updatedAt || '',
+      source,
+    };
+
+    window.opener?.postMessage(message, '*');
+    window.parent?.postMessage(message, '*');
+  } catch (messageError) {
+    console.warn('[MeasurementAnnotations] unable to notify AR of report measurement update:', messageError);
+  }
+}
 
 function normalizeReviewMeasurementRole(value: unknown = '') {
   const role = String(value || '')
@@ -4273,6 +5036,81 @@ function isReviewWorkflowMeasurementsSaveTarget(saveTarget: any = {}) {
     !!normalizeReviewMeasurementRole(saveTarget.measurementWorkflowRole) &&
     !!String(saveTarget.reviewWorkflowType || '').trim()
   );
+}
+
+function isClinicalReportMeasurementsSaveTarget(saveTarget: any = {}) {
+  return (
+    saveTarget.mode === CLINICAL_REPORT_MEASUREMENTS_SAVE_TARGET &&
+    !!String(saveTarget.seriesId || '').trim() &&
+    String(saveTarget.launchSource || '')
+      .trim()
+      .toLowerCase() === 'report'
+  );
+}
+
+function getClinicalViewerMeasurementSemanticKey(measurement: any = {}) {
+  if (measurement?.mode === 'repeated') {
+    return '';
+  }
+
+  const domain = normalizeViewerMeasurementDomain(measurement?.domain || 'generic') || 'generic';
+
+  if (domain !== 'echo') {
+    return '';
+  }
+
+  if (isLAVolumeMeasurement(measurement)) {
+    const slot = getLAVolumeSlotFromMeasurement(measurement);
+
+    return slot ? `echo:${LA_VOLUME_MEASUREMENT_KIND}:${slot}` : '';
+  }
+
+  if (isLVSimpsonMeasurement(measurement)) {
+    const slot = getLVSimpsonSlotFromMeasurement(measurement);
+
+    return slot ? `echo:${LV_SIMPSON_MEASUREMENT_KIND}:${slot}` : '';
+  }
+
+  if (isSpectralDopplerViewerMeasurement(measurement)) {
+    const spectralDoppler = getSpectralDopplerGeometry(measurement, measurement);
+    const targetKey = String(
+      measurement?.reportMapping?.targetKey ||
+        spectralDoppler?.reportMapping?.targetKey ||
+        measurement?.measurements?.spectralDoppler?.reportMapping?.targetKey ||
+        ''
+    )
+      .trim()
+      .toLowerCase();
+
+    return targetKey ? `echo:${SPECTRAL_DOPPLER_MEASUREMENT_KIND}:${targetKey}` : '';
+  }
+
+  return '';
+}
+
+function canonicalizeClinicalViewerMeasurementAnnotations(
+  annotations: any[] = [],
+  excludedSemanticKeys = new Set<string>()
+) {
+  const seenSemanticKeys = new Set<string>();
+  const canonicalReversed = [];
+
+  for (let index = annotations.length - 1; index >= 0; index -= 1) {
+    const measurement = annotations[index];
+    const semanticKey = getClinicalViewerMeasurementSemanticKey(measurement);
+
+    if (semanticKey) {
+      if (excludedSemanticKeys.has(semanticKey) || seenSemanticKeys.has(semanticKey)) {
+        continue;
+      }
+
+      seenSemanticKeys.add(semanticKey);
+    }
+
+    canonicalReversed.push(measurement);
+  }
+
+  return canonicalReversed.reverse();
 }
 
 function isReviewWorkflowMeasurementEditTarget(saveTarget: any = {}) {
@@ -4506,6 +5344,10 @@ async function ensureLearnerCopyForViewerSave(saveTarget) {
 async function resolveViewerReadSeriesDoc(servicesManager, { allowBaseFallback = true } = {}) {
   const saveTarget = getArViewerSaveTargetFromUrl();
 
+  if (isClinicalReportMeasurementsSaveTarget(saveTarget)) {
+    return fetchSeriesDocById(saveTarget.seriesId);
+  }
+
   if (isLearnerCopyOnSaveTarget(saveTarget)) {
     if (saveTarget.learnerSeriesId) {
       return fetchSeriesDocById(saveTarget.learnerSeriesId);
@@ -4521,6 +5363,14 @@ async function resolveViewerReadSeriesDoc(servicesManager, { allowBaseFallback =
 
 async function resolveViewerSaveSeriesDoc({ servicesManager, currentSeriesDoc }) {
   const saveTarget = getArViewerSaveTargetFromUrl();
+
+  if (isClinicalReportMeasurementsSaveTarget(saveTarget)) {
+    if (String(currentSeriesDoc?._id || '') === String(saveTarget.seriesId || '')) {
+      return currentSeriesDoc;
+    }
+
+    return fetchSeriesDocById(saveTarget.seriesId);
+  }
 
   if (!isLearnerCopyOnSaveTarget(saveTarget)) {
     return currentSeriesDoc || fetchSeriesDocForActiveStudy(servicesManager);
@@ -4693,10 +5543,37 @@ function commandsModule({
     });
   }
 
+  let activeSpectralDopplerWorkflowSessionId = '';
+  let spectralDopplerCompletionHandler: null | ((event: Event) => void) = null;
+  let spectralDopplerEscapeHandler: null | ((event: KeyboardEvent) => void) = null;
+
+  function clearSpectralDopplerWorkflowListeners({ resetSession = true } = {}) {
+    if (spectralDopplerCompletionHandler) {
+      eventTarget.removeEventListener(Enums.Events.ANNOTATION_COMPLETED, spectralDopplerCompletionHandler);
+      spectralDopplerCompletionHandler = null;
+    }
+
+    if (spectralDopplerEscapeHandler) {
+      window.removeEventListener('keydown', spectralDopplerEscapeHandler);
+      spectralDopplerEscapeHandler = null;
+    }
+
+    if (resetSession) {
+      activeSpectralDopplerWorkflowSessionId = '';
+    }
+  }
+
   const actions = {
     clearViewerMeasurementsCreatedInSession: () => {
       viewerMeasurementsCreatedInSession.clear();
       viewerMeasurementsDeletedInSession.clear();
+      lvSimpsonSessionMeasurementsByUid.clear();
+      laVolumeSessionMeasurementsByUid.clear();
+      activeLVSimpsonWorkflowSessionId = '';
+      activeLAVolumeWorkflowSessionId = '';
+      clearSpectralDopplerWorkflowListeners();
+      dispatchLVSimpsonSessionMeasurements({ reason: 'viewer-session-cleared' });
+      dispatchLAVolumeSessionMeasurements({ reason: 'viewer-session-cleared' });
     },
 
     markViewerMeasurementCreatedInSession: ({ uid }: { uid?: string } = {}) => {
@@ -5352,7 +6229,6 @@ function commandsModule({
 
       for (const existingMeasurementId of existingSlotMeasurementIds) {
         actions.removeMeasurement({ uid: existingMeasurementId });
-        removeLVSimpsonSessionMeasurement(existingMeasurementId);
       }
 
       dispatchLiveMeasurementsRefresh({
@@ -5523,6 +6399,583 @@ function commandsModule({
       });
 
       return measurement;
+    },
+    startLAVolumeWorkflow: async ({
+      slot: requestedSlot = '',
+      sessionId: requestedSessionId = '',
+    } = {}) => {
+      const workflowSessionId = requestedSessionId || `${csUtils.uuidv4()}`;
+
+      if (!requestedSessionId) {
+        activeLAVolumeWorkflowSessionId = workflowSessionId;
+      }
+
+      const isWorkflowCancelled = () => activeLAVolumeWorkflowSessionId !== workflowSessionId;
+      const { viewport } = _getActiveViewportEnabledElement() || {};
+      const activeViewportId = viewportGridService.getActiveViewportId();
+
+      if (!viewport?.element || !activeViewportId) {
+        uiNotificationService.show({
+          title: 'LA Volume',
+          message: 'No active image viewport is available.',
+          type: 'warning',
+          duration: 3500,
+        });
+        if (activeLAVolumeWorkflowSessionId === workflowSessionId) {
+          activeLAVolumeWorkflowSessionId = '';
+        }
+        return null;
+      }
+
+      if (isWorkflowCancelled()) {
+        return null;
+      }
+
+      const liveMeasurements = measurementService.getMeasurements?.() || [];
+      const slotCandidates = getLAVolumeSlotCandidates([
+        ...liveMeasurements,
+        ...getLAVolumeSessionMeasurements(),
+      ]);
+      const explicitSlot = normalizeLAVolumeSlot(requestedSlot);
+      const nextMissingSlot = getNextMissingLAVolumeSlot(slotCandidates);
+
+      let slotSelection = explicitSlot ? buildLAVolumeSlotSelection(explicitSlot) : null;
+
+      if (!slotSelection && nextMissingSlot) {
+        slotSelection = buildLAVolumeSlotSelection(nextMissingSlot);
+      }
+
+      if (!slotSelection) {
+        uiNotificationService.show({
+          title: 'LA Volume',
+          message: 'Both LA volume views already exist. Choose a view to replace.',
+          type: 'info',
+          duration: 4500,
+        });
+
+        slotSelection = await resolveLAVolumeSlot({
+          uiDialogService,
+          customizationService,
+          title: 'Replace LA Volume View',
+          defaultSlot: 'A4C',
+        });
+      }
+
+      if (!slotSelection || isWorkflowCancelled()) {
+        activeLAVolumeWorkflowSessionId = '';
+        return null;
+      }
+
+      const { label, slotInfo } = slotSelection;
+      const slotDisplayName = getLAVolumeSlotDisplayName(slotInfo.slot);
+      const stepNumber = getLAVolumeStepNumber(slotInfo.slot);
+      const existingSlotMeasurements = slotCandidates.get(slotInfo.slot) || [];
+      const existingSlotMeasurementIds = getLAVolumeExistingMeasurementIds(
+        existingSlotMeasurements
+      );
+      const overlay = createLVSimpsonPreviewOverlay(viewport.element);
+
+      uiNotificationService.show({
+        title: `LA Volume step ${stepNumber}/2`,
+        message: `Navigate to ${slotDisplayName}. Draw the mitral annular closure line from one annular edge to the other. Press Esc to cancel.`,
+        type: 'info',
+        duration: 8000,
+      });
+
+      const annulus = await captureLVSimpsonDrag({
+        viewport,
+        isCancelled: isWorkflowCancelled,
+        onPreview: ({ startWorld, currentWorld }) => {
+          drawLVSimpsonPreview({
+            overlay,
+            viewport,
+            baseLeftPoint: startWorld,
+            baseRightPoint: currentWorld,
+          });
+        },
+      });
+
+      if (!annulus || isWorkflowCancelled()) {
+        clearLVSimpsonPreviewOverlay(viewport.element);
+        setLVSimpsonViewportCursor(viewport.element, 'default');
+        activeLAVolumeWorkflowSessionId = '';
+        return null;
+      }
+
+      drawLVSimpsonPreview({
+        overlay,
+        viewport,
+        baseLeftPoint: annulus.startWorld,
+        baseRightPoint: annulus.endWorld,
+      });
+
+      uiNotificationService.show({
+        title: `LA Volume step ${stepNumber}/2`,
+        message: `Now drag from the annular midpoint to the inner edge of the furthest superior LA wall for ${slotDisplayName}.`,
+        type: 'info',
+        duration: 8000,
+      });
+
+      const superiorDrag = await captureLVSimpsonDrag({
+        viewport,
+        isCancelled: isWorkflowCancelled,
+        onPreview: ({ currentWorld }) => {
+          drawLVSimpsonPreview({
+            overlay,
+            viewport,
+            baseLeftPoint: annulus.startWorld,
+            baseRightPoint: annulus.endWorld,
+            apexPoint: currentWorld,
+          });
+        },
+      });
+
+      clearLVSimpsonPreviewOverlay(viewport.element);
+      setLVSimpsonViewportCursor(viewport.element, 'default');
+
+      if (!superiorDrag?.endWorld || isWorkflowCancelled()) {
+        activeLAVolumeWorkflowSessionId = '';
+        return null;
+      }
+
+      const geometry = buildEchoVolumeContourFromBaseAxis({
+        baseLeftPoint: annulus.startWorld,
+        baseRightPoint: annulus.endWorld,
+        axisPoint: superiorDrag.endWorld,
+      });
+
+      if (!geometry?.points?.length) {
+        activeLAVolumeWorkflowSessionId = '';
+        uiNotificationService.show({
+          title: 'LA Volume',
+          message:
+            'Could not generate the LA contour. Redraw the mitral annular line, then drag from the annular midpoint to the superior LA wall.',
+          type: 'warning',
+          duration: 7000,
+        });
+        return null;
+      }
+
+      for (const existingMeasurementId of existingSlotMeasurementIds) {
+        actions.removeMeasurement({ uid: existingMeasurementId });
+      }
+
+      dispatchLiveMeasurementsRefresh({
+        reason: 'la-volume-slot-replaced',
+        slot: slotInfo.slot,
+      });
+
+      const imageInfo = getCurrentViewportImageInfo(viewport);
+      const displaySet = getActiveViewportDisplaySet({
+        viewportGridService,
+        displaySetService,
+        viewportId: activeViewportId,
+      });
+      const annotationUID = `${csUtils.uuidv4()}`;
+      const frameNumber = getFrameNumberFromReferencedImageId(imageInfo.imageId);
+      const sopInstanceId =
+        getSopInstanceIdFromImageId(imageInfo.imageId) ||
+        displaySet?.SOPInstanceUID ||
+        displaySet?.sopInstanceUID ||
+        '';
+
+      const laVolume = {
+        measurementKind: LA_VOLUME_MEASUREMENT_KIND,
+        slot: slotInfo.slot,
+        view: slotInfo.view,
+        phase: 'ES',
+        label,
+        contourSource: 'annulusAxisGenerated',
+        baseLeftPoint: geometry.baseLeftPoint,
+        baseRightPoint: geometry.baseRightPoint,
+        baseMidpoint: geometry.baseMidpoint,
+        superiorPoint: geometry.axisPoint,
+        axisPoint: geometry.axisPoint,
+        axisPointIndex: geometry.axisPointIndex,
+        contourPoints: geometry.points,
+        longAxisLengthMM: geometry.longAxisLengthMM,
+        userConfirmed: true,
+      };
+
+      let hydrated = null;
+
+      try {
+        hydrated = cornerstoneTools.SplineROITool?.hydrate?.(activeViewportId, geometry.points, {
+          annotationUID,
+        });
+      } catch (error) {
+        console.warn('[LA Volume] SplineROI hydrate failed:', error);
+      }
+
+      const targetAnnotation =
+        cornerstoneTools.annotation.state.getAnnotation?.(annotationUID) || hydrated;
+
+      if (targetAnnotation) {
+        targetAnnotation.annotationUID = annotationUID;
+        targetAnnotation.metadata = {
+          ...(targetAnnotation.metadata || {}),
+          toolName: toolNames.SplineROI || 'SplineROI',
+          referencedImageId: imageInfo.imageId,
+          FrameOfReferenceUID:
+            viewport.getFrameOfReferenceUID?.() ||
+            targetAnnotation.metadata?.FrameOfReferenceUID ||
+            '',
+          SOPInstanceUID: sopInstanceId,
+          SeriesInstanceUID: displaySet?.SeriesInstanceUID || displaySet?.seriesInstanceUID || '',
+          StudyInstanceUID: displaySet?.StudyInstanceUID || displaySet?.studyInstanceUID || '',
+        };
+        targetAnnotation.data = {
+          ...(targetAnnotation.data || {}),
+          label,
+          laVolume,
+          handles: {
+            ...(targetAnnotation.data?.handles || {}),
+            points: geometry.points,
+            activeHandleIndex: null,
+          },
+          contour: {
+            ...(targetAnnotation.data?.contour || {}),
+            closed: true,
+            polyline: geometry.points,
+          },
+        };
+        targetAnnotation.invalidated = false;
+      }
+
+      const measurement = {
+        uid: annotationUID,
+        annotationUID,
+        toolName: toolNames.SplineROI || 'SplineROI',
+        label,
+        measurementRole: label,
+        role: slotInfo.slot,
+        slot: slotInfo.slot,
+        view: slotInfo.view,
+        phase: 'ES',
+        measurementKind: LA_VOLUME_MEASUREMENT_KIND,
+        laVolume,
+        referenceStudyUID: displaySet?.StudyInstanceUID || displaySet?.studyInstanceUID || '',
+        referenceSeriesUID: displaySet?.SeriesInstanceUID || displaySet?.seriesInstanceUID || '',
+        SOPInstanceUID: sopInstanceId,
+        FrameOfReferenceUID: targetAnnotation?.metadata?.FrameOfReferenceUID || '',
+        displaySetInstanceUID: displaySet?.displaySetInstanceUID || '',
+        referencedImageId: imageInfo.imageId,
+        frameNumber,
+        points: geometry.points,
+        displayText: [`${slotInfo.slot} LA volume contour`],
+      };
+
+      try {
+        measurementService.update(annotationUID, measurement, true);
+        actions.markViewerMeasurementCreatedInSession?.({ uid: annotationUID });
+      } catch (error) {
+        console.warn('[LA Volume] measurementService.update failed:', error);
+      }
+
+      upsertLAVolumeSessionMeasurement(measurement);
+
+      dispatchLiveMeasurementsRefresh({
+        reason: 'la-volume-slot-created',
+        annotationUID,
+        slot: slotInfo.slot,
+      });
+
+      try {
+        cornerstoneTools.annotation.selection.setAnnotationSelected(annotationUID, true);
+        installLVSimpsonContourTextCleanupForViewport({
+          viewport,
+          viewportId: activeViewportId,
+          toolName: toolNames.SplineROI || 'SplineROI',
+        });
+        viewport.render?.();
+      } catch {}
+
+      const remainingSlotCandidates = getLAVolumeSlotCandidates([
+        ...measurementService.getMeasurements?.(),
+        ...getLAVolumeSessionMeasurements(),
+      ]);
+      const nextSlot = getNextMissingLAVolumeSlot(remainingSlotCandidates);
+
+      if (nextSlot && !isWorkflowCancelled()) {
+        uiNotificationService.show({
+          title: 'LA Volume',
+          message: `${slotInfo.slot} created. Navigate to ${getLAVolumeSlotDisplayName(
+            nextSlot
+          )}. LA Volume remains active; draw the mitral annular closure line when ready. Press Esc to cancel.`,
+          type: 'success',
+          duration: 9000,
+        });
+
+        window.setTimeout(() => {
+          if (activeLAVolumeWorkflowSessionId !== workflowSessionId) {
+            return;
+          }
+
+          actions.startLAVolumeWorkflow({
+            slot: nextSlot,
+            sessionId: workflowSessionId,
+          });
+        }, LA_VOLUME_AUTO_CONTINUE_DELAY_MS);
+
+        return measurement;
+      }
+
+      activeLAVolumeWorkflowSessionId = '';
+
+      uiNotificationService.show({
+        title: 'LA Volume',
+        message:
+          'A4C and A2C LA contours are present. Adjust either spline as needed; the biplane volume in AR Measurements updates from the edited contours.',
+        type: 'success',
+        duration: 8000,
+      });
+
+      return measurement;
+    },
+    startSpectralDopplerVTIWorkflow: async () => {
+      clearSpectralDopplerWorkflowListeners();
+
+      const activeViewportId = viewportGridService.getActiveViewportId();
+      const { viewport } = _getActiveViewportEnabledElement() || {};
+
+      if (!activeViewportId || !viewport?.element) {
+        uiNotificationService.show({
+          title: 'VTI Trace',
+          message: 'No active image viewport is available.',
+          type: 'warning',
+          duration: 3500,
+        });
+        return null;
+      }
+
+      const saveTarget = getArViewerSaveTargetFromUrl();
+      const isClinicalReportTarget = isClinicalReportMeasurementsSaveTarget(saveTarget);
+      const selectedTarget = await resolveSpectralDopplerVtiTarget({
+        uiDialogService,
+        customizationService,
+        allowGeneric: !isClinicalReportTarget,
+      });
+
+      if (!selectedTarget) {
+        uiNotificationService.show({
+          title: 'VTI Trace',
+          message: isClinicalReportTarget
+            ? 'Choose the AR report measurement that should receive this VTI.'
+            : 'VTI tracing cancelled.',
+          type: isClinicalReportTarget ? 'warning' : 'info',
+          duration: 3500,
+        });
+        return null;
+      }
+
+      const reportMapping = buildViewerReportMapping(selectedTarget);
+      const measurementLabel = selectedTarget.reportMapped
+        ? selectedTarget.label
+        : SPECTRAL_DOPPLER_LABEL;
+
+      const activation = actions.activateViewerMeasurementTool({
+        toolName: toolNames.PlanarFreehandROI || 'PlanarFreehandROI',
+        stopCine: true,
+      });
+
+      if (!activation?.ok) {
+        uiNotificationService.show({
+          title: 'VTI Trace',
+          message: 'The freehand contour tool is not available in this viewport.',
+          type: 'warning',
+          duration: 4500,
+        });
+        return null;
+      }
+
+      const workflowSessionId = `${csUtils.uuidv4()}`;
+      activeSpectralDopplerWorkflowSessionId = workflowSessionId;
+
+      const restoreNavigationTool = () => {
+        try {
+          const toolGroupReference = toolGroupService.getToolGroupForViewport(activeViewportId);
+          actions.setToolActive({
+            toolName: toolNames.WindowLevel || 'WindowLevel',
+            toolGroupId: toolGroupReference,
+          });
+        } catch {}
+      };
+
+      spectralDopplerEscapeHandler = (event: KeyboardEvent) => {
+        if (event.key !== 'Escape' || activeSpectralDopplerWorkflowSessionId !== workflowSessionId) {
+          return;
+        }
+
+        clearSpectralDopplerWorkflowListeners();
+        restoreNavigationTool();
+        uiNotificationService.show({
+          title: 'VTI Trace',
+          message: 'VTI tracing cancelled.',
+          type: 'info',
+          duration: 2500,
+        });
+      };
+
+      spectralDopplerCompletionHandler = async (event: Event) => {
+        if (activeSpectralDopplerWorkflowSessionId !== workflowSessionId) {
+          return;
+        }
+
+        const eventDetail = (event as CustomEvent)?.detail || {};
+        const sourceAnnotation = eventDetail.annotation;
+        const sourceToolName = String(sourceAnnotation?.metadata?.toolName || '');
+
+        if (sourceToolName !== (toolNames.PlanarFreehandROI || 'PlanarFreehandROI')) {
+          return;
+        }
+
+        const annotationId = String(sourceAnnotation?.annotationUID || '').trim();
+
+        if (!annotationId) {
+          return;
+        }
+
+        clearSpectralDopplerWorkflowListeners({ resetSession: false });
+        activeSpectralDopplerWorkflowSessionId = '';
+        restoreNavigationTool();
+
+        const mappedMeasurement = await waitForViewerMeasurementServiceEntry(
+          measurementService,
+          annotationId
+        );
+
+        const contourPoints =
+          sourceAnnotation?.data?.contour?.polyline ||
+          sourceAnnotation?.data?.handles?.points ||
+          mappedMeasurement?.points ||
+          [];
+        const referencedImageId =
+          mappedMeasurement?.referencedImageId || sourceAnnotation?.metadata?.referencedImageId || '';
+        const workingMeasurement = {
+          ...(mappedMeasurement || {}),
+          uid: annotationId,
+          annotationUID: annotationId,
+          toolName: toolNames.PlanarFreehandROI || 'PlanarFreehandROI',
+          label: measurementLabel,
+          measurementRole: measurementLabel,
+          role: measurementLabel,
+          measurementKind: SPECTRAL_DOPPLER_MEASUREMENT_KIND,
+          ...(reportMapping ? { reportMapping } : {}),
+          points: contourPoints,
+          referencedImageId,
+          SOPInstanceUID:
+            mappedMeasurement?.SOPInstanceUID || sourceAnnotation?.metadata?.SOPInstanceUID || '',
+          referenceSeriesUID:
+            mappedMeasurement?.referenceSeriesUID ||
+            sourceAnnotation?.metadata?.SeriesInstanceUID ||
+            '',
+          referenceStudyUID:
+            mappedMeasurement?.referenceStudyUID || sourceAnnotation?.metadata?.StudyInstanceUID || '',
+          FrameOfReferenceUID:
+            mappedMeasurement?.FrameOfReferenceUID ||
+            sourceAnnotation?.metadata?.FrameOfReferenceUID ||
+            '',
+        };
+        const dicomSource = getInstanceForViewerMeasurement(displaySetService, workingMeasurement);
+        const spectralDopplerCalculation = calculateSpectralDopplerVTI({
+          points: contourPoints,
+          referencedImageId,
+          dicomSource,
+        });
+        const spectralDoppler = {
+          ...spectralDopplerCalculation,
+          ...(reportMapping ? { reportMapping } : {}),
+        };
+        const displayText = buildSpectralDopplerDisplayText(spectralDoppler);
+
+        console.info('[VTI Trace] spectral calculation', {
+          annotationId,
+          status: spectralDoppler.status,
+          message: spectralDoppler.message || '',
+          calibration: spectralDoppler.calibration || null,
+          values: spectralDoppler.values || null,
+          reportTarget: reportMapping || null,
+          clinicalReportTarget: isClinicalReportTarget,
+        });
+
+        const nextMeasurement = {
+          ...workingMeasurement,
+          spectralDoppler,
+          measurements: {
+            ...(workingMeasurement?.measurements || {}),
+            measurementKind: SPECTRAL_DOPPLER_MEASUREMENT_KIND,
+            spectralDoppler,
+            displayText,
+          },
+          displayText,
+        };
+
+        sourceAnnotation.metadata = {
+          ...(sourceAnnotation.metadata || {}),
+          toolName: toolNames.PlanarFreehandROI || 'PlanarFreehandROI',
+          referencedImageId,
+        };
+        sourceAnnotation.data = {
+          ...(sourceAnnotation.data || {}),
+          label: measurementLabel,
+          spectralDoppler,
+          ...(reportMapping ? { reportMapping } : {}),
+          arSpectralDopplerDisplayText: displayText,
+          arSavedMeasurementDisplayText: displayText,
+        };
+        sourceAnnotation.invalidated = false;
+
+        try {
+          measurementService.update(annotationId, nextMeasurement, true);
+          actions.markViewerMeasurementCreatedInSession?.({ uid: annotationId });
+        } catch (error) {
+          console.warn('[VTI Trace] measurementService.update failed:', error);
+        }
+
+        installSpectralDopplerTextOverrideForViewport({
+          viewport,
+          viewportId: activeViewportId,
+        });
+        dispatchLiveMeasurementsRefresh({
+          reason: 'spectral-doppler-vti-created',
+          annotationUID: annotationId,
+          status: spectralDoppler.status,
+        });
+
+        try {
+          cornerstoneTools.annotation.selection.setAnnotationSelected?.(annotationId, true);
+          viewport.render?.();
+        } catch {}
+
+        uiNotificationService.show({
+          title: 'VTI Trace',
+          message:
+            spectralDoppler.status === 'complete'
+              ? `${measurementLabel}: ${getSpectralDopplerSummaryText(spectralDoppler)}`
+              : `${spectralDoppler.message || 'Spectral Doppler calibration unavailable.'} The trace was preserved without a calculated VTI.`,
+          type: spectralDoppler.status === 'complete' ? 'success' : 'warning',
+          duration: spectralDoppler.status === 'complete' ? 6000 : 8000,
+        });
+      };
+
+      eventTarget.addEventListener(
+        Enums.Events.ANNOTATION_COMPLETED,
+        spectralDopplerCompletionHandler
+      );
+      window.addEventListener('keydown', spectralDopplerEscapeHandler);
+
+      uiNotificationService.show({
+        title: 'VTI Trace',
+        message: `Trace one complete PW/CW Doppler envelope for ${measurementLabel}. Start and finish at the zero-velocity baseline when possible. Press Esc to cancel.`,
+        type: 'info',
+        duration: 8000,
+      });
+
+      return {
+        ok: true,
+        sessionId: workflowSessionId,
+        toolName: toolNames.PlanarFreehandROI || 'PlanarFreehandROI',
+      };
     },
     setLVTraceMeasurementLabel: async ({ uid } = {}) => {
       if (!uid) {
@@ -5812,6 +7265,8 @@ function commandsModule({
 
         viewerMeasurementsCreatedInSession.delete(measurementId);
         viewerMeasurementsDeletedInSession.add(measurementId);
+        removeLVSimpsonSessionMeasurement(measurementId);
+        removeLAVolumeSessionMeasurement(measurementId);
 
         if (sourceAnnotation) {
           cornerstoneTools.annotation.selection.setAnnotationSelected?.(measurementId, false);
@@ -7585,6 +9040,39 @@ function commandsModule({
         deleting,
       });
     },
+    getSerializedViewerMeasurements: ({
+      domain: explicitDomain = '',
+      workflow = VIEWER_MEASUREMENTS_WORKFLOW,
+      measurementIds = null,
+    } = {}) => {
+      const domain = String(explicitDomain || '').trim() || inferDomainWithoutSeriesDoc('');
+      const restrictMeasurementIds = Array.isArray(measurementIds);
+      const requestedMeasurementIds = new Set(
+        (restrictMeasurementIds ? measurementIds : [])
+          .map(value => String(value || '').trim())
+          .filter(Boolean)
+      );
+      const measurements = getCurrentViewerMeasurementSnapshot(measurementService);
+
+      const annotations = measurements
+        .filter(measurement => {
+          const measurementId = String(measurement?.uid || '').trim();
+          return (
+            measurement?.toolName &&
+            isPersistableViewerMeasurement(measurement) &&
+            (!restrictMeasurementIds || requestedMeasurementIds.has(measurementId))
+          );
+        })
+        .map(measurement =>
+          serializeViewerMeasurement(measurement, domain, null, {
+            workflow,
+            displaySetService,
+          })
+        )
+        .filter(annotation => annotation.referencedImageId || annotation.points?.length);
+
+      return { domain, workflow, annotations };
+    },
     getViewerMeasurementDomainForActiveStudy: async ({ domain: explicitDomain } = {}) => {
       try {
         const seriesDoc = await resolveViewerReadSeriesDoc(servicesManager, {
@@ -7603,6 +9091,7 @@ function commandsModule({
     getViewerMeasurementAnnotationsForActiveStudy: async ({
       domain: explicitDomain,
       workflows = ['viewerMeasurements'],
+      includeRepeated = false,
     } = {}) => {
       const saveTarget = getArViewerSaveTargetFromUrl();
       const seriesDoc = await resolveViewerReadSeriesDoc(servicesManager, {
@@ -7626,17 +9115,11 @@ function commandsModule({
         seriesDoc.MeasurementAnnotations,
         resolvedWorkflows
       ).filter(annotation => {
-        if (annotation?.mode === 'repeated') {
+        if (!includeRepeated && isRepeatedViewerMeasurement(annotation)) {
           return false;
         }
 
-        if (!domain || domain === 'generic') {
-          return true;
-        }
-
-        const annotationDomain = annotation?.domain || 'generic';
-
-        return annotationDomain === domain || annotationDomain === 'generic';
+        return viewerMeasurementDomainsMatch(annotation?.domain || 'generic', domain);
       });
 
       const annotations = excludeViewerMeasurementsDeletedInSession(
@@ -7834,15 +9317,58 @@ function commandsModule({
         };
       }
 
-      forceSavedAnnotationDisplayEverywhere({
-        measurementService,
-        savedAnnotation,
-        referencedImageId:
-          readyReferencedImageId ||
-          actualReferencedImageId ||
-          savedAnnotation.referencedImageId ||
-          '',
-      });
+      if (isSpectralDopplerViewerMeasurement(savedAnnotation)) {
+        const hydratedId =
+          hydratedAnnotation?.annotationUID || hydratedAnnotation?.uid || annotationId;
+        let groupedAnnotations = [];
+        let referenceViewable = null;
+
+        try {
+          groupedAnnotations =
+            annotation.state.getAnnotations?.(
+              savedAnnotation.toolName || 'PlanarFreehandROI',
+              hydratedViewport.element
+            ) || [];
+        } catch {}
+
+        try {
+          referenceViewable = hydratedViewport.isReferenceViewable?.(
+            hydratedAnnotation.metadata,
+            {}
+          );
+        } catch {}
+
+        console.info('[VTI Trace] saved viewport hydration', {
+          annotationId: hydratedId,
+          stateHit: !!annotation.state.getAnnotation?.(hydratedId),
+          groupHit: groupedAnnotations.some(
+            candidate => getAnnotationId(candidate) === hydratedId
+          ),
+          groupedCount: groupedAnnotations.length,
+          referenceViewable,
+          pointCount: hydratedAnnotation?.data?.contour?.polyline?.length || 0,
+          closed: hydratedAnnotation?.data?.contour?.closed,
+          referencedImageId: hydratedAnnotation?.metadata?.referencedImageId || '',
+          currentImageId: hydratedViewport.getCurrentImageId?.() || '',
+        });
+      }
+
+      // Saved VTI traces are manually hydrated as PlanarFreehandROI annotations.
+      // Do not round-trip them back through MeasurementService here: the generic
+      // PlanarFreehandROI source mapping can reconstruct/replace the source annotation
+      // and discard the custom open spectral trace. The saved panel row already has
+      // the persisted VTI display data; Cornerstone annotation state owns viewport display.
+      if (!isSpectralDopplerViewerMeasurement(savedAnnotation)) {
+        forceSavedAnnotationDisplayEverywhere({
+          measurementService,
+          savedAnnotation,
+          referencedImageId:
+            readyReferencedImageId ||
+            actualReferencedImageId ||
+            savedAnnotation.referencedImageId ||
+            '',
+        });
+      }
 
       try {
         const { triggerAnnotationRenderForViewportIds } = await import(
@@ -7856,7 +9382,11 @@ function commandsModule({
 
       hydratedViewport.render?.();
 
-      if (runDelayedDisplayRefresh && isViewerContourTool(savedAnnotation.toolName)) {
+      if (
+        runDelayedDisplayRefresh &&
+        isViewerContourTool(savedAnnotation.toolName) &&
+        !isSpectralDopplerViewerMeasurement(savedAnnotation)
+      ) {
         for (const delayMs of [50, 150, 300, 600, 1000]) {
           await sleep(delayMs);
 
@@ -7999,11 +9529,13 @@ function commandsModule({
           continue;
         }
 
-        forceSavedAnnotationDisplayEverywhere({
-          measurementService,
-          savedAnnotation,
-          referencedImageId,
-        });
+        if (!isSpectralDopplerViewerMeasurement(savedAnnotation)) {
+          forceSavedAnnotationDisplayEverywhere({
+            measurementService,
+            savedAnnotation,
+            referencedImageId,
+          });
+        }
 
         hydratedCount += 1;
       }
@@ -8529,6 +10061,12 @@ function commandsModule({
     startLVSimpsonEFWorkflow: {
       commandFn: actions.startLVSimpsonEFWorkflow,
     },
+    startLAVolumeWorkflow: {
+      commandFn: actions.startLAVolumeWorkflow,
+    },
+    startSpectralDopplerVTIWorkflow: {
+      commandFn: actions.startSpectralDopplerVTIWorkflow,
+    },
     setLVTraceMeasurementLabel: {
       commandFn: actions.setLVTraceMeasurementLabel,
     },
@@ -8834,14 +10372,36 @@ function commandsModule({
     markViewerMeasurementCreatedInSession: {
       commandFn: actions.markViewerMeasurementCreatedInSession,
     },
+    getSerializedViewerMeasurements: {
+      commandFn: actions.getSerializedViewerMeasurements,
+    },
     saveViewerMeasurementsForActiveStudy: {
-      commandFn: async ({ domain: explicitDomain, scoringIntent, educationAttemptIntent } = {}) => {
+      commandFn: async ({
+        domain: explicitDomain,
+        scoringIntent,
+        educationAttemptIntent,
+        deleteAnnotationIds = [],
+        measurementIds = null,
+        suppressSuccessNotification = false,
+      } = {}) => {
         const { measurementService, uiNotificationService } = servicesManager.services;
 
         try {
           const saveTarget = getArViewerSaveTargetFromUrl();
+          const explicitDeleteIds = new Set(
+            (Array.isArray(deleteAnnotationIds) ? deleteAnnotationIds : [])
+              .map(value => String(value || '').trim())
+              .filter(Boolean)
+          );
+          const restrictMeasurementIds = Array.isArray(measurementIds);
+          const requestedMeasurementIds = new Set(
+            (restrictMeasurementIds ? measurementIds : [])
+              .map(value => String(value || '').trim())
+              .filter(Boolean)
+          );
 
           const isReviewWorkflowSave = isReviewWorkflowMeasurementsSaveTarget(saveTarget);
+          const isClinicalReportSave = isClinicalReportMeasurementsSaveTarget(saveTarget);
 
           const writableWorkflow = getWritableReviewMeasurementWorkflow(saveTarget);
 
@@ -8851,7 +10411,9 @@ function commandsModule({
 
           let activeSeriesDoc = null;
 
-          if (isLearnerCopyOnSaveTarget(saveTarget)) {
+          if (isClinicalReportSave) {
+            activeSeriesDoc = await fetchSeriesDocById(saveTarget.seriesId);
+          } else if (isLearnerCopyOnSaveTarget(saveTarget)) {
             if (saveTarget.learnerSeriesId) {
               activeSeriesDoc = await fetchSeriesDocById(saveTarget.learnerSeriesId);
             } else {
@@ -8863,7 +10425,28 @@ function commandsModule({
               );
             }
           } else {
-            activeSeriesDoc = await fetchSeriesDocForActiveStudy(servicesManager);
+            try {
+              activeSeriesDoc = await fetchSeriesDocForActiveStudy(servicesManager);
+            } catch (error) {
+              if (error?.code !== 'series_document_not_found') {
+                throw error;
+              }
+
+              const fallbackDomain = inferDomainWithoutSeriesDoc(explicitDomain);
+
+              console.info(
+                '[MeasurementAnnotations] no Series document exists; ensuring viewer measurement container',
+                {
+                  domain: fallbackDomain,
+                  StudyInstanceUID: error?.studyInstanceId || '',
+                  SeriesInstanceUID: error?.seriesInstanceId || '',
+                }
+              );
+
+              activeSeriesDoc = await ensureSeriesDocForActiveStudy(servicesManager, {
+                domain: fallbackDomain,
+              });
+            }
           }
 
           const seriesDoc = await resolveViewerSaveSeriesDoc({
@@ -8893,7 +10476,7 @@ function commandsModule({
             'submitted-for-score',
           ].includes(normalizedScoringIntent);
 
-          const measurements = measurementService.getMeasurements?.() || [];
+          const measurements = getCurrentViewerMeasurementSnapshot(measurementService);
 
           const targetWorkflow = writableWorkflow || VIEWER_MEASUREMENTS_WORKFLOW;
 
@@ -8930,7 +10513,9 @@ function commandsModule({
                 measurement?.toolName &&
                 isPersistableViewerMeasurement(measurement) &&
                 !!measurementId &&
+                (!restrictMeasurementIds || requestedMeasurementIds.has(measurementId)) &&
                 !viewerMeasurementsDeletedInSession.has(measurementId) &&
+                !explicitDeleteIds.has(measurementId) &&
                 (!isReviewWorkflowSave ||
                   (!blockedMeasurementIds.has(measurementId) &&
                     (writableExistingMeasurementIds.has(measurementId) ||
@@ -8986,6 +10571,10 @@ function commandsModule({
             annotations = Array.from(annotationsById.values());
           }
 
+          if (isClinicalReportSave) {
+            annotations = canonicalizeClinicalViewerMeasurementAnnotations(annotations);
+          }
+
           if (
             annotations.length === 0 &&
             !isReviewWorkflowSave &&
@@ -9000,8 +10589,9 @@ function commandsModule({
             Array.from(viewerMeasurementsDeletedInSession).some(measurementId =>
               writableExistingMeasurementIds.has(measurementId)
             );
+          const hasExplicitDeletion = explicitDeleteIds.size > 0;
 
-          if (annotations.length === 0 && !hasPendingReviewDeletion) {
+          if (annotations.length === 0 && !hasPendingReviewDeletion && !hasExplicitDeletion) {
             uiNotificationService.show({
               title: 'AR Measurements & Annotations',
               message: shouldSubmitForScore
@@ -9017,9 +10607,25 @@ function commandsModule({
           const savedAnnotationIds = new Set(
             annotations.map(annotation => annotation.annotationId || annotation.uid).filter(Boolean)
           );
+          const deletedClinicalSemanticKeys = new Set<string>();
+
+          if (isClinicalReportSave) {
+            for (const measurementId of [
+              ...viewerMeasurementsDeletedInSession,
+              ...explicitDeleteIds,
+            ]) {
+              const existingAnnotation = existingById.get(String(measurementId));
+              const semanticKey = getClinicalViewerMeasurementSemanticKey(existingAnnotation);
+
+              if (semanticKey) {
+                deletedClinicalSemanticKeys.add(semanticKey);
+              }
+            }
+          }
 
           let savedSeriesDoc = seriesDoc;
           let refreshedAnnotations = annotations;
+          let clinicalReportFieldUpdates: Record<string, any> = {};
 
           if (isReviewWorkflowSave) {
             const workflowType = encodeURIComponent(saveTarget.reviewWorkflowType);
@@ -9070,38 +10676,88 @@ function commandsModule({
               saveTarget,
             });
           } else {
+            const incomingClinicalSemanticKeys = new Set(
+              annotations.map(getClinicalViewerMeasurementSemanticKey).filter(Boolean)
+            );
+            const mergedMeasurementAnnotations = upsertViewerMeasurementAnnotations({
+              existingRaw: seriesDoc.MeasurementAnnotations,
+              source: 'ar-measurements-panel',
+              annotations,
+              replaceFilter: existing => {
+                if (!viewerMeasurementDomainsMatch(existing?.domain || 'generic', domain)) {
+                  return false;
+                }
+
+                const existingId = existing?.annotationId || existing?.uid;
+                const semanticKey = isClinicalReportSave
+                  ? getClinicalViewerMeasurementSemanticKey(existing)
+                  : '';
+
+                if (
+                  semanticKey &&
+                  (incomingClinicalSemanticKeys.has(semanticKey) ||
+                    deletedClinicalSemanticKeys.has(semanticKey))
+                ) {
+                  return true;
+                }
+
+                if (
+                  existingId &&
+                  (viewerMeasurementsDeletedInSession.has(existingId) ||
+                    explicitDeleteIds.has(String(existingId)))
+                ) {
+                  return true;
+                }
+
+                return !!existingId && savedAnnotationIds.has(existingId);
+              },
+            });
+
+            let nextMeasurementAnnotations = mergedMeasurementAnnotations;
+
+            if (isClinicalReportSave) {
+              const mergedViewerAnnotations = getRequestedWorkflowAnnotations(
+                mergedMeasurementAnnotations,
+                [VIEWER_MEASUREMENTS_WORKFLOW]
+              );
+              const canonicalViewerAnnotations =
+                canonicalizeClinicalViewerMeasurementAnnotations(
+                  mergedViewerAnnotations,
+                  deletedClinicalSemanticKeys
+                );
+
+              nextMeasurementAnnotations = upsertViewerMeasurementAnnotations({
+                existingRaw: mergedMeasurementAnnotations,
+                source: 'ar-measurements-panel',
+                annotations: canonicalViewerAnnotations,
+                replaceFilter: existing =>
+                  !!getClinicalViewerMeasurementSemanticKey(existing),
+              });
+            }
+
+            if (isClinicalReportSave) {
+              const reportAnnotations = getRequestedWorkflowAnnotations(nextMeasurementAnnotations, [
+                VIEWER_MEASUREMENTS_WORKFLOW,
+              ]);
+
+              clinicalReportFieldUpdates = buildViewerReportFieldUpdates(reportAnnotations);
+
+              if (Object.keys(clinicalReportFieldUpdates).length) {
+                console.info('[MeasurementAnnotations] clinical report field updates', {
+                  fieldNames: Object.keys(clinicalReportFieldUpdates),
+                  updatedFields: clinicalReportFieldUpdates,
+                });
+              }
+            }
+
             const payload = {
               accessType: 'update',
-
-              MeasurementAnnotations: upsertViewerMeasurementAnnotations({
-                existingRaw: seriesDoc.MeasurementAnnotations,
-                source: 'ar-measurements-panel',
-                annotations,
-                replaceFilter: existing => {
-                  if (existing?.mode === 'repeated') {
-                    return false;
-                  }
-
-                  const existingDomainMatches =
-                    existing?.domain === domain ||
-                    (domain !== 'generic' && existing?.domain === 'generic');
-
-                  if (!existingDomainMatches) {
-                    return false;
-                  }
-
-                  const existingId = existing?.annotationId || existing?.uid;
-
-                  if (existingId && viewerMeasurementsDeletedInSession.has(existingId)) {
-                    return true;
-                  }
-
-                  return !!existingId && savedAnnotationIds.has(existingId);
-                },
-              }),
-
+              ...(isClinicalReportSave
+                ? { viewerMeasurementIntent: 'clinical-report' }
+                : {}),
+              ...clinicalReportFieldUpdates,
+              MeasurementAnnotations: nextMeasurementAnnotations,
               scoringIntent: shouldSubmitForScore ? 'score-attempt' : 'draft',
-
               educationAttemptIntent: shouldSubmitForScore ? 'score-attempt' : 'draft',
             };
 
@@ -9116,6 +10772,54 @@ function commandsModule({
             if (!response.ok) {
               throw new Error(`Save failed: ${response.status}`);
             }
+
+            const updatedSeries = await response.json().catch(() => null);
+            if (updatedSeries?._id) {
+              savedSeriesDoc = updatedSeries;
+            }
+
+            if (isClinicalReportSave) {
+              try {
+                const refreshedSeriesDoc = await fetchSeriesDocById(seriesDoc._id);
+
+                if (refreshedSeriesDoc?._id) {
+                  savedSeriesDoc = refreshedSeriesDoc;
+                }
+              } catch (refreshError) {
+                console.warn(
+                  '[MeasurementAnnotations] clinical report refresh after save failed; using PUT response',
+                  refreshError
+                );
+              }
+            }
+
+            const canonicalMeasurementAnnotations =
+              savedSeriesDoc?.MeasurementAnnotations || nextMeasurementAnnotations;
+
+            refreshedAnnotations = getRequestedWorkflowAnnotations(
+              canonicalMeasurementAnnotations,
+              [VIEWER_MEASUREMENTS_WORKFLOW]
+            ).filter(annotation =>
+              viewerMeasurementDomainsMatch(annotation?.domain || 'generic', domain)
+            );
+          }
+
+          if (isClinicalReportSave && savedSeriesDoc?._id) {
+            // AR's Series schema is the acceptance contract. Notify the opener
+            // about every report field that actually changed on the persisted
+            // server document, regardless of measurement domain or tool.
+            const updatedFields = getChangedPersistedArReportFields(
+              activeSeriesDoc,
+              savedSeriesDoc
+            );
+            const fieldNames = Object.keys(updatedFields);
+
+            postArReportMeasurementsUpdated({
+              seriesDoc: savedSeriesDoc,
+              fieldNames,
+              updatedFields,
+              source: 'viewer-measurements',
+            });
           }
 
           viewerMeasurementsCreatedInSession.clear();
@@ -9129,18 +10833,20 @@ function commandsModule({
             processedAnnotations: refreshedAnnotations,
           });
 
-          uiNotificationService.show({
-            title: 'AR Measurements & Annotations',
-            message: isReviewWorkflowSave
-              ? normalizeReviewMeasurementRole(saveTarget.measurementWorkflowRole) === 'educator'
-                ? 'Coach measurements and annotations saved.'
-                : 'Learner measurements and annotations saved.'
-              : shouldSubmitForScore
-                ? 'Viewer measurements saved and submitted for scoring.'
-                : 'Viewer measurements and annotations saved.',
-            type: 'success',
-            duration: 3000,
-          });
+          if (!suppressSuccessNotification) {
+            uiNotificationService.show({
+              title: 'AR Measurements & Annotations',
+              message: isReviewWorkflowSave
+                ? normalizeReviewMeasurementRole(saveTarget.measurementWorkflowRole) === 'educator'
+                  ? 'Coach measurements and annotations saved.'
+                  : 'Learner measurements and annotations saved.'
+                : shouldSubmitForScore
+                  ? 'Viewer measurements saved and submitted for scoring.'
+                  : 'Viewer measurements and annotations saved.',
+              type: 'success',
+              duration: 3000,
+            });
+          }
 
           return {
             seriesDoc: savedSeriesDoc,
@@ -9163,6 +10869,88 @@ function commandsModule({
         }
       },
     },
+    saveViewerStructuredPayloadForActiveStudy: {
+      commandFn: async ({
+        payload = {},
+        source = 'viewer',
+        notificationTitle = 'AR Viewer',
+        successMessage = 'Viewer data saved.',
+        suppressSuccessNotification = false,
+      } = {}) => {
+        const cleanPayload =
+          payload && typeof payload === 'object' && !Array.isArray(payload) ? payload : {};
+
+        const fieldNames = Object.keys(cleanPayload).filter(fieldName => fieldName !== 'accessType');
+        if (!fieldNames.length) {
+          throw new Error('No structured viewer data was provided to save.');
+        }
+
+        const currentSeriesDoc = await resolveViewerReadSeriesDoc(servicesManager, {
+          allowBaseFallback: true,
+        });
+        const seriesDoc = await resolveViewerSaveSeriesDoc({
+          servicesManager,
+          currentSeriesDoc,
+        });
+
+        if (!seriesDoc?._id) {
+          throw new Error('Unable to resolve the AR Series document for this viewer study.');
+        }
+
+        const response = await fetch(
+          buildFormApiUrl(`series/${encodeURIComponent(seriesDoc._id)}`),
+          buildFormApiFetchOptions({
+            method: 'PUT',
+            body: JSON.stringify({
+              ...cleanPayload,
+              accessType: 'update',
+            }),
+          })
+        );
+
+        if (!response.ok) {
+          const message = await getResponseErrorMessage(
+            response,
+            `Structured viewer data save failed: ${response.status}`
+          );
+          throw new Error(message);
+        }
+
+        const updatedSeries = await response.json().catch(() => null);
+        const sourceSeries = updatedSeries || seriesDoc;
+        const updatedFields = fieldNames.reduce((acc, fieldName) => {
+          if (updatedSeries && Object.prototype.hasOwnProperty.call(updatedSeries, fieldName)) {
+            acc[fieldName] = updatedSeries[fieldName];
+          } else if (Object.prototype.hasOwnProperty.call(cleanPayload, fieldName)) {
+            acc[fieldName] = cleanPayload[fieldName];
+          }
+          return acc;
+        }, {});
+
+        postArReportMeasurementsUpdated({
+          seriesDoc: sourceSeries,
+          fieldNames,
+          updatedFields,
+          source,
+        });
+
+        if (!suppressSuccessNotification) {
+          uiNotificationService.show({
+            title: notificationTitle,
+            message: successMessage,
+            type: 'success',
+            duration: 3000,
+          });
+        }
+
+        return {
+          seriesDoc: sourceSeries,
+          fieldNames,
+          updatedFields,
+        };
+      },
+    },
+
     completeIuscanIntegrationSession: {
       commandFn: async () => {
         const params = getViewerUrlSearchParams();

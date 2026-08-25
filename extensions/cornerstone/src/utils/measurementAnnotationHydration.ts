@@ -7,6 +7,10 @@ import {
   isViewerMeasurementWorkflow,
 } from './measurementAnnotations';
 import { buildFormApiFetchOptions, buildFormApiUrl } from './formApi';
+import {
+  SPECTRAL_DOPPLER_MEASUREMENT_KIND,
+  buildSpectralDopplerDisplayText,
+} from './spectralDoppler';
 
 const CONTOUR_TOOL_NAMES = new Set(['SplineROI', 'PlanarFreehandROI', 'LivewireContour']);
 
@@ -322,6 +326,88 @@ async function fetchSeriesDocFromExplicitViewerContext() {
   }
 }
 
+function buildSeriesDocumentLookupError({
+  studyInstanceId = '',
+  seriesInstanceId = '',
+  statuses = [],
+}: {
+  studyInstanceId?: string;
+  seriesInstanceId?: string;
+  statuses?: number[];
+}) {
+  const normalizedStatuses = (Array.isArray(statuses) ? statuses : []).filter(status =>
+    Number.isFinite(Number(status))
+  );
+  const notFound =
+    normalizedStatuses.length > 0 && normalizedStatuses.every(status => Number(status) === 404);
+  const error: any = new Error(
+    `Series document lookup failed. StudyInstanceUID=${studyInstanceId || ''}, SeriesInstanceUID=${seriesInstanceId || ''}`
+  );
+
+  error.code = notFound ? 'series_document_not_found' : 'series_document_lookup_failed';
+  error.statuses = normalizedStatuses;
+  error.studyInstanceId = studyInstanceId || '';
+  error.seriesInstanceId = seriesInstanceId || '';
+
+  return error;
+}
+
+function normalizeViewerMeasurementContainerDomain(value = '') {
+  const domain = String(value || '')
+    .trim()
+    .toLowerCase();
+
+  return ['echo', 'bowel', 'generic'].includes(domain) ? domain : 'generic';
+}
+
+export async function ensureSeriesDocForActiveStudy(
+  servicesManager,
+  { domain = 'generic' }: { domain?: string } = {}
+) {
+  const displaySet = await waitForActiveDisplaySet(servicesManager);
+  const studyInstanceId = String(displaySet?.StudyInstanceUID || '').trim();
+  const seriesInstanceId = String(displaySet?.SeriesInstanceUID || '').trim();
+
+  if (!studyInstanceId && !seriesInstanceId) {
+    throw new Error('Cannot determine active study or series.');
+  }
+
+  const response = await fetch(
+    buildFormApiUrl('series/viewer-measurements/ensure-series'),
+    buildFormApiFetchOptions({
+      method: 'POST',
+      body: JSON.stringify({
+        StudyInstanceUID: studyInstanceId,
+        SeriesInstanceUID: seriesInstanceId,
+        measurementDomain: normalizeViewerMeasurementContainerDomain(domain),
+      }),
+    })
+  );
+
+  const result = await response.json().catch(() => ({}));
+
+  if (!response.ok) {
+    throw new Error(
+      result?.message || result?.error || `Unable to create viewer measurement container: ${response.status}`
+    );
+  }
+
+  const seriesDoc = result?.series || result;
+
+  if (!seriesDoc?._id) {
+    throw new Error('Viewer measurement container response did not include a series document.');
+  }
+
+  console.info('[MeasurementAnnotations] viewer measurement container resolved', {
+    seriesId: seriesDoc._id,
+    created: result?.created === true,
+    StudyInstanceUID: studyInstanceId,
+    SeriesInstanceUID: seriesInstanceId,
+  });
+
+  return seriesDoc;
+}
+
 export async function fetchSeriesDocForActiveStudy(servicesManager) {
   const explicitSeriesDoc = await fetchSeriesDocFromExplicitViewerContext();
 
@@ -332,6 +418,7 @@ export async function fetchSeriesDocForActiveStudy(servicesManager) {
   const displaySet = await waitForActiveDisplaySet(servicesManager);
   const studyInstanceId = displaySet?.StudyInstanceUID;
   const seriesInstanceId = displaySet?.SeriesInstanceUID;
+  const lookupStatuses: number[] = [];
 
   if (!studyInstanceId && !seriesInstanceId) {
     throw new Error('Cannot determine active study or series.');
@@ -360,6 +447,8 @@ export async function fetchSeriesDocForActiveStudy(servicesManager) {
       return seriesResult.data;
     }
 
+    lookupStatuses.push(seriesResult.status);
+
     debugMeasurementAnnotationLog(
       'warn',
       '[MeasurementAnnotations] SeriesInstanceUID lookup failed',
@@ -384,6 +473,8 @@ export async function fetchSeriesDocForActiveStudy(servicesManager) {
       return studyResult.data;
     }
 
+    lookupStatuses.push(studyResult.status);
+
     debugMeasurementAnnotationLog(
       'warn',
       '[MeasurementAnnotations] StudyInstanceUID lookup failed',
@@ -394,9 +485,11 @@ export async function fetchSeriesDocForActiveStudy(servicesManager) {
     );
   }
 
-  throw new Error(
-    `Series document lookup failed. StudyInstanceUID=${studyInstanceId || ''}, SeriesInstanceUID=${seriesInstanceId || ''}`
-  );
+  throw buildSeriesDocumentLookupError({
+    studyInstanceId: studyInstanceId || '',
+    seriesInstanceId: seriesInstanceId || '',
+    statuses: lookupStatuses,
+  });
 }
 
 function inferToolName(annotation) {
@@ -539,6 +632,10 @@ function getCornerstonePixelSpacingMM(referencedImageId = '') {
 }
 
 function getSavedContourAreaMM2(savedAnnotation, referencedImageId = '') {
+  if (isSavedSpectralDopplerAnnotation(savedAnnotation)) {
+    return null;
+  }
+
   const measurements = savedAnnotation?.measurements || {};
   const rawArea = finiteNumberOrNull(measurements.area);
   const rawAreaUnit = String(measurements.areaUnit || '').trim();
@@ -583,6 +680,10 @@ function removeInvalidCachedStatsKeys(cachedStats = {}) {
 }
 
 function getSavedContourStats(savedAnnotation, referencedImageId = '') {
+  if (isSavedSpectralDopplerAnnotation(savedAnnotation)) {
+    return null;
+  }
+
   const area = getSavedContourAreaMM2(savedAnnotation, referencedImageId);
 
   if (area == null) {
@@ -622,6 +723,12 @@ function formatSavedAreaMM2(area) {
 }
 
 function getSavedContourDisplayText(savedAnnotation, referencedImageId = '') {
+  if (isSavedSpectralDopplerAnnotation(savedAnnotation)) {
+    const spectralDoppler =
+      savedAnnotation?.spectralDoppler || savedAnnotation?.measurements?.spectralDoppler || {};
+    return buildSpectralDopplerDisplayText(spectralDoppler);
+  }
+
   const area = getSavedContourAreaMM2(savedAnnotation, referencedImageId);
 
   if (area == null) {
@@ -899,6 +1006,43 @@ function cloneAnnotationPoints(points = []) {
     : [];
 }
 
+function isSavedSpectralDopplerAnnotation(annotation: any = {}) {
+  const spectralDoppler =
+    annotation?.spectralDoppler || annotation?.measurements?.spectralDoppler || null;
+
+  return (
+    annotation?.measurementKind === SPECTRAL_DOPPLER_MEASUREMENT_KIND ||
+    spectralDoppler?.measurementKind === SPECTRAL_DOPPLER_MEASUREMENT_KIND
+  );
+}
+
+function getSavedContourClosed(annotation: any = {}) {
+  if (isSavedSpectralDopplerAnnotation(annotation)) {
+    return false;
+  }
+
+  const explicitClosed =
+    annotation?.contourClosed ??
+    annotation?.measurements?.contourClosed ??
+    annotation?.contour?.closed;
+
+  return typeof explicitClosed === 'boolean' ? explicitClosed : true;
+}
+
+function getSavedContourHandlePoints(annotation: any = {}, points = []) {
+  const clonedPoints = cloneAnnotationPoints(points);
+
+  if (!isSavedSpectralDopplerAnnotation(annotation) || getSavedContourClosed(annotation)) {
+    return clonedPoints;
+  }
+
+  if (clonedPoints.length <= 1) {
+    return clonedPoints;
+  }
+
+  return [clonedPoints[0], clonedPoints[clonedPoints.length - 1]];
+}
+
 function cloneSavedAnnotationMetadataVector(value) {
   if (Array.isArray(value)) {
     return [...value];
@@ -913,6 +1057,56 @@ function cloneSavedAnnotationMetadataVector(value) {
 
 function getSavedAnnotationMetadataVector(annotation: any = {}, key = '') {
   return cloneSavedAnnotationMetadataVector(annotation?.[key] || annotation?.metadata?.[key]);
+}
+
+function getViewportViewReferenceMetadata(viewport, points = []) {
+  if (!viewport?.getViewReference) {
+    return {};
+  }
+
+  const firstPoint = Array.isArray(points) && points.length > 0 ? points[0] : null;
+
+  try {
+    const reference = firstPoint
+      ? viewport.getViewReference({ points: [firstPoint] })
+      : viewport.getViewReference();
+
+    return isPlainObject(reference) ? reference : {};
+  } catch {
+    try {
+      const reference = viewport.getViewReference();
+      return isPlainObject(reference) ? reference : {};
+    } catch {
+      return {};
+    }
+  }
+}
+
+function getViewportAnnotationGroupKey(viewport) {
+  const element = viewport?.element;
+
+  // Preserve the annotation manager's exact group key, including undefined or
+  // an empty string. Ultrasound stack viewports can legitimately have no DICOM
+  // FrameOfReferenceUID. Normalizing undefined to '' creates a different object
+  // key inside Cornerstone's annotation manager and makes a globally stored
+  // annotation invisible to getAnnotations(toolName, viewport.element).
+  try {
+    const annotationManager = csToolsAnnotation.state.getAnnotationManager?.();
+
+    if (element && annotationManager?.getGroupKey) {
+      return annotationManager.getGroupKey(element);
+    }
+  } catch {}
+
+  try {
+    return viewport?.getFrameOfReferenceUID?.();
+  } catch {}
+
+  try {
+    return viewport?.getViewReference?.()?.FrameOfReferenceUID;
+  } catch {}
+
+  return undefined;
 }
 
 function getSavedArrowAnnotateText(annotation: any = {}) {
@@ -943,18 +1137,39 @@ function buildCornerstoneAnnotation(annotation, fallbackFrameOfReferenceUID = ''
   const annotationUID = annotation.uid || annotation.annotationId;
   const referencedImageId = annotation.referencedImageId;
   const points = cloneAnnotationPoints(annotation.points);
+  const handlePoints = getSavedContourHandlePoints(annotation, points);
+  const contourClosed = getSavedContourClosed(annotation);
   const toolName = inferToolName(annotation);
   const savedTextBox = getSavedArrowAnnotateTextBox(annotation);
-  const FrameOfReferenceUID = annotation.FrameOfReferenceUID || fallbackFrameOfReferenceUID || '';
+  const viewportViewReference =
+    annotation?.arViewportViewReference && isPlainObject(annotation.arViewportViewReference)
+      ? annotation.arViewportViewReference
+      : {};
+  const isSpectralDoppler = isSavedSpectralDopplerAnnotation(annotation);
+  const FrameOfReferenceUID = isSpectralDoppler
+    ? annotation.FrameOfReferenceUID
+    : annotation.FrameOfReferenceUID ||
+      viewportViewReference.FrameOfReferenceUID ||
+      fallbackFrameOfReferenceUID ||
+      '';
 
   if (!annotationUID || !toolName || !referencedImageId || points.length === 0) {
     return null;
   }
 
+  const spectralDoppler =
+    annotation?.spectralDoppler || annotation?.measurements?.spectralDoppler || null;
   const data: any = {
     label: getViewportAnnotationLabel(annotation),
+    ...(isSpectralDoppler
+      ? {
+          spectralDoppler,
+          arSpectralDopplerDisplayText: buildSpectralDopplerDisplayText(spectralDoppler || {}),
+          arSavedMeasurementDisplayText: buildSpectralDopplerDisplayText(spectralDoppler || {}),
+        }
+      : {}),
     handles: {
-      points,
+      points: handlePoints,
       activeHandleIndex: null,
       textBox: {
         hasMoved: false,
@@ -974,7 +1189,7 @@ function buildCornerstoneAnnotation(annotation, fallbackFrameOfReferenceUID = ''
   // preserves compatibility with tools/mappers that read handles.
   if (CONTOUR_TOOL_NAMES.has(toolName)) {
     data.contour = {
-      closed: true,
+      closed: contourClosed,
       polyline: points,
     };
   }
@@ -982,6 +1197,7 @@ function buildCornerstoneAnnotation(annotation, fallbackFrameOfReferenceUID = ''
   return {
     annotationUID,
     metadata: {
+      ...viewportViewReference,
       toolName,
       referencedImageId,
       FrameOfReferenceUID,
@@ -1046,6 +1262,8 @@ function patchHydratedAnnotationFromSaved({
 
   const toolName = inferToolName(savedAnnotation);
   const points = cloneAnnotationPoints(savedAnnotation?.points);
+  const handlePoints = getSavedContourHandlePoints(savedAnnotation, points);
+  const contourClosed = getSavedContourClosed(savedAnnotation);
   const savedTextBox = getSavedArrowAnnotateTextBox(savedAnnotation);
 
   target.annotationUID = annotationUID;
@@ -1077,7 +1295,7 @@ function patchHydratedAnnotationFromSaved({
     handles: {
       ...(target.data?.handles || {}),
       ...(fallback?.data?.handles || {}),
-      points,
+      points: handlePoints,
       activeHandleIndex: null,
       textBox: {
         ...(target.data?.handles?.textBox || {}),
@@ -1089,6 +1307,22 @@ function patchHydratedAnnotationFromSaved({
       },
     },
     cachedStats: buildCachedStatsForAnnotation(savedAnnotation, toolName, referencedImageId),
+    ...(isSavedSpectralDopplerAnnotation(savedAnnotation)
+      ? {
+          spectralDoppler:
+            savedAnnotation?.spectralDoppler ||
+            savedAnnotation?.measurements?.spectralDoppler ||
+            null,
+          arSpectralDopplerDisplayText: getSavedContourDisplayText(
+            savedAnnotation,
+            referencedImageId
+          ),
+          arSavedMeasurementDisplayText: getSavedContourDisplayText(
+            savedAnnotation,
+            referencedImageId
+          ),
+        }
+      : {}),
     arMeasurementWorkflow: savedAnnotation.workflow || '',
     arMeasurementReadOnly: !!savedAnnotation.isLocked,
     arMeasurementReviewRound: Number(savedAnnotation.reviewRound) || null,
@@ -1101,7 +1335,7 @@ function patchHydratedAnnotationFromSaved({
   if (CONTOUR_TOOL_NAMES.has(toolName)) {
     target.data.contour = {
       ...(target.data?.contour || {}),
-      closed: true,
+      closed: contourClosed,
       polyline: points,
     };
   }
@@ -1193,11 +1427,26 @@ export function hydrateSavedViewerAnnotationForViewport({
   selectAnnotation?: boolean;
 }) {
   const viewportCamera = viewport?.getCamera?.() || {};
+  const annotationPoints = cloneAnnotationPoints(annotation?.points);
+  const isSpectralDoppler = isSavedSpectralDopplerAnnotation(annotation);
+  const viewportViewReference = isSpectralDoppler
+    ? getViewportViewReferenceMetadata(viewport, annotationPoints)
+    : {};
+  const viewportAnnotationGroupKey = isSpectralDoppler
+    ? getViewportAnnotationGroupKey(viewport)
+    : '';
 
   const annotationToHydrate = {
     ...annotation,
+    arViewportViewReference: viewportViewReference,
+    FrameOfReferenceUID: isSpectralDoppler
+      ? viewportAnnotationGroupKey
+      : annotation?.FrameOfReferenceUID ||
+        viewportViewReference?.FrameOfReferenceUID ||
+        fallbackFrameOfReferenceUID ||
+        '',
     referencedImageId: referencedImageIdOverride || annotation?.referencedImageId,
-    points: cloneAnnotationPoints(annotation?.points),
+    points: annotationPoints,
     viewPlaneNormal:
       getSavedAnnotationMetadataVector(annotation, 'viewPlaneNormal') ||
       cloneSavedAnnotationMetadataVector(viewportCamera.viewPlaneNormal),
@@ -1224,13 +1473,15 @@ export function hydrateSavedViewerAnnotationForViewport({
     toolName,
   });
 
-  const toolHydratedAnnotation = hydrateWithToolClass({
-    savedAnnotation: annotationToHydrate,
-    viewportId,
-    fallbackAnnotation: cornerstoneAnnotation,
-    referencedImageId: cornerstoneAnnotation.metadata.referencedImageId,
-    fallbackFrameOfReferenceUID,
-  });
+  const toolHydratedAnnotation = isSavedSpectralDopplerAnnotation(annotationToHydrate)
+    ? null
+    : hydrateWithToolClass({
+        savedAnnotation: annotationToHydrate,
+        viewportId,
+        fallbackAnnotation: cornerstoneAnnotation,
+        referencedImageId: cornerstoneAnnotation.metadata.referencedImageId,
+        fallbackFrameOfReferenceUID,
+      });
 
   if (toolHydratedAnnotation) {
     const hydratedAnnotationUID =
@@ -1265,7 +1516,17 @@ export function hydrateSavedViewerAnnotationForViewport({
     return targetAnnotation;
   }
 
-  const existing = csToolsAnnotation.state.getAnnotation?.(annotationUID);
+  let existing = csToolsAnnotation.state.getAnnotation?.(annotationUID);
+
+  // Spectral Doppler traces must be indexed under the reopened viewport's current
+  // annotation group. Ultrasound studies may reopen with a different/synthetic
+  // FrameOfReferenceUID even when the SOP/frame is unchanged. Re-add the saved
+  // VTI annotation instead of mutating an object that remains indexed under the
+  // previous group key.
+  if (existing && isSpectralDoppler) {
+    csToolsAnnotation.state.removeAnnotation?.(annotationUID);
+    existing = null;
+  }
 
   if (existing) {
     const patchedExisting = patchHydratedAnnotationFromSaved({
@@ -1300,6 +1561,10 @@ export function hydrateSavedViewerAnnotationForViewport({
       viewport,
     });
 
+    try {
+      csToolsAnnotation.visibility?.setAnnotationVisibility?.(annotationUID, true);
+    } catch {}
+
     if (selectAnnotation) {
       csToolsAnnotation.selection.setAnnotationSelected?.(annotationUID, true);
     }
@@ -1309,11 +1574,29 @@ export function hydrateSavedViewerAnnotationForViewport({
 
   const groupSelector =
     viewport?.element ||
+    viewportAnnotationGroupKey ||
     cornerstoneAnnotation.metadata.FrameOfReferenceUID ||
     viewportId ||
     cornerstoneAnnotation.metadata.referencedImageId;
 
   csToolsAnnotation.state.addAnnotation(cornerstoneAnnotation, groupSelector);
+
+  try {
+    csToolsAnnotation.visibility?.setAnnotationVisibility?.(annotationUID, true);
+  } catch {}
+
+  debugMeasurementAnnotationLog('info', '[MeasurementAnnotations] annotation added to viewport state', {
+    annotationUID,
+    toolName,
+    isSpectralDoppler: isSavedSpectralDopplerAnnotation(annotationToHydrate),
+    pointCount: annotationToHydrate.points?.length || 0,
+    referencedImageId: cornerstoneAnnotation.metadata?.referencedImageId || '',
+    FrameOfReferenceUID: cornerstoneAnnotation.metadata?.FrameOfReferenceUID || '',
+    viewReferenceKeys: Object.keys(viewportViewReference || {}),
+    viewportAnnotationGroupKey,
+    annotationFrameOfReferenceUID: cornerstoneAnnotation.metadata?.FrameOfReferenceUID || '',
+    stateHit: !!csToolsAnnotation.state.getAnnotation?.(annotationUID),
+  });
 
   applyReviewMeasurementAnnotationStyle({
     annotationUID,

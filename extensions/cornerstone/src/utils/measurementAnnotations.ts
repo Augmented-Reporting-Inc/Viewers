@@ -170,3 +170,38 @@ export function upsertViewerMeasurementAnnotations(
     workflow: VIEWER_MEASUREMENTS_WORKFLOW,
   });
 }
+
+export type ViewerRepeatedMeasurementMetadata = {
+  groupKey?: string;
+  siteKey?: string;
+  stateKey?: string;
+  axis?: string;
+  measurementType?: string;
+  slotIndex?: number;
+  pairIndex?: number;
+  maxSlots?: number;
+  aggregation?: string;
+};
+
+export function getViewerRepeatedMeasurementMetadata(value: any = {}) {
+  const repeatedMeasurement =
+    value?.repeatedMeasurement ||
+    value?.metadata?.repeatedMeasurement ||
+    value?.data?.repeatedMeasurement ||
+    null;
+
+  return repeatedMeasurement && typeof repeatedMeasurement === 'object'
+    ? repeatedMeasurement
+    : null;
+}
+
+export function isRepeatedViewerMeasurement(value: any = {}) {
+  return value?.mode === 'repeated' || !!getViewerRepeatedMeasurementMetadata(value);
+}
+
+export function getRepeatedMeasurementSlotIndex(value: any = {}) {
+  const repeatedMeasurement = getViewerRepeatedMeasurementMetadata(value);
+  const slotIndex = Number(repeatedMeasurement?.slotIndex ?? repeatedMeasurement?.slot);
+
+  return Number.isInteger(slotIndex) && slotIndex >= 0 ? slotIndex : null;
+}

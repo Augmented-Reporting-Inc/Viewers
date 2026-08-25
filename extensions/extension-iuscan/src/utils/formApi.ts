@@ -1,1 +1,5 @@
-export { getFormApiBase, buildFormApiUrl } from '../../../cornerstone/src/utils/formApi';
+export {
+  getFormApiBase,
+  buildFormApiUrl,
+  buildFormApiFetchOptions,
+} from '../../../cornerstone/src/utils/formApi';

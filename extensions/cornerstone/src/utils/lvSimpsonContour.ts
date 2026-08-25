@@ -1,4 +1,4 @@
-const DEFAULT_POINT_COUNT_PER_SIDE = 7;
+const DEFAULT_POINT_COUNT_PER_SIDE = 10;
 
 function finiteNumber(value) {
   const numberValue = Number(value);
@@ -60,27 +60,35 @@ function interpolate(a, b, t) {
 
 function smoothWidthProfile(t, baseHalfWidth) {
   const basalShoulder = 0.86 + 0.16 * Math.sin((Math.PI * Math.min(t, 0.7)) / 0.7);
-  const apicalTaper = Math.pow(1 - t, 0.72);
+  const superiorTaper = Math.pow(1 - t, 0.72);
 
-  return Math.max(0, baseHalfWidth * basalShoulder * apicalTaper);
+  return Math.max(0, baseHalfWidth * basalShoulder * superiorTaper);
 }
 
-export function buildLVSimpsonContourFromHingeApex({
+/**
+ * Generic starting contour for echo chamber volume tracing.
+ *
+ * The two base points define the valve annular closure line. axisPoint is the
+ * farthest point on the chamber long axis (LV apex or superior LA wall). The
+ * generated spline is only a starting shape: the user remains responsible for
+ * editing it to the actual endocardial/blood-tissue interface.
+ */
+export function buildEchoVolumeContourFromBaseAxis({
   baseLeftPoint,
   baseRightPoint,
-  apexPoint,
+  axisPoint,
   pointCountPerSide = DEFAULT_POINT_COUNT_PER_SIDE,
 }) {
   const baseLeft = getPoint(baseLeftPoint);
   const baseRight = getPoint(baseRightPoint);
-  const apex = getPoint(apexPoint);
+  const axis = getPoint(axisPoint);
 
-  if (!baseLeft || !baseRight || !apex) {
+  if (!baseLeft || !baseRight || !axis) {
     return null;
   }
 
   const baseMidpoint = midpoint(baseLeft, baseRight);
-  const longAxisVector = subtract(apex, baseMidpoint);
+  const longAxisVector = subtract(axis, baseMidpoint);
   const longAxisLengthWorld = length(longAxisVector);
   const baseHalfWidth = distance(baseLeft, baseRight) / 2;
 
@@ -97,9 +105,9 @@ export function buildLVSimpsonContourFromHingeApex({
 
   for (let index = 0; index <= pointCountPerSide; index += 1) {
     const t = index / pointCountPerSide;
-    const center = interpolate(baseMidpoint, apex, t);
-    const leftGuide = interpolate(baseLeft, apex, t);
-    const rightGuide = interpolate(baseRight, apex, t);
+    const center = interpolate(baseMidpoint, axis, t);
+    const leftGuide = interpolate(baseLeft, axis, t);
+    const rightGuide = interpolate(baseRight, axis, t);
 
     const leftDirection = normalize(subtract(leftGuide, center));
     const rightDirection = normalize(subtract(rightGuide, center));
@@ -114,16 +122,40 @@ export function buildLVSimpsonContourFromHingeApex({
   }
 
   // Keep the generated contour editable without making every tiny perimeter
-  // segment a handle. Also avoid duplicating the apex point, which can make
-  // SplineROI editing/rendering look spiky.
+  // segment a handle. Avoid duplicating the terminal long-axis point because
+  // duplicate spline handles can render as a spike.
   const contourPoints = [...leftSide, ...rightSide.reverse().slice(1)];
 
   return {
     points: contourPoints,
     baseLeftPoint: baseLeft,
     baseRightPoint: baseRight,
-    apexPoint: apex,
+    axisPoint: axis,
+    axisPointIndex: leftSide.length - 1,
     baseMidpoint,
     longAxisLengthMM: longAxisLengthWorld,
+  };
+}
+
+export function buildLVSimpsonContourFromHingeApex({
+  baseLeftPoint,
+  baseRightPoint,
+  apexPoint,
+  pointCountPerSide = DEFAULT_POINT_COUNT_PER_SIDE,
+}) {
+  const geometry = buildEchoVolumeContourFromBaseAxis({
+    baseLeftPoint,
+    baseRightPoint,
+    axisPoint: apexPoint,
+    pointCountPerSide,
+  });
+
+  if (!geometry) {
+    return null;
+  }
+
+  return {
+    ...geometry,
+    apexPoint: geometry.axisPoint,
   };
 }
