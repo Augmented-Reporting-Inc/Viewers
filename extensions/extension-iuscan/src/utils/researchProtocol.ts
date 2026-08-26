@@ -223,6 +223,41 @@ export async function saveActiveResearchReviewResults({
   return activeResearchReview;
 }
 
+export async function completeActiveResearchReview() {
+  const reviewKey = getResearchReviewKeyFromViewerUrl();
+  if (!reviewKey) {
+    throw new Error('Research review key is missing from the viewer context.');
+  }
+
+  const response = await fetch(
+    buildFormApiUrl(`research/reviews/${encodeURIComponent(reviewKey)}/complete`),
+    buildFormApiFetchOptions({
+      method: 'POST',
+      body: JSON.stringify({}),
+    })
+  );
+
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null);
+    throw new Error(
+      payload?.message || `Research review completion failed: ${response.status}`
+    );
+  }
+
+  activeResearchReview = await response.json();
+
+  const study = {
+    studyKey: activeResearchReview.studyKey,
+    title: activeResearchReview.studyTitle,
+    status: activeResearchReview.status,
+    protocol: activeResearchReview.protocol,
+  };
+  activeResearchContext = normalizeProtocol(study, activeResearchReview);
+  dispatchResearchProtocolUpdated(activeResearchContext);
+
+  return activeResearchReview;
+}
+
 export function getResearchComponent(context: any, componentKey = '', siteKey = '') {
   if (!context || !componentKey) {
     return null;

@@ -13,6 +13,7 @@ import {
 } from './spectralDoppler';
 
 const CONTOUR_TOOL_NAMES = new Set(['SplineROI', 'PlanarFreehandROI', 'LivewireContour']);
+const ULTRASOUND_DIRECTIONAL_TOOL_NAME = 'UltrasoundDirectionalTool';
 
 const COACH_MEASUREMENT_COLOR = 'rgb(56, 189, 248)';
 const COACH_MEASUREMENT_HIGHLIGHT_COLOR = 'rgb(125, 211, 252)';
@@ -968,6 +969,28 @@ function buildCachedStatsForAnnotation(annotation, toolName, referencedImageId) 
     return {};
   }
 
+  if (toolName === ULTRASOUND_DIRECTIONAL_TOOL_NAME) {
+    const directional =
+      annotation?.ultrasoundDirectional || annotation?.measurements?.ultrasoundDirectional || {};
+    const xValues = Array.isArray(directional.xValues) ? [...directional.xValues] : [];
+    const yValues = Array.isArray(directional.yValues) ? [...directional.yValues] : [];
+    const units = Array.isArray(directional.units) ? [...directional.units] : [];
+
+    if (xValues.length < 2 || yValues.length < 2) {
+      return {};
+    }
+
+    return {
+      [targetId]: {
+        xValues,
+        yValues,
+        units,
+        isHorizontal: directional.isHorizontal === true,
+        isUnitless: directional.isUnitless === true,
+      },
+    };
+  }
+
   if (toolName === 'Length') {
     const length =
       finiteNumberOrNull(measurements.length) ?? finiteNumberOrNull(measurements.value);
@@ -1014,6 +1037,10 @@ function isSavedSpectralDopplerAnnotation(annotation: any = {}) {
     annotation?.measurementKind === SPECTRAL_DOPPLER_MEASUREMENT_KIND ||
     spectralDoppler?.measurementKind === SPECTRAL_DOPPLER_MEASUREMENT_KIND
   );
+}
+
+function isSavedUltrasoundDirectionalAnnotation(annotation: any = {}) {
+  return inferToolName(annotation) === ULTRASOUND_DIRECTIONAL_TOOL_NAME;
 }
 
 function getSavedContourClosed(annotation: any = {}) {
@@ -1209,12 +1236,14 @@ function buildCornerstoneAnnotation(annotation, fallbackFrameOfReferenceUID = ''
       arMeasurementWorkflow: annotation.workflow || '',
       arMeasurementReadOnly: !!annotation.isLocked,
       arMeasurementReviewRound: Number(annotation.reviewRound) || null,
+      arMeasurementDomain: String(annotation.domain || '').trim().toLowerCase(),
     },
     data: {
       ...data,
       arMeasurementWorkflow: annotation.workflow || '',
       arMeasurementReadOnly: !!annotation.isLocked,
       arMeasurementReviewRound: Number(annotation.reviewRound) || null,
+      arMeasurementDomain: String(annotation.domain || '').trim().toLowerCase(),
     },
     highlighted: false,
     invalidated: false,
@@ -1286,6 +1315,7 @@ function patchHydratedAnnotationFromSaved({
     arMeasurementWorkflow: savedAnnotation.workflow || '',
     arMeasurementReadOnly: !!savedAnnotation.isLocked,
     arMeasurementReviewRound: Number(savedAnnotation.reviewRound) || null,
+    arMeasurementDomain: String(savedAnnotation.domain || '').trim().toLowerCase(),
   };
 
   target.data = {
@@ -1326,6 +1356,7 @@ function patchHydratedAnnotationFromSaved({
     arMeasurementWorkflow: savedAnnotation.workflow || '',
     arMeasurementReadOnly: !!savedAnnotation.isLocked,
     arMeasurementReviewRound: Number(savedAnnotation.reviewRound) || null,
+    arMeasurementDomain: String(savedAnnotation.domain || '').trim().toLowerCase(),
   };
 
   if (toolName === 'ArrowAnnotate') {
@@ -1429,30 +1460,43 @@ export function hydrateSavedViewerAnnotationForViewport({
   const viewportCamera = viewport?.getCamera?.() || {};
   const annotationPoints = cloneAnnotationPoints(annotation?.points);
   const isSpectralDoppler = isSavedSpectralDopplerAnnotation(annotation);
-  const viewportViewReference = isSpectralDoppler
+  const isUltrasoundDirectional = isSavedUltrasoundDirectionalAnnotation(annotation);
+  const useCurrentViewportAnnotationGroup = isSpectralDoppler || isUltrasoundDirectional;
+  const viewportViewReference = useCurrentViewportAnnotationGroup
     ? getViewportViewReferenceMetadata(viewport, annotationPoints)
     : {};
-  const viewportAnnotationGroupKey = isSpectralDoppler
+  const viewportAnnotationGroupKey = useCurrentViewportAnnotationGroup
     ? getViewportAnnotationGroupKey(viewport)
     : '';
 
   const annotationToHydrate = {
     ...annotation,
     arViewportViewReference: viewportViewReference,
-    FrameOfReferenceUID: isSpectralDoppler
-      ? viewportAnnotationGroupKey
-      : annotation?.FrameOfReferenceUID ||
-        viewportViewReference?.FrameOfReferenceUID ||
+    FrameOfReferenceUID: isUltrasoundDirectional
+      ? viewportViewReference?.FrameOfReferenceUID ||
         fallbackFrameOfReferenceUID ||
-        '',
+        annotation?.FrameOfReferenceUID ||
+        ''
+      : isSpectralDoppler
+        ? viewportAnnotationGroupKey
+        : annotation?.FrameOfReferenceUID ||
+          viewportViewReference?.FrameOfReferenceUID ||
+          fallbackFrameOfReferenceUID ||
+          '',
     referencedImageId: referencedImageIdOverride || annotation?.referencedImageId,
     points: annotationPoints,
-    viewPlaneNormal:
-      getSavedAnnotationMetadataVector(annotation, 'viewPlaneNormal') ||
-      cloneSavedAnnotationMetadataVector(viewportCamera.viewPlaneNormal),
-    viewUp:
-      getSavedAnnotationMetadataVector(annotation, 'viewUp') ||
-      cloneSavedAnnotationMetadataVector(viewportCamera.viewUp),
+    viewPlaneNormal: isUltrasoundDirectional
+      ? cloneSavedAnnotationMetadataVector(viewportCamera.viewPlaneNormal) ||
+        cloneSavedAnnotationMetadataVector(viewportViewReference?.viewPlaneNormal) ||
+        getSavedAnnotationMetadataVector(annotation, 'viewPlaneNormal')
+      : getSavedAnnotationMetadataVector(annotation, 'viewPlaneNormal') ||
+        cloneSavedAnnotationMetadataVector(viewportCamera.viewPlaneNormal),
+    viewUp: isUltrasoundDirectional
+      ? cloneSavedAnnotationMetadataVector(viewportCamera.viewUp) ||
+        cloneSavedAnnotationMetadataVector(viewportViewReference?.viewUp) ||
+        getSavedAnnotationMetadataVector(annotation, 'viewUp')
+      : getSavedAnnotationMetadataVector(annotation, 'viewUp') ||
+        cloneSavedAnnotationMetadataVector(viewportCamera.viewUp),
   };
 
   const cornerstoneAnnotation = buildCornerstoneAnnotation(
@@ -1518,12 +1562,11 @@ export function hydrateSavedViewerAnnotationForViewport({
 
   let existing = csToolsAnnotation.state.getAnnotation?.(annotationUID);
 
-  // Spectral Doppler traces must be indexed under the reopened viewport's current
-  // annotation group. Ultrasound studies may reopen with a different/synthetic
-  // FrameOfReferenceUID even when the SOP/frame is unchanged. Re-add the saved
-  // VTI annotation instead of mutating an object that remains indexed under the
-  // previous group key.
-  if (existing && isSpectralDoppler) {
+  // Cornerstone-owned ultrasound annotations must be indexed under the reopened
+  // viewport's current annotation group. Ultrasound studies may reopen with a
+  // different/synthetic FrameOfReferenceUID even when the SOP/frame is unchanged.
+  // Re-add instead of mutating an object that remains indexed under the old group.
+  if (existing && useCurrentViewportAnnotationGroup) {
     csToolsAnnotation.state.removeAnnotation?.(annotationUID);
     existing = null;
   }
@@ -1581,6 +1624,20 @@ export function hydrateSavedViewerAnnotationForViewport({
 
   csToolsAnnotation.state.addAnnotation(cornerstoneAnnotation, groupSelector);
 
+  if (isUltrasoundDirectional && viewport?.element) {
+    let directionalAnnotations: any[] = [];
+
+    try {
+      directionalAnnotations =
+        csToolsAnnotation.state.getAnnotations?.(toolName, viewport.element) || [];
+    } catch {}
+
+    if (!directionalAnnotations.some(candidate => candidate?.annotationUID === annotationUID)) {
+      csToolsAnnotation.state.removeAnnotation?.(annotationUID);
+      csToolsAnnotation.state.addAnnotation(cornerstoneAnnotation, viewport.element);
+    }
+  }
+
   try {
     csToolsAnnotation.visibility?.setAnnotationVisibility?.(annotationUID, true);
   } catch {}
@@ -1589,6 +1646,7 @@ export function hydrateSavedViewerAnnotationForViewport({
     annotationUID,
     toolName,
     isSpectralDoppler: isSavedSpectralDopplerAnnotation(annotationToHydrate),
+    isUltrasoundDirectional: isSavedUltrasoundDirectionalAnnotation(annotationToHydrate),
     pointCount: annotationToHydrate.points?.length || 0,
     referencedImageId: cornerstoneAnnotation.metadata?.referencedImageId || '',
     FrameOfReferenceUID: cornerstoneAnnotation.metadata?.FrameOfReferenceUID || '',

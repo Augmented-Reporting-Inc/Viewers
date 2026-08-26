@@ -3,12 +3,24 @@ import { calculateLVSimpson, LV_SIMPSON_SLOT_ORDER } from '../utils/lvSimpson';
 import { calculateLAVolume, LA_VOLUME_SLOT_ORDER } from '../utils/laVolume';
 import { getViewerMeasurementDomainFromPath } from '../utils/measurementLabelConfig';
 
+const ULTRASOUND_DIRECTIONAL_TOOL_NAME = 'UltrasoundDirectionalTool';
+const CLINICAL_REPORT_MEASUREMENTS_SAVE_TARGET = 'clinicalReportMeasurements';
+
+function isUltrasoundDirectionalMeasurement(measurement) {
+  return String(measurement?.toolName || '') === ULTRASOUND_DIRECTIONAL_TOOL_NAME;
+}
+
+function getUltrasoundDirectionalGeometry(measurement) {
+  return measurement?.ultrasoundDirectional || measurement?.measurements?.ultrasoundDirectional || null;
+}
+
 function getMeasurementLabel(measurement) {
   return (
     measurement?.label ||
     measurement?.measurementRole ||
     measurement?.description ||
     getArrowAnnotateText(measurement) ||
+    (isUltrasoundDirectionalMeasurement(measurement) ? 'Ultrasound Directional' : '') ||
     measurement?.toolName ||
     'Unlabelled measurement'
   );
@@ -160,6 +172,18 @@ function getFirstMeasurementStats(measurement) {
 }
 
 function getMeasurementValue(measurement) {
+  if (isUltrasoundDirectionalMeasurement(measurement)) {
+    const directional = getUltrasoundDirectionalGeometry(measurement) || {};
+    const value = finiteNumberOrNull(directional.value ?? measurement?.measurements?.value ?? measurement?.value);
+    const unit = String(
+      directional.unit || measurement?.measurements?.unit || measurement?.unit || ''
+    ).trim();
+
+    if (value != null) {
+      return formatMeasurementValue(value, unit || 'mm');
+    }
+  }
+
   if (isArrowAnnotateMeasurement(measurement)) {
     return '';
   }
@@ -323,6 +347,35 @@ function normalizeDisplayTextUnits(displayText = [], unitType = 'length') {
 function normalizeMeasurementForDisplay(measurement) {
   const measurements = measurement?.measurements || {};
 
+  if (isUltrasoundDirectionalMeasurement(measurement)) {
+    const directional = getUltrasoundDirectionalGeometry(measurement) || {};
+    const value = finiteNumberOrNull(directional.value ?? measurements.value ?? measurement?.value);
+    const unit = String(directional.unit || measurements.unit || measurement?.unit || '').trim();
+    const displayText =
+      value != null
+        ? [formatMeasurementValue(value, unit || 'mm')]
+        : flattenDisplayText(measurement?.displayText || measurements.displayText || [], 'length');
+
+    return {
+      ...measurement,
+      label: measurement?.label || 'Ultrasound Directional',
+      displayText,
+      measurements: {
+        ...measurements,
+        displayText,
+        ...(value != null
+          ? {
+              value,
+              length: value,
+              unit: unit || 'mm',
+              lengthUnit: unit || 'mm',
+            }
+          : {}),
+      },
+      ...(value != null ? { value, unit: unit || 'mm' } : {}),
+    };
+  }
+
   if (isArrowAnnotateMeasurement(measurement)) {
     const text = getArrowAnnotateText(measurement);
     const displayText = text ? [text] : [];
@@ -411,7 +464,11 @@ function hasSemanticLabel(measurement) {
 }
 
 function isDisplayableViewerMeasurement(measurement) {
-  return !!(measurement?.toolName === 'Length' || hasSemanticLabel(measurement));
+  return !!(
+    measurement?.toolName === 'Length' ||
+    isUltrasoundDirectionalMeasurement(measurement) ||
+    hasSemanticLabel(measurement)
+  );
 }
 
 function getMeasurementKey(measurement) {
@@ -797,6 +854,24 @@ const VIEWER_MEASUREMENTS_WORKFLOW = 'viewerMeasurements';
 
 const REVIEWER_MEASUREMENTS_WORKFLOW = 'reviewerMeasurements';
 
+function isClinicalReportMeasurementsTarget(saveTarget: any = {}) {
+  return (
+    saveTarget.mode === CLINICAL_REPORT_MEASUREMENTS_SAVE_TARGET &&
+    !!saveTarget.seriesId &&
+    String(saveTarget.launchSource || '').trim().toLowerCase() === 'report'
+  );
+}
+
+function confirmArReportMeasurementOverwrite(saveTarget: any = {}) {
+  if (!isClinicalReportMeasurementsTarget(saveTarget)) {
+    return true;
+  }
+
+  return window.confirm(
+    'Saving these measurements will overwrite the corresponding mapped measurement values in the AR report. Continue?'
+  );
+}
+
 function isReviewWorkflowMeasurementsTarget(saveTarget: any = {}) {
   return (
     saveTarget.mode === REVIEW_WORKFLOW_MEASUREMENTS_SAVE_TARGET &&
@@ -936,9 +1011,7 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
   const isExternalIuscanSession = isExternalIuscanViewer(saveTarget);
 
   const isReviewWorkflowReadOnly = isReviewWorkflow && !getWritableMeasurementWorkflow(saveTarget);
-  const [measurements, setMeasurements] = useState(
-    () => measurementService.getMeasurements?.() || []
-  );
+  const [measurements, setMeasurements] = useState([]);
   const [savingAction, setSavingAction] = useState('');
   const isSaving = !!savingAction;
   const [domain, setDomain] = useState(() => getViewerMeasurementDomainFromPath());
@@ -954,6 +1027,27 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
     isLearnerViewerMeasurementWorkflowFromUrl
   );
   const isMeasurementScoringDisabled = isViewerMeasurementScoringDisabledFromUrl();
+  const refreshLiveMeasurements = useCallback(async () => {
+    try {
+      const snapshot = await Promise.resolve(
+        commandsManager.runCommand('getViewerMeasurementSnapshotForPanel')
+      );
+
+      if (Array.isArray(snapshot)) {
+        setMeasurements([...snapshot]);
+        return;
+      }
+    } catch (error) {
+      console.warn('[ARMeasurementsPanel] AR measurement snapshot refresh failed:', error);
+    }
+
+    setMeasurements(
+      [...(measurementService.getMeasurements?.() || [])].filter(
+        measurement => !isUltrasoundDirectionalMeasurement(measurement)
+      )
+    );
+  }, [commandsManager, measurementService]);
+
   const applySavedAnnotationsResult = useCallback(result => {
     if (!result) {
       return;
@@ -1034,10 +1128,6 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
   }, [commandsManager, isReviewWorkflowReadOnly]);
 
   useEffect(() => {
-    const refresh = () => {
-      setMeasurements([...(measurementService.getMeasurements?.() || [])]);
-    };
-
     const events = measurementService.EVENTS || {};
     const subscriptions = [
       events.MEASUREMENT_ADDED,
@@ -1047,17 +1137,17 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
       events.RAW_MEASUREMENT_ADDED,
     ]
       .filter(Boolean)
-      .map(eventName => measurementService.subscribe(eventName, refresh));
+      .map(eventName => measurementService.subscribe(eventName, refreshLiveMeasurements));
 
-    window.addEventListener(AR_LIVE_MEASUREMENTS_REFRESH_EVENT, refresh);
+    window.addEventListener(AR_LIVE_MEASUREMENTS_REFRESH_EVENT, refreshLiveMeasurements);
 
-    refresh();
+    void refreshLiveMeasurements();
 
     return () => {
       subscriptions.forEach(subscription => subscription?.unsubscribe?.());
-      window.removeEventListener(AR_LIVE_MEASUREMENTS_REFRESH_EVENT, refresh);
+      window.removeEventListener(AR_LIVE_MEASUREMENTS_REFRESH_EVENT, refreshLiveMeasurements);
     };
-  }, [measurementService]);
+  }, [measurementService, refreshLiveMeasurements]);
 
   useEffect(() => {
     const handleLVSimpsonSessionUpdated = event => {
@@ -1066,7 +1156,7 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
         : [];
 
       setSessionLVSimpsonMeasurements(nextMeasurements);
-      setMeasurements([...(measurementService.getMeasurements?.() || [])]);
+      void refreshLiveMeasurements();
     };
 
     window.addEventListener(AR_LV_SIMPSON_SESSION_EVENT, handleLVSimpsonSessionUpdated);
@@ -1074,7 +1164,7 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
     return () => {
       window.removeEventListener(AR_LV_SIMPSON_SESSION_EVENT, handleLVSimpsonSessionUpdated);
     };
-  }, [measurementService]);
+  }, [refreshLiveMeasurements]);
 
   useEffect(() => {
     const handleLAVolumeSessionUpdated = event => {
@@ -1083,7 +1173,7 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
         : [];
 
       setSessionLAVolumeMeasurements(nextMeasurements);
-      setMeasurements([...(measurementService.getMeasurements?.() || [])]);
+      void refreshLiveMeasurements();
     };
 
     window.addEventListener(AR_LA_VOLUME_SESSION_EVENT, handleLAVolumeSessionUpdated);
@@ -1091,7 +1181,7 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
     return () => {
       window.removeEventListener(AR_LA_VOLUME_SESSION_EVENT, handleLAVolumeSessionUpdated);
     };
-  }, [measurementService]);
+  }, [refreshLiveMeasurements]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1335,6 +1425,10 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
       return;
     }
 
+    if (!confirmArReportMeasurementOverwrite(saveTarget)) {
+      return;
+    }
+
     saveInFlightRef.current = true;
     setSavingAction(scoreNow ? 'score' : 'draft');
 
@@ -1391,6 +1485,22 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
       }
 
       try {
+        if (isUltrasoundDirectionalMeasurement(measurement)) {
+          const result = await commandsManager.runCommand('jumpToSavedViewerAnnotation', {
+            annotation: measurement,
+            selectAnnotation: true,
+            runDelayedDisplayRefresh: false,
+          });
+
+          return (
+            result || {
+              ok: true,
+              source: 'cornerstone-directional-annotation',
+              annotationId: uid,
+            }
+          );
+        }
+
         if (measurement?.isSavedAnnotation === true) {
           console.info('[ARMeasurementsPanel] displaying saved annotations for image', {
             uid,

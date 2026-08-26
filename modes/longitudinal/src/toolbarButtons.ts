@@ -597,7 +597,7 @@ const toolbarButtons: Button[] = [
     id: 'LAVolume',
     uiType: 'ohif.toolButton',
     props: {
-      icon: 'icon-tool-spline-roi',
+      icon: 'tool-ellipse',
       label: 'LA Volume',
       tooltip:
         'Start guided biplane LA volume. Trace maximum LA volume in A4C and A2C; exclude pulmonary veins and the LA appendage. Press Esc to cancel.',

@@ -3,8 +3,10 @@ export const ECHO_MEASUREMENT_LABELS = [
   { value: 'LVIDs', label: 'LVIDs' },
   { value: 'IVSd', label: 'IVSd' },
   { value: 'PWd', label: 'PWd' },
-  { value: 'AO', label: 'AO' },
-  { value: 'LVOTDIAM', label: 'LVOT diameter' },
+  { value: 'AO', label: 'Aortic root' },
+  { value: 'AscAo', label: 'Ascending aorta' },
+  { value: 'LVOTDiam', label: 'LVOT diameter' },
+  { value: 'LAd', label: 'Left atrial dimension' },
   { value: 'RVIDd', label: 'RVIDd' },
   { value: 'TAPSE', label: 'TAPSE' },
 ];

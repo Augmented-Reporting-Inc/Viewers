@@ -711,14 +711,31 @@ const BASE_MEASUREMENT_TOOL_IDS = [
 ];
 
 const ECHO_ONLY_MEASUREMENT_TOOL_IDS = ['LVSimpsonEF', 'LAVolume', 'SpectralDopplerVTI'];
+const ULTRASOUND_DIRECTIONAL_TOOL_NAME = 'UltrasoundDirectionalTool';
+const AR_LIVE_MEASUREMENTS_REFRESH_EVENT = 'ar-measurements:live-measurements-updated';
 
 const GENERIC_CONTOUR_TOOL_IDS = ['PlanarFreehandROI', 'SplineROI', 'LivewireContour'];
 
-function getMeasurementToolIdsForDomain(domain) {
+function getMeasurementToolIdsForDomain() {
+  return [...BASE_MEASUREMENT_TOOL_IDS, ...GENERIC_CONTOUR_TOOL_IDS];
+}
+
+function getPrimaryToolbarIdsForDomain(domain, measurementToolsReadOnly) {
   return [
-    ...BASE_MEASUREMENT_TOOL_IDS,
-    ...(domain === 'echo' ? ECHO_ONLY_MEASUREMENT_TOOL_IDS : []),
-    ...GENERIC_CONTOUR_TOOL_IDS,
+    'MeasurementTools',
+    ...(measurementToolsReadOnly ? [] : ['ArrowAnnotate']),
+    ...(measurementToolsReadOnly || domain !== 'echo' ? [] : ECHO_ONLY_MEASUREMENT_TOOL_IDS),
+    'Zoom',
+    'Pan',
+    'TrackballRotate',
+    'WindowLevel',
+    'Capture',
+    'Layout',
+    'Cine',
+    'Previous',
+    'Next',
+    'Crosshairs',
+    'MoreTools',
   ];
 }
 
@@ -881,6 +898,8 @@ const extensionDependencies = {
 function modeFactory({ modeConfiguration }) {
   let _activatePanelTriggersSubscriptions = [];
   let _annotationCompletedHandler: null | ((event: Event) => void) = null;
+  let _annotationModifiedHandler: null | ((event: Event) => void) = null;
+  let _directionalMeasurementRefreshTimer: number | null = null;
   const _handledCompletedAnnotationIds = new Set<string>();
   let restoreConsoleWarn: null | (() => void) = null;
   let removeARUSRegionPixelSpacingProvider: null | (() => void) = null;
@@ -958,6 +977,48 @@ function modeFactory({ modeConfiguration }) {
 
       _handledCompletedAnnotationIds.clear();
 
+      if (_annotationModifiedHandler) {
+        eventTarget.removeEventListener(
+          CornerstoneToolsEnums.Events.ANNOTATION_MODIFIED,
+          _annotationModifiedHandler
+        );
+      }
+
+      if (_directionalMeasurementRefreshTimer !== null) {
+        window.clearTimeout(_directionalMeasurementRefreshTimer);
+        _directionalMeasurementRefreshTimer = null;
+      }
+
+      _annotationModifiedHandler = (event: Event) => {
+        const sourceAnnotation = (event as CustomEvent)?.detail?.annotation;
+        const toolName = String(sourceAnnotation?.metadata?.toolName || '').trim();
+
+        if (toolName !== ULTRASOUND_DIRECTIONAL_TOOL_NAME) {
+          return;
+        }
+
+        if (_directionalMeasurementRefreshTimer !== null) {
+          window.clearTimeout(_directionalMeasurementRefreshTimer);
+        }
+
+        _directionalMeasurementRefreshTimer = window.setTimeout(() => {
+          _directionalMeasurementRefreshTimer = null;
+          window.dispatchEvent(
+            new CustomEvent(AR_LIVE_MEASUREMENTS_REFRESH_EVENT, {
+              detail: {
+                reason: 'ultrasound-directional-modified',
+                annotationId: String(sourceAnnotation?.annotationUID || '').trim(),
+              },
+            })
+          );
+        }, 75);
+      };
+
+      eventTarget.addEventListener(
+        CornerstoneToolsEnums.Events.ANNOTATION_MODIFIED,
+        _annotationModifiedHandler
+      );
+
       _annotationCompletedHandler = async (event: Event) => {
         const eventDetail = (event as CustomEvent)?.detail || {};
         const sourceAnnotation = eventDetail.annotation;
@@ -972,6 +1033,28 @@ function modeFactory({ modeConfiguration }) {
         await new Promise(resolve => window.setTimeout(resolve, 0));
 
         if (isHydratedSavedWorkflowAnnotation(annotationId, sourceAnnotation)) {
+          return;
+        }
+
+        const completedToolName = String(sourceAnnotation?.metadata?.toolName || '').trim();
+
+        if (completedToolName === ULTRASOUND_DIRECTIONAL_TOOL_NAME) {
+          _handledCompletedAnnotationIds.add(annotationId);
+
+          commandsManager.runCommand('markViewerMeasurementCreatedInSession', {
+            uid: annotationId,
+          });
+
+          window.dispatchEvent(
+            new CustomEvent(AR_LIVE_MEASUREMENTS_REFRESH_EVENT, {
+              detail: {
+                reason: 'ultrasound-directional-completed',
+                annotationId,
+              },
+            })
+          );
+
+          panelService?.activatePanel?.('extension-ar-measurements.panelModule.arMeasurements', true);
           return;
         }
 
@@ -1043,22 +1126,12 @@ function modeFactory({ modeConfiguration }) {
       toolbarService.register(toolbarButtons);
 
       const measurementToolsReadOnly = isViewerMeasurementReadOnlyFromUrl();
+      const initialMeasurementDomain = getViewerMeasurementDomainFromPath();
 
-      toolbarService.updateSection(toolbarService.sections.primary, [
-        'MeasurementTools',
-        ...(measurementToolsReadOnly ? [] : ['ArrowAnnotate']),
-        'Zoom',
-        'Pan',
-        'TrackballRotate',
-        'WindowLevel',
-        'Capture',
-        'Layout',
-        'Cine',
-        'Previous',
-        'Next',
-        'Crosshairs',
-        'MoreTools',
-      ]);
+      toolbarService.updateSection(
+        toolbarService.sections.primary,
+        getPrimaryToolbarIdsForDomain(initialMeasurementDomain, measurementToolsReadOnly)
+      );
 
       toolbarService.updateSection(toolbarService.sections.viewportActionMenu.topLeft, [
         'orientationMenu',
@@ -1086,20 +1159,22 @@ function modeFactory({ modeConfiguration }) {
         'windowLevelMenu',
       ]);
 
-      const initialMeasurementDomain = getViewerMeasurementDomainFromPath();
-
       toolbarService.updateSection(
         'MeasurementTools',
-        measurementToolsReadOnly ? [] : getMeasurementToolIdsForDomain(initialMeasurementDomain)
+        measurementToolsReadOnly ? [] : getMeasurementToolIdsForDomain()
       );
 
       Promise.resolve(resolveViewerMeasurementDomain(commandsManager))
         .then(resolvedDomain => {
+          const measurementDomain = resolvedDomain || initialMeasurementDomain;
+
+          toolbarService.updateSection(
+            toolbarService.sections.primary,
+            getPrimaryToolbarIdsForDomain(measurementDomain, measurementToolsReadOnly)
+          );
           toolbarService.updateSection(
             'MeasurementTools',
-            measurementToolsReadOnly
-              ? []
-              : getMeasurementToolIdsForDomain(resolvedDomain || initialMeasurementDomain)
+            measurementToolsReadOnly ? [] : getMeasurementToolIdsForDomain()
           );
         })
         .catch(error => {
@@ -1232,6 +1307,19 @@ function modeFactory({ modeConfiguration }) {
           _annotationCompletedHandler
         );
         _annotationCompletedHandler = null;
+      }
+
+      if (_annotationModifiedHandler) {
+        eventTarget.removeEventListener(
+          CornerstoneToolsEnums.Events.ANNOTATION_MODIFIED,
+          _annotationModifiedHandler
+        );
+        _annotationModifiedHandler = null;
+      }
+
+      if (_directionalMeasurementRefreshTimer !== null) {
+        window.clearTimeout(_directionalMeasurementRefreshTimer);
+        _directionalMeasurementRefreshTimer = null;
       }
 
       _handledCompletedAnnotationIds.clear();

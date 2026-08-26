@@ -58,6 +58,7 @@ import {
   hydrateMeasurementAnnotationsForActiveStudy as hydrateMeasurementAnnotationsForActiveStudyUtil,
 } from './utils/measurementAnnotationHydration';
 import { buildFormApiFetchOptions, buildFormApiUrl } from './utils/formApi';
+import { getMeasurementLabelConfigForDomain } from './utils/measurementLabelConfig';
 import {
   LV_SIMPSON_MEASUREMENT_KIND,
   LV_TRACE_MEASUREMENT_LABELS_CONFIG,
@@ -113,9 +114,14 @@ const VIEWER_CONTOUR_TOOL_NAMES = new Set(
 
 const AR_LV_SIMPSON_SESSION_EVENT = 'ar-measurements:lv-simpson-session-updated';
 const AR_LA_VOLUME_SESSION_EVENT = 'ar-measurements:la-volume-session-updated';
+const ULTRASOUND_DIRECTIONAL_TOOL_NAME = 'UltrasoundDirectionalTool';
+const ULTRASOUND_DIRECTIONAL_MEASUREMENT_KIND = 'ultrasound-directional';
 
 const lvSimpsonSessionMeasurementsByUid = new Map<string, any>();
 const laVolumeSessionMeasurementsByUid = new Map<string, any>();
+
+const clinicalViewerSeriesReadCache = new Map<string, any>();
+const clinicalViewerSeriesReadPending = new Map<string, Promise<any>>();
 let activeLVSimpsonWorkflowSessionId = '';
 let activeLAVolumeWorkflowSessionId = '';
 
@@ -285,23 +291,133 @@ function removeLAVolumeSessionMeasurement(uid = '') {
   });
 }
 
-function mergeViewerMeasurementSnapshots(...sources: any[][]) {
+function getViewerMeasurementSnapshotPoints(measurement: any = {}, geometry: any = {}) {
+  const directPoints = Array.isArray(measurement?.points) ? measurement.points : [];
+  if (directPoints.length >= 6) {
+    return directPoints;
+  }
+
+  const geometryPoints = Array.isArray(geometry?.contourPoints)
+    ? geometry.contourPoints
+    : Array.isArray(geometry?.points)
+      ? geometry.points
+      : [];
+
+  return geometryPoints;
+}
+
+function compactViewerVolumeFallbackPoints(points: any[] = [], maxPoints = 400) {
+  if (!Array.isArray(points) || points.length === 0) {
+    return [];
+  }
+
+  const safeMaxPoints = Math.max(6, Math.floor(Number(maxPoints) || 400));
+
+  if (points.length <= safeMaxPoints) {
+    return points;
+  }
+
+  const lastIndex = points.length - 1;
+
+  return Array.from({ length: safeMaxPoints }, (_unused, index) => {
+    const sourceIndex = Math.round((index * lastIndex) / (safeMaxPoints - 1));
+    return points[sourceIndex];
+  });
+}
+
+function isViewerMeasurementSessionFallbackReplacementReady(
+  liveMeasurement: any = {},
+  sessionMeasurement: any = {}
+) {
+  if (isLVSimpsonMeasurement(sessionMeasurement)) {
+    if (!isLVSimpsonMeasurement(liveMeasurement)) {
+      return false;
+    }
+
+    const liveGeometry =
+      liveMeasurement?.lvSimpson || liveMeasurement?.measurements?.lvSimpson || {};
+    const liveSlot = getLVSimpsonSlotFromMeasurement(liveMeasurement);
+    const sessionSlot = getLVSimpsonSlotFromMeasurement(sessionMeasurement);
+    const livePoints = getViewerMeasurementSnapshotPoints(liveMeasurement, liveGeometry);
+
+    return !!(
+      liveMeasurement?.toolName &&
+      liveSlot &&
+      (!sessionSlot || liveSlot === sessionSlot) &&
+      livePoints.length >= 6 &&
+      (liveMeasurement?.referencedImageId || liveMeasurement?.referenceSeriesUID)
+    );
+  }
+
+  if (isLAVolumeMeasurement(sessionMeasurement)) {
+    if (!isLAVolumeMeasurement(liveMeasurement)) {
+      return false;
+    }
+
+    const liveGeometry =
+      liveMeasurement?.laVolume || liveMeasurement?.measurements?.laVolume || {};
+    const liveSlot = getLAVolumeSlotFromMeasurement(liveMeasurement);
+    const sessionSlot = getLAVolumeSlotFromMeasurement(sessionMeasurement);
+    const livePoints = getViewerMeasurementSnapshotPoints(liveMeasurement, liveGeometry);
+
+    return !!(
+      liveMeasurement?.toolName &&
+      liveSlot &&
+      (!sessionSlot || liveSlot === sessionSlot) &&
+      livePoints.length >= 6 &&
+      (liveMeasurement?.referencedImageId || liveMeasurement?.referenceSeriesUID)
+    );
+  }
+
+  return true;
+}
+
+function mergeViewerMeasurementSnapshots({
+  lvSimpsonSessionMeasurements = [],
+  laVolumeSessionMeasurements = [],
+  liveMeasurements = [],
+}: {
+  lvSimpsonSessionMeasurements?: any[];
+  laVolumeSessionMeasurements?: any[];
+  liveMeasurements?: any[];
+} = {}) {
   const measurementsWithoutId: any[] = [];
   const measurementsById = new Map<string, any>();
+  const sessionFallbackById = new Map<string, any>();
 
-  for (const source of sources) {
-    for (const measurement of Array.isArray(source) ? source : []) {
-      const measurementId = getMeasurementAnnotationId(measurement);
+  for (const sessionMeasurement of [
+    ...(Array.isArray(lvSimpsonSessionMeasurements) ? lvSimpsonSessionMeasurements : []),
+    ...(Array.isArray(laVolumeSessionMeasurements) ? laVolumeSessionMeasurements : []),
+  ]) {
+    const measurementId = getMeasurementAnnotationId(sessionMeasurement);
 
-      if (!measurementId) {
-        measurementsWithoutId.push(measurement);
-        continue;
-      }
-
-      // Later sources are more authoritative. Session measurements are used
-      // only as a fallback until MeasurementService has caught up.
-      measurementsById.set(measurementId, measurement);
+    if (!measurementId) {
+      measurementsWithoutId.push(sessionMeasurement);
+      continue;
     }
+
+    sessionFallbackById.set(measurementId, sessionMeasurement);
+    measurementsById.set(measurementId, sessionMeasurement);
+  }
+
+  for (const liveMeasurement of Array.isArray(liveMeasurements) ? liveMeasurements : []) {
+    const measurementId = getMeasurementAnnotationId(liveMeasurement);
+
+    if (!measurementId) {
+      measurementsWithoutId.push(liveMeasurement);
+      continue;
+    }
+
+    const sessionFallback = sessionFallbackById.get(measurementId);
+
+    if (
+      sessionFallback &&
+      !isViewerMeasurementSessionFallbackReplacementReady(liveMeasurement, sessionFallback)
+    ) {
+      continue;
+    }
+
+    measurementsById.set(measurementId, liveMeasurement);
   }
 
   return [...measurementsWithoutId, ...measurementsById.values()];
@@ -318,12 +434,20 @@ function synchronizeViewerMeasurementSessionFallbacks(liveMeasurements: any[] = 
       continue;
     }
 
-    if (lvSimpsonSessionMeasurementsByUid.has(measurementId)) {
+    const lvSimpsonFallback = lvSimpsonSessionMeasurementsByUid.get(measurementId);
+    if (
+      lvSimpsonFallback &&
+      isViewerMeasurementSessionFallbackReplacementReady(liveMeasurement, lvSimpsonFallback)
+    ) {
       lvSimpsonSessionMeasurementsByUid.set(measurementId, liveMeasurement);
       lvSimpsonChanged = true;
     }
 
-    if (laVolumeSessionMeasurementsByUid.has(measurementId)) {
+    const laVolumeFallback = laVolumeSessionMeasurementsByUid.get(measurementId);
+    if (
+      laVolumeFallback &&
+      isViewerMeasurementSessionFallbackReplacementReady(liveMeasurement, laVolumeFallback)
+    ) {
       laVolumeSessionMeasurementsByUid.set(measurementId, liveMeasurement);
       laVolumeChanged = true;
     }
@@ -342,20 +466,394 @@ function synchronizeViewerMeasurementSessionFallbacks(liveMeasurements: any[] = 
   }
 }
 
-function getCurrentViewerMeasurementSnapshot(measurementService: any) {
-  const liveMeasurements = measurementService?.getMeasurements?.() || [];
+function getCurrentViewerMeasurementSnapshot(
+  measurementService: any,
+  cornerstoneFallbackMeasurements: any[] = []
+) {
+  const rawLiveMeasurements = measurementService?.getMeasurements?.() || [];
+  const liveMeasurements = rawLiveMeasurements.filter(
+    measurement => !isUltrasoundDirectionalViewerMeasurement(measurement)
+  );
+  const fallbackMeasurements = Array.isArray(cornerstoneFallbackMeasurements)
+    ? cornerstoneFallbackMeasurements
+    : [];
 
   synchronizeViewerMeasurementSessionFallbacks(liveMeasurements);
 
-  return mergeViewerMeasurementSnapshots(
-    getLVSimpsonSessionMeasurements(),
-    getLAVolumeSessionMeasurements(),
-    liveMeasurements
+  const mergedMeasurements = mergeViewerMeasurementSnapshots({
+    lvSimpsonSessionMeasurements: [
+      ...fallbackMeasurements.filter(isLVSimpsonMeasurement),
+      ...getLVSimpsonSessionMeasurements(),
+    ],
+    laVolumeSessionMeasurements: [
+      ...fallbackMeasurements.filter(isLAVolumeMeasurement),
+      ...getLAVolumeSessionMeasurements(),
+    ],
+    liveMeasurements,
+  });
+
+  const measurementsById = new Map<string, any>();
+  const measurementsWithoutId: any[] = [];
+
+  for (const measurement of mergedMeasurements) {
+    const measurementId = getMeasurementAnnotationId(measurement);
+
+    if (measurementId) {
+      measurementsById.set(measurementId, measurement);
+    } else {
+      measurementsWithoutId.push(measurement);
+    }
+  }
+
+  // Cornerstone annotation state is the source of truth for tools that AR owns
+  // directly rather than round-tripping through OHIF MeasurementService.
+  for (const measurement of fallbackMeasurements.filter(isUltrasoundDirectionalViewerMeasurement)) {
+    const measurementId = getMeasurementAnnotationId(measurement);
+
+    if (measurementId) {
+      measurementsById.set(measurementId, measurement);
+    } else {
+      measurementsWithoutId.push(measurement);
+    }
+  }
+
+  return [...measurementsWithoutId, ...measurementsById.values()];
+}
+
+function getAllCornerstoneViewerAnnotations() {
+  let stateAnnotations: any[] = [];
+  const annotationState: any = cornerstoneTools.annotation.state;
+
+  try {
+    const directAnnotations = annotationState.getAllAnnotations?.();
+    if (Array.isArray(directAnnotations)) {
+      stateAnnotations = directAnnotations;
+    }
+  } catch {}
+
+  if (!stateAnnotations.length) {
+    try {
+      const annotationManager = annotationState.getAnnotationManager?.();
+      const managedAnnotations = annotationManager?.getAllAnnotations?.();
+      if (Array.isArray(managedAnnotations)) {
+        stateAnnotations = managedAnnotations;
+      }
+    } catch {}
+  }
+
+  return stateAnnotations;
+}
+
+function parseDicomWebIdsFromReferencedImageId(referencedImageId = '') {
+  const match = String(referencedImageId || '').match(
+    /\/studies\/([^/]+)\/series\/([^/]+)\/instances\/([^/]+)(?:\/frames\/(\d+))?/i
   );
+
+  if (!match) {
+    return {
+      studyInstanceId: '',
+      seriesInstanceId: '',
+      sopInstanceId: '',
+      frameNumber: 1,
+    };
+  }
+
+  const frameNumber = Number(match[4]);
+
+  return {
+    studyInstanceId: decodeURIComponent(match[1]),
+    seriesInstanceId: decodeURIComponent(match[2]),
+    sopInstanceId: decodeURIComponent(match[3]),
+    frameNumber: Number.isFinite(frameNumber) && frameNumber > 0 ? frameNumber : 1,
+  };
+}
+
+function getUltrasoundDirectionalStatsFromAnnotationData(data: any = {}) {
+  const cachedStats = data?.cachedStats || {};
+
+  return (
+    Object.values(cachedStats).find((stats: any) => {
+      return Array.isArray(stats?.xValues) && Array.isArray(stats?.yValues);
+    }) || null
+  ) as any;
+}
+
+function getUltrasoundDirectionalDistance(stats: any = {}) {
+  const xValues = Array.isArray(stats?.xValues) ? stats.xValues.map(Number) : [];
+  const yValues = Array.isArray(stats?.yValues) ? stats.yValues.map(Number) : [];
+  const units = Array.isArray(stats?.units) ? stats.units.map(value => String(value || '')) : [];
+  const isUnitless = stats?.isUnitless === true;
+  const isHorizontal = stats?.isHorizontal === true;
+
+  let value = null;
+  let unit = '';
+
+  if (isUnitless) {
+    if (Number.isFinite(xValues[0]) && Number.isFinite(xValues[1])) {
+      value = Math.abs(xValues[1] - xValues[0]);
+    }
+    unit = 'px';
+  } else if (isHorizontal) {
+    if (Number.isFinite(xValues[0]) && Number.isFinite(xValues[1])) {
+      value = Math.abs(xValues[1] - xValues[0]);
+    }
+    unit = units[0] || '';
+  } else {
+    if (Number.isFinite(yValues[0]) && Number.isFinite(yValues[1])) {
+      value = Math.abs(yValues[1] - yValues[0]);
+    }
+    unit = units[1] || units[0] || '';
+  }
+
+  if (!Number.isFinite(value)) {
+    return {
+      value: null,
+      unit,
+      isUnitless,
+      isHorizontal,
+    };
+  }
+
+  if (isUnitless) {
+    return {
+      value,
+      unit: 'px',
+      isUnitless,
+      isHorizontal,
+    };
+  }
+
+  const normalized = normalizeLengthValueAndUnit(value, unit);
+
+  return {
+    value: normalized.value,
+    unit: normalized.unit,
+    isUnitless,
+    isHorizontal,
+  };
+}
+
+function buildUltrasoundDirectionalDisplayText(stats: any = {}) {
+  const distance = getUltrasoundDirectionalDistance(stats);
+
+  if (!Number.isFinite(Number(distance.value))) {
+    return [];
+  }
+
+  const value = Number(distance.value);
+  const formattedValue = distance.unit === 'px' ? csUtils.roundNumber(value) : formatLengthMM(value);
+
+  return [`${formattedValue} ${distance.unit || ''}`.trim()];
+}
+
+function getCornerstoneUltrasoundDirectionalMeasurementFallback(stateAnnotation: any = {}) {
+  const measurementId = getMeasurementAnnotationId(stateAnnotation);
+  const metadata = stateAnnotation?.metadata || {};
+  const data = stateAnnotation?.data || {};
+  const toolName = String(metadata.toolName || stateAnnotation?.toolName || '').trim();
+  const points = Array.isArray(data?.handles?.points) ? data.handles.points : [];
+  const stats = getUltrasoundDirectionalStatsFromAnnotationData(data);
+
+  if (
+    !measurementId ||
+    toolName !== ULTRASOUND_DIRECTIONAL_TOOL_NAME ||
+    points.length !== 2 ||
+    !stats
+  ) {
+    return null;
+  }
+
+  const referencedImageId = String(metadata.referencedImageId || '').trim();
+  const parsedIds = parseDicomWebIdsFromReferencedImageId(referencedImageId);
+  const distance = getUltrasoundDirectionalDistance(stats);
+  const label = String(data.label || 'Ultrasound Directional').trim();
+
+  return {
+    uid: measurementId,
+    annotationUID: measurementId,
+    toolName: ULTRASOUND_DIRECTIONAL_TOOL_NAME,
+    measurementKind: ULTRASOUND_DIRECTIONAL_MEASUREMENT_KIND,
+    label,
+    measurementRole: label,
+    role: label,
+    ultrasoundDirectional: {
+      xValues: Array.isArray(stats.xValues) ? [...stats.xValues] : [],
+      yValues: Array.isArray(stats.yValues) ? [...stats.yValues] : [],
+      units: Array.isArray(stats.units) ? [...stats.units] : [],
+      isHorizontal: stats.isHorizontal === true,
+      isUnitless: stats.isUnitless === true,
+      value: distance.value,
+      unit: distance.unit,
+      measurementKind: ULTRASOUND_DIRECTIONAL_MEASUREMENT_KIND,
+    },
+    referenceStudyUID: metadata.StudyInstanceUID || parsedIds.studyInstanceId || '',
+    referenceSeriesUID: metadata.SeriesInstanceUID || parsedIds.seriesInstanceId || '',
+    SOPInstanceUID: metadata.SOPInstanceUID || parsedIds.sopInstanceId || '',
+    FrameOfReferenceUID: metadata.FrameOfReferenceUID || '',
+    displaySetInstanceUID: metadata.displaySetInstanceUID || '',
+    referencedImageId,
+    frameNumber: parsedIds.frameNumber || getFrameNumberFromReferencedImageId(referencedImageId),
+    points: points.map(point => (Array.isArray(point) ? [...point] : point)),
+    viewPlaneNormal: cloneViewerMeasurementMetadataVector(metadata.viewPlaneNormal),
+    viewUp: cloneViewerMeasurementMetadataVector(metadata.viewUp),
+    data: data.cachedStats || {},
+    value: distance.value,
+    unit: distance.unit,
+    displayText: buildUltrasoundDirectionalDisplayText(stats),
+  };
+}
+
+function getCornerstoneUltrasoundDirectionalMeasurementFallbacks({
+  studyInstanceUID = '',
+  excludedMeasurementIds = new Set<string>(),
+}: {
+  studyInstanceUID?: string;
+  excludedMeasurementIds?: Set<string>;
+} = {}) {
+  const expectedStudyInstanceUID = String(studyInstanceUID || '').trim();
+
+  return getAllCornerstoneViewerAnnotations()
+    .map(getCornerstoneUltrasoundDirectionalMeasurementFallback)
+    .filter(Boolean)
+    .filter((measurement: any) => {
+      const measurementId = getMeasurementAnnotationId(measurement);
+      const measurementStudyInstanceUID = String(measurement?.referenceStudyUID || '').trim();
+
+      if (!measurementId || excludedMeasurementIds.has(measurementId)) {
+        return false;
+      }
+
+      return !(
+        expectedStudyInstanceUID &&
+        measurementStudyInstanceUID &&
+        measurementStudyInstanceUID !== expectedStudyInstanceUID
+      );
+    });
+}
+
+function getCornerstoneVolumeMeasurementFallback(annotationId = '') {
+  const measurementId = String(annotationId || '').trim();
+
+  if (!measurementId) {
+    return null;
+  }
+
+  const stateAnnotation = cornerstoneTools.annotation.state.getAnnotation?.(measurementId);
+
+  if (!stateAnnotation) {
+    return null;
+  }
+
+  const metadata = stateAnnotation.metadata || {};
+  const data = stateAnnotation.data || {};
+  const lvSimpson = data.lvSimpson || null;
+  const laVolume = data.laVolume || null;
+
+  if (!lvSimpson && !laVolume) {
+    return null;
+  }
+
+  const geometry = lvSimpson || laVolume || {};
+  const geometryContourPoints = Array.isArray(geometry?.contourPoints)
+    ? geometry.contourPoints
+    : Array.isArray(geometry?.points)
+      ? geometry.points
+      : [];
+  const handlePoints = Array.isArray(data?.handles?.points) ? data.handles.points : [];
+  const renderedPolyline = Array.isArray(data?.contour?.polyline) ? data.contour.polyline : [];
+  const contourPoints = compactViewerVolumeFallbackPoints(
+    geometryContourPoints.length
+      ? geometryContourPoints
+      : handlePoints.length
+        ? handlePoints
+        : renderedPolyline
+  );
+  const label = String(data.label || geometry.label || '').trim();
+  const referencedImageId = String(metadata.referencedImageId || '').trim();
+  const measurementKind = lvSimpson
+    ? LV_SIMPSON_MEASUREMENT_KIND
+    : LA_VOLUME_MEASUREMENT_KIND;
+
+  return {
+    uid: measurementId,
+    annotationUID: measurementId,
+    toolName: metadata.toolName || stateAnnotation.toolName || 'SplineROI',
+    label,
+    measurementRole: label,
+    role: geometry.slot || '',
+    slot: geometry.slot || '',
+    view: geometry.view || '',
+    phase: geometry.phase || '',
+    measurementKind,
+    ...(lvSimpson ? { lvSimpson } : {}),
+    ...(laVolume ? { laVolume } : {}),
+    referenceStudyUID: metadata.StudyInstanceUID || '',
+    referenceSeriesUID: metadata.SeriesInstanceUID || '',
+    SOPInstanceUID: metadata.SOPInstanceUID || '',
+    FrameOfReferenceUID: metadata.FrameOfReferenceUID || '',
+    displaySetInstanceUID: metadata.displaySetInstanceUID || '',
+    referencedImageId,
+    frameNumber: getFrameNumberFromReferencedImageId(referencedImageId),
+    points: contourPoints,
+    data: data.cachedStats || {},
+    displayText: [],
+  };
+}
+
+function getCornerstoneVolumeMeasurementFallbacks({
+  studyInstanceUID = '',
+  excludedMeasurementIds = new Set<string>(),
+}: {
+  studyInstanceUID?: string;
+  excludedMeasurementIds?: Set<string>;
+} = {}) {
+  const stateAnnotations = getAllCornerstoneViewerAnnotations();
+  const expectedStudyInstanceUID = String(studyInstanceUID || '').trim();
+
+  return stateAnnotations
+    .filter(stateAnnotation => {
+      const measurementId = getMeasurementAnnotationId(stateAnnotation);
+      const metadata = stateAnnotation?.metadata || {};
+      const data = stateAnnotation?.data || {};
+      const stateStudyInstanceUID = String(metadata.StudyInstanceUID || '').trim();
+
+      if (!measurementId || excludedMeasurementIds.has(measurementId)) {
+        return false;
+      }
+
+      if (!data.lvSimpson && !data.laVolume) {
+        return false;
+      }
+
+      if (
+        expectedStudyInstanceUID &&
+        stateStudyInstanceUID &&
+        stateStudyInstanceUID !== expectedStudyInstanceUID
+      ) {
+        return false;
+      }
+
+      return true;
+    })
+    .map(stateAnnotation =>
+      getCornerstoneVolumeMeasurementFallback(getMeasurementAnnotationId(stateAnnotation))
+    )
+    .filter(Boolean);
 }
 
 function isViewerContourTool(toolName) {
   return VIEWER_CONTOUR_TOOL_NAMES.has(toolName);
+}
+
+function isUltrasoundDirectionalViewerMeasurement(measurement: any = {}) {
+  return (
+    String(measurement?.toolName || '').trim() === ULTRASOUND_DIRECTIONAL_TOOL_NAME ||
+    measurement?.measurementKind === ULTRASOUND_DIRECTIONAL_MEASUREMENT_KIND ||
+    measurement?.ultrasoundDirectional?.measurementKind ===
+      ULTRASOUND_DIRECTIONAL_MEASUREMENT_KIND ||
+    measurement?.measurements?.ultrasoundDirectional?.measurementKind ===
+      ULTRASOUND_DIRECTIONAL_MEASUREMENT_KIND
+  );
 }
 
 function normalizeViewerMeasurementDomain(value = '') {
@@ -916,6 +1414,7 @@ function hydrateSavedLengthAnnotationForActiveViewport({
     arMeasurementWorkflow: savedAnnotation.workflow || '',
     arMeasurementReadOnly: !!savedAnnotation.isLocked,
     arMeasurementReviewRound: Number(savedAnnotation.reviewRound) || null,
+    arMeasurementDomain: normalizeViewerMeasurementDomain(savedAnnotation.domain || ''),
   };
 
   targetAnnotation.data = {
@@ -936,6 +1435,7 @@ function hydrateSavedLengthAnnotationForActiveViewport({
     arMeasurementWorkflow: savedAnnotation.workflow || '',
     arMeasurementReadOnly: !!savedAnnotation.isLocked,
     arMeasurementReviewRound: Number(savedAnnotation.reviewRound) || null,
+    arMeasurementDomain: normalizeViewerMeasurementDomain(savedAnnotation.domain || ''),
   };
 
   targetAnnotation.invalidated = false;
@@ -1071,7 +1571,9 @@ function hasViewerMeasurementSemanticLabel(measurement) {
 
 function isPersistableViewerMeasurement(measurement) {
   return !!(
-    measurement?.toolName === 'Length' || hasViewerMeasurementSemanticLabel(measurement)
+    measurement?.toolName === 'Length' ||
+    isUltrasoundDirectionalViewerMeasurement(measurement) ||
+    hasViewerMeasurementSemanticLabel(measurement)
   );
 }
 
@@ -1201,12 +1703,14 @@ function getLVSimpsonMeasurementPayload(measurement, existingAnnotation = null) 
     ...(contourPoints.length >= 3 ? { contourPoints } : {}),
   };
 
+  const persistedGeometry = stripPersistedViewerVolumeGeometryPoints(updatedGeometry);
+
   return {
     measurementKind: LV_SIMPSON_MEASUREMENT_KIND,
     lvSimpson: {
-      ...updatedGeometry,
-      apexPoint: updatedGeometry.apexPoint || updatedGeometry.axisPoint,
-      axisPoint: updatedGeometry.axisPoint || updatedGeometry.apexPoint,
+      ...persistedGeometry,
+      apexPoint: persistedGeometry.apexPoint || persistedGeometry.axisPoint,
+      axisPoint: persistedGeometry.axisPoint || persistedGeometry.apexPoint,
       measurementKind: LV_SIMPSON_MEASUREMENT_KIND,
     },
   };
@@ -1221,6 +1725,120 @@ function getLAVolumeGeometry(measurement, existingAnnotation = null) {
     existingAnnotation?.measurements?.laVolume ||
     null
   );
+}
+
+function stripPersistedViewerVolumeGeometryPoints(geometry: any = {}) {
+  if (!geometry || typeof geometry !== 'object' || Array.isArray(geometry)) {
+    return geometry;
+  }
+
+  const metadata = { ...geometry };
+  delete metadata.contourPoints;
+  delete metadata.points;
+  return metadata;
+}
+
+function getPersistedViewerVolumePoints(annotation: any = {}, geometry: any = {}) {
+  const directPoints = Array.isArray(annotation?.points) ? annotation.points : [];
+
+  if (directPoints.length >= 6) {
+    return directPoints;
+  }
+
+  const geometryPoints = Array.isArray(geometry?.contourPoints)
+    ? geometry.contourPoints
+    : Array.isArray(geometry?.points)
+      ? geometry.points
+      : [];
+
+  return geometryPoints;
+}
+
+function compactClinicalViewerVolumeAnnotationStorage(annotation: any = {}) {
+  const lvSimpson = getLVSimpsonGeometry(annotation, annotation);
+  const laVolume = getLAVolumeGeometry(annotation, annotation);
+
+  if (!lvSimpson && !laVolume) {
+    return annotation;
+  }
+
+  const volumeGeometry = lvSimpson || laVolume || {};
+  const persistedPoints = getPersistedViewerVolumePoints(annotation, volumeGeometry);
+  const measurements = { ...(annotation?.measurements || {}) };
+  const geometryContainer =
+    annotation?.geometry && typeof annotation.geometry === 'object' && !Array.isArray(annotation.geometry)
+      ? { ...annotation.geometry }
+      : null;
+
+  // The top-level points array is the single persisted contour source of truth.
+  // Hydration and FormAPI report derivation both read it first. Keep every point
+  // exactly as captured; remove only redundant copies from volume metadata.
+  delete measurements.lvSimpson;
+  delete measurements.laVolume;
+
+  if (geometryContainer) {
+    delete geometryContainer.lvSimpson;
+    delete geometryContainer.laVolume;
+  }
+
+  const compactAnnotation: any = {
+    ...annotation,
+    ...(persistedPoints.length ? { points: persistedPoints } : {}),
+    measurements,
+    ...(geometryContainer ? { geometry: geometryContainer } : {}),
+  };
+
+  if (lvSimpson) {
+    compactAnnotation.lvSimpson = stripPersistedViewerVolumeGeometryPoints(lvSimpson);
+    delete compactAnnotation.laVolume;
+  } else {
+    compactAnnotation.laVolume = stripPersistedViewerVolumeGeometryPoints(laVolume);
+    delete compactAnnotation.lvSimpson;
+  }
+
+  return compactAnnotation;
+}
+
+function compactClinicalViewerMeasurementAnnotationsRaw(raw: any) {
+  if (!raw) {
+    return raw;
+  }
+
+  const returnAsString = typeof raw === 'string';
+  let parsed = raw;
+
+  if (returnAsString) {
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      return raw;
+    }
+  }
+
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return raw;
+  }
+
+  const workflow = parsed?.workflows?.[VIEWER_MEASUREMENTS_WORKFLOW];
+  const annotations = Array.isArray(workflow?.annotations) ? workflow.annotations : null;
+
+  if (!annotations) {
+    return raw;
+  }
+
+  const compactAnnotations = annotations.map(compactClinicalViewerVolumeAnnotationStorage);
+  const nextParsed = {
+    ...parsed,
+    workflows: {
+      ...(parsed.workflows || {}),
+      [VIEWER_MEASUREMENTS_WORKFLOW]: {
+        ...workflow,
+        annotations: compactAnnotations,
+      },
+    },
+  };
+
+  return returnAsString ? JSON.stringify(nextParsed) : nextParsed;
 }
 
 function getLAVolumeMeasurementPayload(measurement, existingAnnotation = null) {
@@ -1242,12 +1860,14 @@ function getLAVolumeMeasurementPayload(measurement, existingAnnotation = null) {
     ...(contourPoints.length >= 3 ? { contourPoints } : {}),
   };
 
+  const persistedGeometry = stripPersistedViewerVolumeGeometryPoints(updatedGeometry);
+
   return {
     measurementKind: LA_VOLUME_MEASUREMENT_KIND,
     laVolume: {
-      ...updatedGeometry,
-      superiorPoint: updatedGeometry.superiorPoint || updatedGeometry.axisPoint,
-      axisPoint: updatedGeometry.axisPoint || updatedGeometry.superiorPoint,
+      ...persistedGeometry,
+      superiorPoint: persistedGeometry.superiorPoint || persistedGeometry.axisPoint,
+      axisPoint: persistedGeometry.axisPoint || persistedGeometry.superiorPoint,
       measurementKind: LA_VOLUME_MEASUREMENT_KIND,
     },
   };
@@ -1269,6 +1889,69 @@ function isSpectralDopplerViewerMeasurement(measurement: any = {}) {
   return (
     measurement?.measurementKind === SPECTRAL_DOPPLER_MEASUREMENT_KIND ||
     spectralDoppler?.measurementKind === SPECTRAL_DOPPLER_MEASUREMENT_KIND
+  );
+}
+
+function getUltrasoundDirectionalGeometry(measurement: any = {}, existingAnnotation: any = null) {
+  return (
+    measurement?.ultrasoundDirectional ||
+    measurement?.measurements?.ultrasoundDirectional ||
+    existingAnnotation?.ultrasoundDirectional ||
+    existingAnnotation?.measurements?.ultrasoundDirectional ||
+    null
+  );
+}
+
+function getUltrasoundDirectionalMeasurementPayload(measurement, existingAnnotation = null) {
+  const directional = getUltrasoundDirectionalGeometry(measurement, existingAnnotation);
+  const stats = getUltrasoundDirectionalStatsFromAnnotationData({
+    cachedStats: measurement?.data || measurement?.cachedStats || {},
+  });
+  const derivedDirectional = stats
+    ? {
+        xValues: Array.isArray(stats.xValues) ? [...stats.xValues] : [],
+        yValues: Array.isArray(stats.yValues) ? [...stats.yValues] : [],
+        units: Array.isArray(stats.units) ? [...stats.units] : [],
+        isHorizontal: stats.isHorizontal === true,
+        isUnitless: stats.isUnitless === true,
+        ...getUltrasoundDirectionalDistance(stats),
+      }
+    : null;
+  const nextDirectional = {
+    ...(existingAnnotation?.ultrasoundDirectional || {}),
+    ...(directional || {}),
+    ...(derivedDirectional || {}),
+    measurementKind: ULTRASOUND_DIRECTIONAL_MEASUREMENT_KIND,
+  };
+  const numericValue = Number(nextDirectional.value);
+  const unit = String(nextDirectional.unit || '').trim();
+  const displayText = Number.isFinite(numericValue)
+    ? [
+        `${
+          unit === 'px' ? csUtils.roundNumber(numericValue) : formatLengthMM(numericValue)
+        } ${unit}`.trim(),
+      ]
+    : measurement?.displayText || existingAnnotation?.displayText || [];
+
+  return {
+    measurementKind: ULTRASOUND_DIRECTIONAL_MEASUREMENT_KIND,
+    ultrasoundDirectional: nextDirectional,
+    ...(Number.isFinite(numericValue)
+      ? {
+          value: numericValue,
+          length: numericValue,
+          unit,
+          lengthUnit: unit,
+        }
+      : {}),
+    displayText,
+  };
+}
+
+function isCornerstoneOwnedViewerMeasurement(measurement: any = {}) {
+  return (
+    isSpectralDopplerViewerMeasurement(measurement) ||
+    isUltrasoundDirectionalViewerMeasurement(measurement)
   );
 }
 
@@ -1329,19 +2012,22 @@ function serializeViewerMeasurement(measurement, domain, existingAnnotation = nu
   const isSpectralDoppler =
     measurement?.measurementKind === SPECTRAL_DOPPLER_MEASUREMENT_KIND ||
     spectralDoppler?.measurementKind === SPECTRAL_DOPPLER_MEASUREMENT_KIND;
+  const isUltrasoundDirectional = isUltrasoundDirectionalViewerMeasurement(measurement);
   const frameNumber =
     measurement.frameNumber && measurement.frameNumber > 1
       ? measurement.frameNumber
       : getFrameNumberFromReferencedImageId(measurement.referencedImageId);
 
   const nextMeasurements = {
-    ...(isContourMeasurement && !isSpectralDoppler
-      ? buildContourMeasurementPayload(measurement, existingAnnotation, options.displaySetService)
-      : isArrowAnnotateMeasurement
-        ? getArrowAnnotateMeasurementPayload(measurement, existingAnnotation)
-        : !isContourMeasurement
-          ? getLengthMeasurementPayload(measurement)
-          : {}),
+    ...(isUltrasoundDirectional
+      ? getUltrasoundDirectionalMeasurementPayload(measurement, existingAnnotation)
+      : isContourMeasurement && !isSpectralDoppler
+        ? buildContourMeasurementPayload(measurement, existingAnnotation, options.displaySetService)
+        : isArrowAnnotateMeasurement
+          ? getArrowAnnotateMeasurementPayload(measurement, existingAnnotation)
+          : !isContourMeasurement
+            ? getLengthMeasurementPayload(measurement)
+            : {}),
     ...(isLVSimpson ? getLVSimpsonMeasurementPayload(measurement, existingAnnotation) : {}),
     ...(isLAVolume ? getLAVolumeMeasurementPayload(measurement, existingAnnotation) : {}),
     ...(isSpectralDoppler
@@ -1360,6 +2046,17 @@ function serializeViewerMeasurement(measurement, domain, existingAnnotation = nu
 
   const repeatedMeasurement = getViewerRepeatedMeasurementMetadata(measurement);
   const measurementMode = repeatedMeasurement ? 'repeated' : 'single';
+  const persistedMeasurements = {
+    ...(existingAnnotation?.measurements || {}),
+    ...(nextMeasurements || {}),
+  };
+
+  // Volume contour geometry is persisted only once at annotation.points. Keep
+  // the small top-level lvSimpson/laVolume metadata, but never persist another
+  // contour copy inside measurements.
+  delete persistedMeasurements.lvSimpson;
+  delete persistedMeasurements.laVolume;
+  delete persistedMeasurements.ultrasoundDirectional;
 
   return {
     annotationId: measurement.uid,
@@ -1417,6 +2114,13 @@ function serializeViewerMeasurement(measurement, domain, existingAnnotation = nu
         }
       : {}),
 
+    ...(isUltrasoundDirectional
+      ? {
+          measurementKind: ULTRASOUND_DIRECTIONAL_MEASUREMENT_KIND,
+          ultrasoundDirectional: nextMeasurements.ultrasoundDirectional,
+        }
+      : {}),
+
     StudyInstanceUID: measurement.referenceStudyUID || '',
     SeriesInstanceUID: measurement.referenceSeriesUID || '',
     SOPInstanceUID: measurement.SOPInstanceUID,
@@ -1434,10 +2138,7 @@ function serializeViewerMeasurement(measurement, domain, existingAnnotation = nu
     ),
     viewUp: getViewerMeasurementMetadataVector(measurement, existingAnnotation, 'viewUp'),
 
-    measurements: {
-      ...(existingAnnotation?.measurements || {}),
-      ...(nextMeasurements || {}),
-    },
+    measurements: persistedMeasurements,
     displayText: finalDisplayText,
   };
 }
@@ -5107,7 +5808,7 @@ function canonicalizeClinicalViewerMeasurementAnnotations(
       seenSemanticKeys.add(semanticKey);
     }
 
-    canonicalReversed.push(measurement);
+    canonicalReversed.push(compactClinicalViewerVolumeAnnotationStorage(measurement));
   }
 
   return canonicalReversed.reverse();
@@ -5341,11 +6042,55 @@ async function ensureLearnerCopyForViewerSave(saveTarget) {
   return learnerCopy;
 }
 
+async function fetchClinicalViewerSeriesDocCached(seriesId) {
+  const id = String(seriesId || '').trim();
+
+  if (!id) {
+    return null;
+  }
+
+  if (clinicalViewerSeriesReadCache.has(id)) {
+    return clinicalViewerSeriesReadCache.get(id);
+  }
+
+  const pendingRequest = clinicalViewerSeriesReadPending.get(id);
+  if (pendingRequest) {
+    return pendingRequest;
+  }
+
+  const request = fetchSeriesDocById(id)
+    .then(seriesDoc => {
+      if (seriesDoc?._id) {
+        clinicalViewerSeriesReadCache.set(id, seriesDoc);
+      }
+
+      return seriesDoc;
+    })
+    .finally(() => {
+      clinicalViewerSeriesReadPending.delete(id);
+    });
+
+  clinicalViewerSeriesReadPending.set(id, request);
+
+  return request;
+}
+
+function rememberClinicalViewerSeriesDoc(seriesDoc: any = null) {
+  const id = String(seriesDoc?._id || '').trim();
+
+  if (!id) {
+    return;
+  }
+
+  clinicalViewerSeriesReadCache.set(id, seriesDoc);
+  clinicalViewerSeriesReadPending.delete(id);
+}
+
 async function resolveViewerReadSeriesDoc(servicesManager, { allowBaseFallback = true } = {}) {
   const saveTarget = getArViewerSaveTargetFromUrl();
 
   if (isClinicalReportMeasurementsSaveTarget(saveTarget)) {
-    return fetchSeriesDocById(saveTarget.seriesId);
+    return fetchClinicalViewerSeriesDocCached(saveTarget.seriesId);
   }
 
   if (isLearnerCopyOnSaveTarget(saveTarget)) {
@@ -5966,20 +6711,64 @@ function commandsModule({
         normalizeLabel?: (value: string) => string;
       } = {}
     ) => {
-      const labelConfig =
-        options.labelConfigOverride || customizationService.getCustomization('measurementLabels');
       const renderContent = customizationService.getCustomization('ui.labellingComponent');
       const measurement = measurementService.getMeasurement(uid);
-      const normalizedLabelConfig = normalizeMeasurementLabelConfigForDialog(
-        labelConfig,
-        options.title
-      );
-      const dialogTitle = getMeasurementLabelDialogTitle(normalizedLabelConfig, options.title);
 
       if (!measurement) {
         console.debug('No measurement found for label editing');
         return null;
       }
+
+      let labelConfig = options.labelConfigOverride;
+
+      if (!labelConfig && measurement?.toolName === 'Length') {
+        const stateAnnotation = cornerstoneTools.annotation.state.getAnnotation?.(uid);
+        let measurementDomain = normalizeViewerMeasurementDomain(
+          measurement?.domain ||
+            measurement?.measurementDomain ||
+            stateAnnotation?.metadata?.arMeasurementDomain ||
+            stateAnnotation?.data?.arMeasurementDomain ||
+            ''
+        );
+
+        // The active viewer context is more reliable for label UI than a generic
+        // series lookup. In particular, an echo Length must never inherit the
+        // bowel customization simply because another measurement container was
+        // resolved first.
+        if (!measurementDomain || measurementDomain === 'generic') {
+          const viewerContextDomain = inferDomainWithoutSeriesDoc('');
+
+          if (viewerContextDomain && viewerContextDomain !== 'generic') {
+            measurementDomain = viewerContextDomain;
+          }
+        }
+
+        if (!measurementDomain || measurementDomain === 'generic') {
+          try {
+            const seriesDoc = await resolveViewerReadSeriesDoc(servicesManager, {
+              allowBaseFallback: false,
+            });
+
+            if (seriesDoc) {
+              measurementDomain = inferDomainFromSeriesDoc(seriesDoc, '');
+            }
+          } catch (error) {
+            console.warn('[AR Measurements] could not resolve Length label domain:', error);
+          }
+        }
+
+        labelConfig = getMeasurementLabelConfigForDomain(measurementDomain);
+      }
+
+      if (!labelConfig) {
+        labelConfig = customizationService.getCustomization('measurementLabels');
+      }
+
+      const normalizedLabelConfig = normalizeMeasurementLabelConfigForDialog(
+        labelConfig,
+        options.title
+      );
+      const dialogTitle = getMeasurementLabelDialogTitle(normalizedLabelConfig, options.title);
 
       if (!normalizedLabelConfig) {
         const label = await callInputDialog({
@@ -9052,7 +9841,14 @@ function commandsModule({
           .map(value => String(value || '').trim())
           .filter(Boolean)
       );
-      const measurements = getCurrentViewerMeasurementSnapshot(measurementService);
+      const cornerstoneFallbackMeasurements =
+        getCornerstoneUltrasoundDirectionalMeasurementFallbacks({
+          excludedMeasurementIds: viewerMeasurementsDeletedInSession,
+        });
+      const measurements = getCurrentViewerMeasurementSnapshot(
+        measurementService,
+        cornerstoneFallbackMeasurements
+      );
 
       const annotations = measurements
         .filter(measurement => {
@@ -9072,6 +9868,38 @@ function commandsModule({
         .filter(annotation => annotation.referencedImageId || annotation.points?.length);
 
       return { domain, workflow, annotations };
+    },
+    getViewerMeasurementSnapshotForPanel: () => {
+      const saveTarget = getArViewerSaveTargetFromUrl();
+      const writableWorkflow = getWritableReviewMeasurementWorkflow(saveTarget);
+      const directionalFallbacks = getCornerstoneUltrasoundDirectionalMeasurementFallbacks({
+        excludedMeasurementIds: viewerMeasurementsDeletedInSession,
+      });
+
+      return getCurrentViewerMeasurementSnapshot(measurementService, directionalFallbacks).map(
+        measurement => {
+          if (!isUltrasoundDirectionalViewerMeasurement(measurement)) {
+            return measurement;
+          }
+
+          const measurementId = getMeasurementAnnotationId(measurement);
+          const createdInViewerSession =
+            !!measurementId && viewerMeasurementsCreatedInSession.has(measurementId);
+
+          return {
+            ...measurement,
+            arCreatedInViewerSession: createdInViewerSession,
+            ...(createdInViewerSession && writableWorkflow
+              ? {
+                  workflow: writableWorkflow,
+                  measurementOwner:
+                    writableWorkflow === REVIEWER_MEASUREMENTS_WORKFLOW ? 'coach' : 'learner',
+                  isLocked: false,
+                }
+              : {}),
+          };
+        }
+      );
     },
     getViewerMeasurementDomainForActiveStudy: async ({ domain: explicitDomain } = {}) => {
       try {
@@ -9353,12 +10181,10 @@ function commandsModule({
         });
       }
 
-      // Saved VTI traces are manually hydrated as PlanarFreehandROI annotations.
-      // Do not round-trip them back through MeasurementService here: the generic
-      // PlanarFreehandROI source mapping can reconstruct/replace the source annotation
-      // and discard the custom open spectral trace. The saved panel row already has
-      // the persisted VTI display data; Cornerstone annotation state owns viewport display.
-      if (!isSpectralDopplerViewerMeasurement(savedAnnotation)) {
+      // Cornerstone-owned AR annotations (VTI traces and directional US measurements)
+      // must not round-trip through MeasurementService here. Their persisted AR payload
+      // and Cornerstone annotation state are the source of truth for viewport display.
+      if (!isCornerstoneOwnedViewerMeasurement(savedAnnotation)) {
         forceSavedAnnotationDisplayEverywhere({
           measurementService,
           savedAnnotation,
@@ -9529,7 +10355,7 @@ function commandsModule({
           continue;
         }
 
-        if (!isSpectralDopplerViewerMeasurement(savedAnnotation)) {
+        if (!isCornerstoneOwnedViewerMeasurement(savedAnnotation)) {
           forceSavedAnnotationDisplayEverywhere({
             measurementService,
             savedAnnotation,
@@ -10375,6 +11201,9 @@ function commandsModule({
     getSerializedViewerMeasurements: {
       commandFn: actions.getSerializedViewerMeasurements,
     },
+    getViewerMeasurementSnapshotForPanel: {
+      commandFn: actions.getViewerMeasurementSnapshotForPanel,
+    },
     saveViewerMeasurementsForActiveStudy: {
       commandFn: async ({
         domain: explicitDomain,
@@ -10476,7 +11305,38 @@ function commandsModule({
             'submitted-for-score',
           ].includes(normalizedScoringIntent);
 
-          const measurements = getCurrentViewerMeasurementSnapshot(measurementService);
+          const cornerstoneFallbackMeasurements = [
+            ...(isClinicalReportSave
+              ? getCornerstoneVolumeMeasurementFallbacks({
+                  studyInstanceUID: String(seriesDoc?.StudyInstanceUID || ''),
+                  excludedMeasurementIds: viewerMeasurementsDeletedInSession,
+                })
+              : []),
+            ...getCornerstoneUltrasoundDirectionalMeasurementFallbacks({
+              studyInstanceUID: String(seriesDoc?.StudyInstanceUID || ''),
+              excludedMeasurementIds: viewerMeasurementsDeletedInSession,
+            }),
+          ];
+          const measurements = getCurrentViewerMeasurementSnapshot(
+            measurementService,
+            cornerstoneFallbackMeasurements
+          );
+
+          if (isClinicalReportSave) {
+            console.info('[MeasurementAnnotations] clinical save snapshot', {
+              liveMeasurementCount: measurementService?.getMeasurements?.()?.length || 0,
+              lvSimpsonSessionCount: getLVSimpsonSessionMeasurements().length,
+              laVolumeSessionCount: getLAVolumeSessionMeasurements().length,
+              cornerstoneFallbackCount: cornerstoneFallbackMeasurements.length,
+              cornerstoneFallbackSlots: cornerstoneFallbackMeasurements
+                .map(getLVSimpsonSlotFromMeasurement)
+                .filter(Boolean),
+              snapshotCount: measurements.length,
+              lvSimpsonSlots: measurements
+                .map(getLVSimpsonSlotFromMeasurement)
+                .filter(Boolean),
+            });
+          }
 
           const targetWorkflow = writableWorkflow || VIEWER_MEASUREMENTS_WORKFLOW;
 
@@ -10720,10 +11580,15 @@ function commandsModule({
                 mergedMeasurementAnnotations,
                 [VIEWER_MEASUREMENTS_WORKFLOW]
               );
+              const unreplacedDeletedClinicalSemanticKeys = new Set(
+                Array.from(deletedClinicalSemanticKeys).filter(
+                  semanticKey => !incomingClinicalSemanticKeys.has(semanticKey)
+                )
+              );
               const canonicalViewerAnnotations =
                 canonicalizeClinicalViewerMeasurementAnnotations(
                   mergedViewerAnnotations,
-                  deletedClinicalSemanticKeys
+                  unreplacedDeletedClinicalSemanticKeys
                 );
 
               nextMeasurementAnnotations = upsertViewerMeasurementAnnotations({
@@ -10736,6 +11601,11 @@ function commandsModule({
             }
 
             if (isClinicalReportSave) {
+              // Enforce single-copy volume geometry at the final serialized
+              // MeasurementAnnotations boundary, after every merge/upsert step.
+              nextMeasurementAnnotations =
+                compactClinicalViewerMeasurementAnnotationsRaw(nextMeasurementAnnotations);
+
               const reportAnnotations = getRequestedWorkflowAnnotations(nextMeasurementAnnotations, [
                 VIEWER_MEASUREMENTS_WORKFLOW,
               ]);
@@ -10761,11 +11631,39 @@ function commandsModule({
               educationAttemptIntent: shouldSubmitForScore ? 'score-attempt' : 'draft',
             };
 
+            const serializedPayload = JSON.stringify(payload);
+
+            if (isClinicalReportSave) {
+              const diagnosticAnnotations = getRequestedWorkflowAnnotations(
+                nextMeasurementAnnotations,
+                [VIEWER_MEASUREMENTS_WORKFLOW]
+              );
+              const nestedVolumeContourCopies = diagnosticAnnotations.reduce(
+                (count, annotation) =>
+                  count +
+                  (Array.isArray(annotation?.lvSimpson?.contourPoints) ? 1 : 0) +
+                  (Array.isArray(annotation?.laVolume?.contourPoints) ? 1 : 0) +
+                  (Array.isArray(annotation?.measurements?.lvSimpson?.contourPoints) ? 1 : 0) +
+                  (Array.isArray(annotation?.measurements?.laVolume?.contourPoints) ? 1 : 0),
+                0
+              );
+
+              console.info('[MeasurementAnnotations] clinical save payload', {
+                annotationCount: diagnosticAnnotations.length,
+                volumeAnnotationCount: diagnosticAnnotations.filter(
+                  annotation => annotation?.lvSimpson || annotation?.laVolume
+                ).length,
+                nestedVolumeContourCopies,
+                measurementAnnotationsCharacters: String(nextMeasurementAnnotations || '').length,
+                requestCharacters: serializedPayload.length,
+              });
+            }
+
             const response = await fetch(
               buildFormApiUrl(`series/${seriesDoc._id}`),
               buildFormApiFetchOptions({
                 method: 'PUT',
-                body: JSON.stringify(payload),
+                body: serializedPayload,
               })
             );
 
@@ -10805,6 +11703,8 @@ function commandsModule({
           }
 
           if (isClinicalReportSave && savedSeriesDoc?._id) {
+            rememberClinicalViewerSeriesDoc(savedSeriesDoc);
+
             // AR's Series schema is the acceptance contract. Notify the opener
             // about every report field that actually changed on the persisted
             // server document, regardless of measurement domain or tool.

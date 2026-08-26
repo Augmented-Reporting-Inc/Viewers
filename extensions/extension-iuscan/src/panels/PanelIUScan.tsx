@@ -13,6 +13,7 @@ import {
 } from '../utils/reportBuilder';
 import {
   getActiveResearchContext,
+  completeActiveResearchReview,
   getActiveResearchReview,
   getResearchReviewKeyFromViewerUrl,
   getResearchStudyKeyFromViewerUrl,
@@ -57,6 +58,7 @@ export default function PanelIUScan({ servicesManager, commandsManager }) {
   const [openSite, setOpenSite] = useState('terminalIleum');
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
+  const [isCompleting, setIsCompleting] = useState(false);
 
   useEffect(() => {
     const unsubscribe = subscribeResearchContext(context => setResearchContext(context));
@@ -214,32 +216,48 @@ export default function PanelIUScan({ servicesManager, commandsManager }) {
     [observationsBySite, visibleSites]
   );
 
+  const researchReviewCompleted =
+    !!researchContext?.reviewKey &&
+    String(researchContext?.reviewStatus || '').trim().toLowerCase() === 'completed';
+
   const handleToggle = useCallback(key => {
     setOpenSite(prev => (prev === key ? null : key));
   }, []);
 
-  const handleObservationChange = useCallback((siteKey, field, value) => {
-    setObservationsBySite(prev => ({
-      ...prev,
-      [siteKey]: {
-        ...(prev[siteKey] || {}),
-        [field]: value,
-      },
-    }));
-  }, []);
+  const handleObservationChange = useCallback(
+    (siteKey, field, value) => {
+      if (researchReviewCompleted) return;
 
-  const handleObservationsChange = useCallback((siteKey, patch) => {
-    setObservationsBySite(prev => ({
-      ...prev,
-      [siteKey]: {
-        ...(prev[siteKey] || {}),
-        ...patch,
-      },
-    }));
-  }, []);
+      setObservationsBySite(prev => ({
+        ...prev,
+        [siteKey]: {
+          ...(prev[siteKey] || {}),
+          [field]: value,
+        },
+      }));
+    },
+    [researchReviewCompleted]
+  );
+
+  const handleObservationsChange = useCallback(
+    (siteKey, patch) => {
+      if (researchReviewCompleted) return;
+
+      setObservationsBySite(prev => ({
+        ...prev,
+        [siteKey]: {
+          ...(prev[siteKey] || {}),
+          ...patch,
+        },
+      }));
+    },
+    [researchReviewCompleted]
+  );
 
   const handleRemoveMeasurement = useCallback(
     slot => {
+      if (researchReviewCompleted) return;
+
       const id = getIuscanRepeatedAnnotationId(slot);
       if (!id) return;
 
@@ -248,12 +266,12 @@ export default function PanelIUScan({ servicesManager, commandsManager }) {
         commandsManager.runCommand('removeMeasurement', { uid: id });
       }
     },
-    [commandsManager, measurementService]
+    [commandsManager, measurementService, researchReviewCompleted]
   );
 
   async function handleSave() {
-    if (researchContext?.preview) {
-      return;
+    if (researchContext?.preview || researchReviewCompleted) {
+      return null;
     }
 
     setIsSaving(true);
@@ -277,19 +295,50 @@ export default function PanelIUScan({ servicesManager, commandsManager }) {
           ...(savedReview?.observationsBySite || observationsBySite),
         });
         setRemovedAnnotationIds(new Set());
+        return savedReview;
       } else {
         await commandsManager.runCommand('exportIUScanReport', {
           observationsBySite,
           removedAnnotationIds: Array.from(removedAnnotationIds),
         });
         await loadSavedState();
+        return null;
       }
     } finally {
       setIsSaving(false);
     }
   }
 
+  async function handleCompleteResearchReview() {
+    if (
+      !researchContext?.reviewKey ||
+      researchContext?.preview ||
+      researchReviewCompleted ||
+      isSaving ||
+      isCompleting
+    ) {
+      return;
+    }
+
+    const confirmed = window.confirm(
+      'Complete this Research Review? Once completed, it will become read-only.'
+    );
+    if (!confirmed) return;
+
+    setIsCompleting(true);
+    try {
+      await handleSave();
+      await completeActiveResearchReview();
+    } catch (error) {
+      console.error('[iUSCAN] unable to complete Research Review:', error);
+      window.alert(error?.message || 'Unable to complete the Research Review.');
+    } finally {
+      setIsCompleting(false);
+    }
+  }
+
   function handleClear() {
+    if (researchReviewCompleted) return;
     const currentIds = new Set(removedAnnotationIds);
     for (const site of visibleSites) {
       for (const groupState of Object.values(measurementState[site.key] || {})) {
@@ -321,7 +370,14 @@ export default function PanelIUScan({ servicesManager, commandsManager }) {
         </div>
         {researchContext && (
           <div className="mt-1 text-[11px] text-gray-500">
-            Protocol-driven assessment{researchContext.preview ? ' · preview only' : ''}
+            Protocol-driven assessment
+            {researchContext.preview
+              ? ' · preview only'
+              : researchReviewCompleted
+                ? ' · completed · read-only'
+                : researchContext.reviewKey
+                  ? ' · working review'
+                  : ''}
           </div>
         )}
       </div>
@@ -377,7 +433,7 @@ export default function PanelIUScan({ servicesManager, commandsManager }) {
               ? 'border-gray-500 text-gray-300 hover:border-red-400 hover:text-red-400'
               : 'cursor-not-allowed border-gray-700 text-gray-600',
           ].join(' ')}
-          disabled={!hasAnyData || isSaving}
+          disabled={!hasAnyData || isSaving || isCompleting || researchReviewCompleted}
           onClick={handleClear}
           title="Clear current measurements and observations"
         >
@@ -387,21 +443,52 @@ export default function PanelIUScan({ servicesManager, commandsManager }) {
           <div className="flex-1 rounded border border-gray-700 px-2 py-1.5 text-center text-xs text-gray-500">
             Preview only
           </div>
+        ) : researchReviewCompleted ? (
+          <div className="flex-1 rounded border border-green-800 bg-green-950/30 px-2 py-1.5 text-center text-xs font-semibold text-green-300">
+            Review completed
+          </div>
         ) : (
-          <button
-            type="button"
-            className={[
-              'flex-1 rounded border py-1.5 text-xs font-semibold transition-colors',
-              hasAnyData
-                ? 'border-primary-light bg-primary-light hover:bg-primary-dark hover:text-primary-light text-black'
-                : 'cursor-not-allowed border-gray-700 text-gray-600',
-            ].join(' ')}
-            disabled={!hasAnyData || isSaving}
-            onClick={handleSave}
-            title={researchContext?.reviewKey ? 'Save measurements and observations to the Research Review' : 'Save measurements and observations to AR (Ctrl+Shift+S)'}
-          >
-            {isSaving ? 'Saving…' : researchContext?.reviewKey ? 'Save Research Review' : 'Save to Report'}
-          </button>
+          <>
+            <button
+              type="button"
+              className={[
+                'flex-1 rounded border py-1.5 text-xs font-semibold transition-colors',
+                hasAnyData
+                  ? 'border-primary-light bg-primary-light hover:bg-primary-dark hover:text-primary-light text-black'
+                  : 'cursor-not-allowed border-gray-700 text-gray-600',
+              ].join(' ')}
+              disabled={!hasAnyData || isSaving || isCompleting}
+              onClick={handleSave}
+              title={
+                researchContext?.reviewKey
+                  ? 'Save measurements and observations to the Research Review'
+                  : 'Save measurements and observations to AR (Ctrl+Shift+S)'
+              }
+            >
+              {isSaving
+                ? 'Saving…'
+                : researchContext?.reviewKey
+                  ? 'Save Review'
+                  : 'Save to Report'}
+            </button>
+
+            {researchContext?.reviewKey ? (
+              <button
+                type="button"
+                className={[
+                  'flex-1 rounded border py-1.5 text-xs font-semibold transition-colors',
+                  hasAnyData
+                    ? 'border-green-700 bg-green-900/40 text-green-200 hover:border-green-500 hover:bg-green-900/70'
+                    : 'cursor-not-allowed border-gray-700 text-gray-600',
+                ].join(' ')}
+                disabled={!hasAnyData || isSaving || isCompleting}
+                onClick={handleCompleteResearchReview}
+                title="Save and complete this Research Review. Completed reviews are read-only."
+              >
+                {isCompleting ? 'Completing…' : 'Complete Review'}
+              </button>
+            ) : null}
+          </>
         )}
       </div>
     </div>
