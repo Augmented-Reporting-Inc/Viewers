@@ -58,7 +58,6 @@ import {
   hydrateMeasurementAnnotationsForActiveStudy as hydrateMeasurementAnnotationsForActiveStudyUtil,
 } from './utils/measurementAnnotationHydration';
 import { buildFormApiFetchOptions, buildFormApiUrl } from './utils/formApi';
-import { getMeasurementLabelConfigForDomain } from './utils/measurementLabelConfig';
 import {
   LV_SIMPSON_MEASUREMENT_KIND,
   LV_TRACE_MEASUREMENT_LABELS_CONFIG,
@@ -91,9 +90,21 @@ import {
 import {
   buildViewerReportFieldUpdates,
   buildViewerReportMapping,
+  buildViewerReportMappingForMeasurement,
   getSpectralDopplerVtiTargetOptions,
+  getViewerReportTargetKeyForMeasurement,
   normalizeSpectralDopplerVtiTargetSelection,
 } from './utils/viewerReportMapping';
+import {
+  getMeasurementLabelConfigForDomain,
+  isIuscanBowelViewerContext,
+} from '../../extension-ar-measurements/src/utils/measurementLabelConfig';
+import {
+  BOWEL_CURVED_LENGTH_MEASUREMENT_KIND,
+  BOWEL_STRAIGHT_LENGTH_MEASUREMENT_KIND,
+  getBowelCurvedLengthTargetOptions,
+  normalizeBowelMeasurementTargetSelection,
+} from '../../extension-ar-measurements/src/utils/bowelMeasurementTargets';
 
 const { DefaultHistoryMemo } = csUtils.HistoryMemo;
 const toggleSyncFunctions = {
@@ -124,6 +135,8 @@ const clinicalViewerSeriesReadCache = new Map<string, any>();
 const clinicalViewerSeriesReadPending = new Map<string, Promise<any>>();
 let activeLVSimpsonWorkflowSessionId = '';
 let activeLAVolumeWorkflowSessionId = '';
+let activeLVSimpsonCaptureCancel: null | (() => void) = null;
+let activeLAVolumeCaptureCancel: null | (() => void) = null;
 
 const LV_SIMPSON_MIN_AXIS_MM = 25;
 const LV_SIMPSON_MAX_AXIS_MM = 130;
@@ -424,9 +437,6 @@ function mergeViewerMeasurementSnapshots({
 }
 
 function synchronizeViewerMeasurementSessionFallbacks(liveMeasurements: any[] = []) {
-  let lvSimpsonChanged = false;
-  let laVolumeChanged = false;
-
   for (const liveMeasurement of Array.isArray(liveMeasurements) ? liveMeasurements : []) {
     const measurementId = getMeasurementAnnotationId(liveMeasurement);
 
@@ -439,8 +449,11 @@ function synchronizeViewerMeasurementSessionFallbacks(liveMeasurements: any[] = 
       lvSimpsonFallback &&
       isViewerMeasurementSessionFallbackReplacementReady(liveMeasurement, lvSimpsonFallback)
     ) {
+      // This function runs while the panel is resolving its live snapshot.
+      // Updating the fallback map is sufficient. Re-dispatching the LV session
+      // event here feeds directly back into another panel snapshot and creates
+      // an unbounded refresh loop once a live contour replaces its fallback.
       lvSimpsonSessionMeasurementsByUid.set(measurementId, liveMeasurement);
-      lvSimpsonChanged = true;
     }
 
     const laVolumeFallback = laVolumeSessionMeasurementsByUid.get(measurementId);
@@ -448,21 +461,10 @@ function synchronizeViewerMeasurementSessionFallbacks(liveMeasurements: any[] = 
       laVolumeFallback &&
       isViewerMeasurementSessionFallbackReplacementReady(liveMeasurement, laVolumeFallback)
     ) {
+      // Same rule for LA: session events are emitted by the workflow upsert,
+      // never by snapshot synchronization.
       laVolumeSessionMeasurementsByUid.set(measurementId, liveMeasurement);
-      laVolumeChanged = true;
     }
-  }
-
-  if (lvSimpsonChanged) {
-    dispatchLVSimpsonSessionMeasurements({
-      reason: 'measurement-service-synchronized',
-    });
-  }
-
-  if (laVolumeChanged) {
-    dispatchLAVolumeSessionMeasurements({
-      reason: 'measurement-service-synchronized',
-    });
   }
 }
 
@@ -507,7 +509,11 @@ function getCurrentViewerMeasurementSnapshot(
 
   // Cornerstone annotation state is the source of truth for tools that AR owns
   // directly rather than round-tripping through OHIF MeasurementService.
-  for (const measurement of fallbackMeasurements.filter(isUltrasoundDirectionalViewerMeasurement)) {
+  for (const measurement of fallbackMeasurements.filter(
+    measurement =>
+      isUltrasoundDirectionalViewerMeasurement(measurement) ||
+      isBowelCurvedLengthViewerMeasurement(measurement)
+  )) {
     const measurementId = getMeasurementAnnotationId(measurement);
 
     if (measurementId) {
@@ -714,6 +720,86 @@ function getCornerstoneUltrasoundDirectionalMeasurementFallbacks({
 
   return getAllCornerstoneViewerAnnotations()
     .map(getCornerstoneUltrasoundDirectionalMeasurementFallback)
+    .filter(Boolean)
+    .filter((measurement: any) => {
+      const measurementId = getMeasurementAnnotationId(measurement);
+      const measurementStudyInstanceUID = String(measurement?.referenceStudyUID || '').trim();
+
+      if (!measurementId || excludedMeasurementIds.has(measurementId)) {
+        return false;
+      }
+
+      return !(
+        expectedStudyInstanceUID &&
+        measurementStudyInstanceUID &&
+        measurementStudyInstanceUID !== expectedStudyInstanceUID
+      );
+    });
+}
+
+function getCornerstoneBowelCurvedLengthMeasurementFallback(stateAnnotation: any = {}) {
+  const measurementId = getMeasurementAnnotationId(stateAnnotation);
+  const metadata = stateAnnotation?.metadata || {};
+  const data = stateAnnotation?.data || {};
+  const toolName = String(metadata.toolName || stateAnnotation?.toolName || '').trim();
+  const measurementKind = String(
+    data.measurementKind || metadata.measurementKind || stateAnnotation?.measurementKind || ''
+  ).trim();
+  const reportMapping = data.reportMapping || metadata.reportMapping || stateAnnotation?.reportMapping || null;
+  const points = Array.isArray(data?.contour?.polyline) ? data.contour.polyline : [];
+
+  if (
+    !measurementId ||
+    toolName !== (toolNames.PlanarFreehandROI || 'PlanarFreehandROI') ||
+    measurementKind !== BOWEL_CURVED_LENGTH_MEASUREMENT_KIND ||
+    data?.contour?.closed === true ||
+    points.length < 2
+  ) {
+    return null;
+  }
+
+  const referencedImageId = String(metadata.referencedImageId || '').trim();
+  const parsedIds = parseDicomWebIdsFromReferencedImageId(referencedImageId);
+  const label = String(data.label || '').trim();
+
+  return {
+    uid: measurementId,
+    annotationUID: measurementId,
+    toolName,
+    measurementKind: BOWEL_CURVED_LENGTH_MEASUREMENT_KIND,
+    contourClosed: false,
+    label,
+    measurementRole: label,
+    role: label,
+    ...(reportMapping ? { reportMapping } : {}),
+    referenceStudyUID: metadata.StudyInstanceUID || parsedIds.studyInstanceId || '',
+    referenceSeriesUID: metadata.SeriesInstanceUID || parsedIds.seriesInstanceId || '',
+    SOPInstanceUID: metadata.SOPInstanceUID || parsedIds.sopInstanceId || '',
+    FrameOfReferenceUID: metadata.FrameOfReferenceUID || '',
+    displaySetInstanceUID: metadata.displaySetInstanceUID || '',
+    referencedImageId,
+    frameNumber: parsedIds.frameNumber || getFrameNumberFromReferencedImageId(referencedImageId),
+    points: points.map(point => (Array.isArray(point) ? [...point] : point)),
+    viewPlaneNormal: cloneViewerMeasurementMetadataVector(metadata.viewPlaneNormal),
+    viewUp: cloneViewerMeasurementMetadataVector(metadata.viewUp),
+    data: data.cachedStats || {},
+    displayText: Array.isArray(data.arSavedMeasurementDisplayText)
+      ? [...data.arSavedMeasurementDisplayText]
+      : [],
+  };
+}
+
+function getCornerstoneBowelCurvedLengthMeasurementFallbacks({
+  studyInstanceUID = '',
+  excludedMeasurementIds = new Set<string>(),
+}: {
+  studyInstanceUID?: string;
+  excludedMeasurementIds?: Set<string>;
+} = {}) {
+  const expectedStudyInstanceUID = String(studyInstanceUID || '').trim();
+
+  return getAllCornerstoneViewerAnnotations()
+    .map(getCornerstoneBowelCurvedLengthMeasurementFallback)
     .filter(Boolean)
     .filter((measurement: any) => {
       const measurementId = getMeasurementAnnotationId(measurement);
@@ -1006,6 +1092,10 @@ function cleanDialogText(value = '') {
   return String(value || '').trim();
 }
 
+function getLengthMeasurementLabelConfigForDomain(domain = '') {
+  return getMeasurementLabelConfigForDomain(normalizeViewerMeasurementDomain(domain));
+}
+
 function getMeasurementLabelDialogTitleForDomain(domain = '') {
   const normalizedDomain = cleanDialogText(domain)
     .toLowerCase()
@@ -1288,6 +1378,268 @@ function cloneSavedAnnotationPoints(points = []) {
   return Array.isArray(points)
     ? points.map(point => (Array.isArray(point) ? [...point] : point))
     : [];
+}
+
+function getViewerAnnotationViewportReference(viewport, points = []) {
+  if (!viewport?.getViewReference) {
+    return {};
+  }
+
+  const firstPoint = Array.isArray(points) && points.length > 0 ? points[0] : null;
+
+  try {
+    const reference = firstPoint
+      ? viewport.getViewReference({ points: [firstPoint] })
+      : viewport.getViewReference();
+
+    return reference && typeof reference === 'object' && !Array.isArray(reference)
+      ? reference
+      : {};
+  } catch {
+    try {
+      const reference = viewport.getViewReference();
+      return reference && typeof reference === 'object' && !Array.isArray(reference)
+        ? reference
+        : {};
+    } catch {
+      return {};
+    }
+  }
+}
+
+function buildSavedUltrasoundDirectionalCachedStats(savedAnnotation: any = {}, referencedImageId = '') {
+  const targetId = referencedImageId ? `imageId:${referencedImageId}` : '';
+  const directional = getUltrasoundDirectionalGeometry(savedAnnotation, savedAnnotation) || {};
+  const xValues = Array.isArray(directional.xValues) ? [...directional.xValues] : [];
+  const yValues = Array.isArray(directional.yValues) ? [...directional.yValues] : [];
+  const units = Array.isArray(directional.units) ? [...directional.units] : [];
+
+  if (!targetId || xValues.length < 2 || yValues.length < 2) {
+    return {};
+  }
+
+  return {
+    [targetId]: {
+      xValues,
+      yValues,
+      units,
+      isHorizontal: directional.isHorizontal === true,
+      isUnitless: directional.isUnitless === true,
+    },
+  };
+}
+
+function getViewerAnnotationGroupKeyForViewport(viewport) {
+  const element = viewport?.element;
+
+  try {
+    const annotationManager = annotation.state.getAnnotationManager?.();
+
+    if (element && annotationManager?.getGroupKey) {
+      return annotationManager.getGroupKey(element);
+    }
+  } catch {}
+
+  try {
+    return viewport?.getFrameOfReferenceUID?.();
+  } catch {}
+
+  return undefined;
+}
+
+function hydrateSavedUltrasoundDirectionalForViewport({
+  savedAnnotation,
+  viewport,
+  viewportId = '',
+  referencedImageIdOverride = '',
+  fallbackFrameOfReferenceUID = '',
+  selectAnnotation = true,
+}: {
+  savedAnnotation: any;
+  viewport?: any;
+  viewportId?: string;
+  referencedImageIdOverride?: string;
+  fallbackFrameOfReferenceUID?: string;
+  selectAnnotation?: boolean;
+}) {
+  const annotationId = getAnnotationId(savedAnnotation);
+  const points = cloneSavedAnnotationPoints(savedAnnotation?.points);
+  const referencedImageId = String(
+    referencedImageIdOverride || savedAnnotation?.referencedImageId || ''
+  ).trim();
+
+  if (!annotationId || !viewport || !referencedImageId || points.length !== 2) {
+    return null;
+  }
+
+  const workflow = String(savedAnnotation?.workflow || '').trim();
+  const domain = normalizeViewerMeasurementDomain(savedAnnotation?.domain || '');
+  const readOnly = !!savedAnnotation?.isLocked;
+  const reviewRound = Number(savedAnnotation?.reviewRound) || null;
+  const viewportReference = getViewerAnnotationViewportReference(viewport, points);
+  const camera = viewport?.getCamera?.() || {};
+  const cachedStats = buildSavedUltrasoundDirectionalCachedStats(
+    savedAnnotation,
+    referencedImageId
+  );
+  const baseData: any = {
+    annotationUID: annotationId,
+    highlighted: false,
+    invalidated: false,
+    isLocked: readOnly,
+    isVisible: savedAnnotation?.isVisible !== false,
+    data: {
+      label: getSavedAnnotationViewportLabel(savedAnnotation) || 'Ultrasound Directional',
+      handles: {
+        points,
+        activeHandleIndex: null,
+        textBox: {
+          hasMoved: false,
+          worldPosition: points[0] || [0, 0, 0],
+          worldBoundingBox: null,
+        },
+      },
+      cachedStats,
+      arMeasurementWorkflow: workflow,
+      arMeasurementReadOnly: readOnly,
+      arMeasurementReviewRound: reviewRound,
+      arMeasurementDomain: domain,
+    },
+  };
+
+  let cornerstoneAnnotation: any = null;
+
+  try {
+    const ToolClass: any = (cornerstoneTools as any).UltrasoundDirectionalTool;
+
+    if (typeof ToolClass?.createAnnotationForViewport === 'function') {
+      cornerstoneAnnotation = ToolClass.createAnnotationForViewport(viewport, baseData);
+    }
+  } catch (error) {
+    console.warn(
+      '[MeasurementAnnotations] UltrasoundDirectionalTool viewport factory failed; using viewport reference fallback',
+      error
+    );
+  }
+
+  if (!cornerstoneAnnotation) {
+    cornerstoneAnnotation = {
+      ...baseData,
+      metadata: {
+        ...viewportReference,
+        toolName: ULTRASOUND_DIRECTIONAL_TOOL_NAME,
+      },
+    };
+  }
+
+  const factoryMetadata = cornerstoneAnnotation.metadata || {};
+  const viewPlaneNormal =
+    cloneViewerMeasurementMetadataVector(factoryMetadata.viewPlaneNormal) ||
+    cloneViewerMeasurementMetadataVector(camera.viewPlaneNormal) ||
+    cloneViewerMeasurementMetadataVector(viewportReference?.viewPlaneNormal) ||
+    getViewerMeasurementMetadataVector(savedAnnotation, savedAnnotation, 'viewPlaneNormal');
+  const viewUp =
+    cloneViewerMeasurementMetadataVector(factoryMetadata.viewUp) ||
+    cloneViewerMeasurementMetadataVector(camera.viewUp) ||
+    cloneViewerMeasurementMetadataVector(viewportReference?.viewUp) ||
+    getViewerMeasurementMetadataVector(savedAnnotation, savedAnnotation, 'viewUp');
+
+  let enabledElementFrameOfReferenceUID;
+  try {
+    enabledElementFrameOfReferenceUID = getEnabledElement(viewport.element)?.FrameOfReferenceUID;
+  } catch {}
+
+  const directionalFrameOfReferenceUID = [
+    factoryMetadata.FrameOfReferenceUID,
+    viewportReference?.FrameOfReferenceUID,
+    enabledElementFrameOfReferenceUID,
+    viewport?.getFrameOfReferenceUID?.(),
+    fallbackFrameOfReferenceUID,
+    savedAnnotation?.FrameOfReferenceUID,
+  ].find(value => value != null && (typeof value !== 'string' || value.trim() !== ''));
+
+  cornerstoneAnnotation.annotationUID = annotationId;
+  cornerstoneAnnotation.metadata = {
+    ...viewportReference,
+    ...factoryMetadata,
+    toolName: ULTRASOUND_DIRECTIONAL_TOOL_NAME,
+    referencedImageId,
+    FrameOfReferenceUID: directionalFrameOfReferenceUID,
+    SOPInstanceUID: savedAnnotation?.SOPInstanceUID || '',
+    SeriesInstanceUID:
+      savedAnnotation?.SeriesInstanceUID || savedAnnotation?.referenceSeriesUID || '',
+    StudyInstanceUID:
+      savedAnnotation?.StudyInstanceUID || savedAnnotation?.referenceStudyUID || '',
+    ...(viewPlaneNormal ? { viewPlaneNormal } : {}),
+    ...(viewUp ? { viewUp } : {}),
+    arMeasurementWorkflow: workflow,
+    arMeasurementReadOnly: readOnly,
+    arMeasurementReviewRound: reviewRound,
+    arMeasurementDomain: domain,
+  };
+  cornerstoneAnnotation.data = {
+    ...(cornerstoneAnnotation.data || {}),
+    ...baseData.data,
+  };
+  cornerstoneAnnotation.highlighted = false;
+  cornerstoneAnnotation.invalidated = false;
+  cornerstoneAnnotation.isLocked = readOnly;
+  cornerstoneAnnotation.isVisible = savedAnnotation?.isVisible !== false;
+
+  const annotationGroupKey = getViewerAnnotationGroupKeyForViewport(viewport);
+  const annotationGroupSelector =
+    viewport?.element ||
+    annotationGroupKey ||
+    cornerstoneAnnotation.metadata?.FrameOfReferenceUID ||
+    viewportId ||
+    referencedImageId;
+
+  annotation.state.removeAnnotation?.(annotationId);
+  annotation.state.addAnnotation(cornerstoneAnnotation, annotationGroupSelector);
+
+  const storedAnnotation = annotation.state.getAnnotation?.(annotationId) || cornerstoneAnnotation;
+
+  try {
+    annotation.visibility?.setAnnotationVisibility?.(annotationId, true);
+  } catch {}
+
+  applyReviewMeasurementAnnotationStyle({
+    annotationUID: annotationId,
+    workflow,
+    measurementOwner: savedAnnotation?.measurementOwner,
+  });
+
+  if (selectAnnotation) {
+    annotation.selection.setAnnotationSelected?.(annotationId, true);
+  }
+
+  let groupedAnnotations: any[] = [];
+  let referenceViewable = null;
+
+  try {
+    groupedAnnotations =
+      annotation.state.getAnnotations?.(ULTRASOUND_DIRECTIONAL_TOOL_NAME, viewport.element) || [];
+  } catch {}
+
+  try {
+    referenceViewable = viewport.isReferenceViewable?.(storedAnnotation.metadata, {});
+  } catch {}
+
+  console.info('[Ultrasound Directional] saved viewport hydration', {
+    annotationId,
+    stateHit: !!annotation.state.getAnnotation?.(annotationId),
+    groupHit: groupedAnnotations.some(candidate => getAnnotationId(candidate) === annotationId),
+    groupedCount: groupedAnnotations.length,
+    annotationGroupKey,
+    enabledElementFrameOfReferenceUID,
+    storedFrameOfReferenceUID: storedAnnotation?.metadata?.FrameOfReferenceUID,
+    referenceViewable,
+    pointCount: storedAnnotation?.data?.handles?.points?.length || 0,
+    referencedImageId: storedAnnotation?.metadata?.referencedImageId || '',
+    currentImageId: viewport?.getCurrentImageId?.() || '',
+  });
+
+  return storedAnnotation;
 }
 
 function getSavedAnnotationImageKey(annotation: any = {}) {
@@ -1951,7 +2303,8 @@ function getUltrasoundDirectionalMeasurementPayload(measurement, existingAnnotat
 function isCornerstoneOwnedViewerMeasurement(measurement: any = {}) {
   return (
     isSpectralDopplerViewerMeasurement(measurement) ||
-    isUltrasoundDirectionalViewerMeasurement(measurement)
+    isUltrasoundDirectionalViewerMeasurement(measurement) ||
+    isBowelCurvedLengthViewerMeasurement(measurement)
   );
 }
 
@@ -1989,6 +2342,115 @@ function getSpectralDopplerMeasurementPayload(
   };
 }
 
+
+function isBowelCurvedLengthViewerMeasurement(measurement: any = {}, existingAnnotation: any = null) {
+  return (
+    measurement?.measurementKind === BOWEL_CURVED_LENGTH_MEASUREMENT_KIND ||
+    measurement?.measurements?.measurementKind === BOWEL_CURVED_LENGTH_MEASUREMENT_KIND ||
+    existingAnnotation?.measurementKind === BOWEL_CURVED_LENGTH_MEASUREMENT_KIND ||
+    existingAnnotation?.measurements?.measurementKind === BOWEL_CURVED_LENGTH_MEASUREMENT_KIND
+  );
+}
+
+function getBowelCurvedLengthPhysicalStatsFromCachedStats(
+  cachedStats: any = {},
+  referencedImageId = ''
+) {
+  const stats = getMeasurementStats({
+    data: cachedStats || {},
+    referencedImageId,
+  });
+  const length = finiteNumberOrNull(stats?.length);
+  const unit = String(stats?.lengthUnit || stats?.unit || '').trim();
+
+  if (length == null || length <= 0 || !/^(mm|cm)\b/i.test(stripMeasurementSourceSuffix(unit))) {
+    return null;
+  }
+
+  return { length, unit };
+}
+
+async function waitForBowelCurvedLengthPhysicalStats({
+  annotation,
+  referencedImageId = '',
+  viewport,
+}: {
+  annotation: any;
+  referencedImageId?: string;
+  viewport?: any;
+}) {
+  const delays = [0, 20, 50, 100, 200, 350];
+
+  for (const delayMs of delays) {
+    if (delayMs > 0) {
+      await new Promise(resolve => window.setTimeout(resolve, delayMs));
+    }
+
+    const physicalStats = getBowelCurvedLengthPhysicalStatsFromCachedStats(
+      annotation?.data?.cachedStats || {},
+      referencedImageId
+    );
+
+    if (physicalStats) {
+      return physicalStats;
+    }
+
+    try {
+      annotation.invalidated = true;
+      viewport?.render?.();
+    } catch {}
+  }
+
+  return null;
+}
+
+function getBowelCurvedLengthMeasurementPayload(measurement, existingAnnotation = null) {
+  const stats = getMeasurementStats(measurement);
+  const existingMeasurements = existingAnnotation?.measurements || {};
+  const rawLength =
+    finiteNumberOrNull(stats?.length) ??
+    finiteNumberOrNull(measurement?.measurements?.length) ??
+    finiteNumberOrNull(existingMeasurements.length);
+  const rawUnit = String(
+    stats?.lengthUnit ||
+      stats?.unit ||
+      measurement?.measurements?.lengthUnit ||
+      measurement?.measurements?.unit ||
+      existingMeasurements.lengthUnit ||
+      existingMeasurements.unit ||
+      ''
+  ).trim();
+  const sourceUnit = stripMeasurementSourceSuffix(rawUnit);
+  let lengthMM = null;
+
+  if (rawLength != null && rawLength > 0) {
+    if (/^cm\b/i.test(sourceUnit)) {
+      lengthMM = rawLength * 10;
+    } else if (/^mm\b/i.test(sourceUnit)) {
+      lengthMM = rawLength;
+    }
+  }
+
+  const displayText =
+    lengthMM != null
+      ? [`${formatLengthMM(lengthMM)} mm`]
+      : existingMeasurements.displayText || existingAnnotation?.displayText || [];
+
+  return {
+    measurementKind: BOWEL_CURVED_LENGTH_MEASUREMENT_KIND,
+    contourClosed: false,
+    ...(lengthMM != null
+      ? {
+          value: lengthMM,
+          length: lengthMM,
+          unit: 'mm',
+          lengthUnit: 'mm',
+        }
+      : {}),
+    displayText,
+  };
+}
+
 function serializeViewerMeasurement(measurement, domain, existingAnnotation = null, options = {}) {
   const isArrowAnnotateMeasurement = measurement?.toolName === 'ArrowAnnotate';
   const arrowText = isArrowAnnotateMeasurement
@@ -2000,18 +2462,30 @@ function serializeViewerMeasurement(measurement, domain, existingAnnotation = nu
   const lvSimpson = getLVSimpsonGeometry(measurement, existingAnnotation);
   const laVolume = getLAVolumeGeometry(measurement, existingAnnotation);
   const spectralDoppler = getSpectralDopplerGeometry(measurement, existingAnnotation);
+  const isLVSimpson = domain === 'echo' && !!lvSimpson;
+  const isLAVolume = domain === 'echo' && !!laVolume;
+  const isSpectralDoppler =
+    measurement?.measurementKind === SPECTRAL_DOPPLER_MEASUREMENT_KIND ||
+    spectralDoppler?.measurementKind === SPECTRAL_DOPPLER_MEASUREMENT_KIND;
+  const isBowelCurvedLength =
+    domain === 'bowel' && isBowelCurvedLengthViewerMeasurement(measurement, existingAnnotation);
+  const measurementKindForMapping = isBowelCurvedLength
+    ? BOWEL_CURVED_LENGTH_MEASUREMENT_KIND
+    : measurement?.toolName === 'Length'
+      ? BOWEL_STRAIGHT_LENGTH_MEASUREMENT_KIND
+      : String(measurement?.measurementKind || '');
   const reportMapping =
     measurement?.reportMapping ||
     spectralDoppler?.reportMapping ||
     existingAnnotation?.reportMapping ||
     existingAnnotation?.spectralDoppler?.reportMapping ||
     existingAnnotation?.measurements?.spectralDoppler?.reportMapping ||
+    buildViewerReportMappingForMeasurement({
+      domain,
+      label,
+      measurementKind: measurementKindForMapping,
+    }) ||
     null;
-  const isLVSimpson = domain === 'echo' && !!lvSimpson;
-  const isLAVolume = domain === 'echo' && !!laVolume;
-  const isSpectralDoppler =
-    measurement?.measurementKind === SPECTRAL_DOPPLER_MEASUREMENT_KIND ||
-    spectralDoppler?.measurementKind === SPECTRAL_DOPPLER_MEASUREMENT_KIND;
   const isUltrasoundDirectional = isUltrasoundDirectionalViewerMeasurement(measurement);
   const frameNumber =
     measurement.frameNumber && measurement.frameNumber > 1
@@ -2021,8 +2495,10 @@ function serializeViewerMeasurement(measurement, domain, existingAnnotation = nu
   const nextMeasurements = {
     ...(isUltrasoundDirectional
       ? getUltrasoundDirectionalMeasurementPayload(measurement, existingAnnotation)
-      : isContourMeasurement && !isSpectralDoppler
-        ? buildContourMeasurementPayload(measurement, existingAnnotation, options.displaySetService)
+      : isBowelCurvedLength
+        ? getBowelCurvedLengthMeasurementPayload(measurement, existingAnnotation)
+        : isContourMeasurement && !isSpectralDoppler
+          ? buildContourMeasurementPayload(measurement, existingAnnotation, options.displaySetService)
         : isArrowAnnotateMeasurement
           ? getArrowAnnotateMeasurementPayload(measurement, existingAnnotation)
           : !isContourMeasurement
@@ -2110,9 +2586,17 @@ function serializeViewerMeasurement(measurement, domain, existingAnnotation = nu
       ? {
           measurementKind: SPECTRAL_DOPPLER_MEASUREMENT_KIND,
           spectralDoppler: nextMeasurements.spectralDoppler,
-          ...(reportMapping ? { reportMapping } : {}),
         }
       : {}),
+
+    ...(isBowelCurvedLength
+      ? {
+          measurementKind: BOWEL_CURVED_LENGTH_MEASUREMENT_KIND,
+          contourClosed: false,
+        }
+      : {}),
+
+    ...(reportMapping ? { reportMapping } : {}),
 
     ...(isUltrasoundDirectional
       ? {
@@ -2125,7 +2609,8 @@ function serializeViewerMeasurement(measurement, domain, existingAnnotation = nu
     SeriesInstanceUID: measurement.referenceSeriesUID || '',
     SOPInstanceUID: measurement.SOPInstanceUID,
     FrameOfReferenceUID: measurement.FrameOfReferenceUID || '',
-    displaySetInstanceUID: measurement.displaySetInstanceUID || '',
+    displaySetInstanceUID:
+      measurement.displaySetInstanceUID || existingAnnotation?.displaySetInstanceUID || '',
 
     referenceSeriesUID: measurement.referenceSeriesUID,
     referencedImageId: measurement.referencedImageId,
@@ -2996,7 +3481,9 @@ function getSavedAnnotationDisplayText(savedAnnotation) {
     return text ? [text] : [];
   }
   const measurements = savedAnnotation?.measurements || {};
-  const unitType = isViewerContourTool(savedAnnotation?.toolName) ? 'area' : 'length';
+  const isCurvedLength = isBowelCurvedLengthViewerMeasurement(savedAnnotation, savedAnnotation);
+  const unitType =
+    isViewerContourTool(savedAnnotation?.toolName) && !isCurvedLength ? 'area' : 'length';
 
   if (Array.isArray(measurements.displayText) && measurements.displayText.length > 0) {
     return normalizeDisplayTextUnits(measurements.displayText, unitType);
@@ -3006,7 +3493,10 @@ function getSavedAnnotationDisplayText(savedAnnotation) {
     return normalizeDisplayTextUnits(savedAnnotation.displayText, unitType);
   }
 
-  if (savedAnnotation?.toolName === 'Length') {
+  if (
+    savedAnnotation?.toolName === 'Length' ||
+    isBowelCurvedLengthViewerMeasurement(savedAnnotation, savedAnnotation)
+  ) {
     const normalized = normalizeLengthValueAndUnit(
       measurements.length ?? measurements.value,
       measurements.lengthUnit || measurements.unit || ''
@@ -3041,7 +3531,10 @@ function buildSavedAnnotationStatsForMeasurementService(savedAnnotation, referen
     return {};
   }
 
-  if (savedAnnotation?.toolName === 'Length') {
+  if (
+    savedAnnotation?.toolName === 'Length' ||
+    isBowelCurvedLengthViewerMeasurement(savedAnnotation, savedAnnotation)
+  ) {
     const normalized = normalizeLengthValueAndUnit(
       measurements.length ?? measurements.value,
       measurements.lengthUnit || measurements.unit || ''
@@ -3126,7 +3619,10 @@ function buildSavedAnnotationStatsForCornerstone(savedAnnotation, referencedImag
     return {};
   }
 
-  if (savedAnnotation?.toolName === 'Length') {
+  if (
+    savedAnnotation?.toolName === 'Length' ||
+    isBowelCurvedLengthViewerMeasurement(savedAnnotation, savedAnnotation)
+  ) {
     const normalized = normalizeLengthValueAndUnit(
       measurements.length ?? measurements.value,
       measurements.lengthUnit || measurements.unit || ''
@@ -3349,6 +3845,12 @@ function forceSavedAnnotationMeasurementServiceDisplay({
           spectralDoppler: getSpectralDopplerGeometry(savedAnnotation, savedAnnotation),
         }
       : {}),
+    ...(isBowelCurvedLengthViewerMeasurement(savedAnnotation, savedAnnotation)
+      ? {
+          measurementKind: BOWEL_CURVED_LENGTH_MEASUREMENT_KIND,
+          reportMapping: savedAnnotation?.reportMapping || null,
+        }
+      : {}),
     data: {
       ...(currentMeasurement.data || {}),
       ...stats,
@@ -3370,7 +3872,8 @@ function forceSavedAnnotationMeasurementServiceDisplay({
 
   if (
     isViewerContourTool(savedAnnotation.toolName) &&
-    savedAnnotation?.measurementKind !== SPECTRAL_DOPPLER_MEASUREMENT_KIND
+    savedAnnotation?.measurementKind !== SPECTRAL_DOPPLER_MEASUREMENT_KIND &&
+    !isBowelCurvedLengthViewerMeasurement(savedAnnotation, savedAnnotation)
   ) {
     const measurements = savedAnnotation.measurements || {};
     const area = getSavedContourAreaForDisplay(
@@ -4346,7 +4849,7 @@ function installLVSimpsonContourTextCleanupForViewport({ viewport, viewportId = 
   toolInstance.__arLVSimpsonTextCleanupInstalled = true;
 }
 
-function installSpectralDopplerTextOverrideForViewport({ viewport, viewportId = '' }) {
+function installPlanarFreehandTextOverrideForViewport({ viewport, viewportId = '' }) {
   if (!viewport) {
     return;
   }
@@ -4366,7 +4869,7 @@ function installSpectralDopplerTextOverrideForViewport({ viewport, viewportId = 
   const toolName = toolNames.PlanarFreehandROI || 'PlanarFreehandROI';
   const toolInstance = toolGroup?.getToolInstance?.(toolName);
 
-  if (!toolInstance || toolInstance.__arSpectralDopplerTextOverrideInstalled) {
+  if (!toolInstance || toolInstance.__arPlanarFreehandTextOverrideInstalled) {
     return;
   }
 
@@ -4406,10 +4909,10 @@ function installSpectralDopplerTextOverrideForViewport({ viewport, viewportId = 
 
   toolInstance.configuration = nextConfiguration;
   toolGroup?.setToolConfiguration?.(toolName, nextConfiguration, true);
-  toolInstance.__arSpectralDopplerTextOverrideInstalled = true;
+  toolInstance.__arPlanarFreehandTextOverrideInstalled = true;
 }
 
-function captureLVSimpsonDrag({ viewport, onPreview, isCancelled }) {
+function captureLVSimpsonDrag({ viewport, onPreview, isCancelled, setCancelHandler }) {
   const element = viewport?.element;
 
   if (!element) {
@@ -4432,6 +4935,7 @@ function captureLVSimpsonDrag({ viewport, onPreview, isCancelled }) {
       window.removeEventListener('mousemove', handleMouseMove, true);
       window.removeEventListener('mouseup', handleMouseUp, true);
       window.removeEventListener('keydown', handleKeyDown, true);
+      setCancelHandler?.(null);
       resolve(result);
     }
 
@@ -4494,6 +4998,7 @@ function captureLVSimpsonDrag({ viewport, onPreview, isCancelled }) {
       finish(endWorld ? { startWorld, endWorld } : null);
     }
 
+    setCancelHandler?.(() => finish(null));
     setLVSimpsonViewportCursor(element, 'crosshair');
     element.addEventListener('mousedown', handleMouseDown, true);
     window.addEventListener('keydown', handleKeyDown, true);
@@ -4821,6 +5326,52 @@ async function resolveSpectralDopplerVtiTarget({
   }
 
   return normalizeSpectralDopplerVtiTargetSelection(value, { allowGeneric });
+}
+
+
+function getBowelCurvedLengthTargetDialogConfig({ isIuscan = false } = {}) {
+  return {
+    id: 'bowelCurvedLengthReportTarget',
+    labelOnMeasure: false,
+    exclusive: true,
+    items: getBowelCurvedLengthTargetOptions({ isIuscan }),
+  };
+}
+
+async function resolveBowelCurvedLengthTarget({
+  uiDialogService,
+  customizationService,
+} = {}) {
+  const renderContent = customizationService.getCustomization('ui.labellingComponent');
+  const isIuscan = isIuscanBowelViewerContext();
+  const options = getBowelCurvedLengthTargetOptions({ isIuscan });
+  let value = null;
+
+  if (!options.length) {
+    return null;
+  }
+
+  try {
+    value = await callInputDialogAutoComplete({
+      uiDialogService,
+      labelConfig: getBowelCurvedLengthTargetDialogConfig({ isIuscan }),
+      renderContent,
+      title: 'Curved Length Measurement Type',
+    });
+  } catch (error) {
+    console.warn('[Bowel Curved Length] target autocomplete failed; falling back to text input:', error);
+
+    value = await callInputDialog({
+      uiDialogService,
+      title: 'Curved Length Measurement Type',
+      placeholder: options.map(option => option.label).join(', '),
+      defaultValue: options[0]?.label || '',
+    });
+  }
+
+  return normalizeBowelMeasurementTargetSelection(value, {
+    measurementKind: BOWEL_CURVED_LENGTH_MEASUREMENT_KIND,
+  });
 }
 
 const VIEWER_QUIZ_MARKER_OVERLAY_CLASS = 'ar-viewer-quiz-marker-overlay';
@@ -5756,6 +6307,11 @@ function getClinicalViewerMeasurementSemanticKey(measurement: any = {}) {
 
   const domain = normalizeViewerMeasurementDomain(measurement?.domain || 'generic') || 'generic';
 
+  if (domain === 'bowel') {
+    const targetKey = getViewerReportTargetKeyForMeasurement(measurement);
+    return targetKey ? `bowel:${targetKey}` : '';
+  }
+
   if (domain !== 'echo') {
     return '';
   }
@@ -6308,15 +6864,73 @@ function commandsModule({
     }
   }
 
+  let activeBowelCurvedLengthWorkflowSessionId = '';
+  let bowelCurvedLengthCompletionHandler: null | ((event: Event) => void) = null;
+  let bowelCurvedLengthEscapeHandler: null | ((event: KeyboardEvent) => void) = null;
+
+  function clearBowelCurvedLengthWorkflowListeners({ resetSession = true } = {}) {
+    if (bowelCurvedLengthCompletionHandler) {
+      eventTarget.removeEventListener(
+        Enums.Events.ANNOTATION_COMPLETED,
+        bowelCurvedLengthCompletionHandler
+      );
+      bowelCurvedLengthCompletionHandler = null;
+    }
+
+    if (bowelCurvedLengthEscapeHandler) {
+      window.removeEventListener('keydown', bowelCurvedLengthEscapeHandler);
+      bowelCurvedLengthEscapeHandler = null;
+    }
+
+    if (resetSession) {
+      activeBowelCurvedLengthWorkflowSessionId = '';
+    }
+  }
+
+  function cancelActiveLVSimpsonCapture() {
+    const cancel = activeLVSimpsonCaptureCancel;
+    activeLVSimpsonCaptureCancel = null;
+    cancel?.();
+  }
+
+  function cancelActiveLAVolumeCapture() {
+    const cancel = activeLAVolumeCaptureCancel;
+    activeLAVolumeCaptureCancel = null;
+    cancel?.();
+  }
+
+  function clearLVSimpsonWorkflowIfCurrent(workflowSessionId = '') {
+    if (activeLVSimpsonWorkflowSessionId !== workflowSessionId) {
+      return false;
+    }
+
+    activeLVSimpsonWorkflowSessionId = '';
+    cancelActiveLVSimpsonCapture();
+    return true;
+  }
+
+  function clearLAVolumeWorkflowIfCurrent(workflowSessionId = '') {
+    if (activeLAVolumeWorkflowSessionId !== workflowSessionId) {
+      return false;
+    }
+
+    activeLAVolumeWorkflowSessionId = '';
+    cancelActiveLAVolumeCapture();
+    return true;
+  }
+
   const actions = {
     clearViewerMeasurementsCreatedInSession: () => {
       viewerMeasurementsCreatedInSession.clear();
       viewerMeasurementsDeletedInSession.clear();
       lvSimpsonSessionMeasurementsByUid.clear();
       laVolumeSessionMeasurementsByUid.clear();
+      cancelActiveLVSimpsonCapture();
+      cancelActiveLAVolumeCapture();
       activeLVSimpsonWorkflowSessionId = '';
       activeLAVolumeWorkflowSessionId = '';
       clearSpectralDopplerWorkflowListeners();
+      clearBowelCurvedLengthWorkflowListeners();
       dispatchLVSimpsonSessionMeasurements({ reason: 'viewer-session-cleared' });
       dispatchLAVolumeSessionMeasurements({ reason: 'viewer-session-cleared' });
     },
@@ -6757,7 +7371,7 @@ function commandsModule({
           }
         }
 
-        labelConfig = getMeasurementLabelConfigForDomain(measurementDomain);
+        labelConfig = getLengthMeasurementLabelConfigForDomain(measurementDomain);
       }
 
       if (!labelConfig) {
@@ -6828,6 +7442,7 @@ function commandsModule({
       const workflowSessionId = requestedSessionId || `${csUtils.uuidv4()}`;
 
       if (!requestedSessionId) {
+        cancelActiveLVSimpsonCapture();
         activeLVSimpsonWorkflowSessionId = workflowSessionId;
       }
 
@@ -6843,7 +7458,7 @@ function commandsModule({
           duration: 3500,
         });
         if (!requestedSessionId) {
-          activeLVSimpsonWorkflowSessionId = '';
+          clearLVSimpsonWorkflowIfCurrent(workflowSessionId);
         }
         return null;
       }
@@ -6938,6 +7553,11 @@ function commandsModule({
       const hinge = await captureLVSimpsonDrag({
         viewport,
         isCancelled: isWorkflowCancelled,
+        setCancelHandler: cancel => {
+          if (activeLVSimpsonWorkflowSessionId === workflowSessionId) {
+            activeLVSimpsonCaptureCancel = cancel;
+          }
+        },
         onPreview: ({ startWorld, currentWorld }) => {
           drawLVSimpsonPreview({
             overlay,
@@ -6952,7 +7572,7 @@ function commandsModule({
         clearLVSimpsonPreviewOverlay(viewport.element);
         setLVSimpsonViewportCursor(viewport.element, 'default');
         if (!requestedSessionId) {
-          activeLVSimpsonWorkflowSessionId = '';
+          clearLVSimpsonWorkflowIfCurrent(workflowSessionId);
         }
         return null;
       }
@@ -6974,6 +7594,11 @@ function commandsModule({
       const apexDrag = await captureLVSimpsonDrag({
         viewport,
         isCancelled: isWorkflowCancelled,
+        setCancelHandler: cancel => {
+          if (activeLVSimpsonWorkflowSessionId === workflowSessionId) {
+            activeLVSimpsonCaptureCancel = cancel;
+          }
+        },
         onPreview: ({ currentWorld }) => {
           drawLVSimpsonPreview({
             overlay,
@@ -6989,7 +7614,7 @@ function commandsModule({
       setLVSimpsonViewportCursor(viewport.element, 'default');
 
       if (!apexDrag?.endWorld) {
-        activeLVSimpsonWorkflowSessionId = '';
+        clearLVSimpsonWorkflowIfCurrent(workflowSessionId);
         return null;
       }
 
@@ -7178,7 +7803,7 @@ function commandsModule({
         return measurement;
       }
 
-      activeLVSimpsonWorkflowSessionId = '';
+      clearLVSimpsonWorkflowIfCurrent(workflowSessionId);
 
       uiNotificationService.show({
         title: 'LV EF',
@@ -7196,6 +7821,7 @@ function commandsModule({
       const workflowSessionId = requestedSessionId || `${csUtils.uuidv4()}`;
 
       if (!requestedSessionId) {
+        cancelActiveLAVolumeCapture();
         activeLAVolumeWorkflowSessionId = workflowSessionId;
       }
 
@@ -7210,9 +7836,7 @@ function commandsModule({
           type: 'warning',
           duration: 3500,
         });
-        if (activeLAVolumeWorkflowSessionId === workflowSessionId) {
-          activeLAVolumeWorkflowSessionId = '';
-        }
+        clearLAVolumeWorkflowIfCurrent(workflowSessionId);
         return null;
       }
 
@@ -7251,7 +7875,7 @@ function commandsModule({
       }
 
       if (!slotSelection || isWorkflowCancelled()) {
-        activeLAVolumeWorkflowSessionId = '';
+        clearLAVolumeWorkflowIfCurrent(workflowSessionId);
         return null;
       }
 
@@ -7274,6 +7898,11 @@ function commandsModule({
       const annulus = await captureLVSimpsonDrag({
         viewport,
         isCancelled: isWorkflowCancelled,
+        setCancelHandler: cancel => {
+          if (activeLAVolumeWorkflowSessionId === workflowSessionId) {
+            activeLAVolumeCaptureCancel = cancel;
+          }
+        },
         onPreview: ({ startWorld, currentWorld }) => {
           drawLVSimpsonPreview({
             overlay,
@@ -7287,7 +7916,7 @@ function commandsModule({
       if (!annulus || isWorkflowCancelled()) {
         clearLVSimpsonPreviewOverlay(viewport.element);
         setLVSimpsonViewportCursor(viewport.element, 'default');
-        activeLAVolumeWorkflowSessionId = '';
+        clearLAVolumeWorkflowIfCurrent(workflowSessionId);
         return null;
       }
 
@@ -7308,6 +7937,11 @@ function commandsModule({
       const superiorDrag = await captureLVSimpsonDrag({
         viewport,
         isCancelled: isWorkflowCancelled,
+        setCancelHandler: cancel => {
+          if (activeLAVolumeWorkflowSessionId === workflowSessionId) {
+            activeLAVolumeCaptureCancel = cancel;
+          }
+        },
         onPreview: ({ currentWorld }) => {
           drawLVSimpsonPreview({
             overlay,
@@ -7323,7 +7957,7 @@ function commandsModule({
       setLVSimpsonViewportCursor(viewport.element, 'default');
 
       if (!superiorDrag?.endWorld || isWorkflowCancelled()) {
-        activeLAVolumeWorkflowSessionId = '';
+        clearLAVolumeWorkflowIfCurrent(workflowSessionId);
         return null;
       }
 
@@ -7334,7 +7968,7 @@ function commandsModule({
       });
 
       if (!geometry?.points?.length) {
-        activeLAVolumeWorkflowSessionId = '';
+        clearLAVolumeWorkflowIfCurrent(workflowSessionId);
         uiNotificationService.show({
           title: 'LA Volume',
           message:
@@ -7509,7 +8143,7 @@ function commandsModule({
         return measurement;
       }
 
-      activeLAVolumeWorkflowSessionId = '';
+      clearLAVolumeWorkflowIfCurrent(workflowSessionId);
 
       uiNotificationService.show({
         title: 'LA Volume',
@@ -7642,6 +8276,7 @@ function commandsModule({
           mappedMeasurement?.referencedImageId || sourceAnnotation?.metadata?.referencedImageId || '';
         const workingMeasurement = {
           ...(mappedMeasurement || {}),
+          data: mappedMeasurement?.data || sourceAnnotation?.data?.cachedStats || {},
           uid: annotationId,
           annotationUID: annotationId,
           toolName: toolNames.PlanarFreehandROI || 'PlanarFreehandROI',
@@ -7721,7 +8356,7 @@ function commandsModule({
           console.warn('[VTI Trace] measurementService.update failed:', error);
         }
 
-        installSpectralDopplerTextOverrideForViewport({
+        installPlanarFreehandTextOverrideForViewport({
           viewport,
           viewportId: activeViewportId,
         });
@@ -7764,6 +8399,327 @@ function commandsModule({
         ok: true,
         sessionId: workflowSessionId,
         toolName: toolNames.PlanarFreehandROI || 'PlanarFreehandROI',
+      };
+    },
+    startBowelCurvedLengthWorkflow: async () => {
+      clearBowelCurvedLengthWorkflowListeners();
+
+      const activeViewportId = viewportGridService.getActiveViewportId();
+      const { viewport } = _getActiveViewportEnabledElement() || {};
+
+      if (!activeViewportId || !viewport?.element) {
+        uiNotificationService.show({
+          title: 'Curved Length',
+          message: 'No active image viewport is available.',
+          type: 'warning',
+          duration: 3500,
+        });
+        return null;
+      }
+
+      const selectedTarget = await resolveBowelCurvedLengthTarget({
+        uiDialogService,
+        customizationService,
+      });
+
+      if (!selectedTarget) {
+        uiNotificationService.show({
+          title: 'Curved Length',
+          message: 'Choose the bowel report measurement that should receive this curved length.',
+          type: 'warning',
+          duration: 3500,
+        });
+        return null;
+      }
+
+      const reportMapping = buildViewerReportMapping(selectedTarget);
+      const measurementLabel = selectedTarget.label;
+      const freehandToolName = toolNames.PlanarFreehandROI || 'PlanarFreehandROI';
+      const toolGroupReference = toolGroupService.getToolGroupForViewport(activeViewportId);
+      const toolGroup =
+        typeof toolGroupReference === 'string'
+          ? toolGroupService.getToolGroup(toolGroupReference)
+          : toolGroupReference;
+      const previousToolConfiguration = toolGroup?.getToolConfiguration?.(freehandToolName) || {};
+
+      try {
+        toolGroup?.setToolConfiguration?.(
+          freehandToolName,
+          {
+            ...previousToolConfiguration,
+            allowOpenContours: true,
+            calculateStats: true,
+          },
+          true
+        );
+      } catch (error) {
+        console.warn('[Bowel Curved Length] could not enable open contours:', error);
+      }
+
+      const restoreToolConfiguration = () => {
+        try {
+          toolGroup?.setToolConfiguration?.(freehandToolName, previousToolConfiguration, true);
+        } catch {}
+      };
+
+      const activation = actions.activateViewerMeasurementTool({
+        toolName: freehandToolName,
+        stopCine: true,
+      });
+
+      if (!activation?.ok) {
+        restoreToolConfiguration();
+        uiNotificationService.show({
+          title: 'Curved Length',
+          message: 'The freehand contour tool is not available in this viewport.',
+          type: 'warning',
+          duration: 4500,
+        });
+        return null;
+      }
+
+      const workflowSessionId = `${csUtils.uuidv4()}`;
+      activeBowelCurvedLengthWorkflowSessionId = workflowSessionId;
+
+      const restoreNavigationTool = () => {
+        restoreToolConfiguration();
+        try {
+          const reference = toolGroupService.getToolGroupForViewport(activeViewportId);
+          actions.setToolActive({
+            toolName: toolNames.WindowLevel || 'WindowLevel',
+            toolGroupId: reference,
+          });
+        } catch {}
+      };
+
+      bowelCurvedLengthEscapeHandler = (event: KeyboardEvent) => {
+        if (
+          event.key !== 'Escape' ||
+          activeBowelCurvedLengthWorkflowSessionId !== workflowSessionId
+        ) {
+          return;
+        }
+
+        clearBowelCurvedLengthWorkflowListeners();
+        restoreNavigationTool();
+        uiNotificationService.show({
+          title: 'Curved Length',
+          message: 'Curved length measurement cancelled.',
+          type: 'info',
+          duration: 2500,
+        });
+      };
+
+      bowelCurvedLengthCompletionHandler = async (event: Event) => {
+        if (activeBowelCurvedLengthWorkflowSessionId !== workflowSessionId) {
+          return;
+        }
+
+        const eventDetail = (event as CustomEvent)?.detail || {};
+        const sourceAnnotation = eventDetail.annotation;
+        const sourceToolName = String(sourceAnnotation?.metadata?.toolName || '');
+
+        if (sourceToolName !== freehandToolName) {
+          return;
+        }
+
+        const annotationId = String(sourceAnnotation?.annotationUID || '').trim();
+        if (!annotationId) {
+          return;
+        }
+
+        const contourClosed = sourceAnnotation?.data?.contour?.closed === true;
+
+        clearBowelCurvedLengthWorkflowListeners({ resetSession: false });
+        activeBowelCurvedLengthWorkflowSessionId = '';
+        restoreNavigationTool();
+
+        const mappedMeasurement = await waitForViewerMeasurementServiceEntry(
+          measurementService,
+          annotationId
+        );
+
+        if (contourClosed) {
+          actions.removeMeasurement({ uid: annotationId });
+          uiNotificationService.show({
+            title: 'Curved Length',
+            message:
+              'The trace closed as an ROI, so it was removed. Curved length must be an open contour; redraw it and release with the endpoint away from the starting point.',
+            type: 'warning',
+            duration: 8000,
+          });
+          return null;
+        }
+
+        const contourPoints =
+          sourceAnnotation?.data?.contour?.polyline ||
+          sourceAnnotation?.data?.handles?.points ||
+          mappedMeasurement?.points ||
+          [];
+        const referencedImageId =
+          mappedMeasurement?.referencedImageId ||
+          sourceAnnotation?.metadata?.referencedImageId ||
+          '';
+
+        const workingMeasurement = {
+          ...(mappedMeasurement || {}),
+          uid: annotationId,
+          annotationUID: annotationId,
+          toolName: freehandToolName,
+          label: measurementLabel,
+          measurementRole: measurementLabel,
+          role: measurementLabel,
+          measurementKind: BOWEL_CURVED_LENGTH_MEASUREMENT_KIND,
+          reportMapping,
+          contourClosed: false,
+          points: contourPoints,
+          referencedImageId,
+          SOPInstanceUID:
+            mappedMeasurement?.SOPInstanceUID || sourceAnnotation?.metadata?.SOPInstanceUID || '',
+          referenceSeriesUID:
+            mappedMeasurement?.referenceSeriesUID ||
+            sourceAnnotation?.metadata?.SeriesInstanceUID ||
+            '',
+          referenceStudyUID:
+            mappedMeasurement?.referenceStudyUID ||
+            sourceAnnotation?.metadata?.StudyInstanceUID ||
+            '',
+          FrameOfReferenceUID:
+            mappedMeasurement?.FrameOfReferenceUID ||
+            sourceAnnotation?.metadata?.FrameOfReferenceUID ||
+            '',
+        };
+
+        const cornerstonePhysicalStats = await waitForBowelCurvedLengthPhysicalStats({
+          annotation: sourceAnnotation,
+          referencedImageId,
+          viewport,
+        });
+        const measurementForCurvedPayload = {
+          ...workingMeasurement,
+          data:
+            sourceAnnotation?.data?.cachedStats &&
+            Object.keys(sourceAnnotation.data.cachedStats).length > 0
+              ? sourceAnnotation.data.cachedStats
+              : workingMeasurement?.data || {},
+          ...(cornerstonePhysicalStats
+            ? {
+                measurements: {
+                  ...(workingMeasurement?.measurements || {}),
+                  length: cornerstonePhysicalStats.length,
+                  lengthUnit: cornerstonePhysicalStats.unit,
+                  unit: cornerstonePhysicalStats.unit,
+                },
+              }
+            : {}),
+        };
+        const curvedPayload = getBowelCurvedLengthMeasurementPayload(measurementForCurvedPayload);
+        const lengthMM = finiteNumberOrNull(curvedPayload?.length);
+        const displayText = curvedPayload?.displayText || [];
+
+        const nextMeasurement = {
+          ...workingMeasurement,
+          measurements: {
+            ...(workingMeasurement?.measurements || {}),
+            ...curvedPayload,
+          },
+          displayText,
+        };
+
+        sourceAnnotation.metadata = {
+          ...(sourceAnnotation.metadata || {}),
+          toolName: freehandToolName,
+          referencedImageId,
+        };
+        const curvedStatsKey = referencedImageId ? `imageId:${referencedImageId}` : '';
+        const existingCurvedStats = sourceAnnotation.data?.cachedStats || {};
+
+        sourceAnnotation.data = {
+          ...(sourceAnnotation.data || {}),
+          label: measurementLabel,
+          measurementKind: BOWEL_CURVED_LENGTH_MEASUREMENT_KIND,
+          reportMapping,
+          contour: {
+            ...(sourceAnnotation.data?.contour || {}),
+            closed: false,
+            polyline: contourPoints,
+          },
+          handles: {
+            ...(sourceAnnotation.data?.handles || {}),
+            points:
+              contourPoints.length > 1
+                ? [contourPoints[0], contourPoints[contourPoints.length - 1]]
+                : contourPoints,
+          },
+          cachedStats:
+            curvedStatsKey && lengthMM != null
+              ? {
+                  ...existingCurvedStats,
+                  [curvedStatsKey]: {
+                    ...(existingCurvedStats[curvedStatsKey] || {}),
+                    length: lengthMM,
+                    lengthUnit: 'mm',
+                    unit: 'mm',
+                  },
+                }
+              : existingCurvedStats,
+          arSavedMeasurementDisplayText: displayText,
+        };
+        sourceAnnotation.invalidated = false;
+
+        try {
+          measurementService.update(annotationId, nextMeasurement, true);
+          actions.markViewerMeasurementCreatedInSession?.({ uid: annotationId });
+        } catch (error) {
+          console.warn('[Bowel Curved Length] measurementService.update failed:', error);
+        }
+
+        installPlanarFreehandTextOverrideForViewport({
+          viewport,
+          viewportId: activeViewportId,
+        });
+
+        dispatchLiveMeasurementsRefresh({
+          reason: 'bowel-curved-length-created',
+          annotationUID: annotationId,
+          calibrated: lengthMM != null,
+        });
+
+        try {
+          cornerstoneTools.annotation.selection.setAnnotationSelected?.(annotationId, true);
+          viewport.render?.();
+        } catch {}
+
+        uiNotificationService.show({
+          title: 'Curved Length',
+          message:
+            lengthMM != null
+              ? `${measurementLabel}: ${formatLengthMM(lengthMM)} mm`
+              : 'The open trace was preserved, but calibrated physical length was unavailable. It will not overwrite an AR report value.',
+          type: lengthMM != null ? 'success' : 'warning',
+          duration: lengthMM != null ? 6000 : 8000,
+        });
+
+        return nextMeasurement;
+      };
+
+      eventTarget.addEventListener(
+        Enums.Events.ANNOTATION_COMPLETED,
+        bowelCurvedLengthCompletionHandler
+      );
+      window.addEventListener('keydown', bowelCurvedLengthEscapeHandler);
+
+      uiNotificationService.show({
+        title: 'Curved Length',
+        message: `Trace the open path for ${measurementLabel}. Release to finish, keeping the endpoint away from the start so the contour remains open. Press Esc to cancel.`,
+        type: 'info',
+        duration: 8000,
+      });
+
+      return {
+        ok: true,
+        sessionId: workflowSessionId,
+        toolName: freehandToolName,
       };
     },
     setLVTraceMeasurementLabel: async ({ uid } = {}) => {
@@ -8063,7 +9019,12 @@ function commandsModule({
 
         if (measurement) {
           measurementService.remove(measurementId);
-        } else if (sourceAnnotation) {
+        }
+
+        // Viewer-owned LV/LA contours are manually hydrated into Cornerstone and can
+        // outlive their MeasurementService entry. Always remove any remaining source
+        // annotation so delete/recreate cycles cannot accumulate ghost spline geometry.
+        if (annotation.state.getAnnotation?.(measurementId)) {
           annotation.state.removeAnnotation?.(measurementId);
         }
       }
@@ -9965,6 +10926,116 @@ function commandsModule({
         annotations,
       };
     },
+    hydrateSavedViewerAnnotationIfVisibleInActiveViewport: async ({
+      annotation: savedAnnotation,
+      selectAnnotation = false,
+    } = {}) => {
+      const annotationId = getAnnotationId(savedAnnotation);
+
+      if (!annotationId) {
+        return {
+          ok: false,
+          reason: 'missing-annotation-id',
+        };
+      }
+
+      const activeViewportId = viewportGridService.getActiveViewportId();
+      const viewport = cornerstoneViewportService.getCornerstoneViewport(activeViewportId);
+
+      if (!viewport) {
+        return {
+          ok: false,
+          reason: 'viewport-not-found',
+          annotationId,
+        };
+      }
+
+      const match = findImageIdIndexForSavedAnnotation(viewport, savedAnnotation);
+      const currentImageId = String(viewport.getCurrentImageId?.() || '').trim();
+      const currentImageIndex = Number(viewport.getCurrentImageIdIndex?.());
+      const currentImageMatches =
+        match.index >= 0 &&
+        ((Number.isInteger(currentImageIndex) && currentImageIndex === match.index) ||
+          (!!currentImageId &&
+            normalizeImageIdForCompare(currentImageId) ===
+              normalizeImageIdForCompare(match.imageId)));
+
+      if (!currentImageMatches) {
+        return {
+          ok: false,
+          reason: 'saved-image-not-active',
+          annotationId,
+          viewportId: activeViewportId,
+        };
+      }
+
+      const existingAnnotation = cornerstoneTools.annotation.state.getAnnotation?.(annotationId);
+      if (existingAnnotation) {
+        existingAnnotation.isVisible = savedAnnotation.isVisible !== false;
+        existingAnnotation.isLocked = !!savedAnnotation.isLocked;
+
+        try {
+          const { triggerAnnotationRenderForViewportIds } = await import(
+            '@cornerstonejs/tools/utilities'
+          );
+          triggerAnnotationRenderForViewportIds([viewport.id || activeViewportId]);
+        } catch {}
+
+        viewport.render?.();
+
+        return {
+          ok: true,
+          source: 'existing-annotation',
+          annotationId,
+          viewportId: viewport.id || activeViewportId,
+          referencedImageId: match.imageId,
+        };
+      }
+
+      const hydratedAnnotation = hydrateSavedViewerAnnotationForViewport({
+        annotation: savedAnnotation,
+        viewport,
+        viewportId: viewport.id || activeViewportId,
+        referencedImageIdOverride: match.imageId || currentImageId || savedAnnotation.referencedImageId || '',
+        fallbackFrameOfReferenceUID:
+          viewport.getFrameOfReferenceUID?.() || savedAnnotation.FrameOfReferenceUID || '',
+        selectAnnotation,
+      });
+
+      if (!hydratedAnnotation) {
+        return {
+          ok: false,
+          reason: 'annotation-hydration-failed',
+          annotationId,
+          viewportId: viewport.id || activeViewportId,
+        };
+      }
+
+      if (!isCornerstoneOwnedViewerMeasurement(savedAnnotation)) {
+        forceSavedAnnotationDisplayEverywhere({
+          measurementService,
+          savedAnnotation,
+          referencedImageId: match.imageId || currentImageId || savedAnnotation.referencedImageId || '',
+        });
+      }
+
+      try {
+        const { triggerAnnotationRenderForViewportIds } = await import(
+          '@cornerstonejs/tools/utilities'
+        );
+        triggerAnnotationRenderForViewportIds([viewport.id || activeViewportId]);
+      } catch {}
+
+      viewport.render?.();
+
+      return {
+        ok: true,
+        source: 'hydrated-current-image',
+        annotationId,
+        viewportId: viewport.id || activeViewportId,
+        referencedImageId: match.imageId || currentImageId || '',
+      };
+    },
     jumpToSavedViewerAnnotation: async ({
       annotation: savedAnnotation,
       selectAnnotation = true,
@@ -10110,8 +11181,19 @@ function commandsModule({
         ) ||
         viewport;
 
-      const hydratedAnnotation =
-        savedAnnotation.toolName === 'Length'
+      const hydratedAnnotation = isUltrasoundDirectionalViewerMeasurement(savedAnnotation)
+        ? hydrateSavedUltrasoundDirectionalForViewport({
+            savedAnnotation,
+            viewport: hydratedViewport,
+            viewportId: hydratedViewport.id || targetViewportId,
+            referencedImageIdOverride: readyReferencedImageId || actualReferencedImageId || '',
+            fallbackFrameOfReferenceUID:
+              hydratedViewport.getFrameOfReferenceUID?.() ||
+              savedAnnotation.FrameOfReferenceUID ||
+              '',
+            selectAnnotation,
+          })
+        : savedAnnotation.toolName === 'Length'
           ? hydrateSavedLengthAnnotationForActiveViewport({
               annotation: savedAnnotation,
               activeViewportId: hydratedViewport.id || targetViewportId,
@@ -10207,6 +11289,24 @@ function commandsModule({
       }
 
       hydratedViewport.render?.();
+
+      if (isUltrasoundDirectionalViewerMeasurement(savedAnnotation)) {
+        for (const delayMs of [50, 150, 300]) {
+          await sleep(delayMs);
+
+          try {
+            const { triggerAnnotationRenderForViewportIds } = await import(
+              '@cornerstonejs/tools/utilities'
+            );
+
+            triggerAnnotationRenderForViewportIds([hydratedViewport.id || targetViewportId]);
+          } catch (error) {
+            console.warn('[MeasurementAnnotations] directional delayed render failed:', error);
+          }
+
+          hydratedViewport.render?.();
+        }
+      }
 
       if (
         runDelayedDisplayRefresh &&
@@ -10327,8 +11427,17 @@ function commandsModule({
       let hydratedCount = 1;
 
       for (const savedAnnotation of orderedAnnotations.slice(1)) {
-        const hydratedAnnotation =
-          savedAnnotation.toolName === 'Length'
+        const hydratedAnnotation = isUltrasoundDirectionalViewerMeasurement(savedAnnotation)
+          ? hydrateSavedUltrasoundDirectionalForViewport({
+              savedAnnotation,
+              viewport,
+              viewportId: viewport.id || viewportId,
+              referencedImageIdOverride: referencedImageId,
+              fallbackFrameOfReferenceUID:
+                viewport.getFrameOfReferenceUID?.() || savedAnnotation.FrameOfReferenceUID || '',
+              selectAnnotation: false,
+            })
+          : savedAnnotation.toolName === 'Length'
             ? hydrateSavedLengthAnnotationForActiveViewport({
                 annotation: savedAnnotation,
                 activeViewportId: viewport.id || viewportId,
@@ -10893,6 +12002,9 @@ function commandsModule({
     startSpectralDopplerVTIWorkflow: {
       commandFn: actions.startSpectralDopplerVTIWorkflow,
     },
+    startBowelCurvedLengthWorkflow: {
+      commandFn: actions.startBowelCurvedLengthWorkflow,
+    },
     setLVTraceMeasurementLabel: {
       commandFn: actions.setLVTraceMeasurementLabel,
     },
@@ -11211,6 +12323,8 @@ function commandsModule({
         educationAttemptIntent,
         deleteAnnotationIds = [],
         measurementIds = null,
+        previewOnly = false,
+        reportFieldNames = null,
         suppressSuccessNotification = false,
       } = {}) => {
         const { measurementService, uiNotificationService } = servicesManager.services;
@@ -11231,6 +12345,18 @@ function commandsModule({
 
           const isReviewWorkflowSave = isReviewWorkflowMeasurementsSaveTarget(saveTarget);
           const isClinicalReportSave = isClinicalReportMeasurementsSaveTarget(saveTarget);
+
+          if (previewOnly && !isClinicalReportSave) {
+            return {
+              previewOnly: true,
+              isClinicalReportSave: false,
+              saveTarget,
+              fieldNames: [],
+              existingReportValues: {},
+              incomingReportValues: {},
+              reportFieldUpdates: {},
+            };
+          }
 
           const writableWorkflow = getWritableReviewMeasurementWorkflow(saveTarget);
 
@@ -11316,6 +12442,12 @@ function commandsModule({
               studyInstanceUID: String(seriesDoc?.StudyInstanceUID || ''),
               excludedMeasurementIds: viewerMeasurementsDeletedInSession,
             }),
+            ...(isClinicalReportSave
+              ? getCornerstoneBowelCurvedLengthMeasurementFallbacks({
+                  studyInstanceUID: String(seriesDoc?.StudyInstanceUID || ''),
+                  excludedMeasurementIds: viewerMeasurementsDeletedInSession,
+                })
+              : []),
           ];
           const measurements = getCurrentViewerMeasurementSnapshot(
             measurementService,
@@ -11400,18 +12532,31 @@ function commandsModule({
 
           let annotations = liveAnnotations;
 
-          if (isReviewWorkflowSave) {
+          if (isReviewWorkflowSave || isClinicalReportSave) {
             const annotationsById = new Map();
 
-            // Preserve writable saved annotations that are currently on other
-            // images and therefore may not be hydrated in MeasurementService.
+            // Preserve saved annotations that are currently on other images or
+            // have not yet been hydrated into MeasurementService. Clinical
+            // reports need the same protection as review workflows; otherwise a
+            // reopened viewer can incorrectly report that there is nothing to
+            // save even though the persisted panel contains valid annotations.
             for (const existingAnnotation of existingById.values()) {
               const existingAnnotationId = getMeasurementAnnotationId(existingAnnotation);
 
+              if (!existingAnnotationId) {
+                continue;
+              }
+
               if (
-                !existingAnnotationId ||
-                !writableExistingMeasurementIds.has(existingAnnotationId) ||
-                viewerMeasurementsDeletedInSession.has(existingAnnotationId)
+                viewerMeasurementsDeletedInSession.has(existingAnnotationId) ||
+                explicitDeleteIds.has(existingAnnotationId)
+              ) {
+                continue;
+              }
+
+              if (
+                isReviewWorkflowSave &&
+                !writableExistingMeasurementIds.has(existingAnnotationId)
               ) {
                 continue;
               }
@@ -11486,6 +12631,7 @@ function commandsModule({
           let savedSeriesDoc = seriesDoc;
           let refreshedAnnotations = annotations;
           let clinicalReportFieldUpdates: Record<string, any> = {};
+          let clinicalReportApprovedFieldNames: string[] | null = null;
 
           if (isReviewWorkflowSave) {
             const workflowType = encodeURIComponent(saveTarget.reviewWorkflowType);
@@ -11618,14 +12764,75 @@ function commandsModule({
                   updatedFields: clinicalReportFieldUpdates,
                 });
               }
+
+              if (previewOnly) {
+                const previewPayload = {
+                  accessType: 'update',
+                  viewerMeasurementIntent: 'clinical-report',
+                  viewerMeasurementReviewOnly: true,
+                  viewerReportFieldUpdates: clinicalReportFieldUpdates,
+                  MeasurementAnnotations: nextMeasurementAnnotations,
+                  scoringIntent: shouldSubmitForScore ? 'score-attempt' : 'draft',
+                  educationAttemptIntent: shouldSubmitForScore ? 'score-attempt' : 'draft',
+                };
+
+                const previewResponse = await fetch(
+                  buildFormApiUrl(`series/${seriesDoc._id}`),
+                  buildFormApiFetchOptions({
+                    method: 'PUT',
+                    body: JSON.stringify(previewPayload),
+                  })
+                );
+
+                if (!previewResponse.ok) {
+                  const message = await getResponseErrorMessage(
+                    previewResponse,
+                    `Measurement review failed: ${previewResponse.status}`
+                  );
+                  throw new Error(message);
+                }
+
+                const serverPreview = await previewResponse.json().catch(() => null);
+
+                if (!serverPreview?.reviewOnly) {
+                  throw new Error('FormAPI did not return a clinical measurement review preview.');
+                }
+
+                return {
+                  ...serverPreview,
+                  previewOnly: true,
+                  isClinicalReportSave: true,
+                  seriesDoc,
+                  saveTarget,
+                  domain,
+                  annotations: reportAnnotations,
+                  reportFieldUpdates: clinicalReportFieldUpdates,
+                  reviewItems: Array.isArray(serverPreview?.items) ? serverPreview.items : [],
+                };
+              }
+
+              if (Array.isArray(reportFieldNames)) {
+                clinicalReportApprovedFieldNames = Array.from(
+                  new Set(
+                    reportFieldNames
+                      .map(fieldName => String(fieldName || '').trim())
+                      .filter(fieldName => /^[A-Za-z][A-Za-z0-9_]*$/.test(fieldName))
+                  )
+                );
+              }
             }
 
             const payload = {
               accessType: 'update',
               ...(isClinicalReportSave
-                ? { viewerMeasurementIntent: 'clinical-report' }
+                ? {
+                    viewerMeasurementIntent: 'clinical-report',
+                    viewerReportFieldUpdates: clinicalReportFieldUpdates,
+                    ...(clinicalReportApprovedFieldNames !== null
+                      ? { viewerMeasurementApprovedFields: clinicalReportApprovedFieldNames }
+                      : {}),
+                  }
                 : {}),
-              ...clinicalReportFieldUpdates,
               MeasurementAnnotations: nextMeasurementAnnotations,
               scoringIntent: shouldSubmitForScore ? 'score-attempt' : 'draft',
               educationAttemptIntent: shouldSubmitForScore ? 'score-attempt' : 'draft',
@@ -11892,6 +13099,9 @@ function commandsModule({
     },
     getViewerMeasurementAnnotationsForActiveStudy: {
       commandFn: actions.getViewerMeasurementAnnotationsForActiveStudy,
+    },
+    hydrateSavedViewerAnnotationIfVisibleInActiveViewport: {
+      commandFn: actions.hydrateSavedViewerAnnotationIfVisibleInActiveViewport,
     },
     jumpToSavedViewerAnnotation: {
       commandFn: actions.jumpToSavedViewerAnnotation,

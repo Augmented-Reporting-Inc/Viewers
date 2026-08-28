@@ -1,4 +1,9 @@
 import { SPECTRAL_DOPPLER_MEASUREMENT_KIND } from './spectralDoppler';
+import {
+  BOWEL_STRAIGHT_LENGTH_MEASUREMENT_KIND,
+  BOWEL_VIEWER_REPORT_TARGETS,
+  findBowelMeasurementTarget,
+} from '../../../extension-ar-measurements/src/utils/bowelMeasurementTargets';
 
 export type ViewerReportMapping = {
   targetKey: string;
@@ -9,9 +14,9 @@ export type ViewerReportMapping = {
 type ViewerReportTargetDefinition = {
   key: string;
   label: string;
-  measurementKind: string;
+  measurementKinds: readonly string[];
   valueField: string;
-  uomField: string;
+  uomField?: string;
   uom: string;
   valuePath: readonly string[];
   formatValue: (value: number) => string;
@@ -33,11 +38,20 @@ function formatVtiCentimeters(value: number) {
   return value >= 100 ? value.toFixed(0) : value.toFixed(1);
 }
 
-const VIEWER_REPORT_TARGET_DEFINITIONS: readonly ViewerReportTargetDefinition[] = Object.freeze([
+function formatBowelLengthFromMillimeters(value: number, uom: 'mm' | 'cm', decimals: number) {
+  if (!Number.isFinite(value) || value <= 0) {
+    return '';
+  }
+
+  const converted = uom === 'cm' ? value / 10 : value;
+  return converted.toFixed(decimals);
+}
+
+const ECHO_VIEWER_REPORT_TARGET_DEFINITIONS: readonly ViewerReportTargetDefinition[] = Object.freeze([
   {
     key: 'echo.lvotVti',
     label: 'LVOT VTI',
-    measurementKind: SPECTRAL_DOPPLER_MEASUREMENT_KIND,
+    measurementKinds: [SPECTRAL_DOPPLER_MEASUREMENT_KIND],
     valueField: 'LVOTVTI',
     uomField: 'LVOTVTIUOM',
     uom: 'cm',
@@ -47,7 +61,7 @@ const VIEWER_REPORT_TARGET_DEFINITIONS: readonly ViewerReportTargetDefinition[] 
   {
     key: 'echo.avVti',
     label: 'AV VTI',
-    measurementKind: SPECTRAL_DOPPLER_MEASUREMENT_KIND,
+    measurementKinds: [SPECTRAL_DOPPLER_MEASUREMENT_KIND],
     valueField: 'AVVTI',
     uomField: 'AVVTIUOM',
     uom: 'cm',
@@ -57,7 +71,7 @@ const VIEWER_REPORT_TARGET_DEFINITIONS: readonly ViewerReportTargetDefinition[] 
   {
     key: 'echo.pvVti',
     label: 'PV VTI',
-    measurementKind: SPECTRAL_DOPPLER_MEASUREMENT_KIND,
+    measurementKinds: [SPECTRAL_DOPPLER_MEASUREMENT_KIND],
     valueField: 'PVVTI',
     uomField: 'PVVTIUOM',
     uom: 'cm',
@@ -67,7 +81,7 @@ const VIEWER_REPORT_TARGET_DEFINITIONS: readonly ViewerReportTargetDefinition[] 
   {
     key: 'echo.arVti',
     label: 'AR VTI',
-    measurementKind: SPECTRAL_DOPPLER_MEASUREMENT_KIND,
+    measurementKinds: [SPECTRAL_DOPPLER_MEASUREMENT_KIND],
     valueField: 'ARVTI',
     uomField: 'ARVTIUOM',
     uom: 'cm',
@@ -77,7 +91,7 @@ const VIEWER_REPORT_TARGET_DEFINITIONS: readonly ViewerReportTargetDefinition[] 
   {
     key: 'echo.mvTvi',
     label: 'MV TVI',
-    measurementKind: SPECTRAL_DOPPLER_MEASUREMENT_KIND,
+    measurementKinds: [SPECTRAL_DOPPLER_MEASUREMENT_KIND],
     valueField: 'MVTVI',
     uomField: 'MVTVIUOM',
     uom: 'cm',
@@ -86,13 +100,32 @@ const VIEWER_REPORT_TARGET_DEFINITIONS: readonly ViewerReportTargetDefinition[] 
   },
 ]);
 
+const BOWEL_VIEWER_REPORT_TARGET_DEFINITIONS: readonly ViewerReportTargetDefinition[] = Object.freeze(
+  BOWEL_VIEWER_REPORT_TARGETS.map(target => ({
+    key: target.key,
+    label: target.label,
+    measurementKinds: target.measurementKinds,
+    valueField: target.valueField,
+    uomField: target.uomField,
+    uom: target.uom,
+    valuePath: ['measurements', 'length'],
+    formatValue: (value: number) =>
+      formatBowelLengthFromMillimeters(value, target.uom, target.decimals),
+  }))
+);
+
+const VIEWER_REPORT_TARGET_DEFINITIONS: readonly ViewerReportTargetDefinition[] = Object.freeze([
+  ...ECHO_VIEWER_REPORT_TARGET_DEFINITIONS,
+  ...BOWEL_VIEWER_REPORT_TARGET_DEFINITIONS,
+]);
+
 const VIEWER_REPORT_TARGET_BY_KEY = new Map(
   VIEWER_REPORT_TARGET_DEFINITIONS.map(definition => [definition.key, definition])
 );
 
 const SPECTRAL_DOPPLER_VTI_TARGET_KEYS = new Set(
-  VIEWER_REPORT_TARGET_DEFINITIONS.filter(
-    definition => definition.measurementKind === SPECTRAL_DOPPLER_MEASUREMENT_KIND
+  ECHO_VIEWER_REPORT_TARGET_DEFINITIONS.filter(definition =>
+    definition.measurementKinds.includes(SPECTRAL_DOPPLER_MEASUREMENT_KIND)
   ).map(definition => definition.key)
 );
 
@@ -109,7 +142,7 @@ function normalizeTargetLabelText(value: unknown) {
   return String(value || '')
     .trim()
     .toLowerCase()
-    .replace(/[–—-]/g, ' ')
+    .replace(/[–—_-]/g, ' ')
     .replace(/\s+/g, ' ');
 }
 
@@ -118,13 +151,27 @@ function getValueAtPath(source: any, path: readonly string[]) {
 }
 
 function getAnnotationMeasurementKind(annotation: any = {}) {
-  return String(
+  const explicitKind = String(
     annotation?.measurementKind ||
       annotation?.measurements?.measurementKind ||
       annotation?.spectralDoppler?.measurementKind ||
       annotation?.measurements?.spectralDoppler?.measurementKind ||
       ''
   ).trim();
+
+  if (explicitKind) {
+    return explicitKind;
+  }
+
+  if (
+    String(annotation?.toolName || '') === 'Length' ||
+    annotation?.measurements?.length != null ||
+    annotation?.length != null
+  ) {
+    return BOWEL_STRAIGHT_LENGTH_MEASUREMENT_KIND;
+  }
+
+  return '';
 }
 
 function getAnnotationReportMapping(annotation: any = {}): ViewerReportMapping | null {
@@ -164,8 +211,15 @@ function getMappingAssignedAtMs(mapping: ViewerReportMapping | null) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function definitionAcceptsMeasurementKind(
+  definition: ViewerReportTargetDefinition,
+  measurementKind = ''
+) {
+  return definition.measurementKinds.includes(String(measurementKind || '').trim());
+}
+
 export function getSpectralDopplerVtiTargetOptions({ includeGeneric = false } = {}) {
-  const options = VIEWER_REPORT_TARGET_DEFINITIONS.filter(definition =>
+  const options = ECHO_VIEWER_REPORT_TARGET_DEFINITIONS.filter(definition =>
     SPECTRAL_DOPPLER_VTI_TARGET_KEYS.has(definition.key)
   ).map(definition => ({
     value: definition.key,
@@ -210,7 +264,7 @@ export function normalizeSpectralDopplerVtiTargetSelection(
     return { ...GENERIC_SPECTRAL_DOPPLER_VTI_TARGET, reportMapped: false };
   }
 
-  const labelMatch = VIEWER_REPORT_TARGET_DEFINITIONS.find(
+  const labelMatch = ECHO_VIEWER_REPORT_TARGET_DEFINITIONS.find(
     definition =>
       SPECTRAL_DOPPLER_VTI_TARGET_KEYS.has(definition.key) &&
       normalizeTargetLabelText(definition.label) === normalizedLabel
@@ -239,6 +293,50 @@ export function buildViewerReportMapping(target: any): ViewerReportMapping | nul
   };
 }
 
+export function buildViewerReportMappingForMeasurement({
+  domain = '',
+  label = '',
+  measurementKind = '',
+} = {}): ViewerReportMapping | null {
+  if (String(domain || '').trim().toLowerCase() !== 'bowel') {
+    return null;
+  }
+
+  const target = findBowelMeasurementTarget({
+    label,
+    measurementKind,
+  });
+
+  return target ? buildViewerReportMapping(target) : null;
+}
+
+export function getViewerReportTargetKeyForMeasurement(measurement: any = {}) {
+  const explicitMapping = getAnnotationReportMapping(measurement);
+  const measurementKind = getAnnotationMeasurementKind(measurement);
+
+  if (explicitMapping) {
+    const definition = VIEWER_REPORT_TARGET_BY_KEY.get(explicitMapping.targetKey);
+
+    if (definition && definitionAcceptsMeasurementKind(definition, measurementKind)) {
+      return definition.key;
+    }
+  }
+
+  const domain = String(measurement?.domain || '').trim().toLowerCase();
+
+  if (domain !== 'bowel') {
+    return '';
+  }
+
+  const target = findBowelMeasurementTarget({
+    label:
+      measurement?.label || measurement?.measurementRole || measurement?.role || '',
+    measurementKind,
+  });
+
+  return target?.key || '';
+}
+
 export function buildViewerReportFieldUpdates(annotations: any[] = []) {
   const latestByTarget = new Map<
     string,
@@ -251,17 +349,23 @@ export function buildViewerReportFieldUpdates(annotations: any[] = []) {
   >();
 
   (Array.isArray(annotations) ? annotations : []).forEach((annotation, index) => {
-    const mapping = getAnnotationReportMapping(annotation);
+    const measurementKind = getAnnotationMeasurementKind(annotation);
+    let mapping = getAnnotationReportMapping(annotation);
+
+    if (!mapping && String(annotation?.domain || '').trim().toLowerCase() === 'bowel') {
+      mapping = buildViewerReportMappingForMeasurement({
+        domain: 'bowel',
+        label: annotation?.label || annotation?.measurementRole || annotation?.role || '',
+        measurementKind,
+      });
+    }
+
     if (!mapping) {
       return;
     }
 
     const definition = VIEWER_REPORT_TARGET_BY_KEY.get(mapping.targetKey);
-    if (!definition) {
-      return;
-    }
-
-    if (getAnnotationMeasurementKind(annotation) !== definition.measurementKind) {
+    if (!definition || !definitionAcceptsMeasurementKind(definition, measurementKind)) {
       return;
     }
 
@@ -269,13 +373,16 @@ export function buildViewerReportFieldUpdates(annotations: any[] = []) {
       annotation?.spectralDoppler || annotation?.measurements?.spectralDoppler || null;
 
     if (
-      definition.measurementKind === SPECTRAL_DOPPLER_MEASUREMENT_KIND &&
+      definition.measurementKinds.includes(SPECTRAL_DOPPLER_MEASUREMENT_KIND) &&
       String(spectralDoppler?.status || '').trim() !== 'complete'
     ) {
       return;
     }
 
-    const rawValue = getValueAtPath(getAnnotationMappingValueSource(annotation), definition.valuePath);
+    const rawValue = getValueAtPath(
+      getAnnotationMappingValueSource(annotation),
+      definition.valuePath
+    );
     const value = Number(rawValue);
 
     if (!Number.isFinite(value) || value <= 0) {
@@ -311,7 +418,9 @@ export function buildViewerReportFieldUpdates(annotations: any[] = []) {
     }
 
     updates[definition.valueField] = formattedValue;
-    updates[definition.uomField] = definition.uom;
+    if (definition.uomField) {
+      updates[definition.uomField] = definition.uom;
+    }
   }
 
   return updates;

@@ -7,90 +7,10 @@ import {
 import { id } from './id';
 import initToolGroups from './initToolGroups';
 import toolbarButtons from './toolbarButtons';
-
-const ECHO_LENGTH_MEASUREMENT_LABELS_CONFIG = {
-  id: 'echoLengthMeasurementLabels',
-  domain: 'echo',
-  dialogTitle: 'Echo Annotation',
-  annotationTitle: 'Echo Annotation',
-  labelOnMeasure: true,
-  exclusive: true,
-  items: [
-    { value: 'LVIDd', label: 'LVIDd' },
-    { value: 'LVIDs', label: 'LVIDs' },
-    { value: 'IVSd', label: 'IVSd' },
-    { value: 'PWd', label: 'PWd' },
-    { value: 'AO', label: 'Aortic root' },
-    { value: 'AscAo', label: 'Ascending aorta' },
-    { value: 'LVOTDiam', label: 'LVOT diameter' },
-    { value: 'LAd', label: 'Left atrial dimension' },
-    { value: 'RVIDd', label: 'RVIDd' },
-    { value: 'TAPSE', label: 'TAPSE' },
-  ],
-};
-
-const BOWEL_LENGTH_MEASUREMENT_LABELS_CONFIG = {
-  id: 'bowelLengthMeasurementLabels',
-  domain: 'bowel',
-  dialogTitle: 'Bowel Annotation',
-  annotationTitle: 'Bowel Annotation',
-  labelOnMeasure: true,
-  exclusive: true,
-  items: [
-    { value: 'BowelRectumBWT', label: 'Rectum BWT' },
-    { value: 'BowelSigmoidColonBWT', label: 'Sigmoid colon BWT' },
-    { value: 'BowelDescendingColonBWT', label: 'Descending colon BWT' },
-    { value: 'BowelTransverseColonBWT', label: 'Transverse colon BWT' },
-    { value: 'BowelAscendingColonBWT', label: 'Ascending colon BWT' },
-    { value: 'BowelCecumBWT', label: 'Cecum BWT' },
-    { value: 'BowelTerminalIleumBWT', label: 'Terminal ileum BWT' },
-    { value: 'BowelIleocolicAnastomosisBWT', label: 'Ileocolic anastomosis BWT' },
-    { value: 'BowelNeoTerminalIleumBWT', label: 'Neo-terminal ileum BWT' },
-  ],
-};
-
-function getViewerMeasurementDomainFromPath() {
-  const params = getViewerUrlSearchParams();
-
-  const integration = String(params.get('arIntegration') || '')
-    .trim()
-    .toLowerCase();
-
-  if (integration === 'iuscan') {
-    return 'bowel';
-  }
-
-  const explicitDomain = String(
-    params.get('arMeasurementDomain') ||
-      params.get('arViewerDomain') ||
-      params.get('viewerDomain') ||
-      ''
-  )
-    .trim()
-    .toLowerCase();
-
-  if (['iuscan', 'bowel', 'echo', 'generic'].includes(explicitDomain)) {
-    return explicitDomain === 'iuscan' ? 'bowel' : explicitDomain;
-  }
-
-  const path = String(window.location?.pathname || '').toLowerCase();
-
-  if (path.includes('/bviewer/iuscan')) {
-    return 'bowel';
-  }
-
-  if (path.includes('/bviewer')) {
-    return 'bowel';
-  }
-
-  if (path.includes('/rviewer') || path.includes('/stressecho') || path.includes('/dobutamine')) {
-    return 'echo';
-  }
-
-  // The generic local longitudinal route is Echo unless the URL explicitly
-  // identifies a bowel or iUSCAN session.
-  return 'echo';
-}
+import {
+  getMeasurementLabelConfigForDomain,
+  getViewerMeasurementDomainFromPath,
+} from '../../../extensions/extension-ar-measurements/src/utils/measurementLabelConfig';
 
 function getViewerUrlSearchParams() {
   const params = new URLSearchParams();
@@ -710,7 +630,13 @@ const BASE_MEASUREMENT_TOOL_IDS = [
   'CircleROI',
 ];
 
-const ECHO_ONLY_MEASUREMENT_TOOL_IDS = ['LVSimpsonEF', 'LAVolume', 'SpectralDopplerVTI'];
+const ECHO_ONLY_MEASUREMENT_TOOL_IDS = [
+  'LVSimpsonEF',
+  'LAVolume',
+  'SpectralDopplerVTI',
+  'UltrasoundDirectionalTool',
+];
+const BOWEL_ONLY_MEASUREMENT_TOOL_IDS = ['BowelCurvedLength'];
 const ULTRASOUND_DIRECTIONAL_TOOL_NAME = 'UltrasoundDirectionalTool';
 const AR_LIVE_MEASUREMENTS_REFRESH_EVENT = 'ar-measurements:live-measurements-updated';
 
@@ -725,6 +651,7 @@ function getPrimaryToolbarIdsForDomain(domain, measurementToolsReadOnly) {
     'MeasurementTools',
     ...(measurementToolsReadOnly ? [] : ['ArrowAnnotate']),
     ...(measurementToolsReadOnly || domain !== 'echo' ? [] : ECHO_ONLY_MEASUREMENT_TOOL_IDS),
+    ...(measurementToolsReadOnly || domain !== 'bowel' ? [] : BOWEL_ONLY_MEASUREMENT_TOOL_IDS),
     'Zoom',
     'Pan',
     'TrackballRotate',
@@ -736,6 +663,49 @@ function getPrimaryToolbarIdsForDomain(domain, measurementToolsReadOnly) {
     'Next',
     'Crosshairs',
     'MoreTools',
+  ];
+}
+
+function getMoreToolIdsForDomain(domain, measurementToolsReadOnly) {
+  const commonToolIds = [
+    'Reset',
+    'rotate-right',
+    'flipHorizontal',
+    'ImageSliceSync',
+    'ReferenceLines',
+    'ImageOverlayViewer',
+    'StackScroll',
+    'invert',
+    'Cine',
+    'Magnify',
+    'TagBrowser',
+    'AdvancedMagnify',
+  ];
+
+  if (measurementToolsReadOnly) {
+    return commonToolIds;
+  }
+
+  return [
+    'Reset',
+    'rotate-right',
+    'flipHorizontal',
+    'ImageSliceSync',
+    'ReferenceLines',
+    'ImageOverlayViewer',
+    'StackScroll',
+    'invert',
+    'Probe',
+    'Cine',
+    'Angle',
+    'CobbAngle',
+    'Magnify',
+    'CalibrationLine',
+    'TagBrowser',
+    'AdvancedMagnify',
+    ...(domain === 'echo' ? [] : ['UltrasoundDirectionalTool']),
+    'WindowLevelRegion',
+    'SegmentLabelTool',
   ];
 }
 
@@ -752,7 +722,7 @@ async function resolveViewerMeasurementDomain(commandsManager) {
     console.warn('[AR Measurements] could not resolve measurement domain:', error);
   }
 
-  return getViewerMeasurementDomainFromPath();
+  return getViewerMeasurementDomainFromPath({ fallback: 'echo' });
 }
 
 async function getLabelConfigForMeasurement(measurement, commandsManager) {
@@ -779,27 +749,18 @@ async function getLabelConfigForMeasurement(measurement, commandsManager) {
     console.warn('[AR Measurements] could not resolve Length label mode:', error);
   }
 
-  if (domain === 'iuscan') {
+  const labelConfig = getMeasurementLabelConfigForDomain(domain);
+
+  if (!labelConfig) {
     return null;
   }
 
-  if (domain === 'bowel') {
-    return {
-      title: 'Set Bowel Measurement',
-      placeholder: 'Choose bowel measurement',
-      labelConfigOverride: BOWEL_LENGTH_MEASUREMENT_LABELS_CONFIG,
-    };
-  }
-
-  if (domain === 'echo') {
-    return {
-      title: 'Set Echo Measurement',
-      placeholder: 'Choose echo measurement',
-      labelConfigOverride: ECHO_LENGTH_MEASUREMENT_LABELS_CONFIG,
-    };
-  }
-
-  return null;
+  return {
+    title: domain === 'bowel' ? 'Set Bowel Measurement' : 'Set Echo Measurement',
+    placeholder:
+      domain === 'bowel' ? 'Choose bowel measurement' : 'Choose echo measurement',
+    labelConfigOverride: labelConfig,
+  };
 }
 
 async function waitForViewerMeasurementServiceEntry(
@@ -1126,7 +1087,7 @@ function modeFactory({ modeConfiguration }) {
       toolbarService.register(toolbarButtons);
 
       const measurementToolsReadOnly = isViewerMeasurementReadOnlyFromUrl();
-      const initialMeasurementDomain = getViewerMeasurementDomainFromPath();
+      const initialMeasurementDomain = getViewerMeasurementDomainFromPath({ fallback: 'echo' });
 
       toolbarService.updateSection(
         toolbarService.sections.primary,
@@ -1176,6 +1137,10 @@ function modeFactory({ modeConfiguration }) {
             'MeasurementTools',
             measurementToolsReadOnly ? [] : getMeasurementToolIdsForDomain()
           );
+          toolbarService.updateSection(
+            'MoreTools',
+            getMoreToolIdsForDomain(measurementDomain, measurementToolsReadOnly)
+          );
         })
         .catch(error => {
           console.warn('[AR Measurements] could not refresh measurement tools:', error);
@@ -1183,42 +1148,7 @@ function modeFactory({ modeConfiguration }) {
 
       toolbarService.updateSection(
         'MoreTools',
-        measurementToolsReadOnly
-          ? [
-              'Reset',
-              'rotate-right',
-              'flipHorizontal',
-              'ImageSliceSync',
-              'ReferenceLines',
-              'ImageOverlayViewer',
-              'StackScroll',
-              'invert',
-              'Cine',
-              'Magnify',
-              'TagBrowser',
-              'AdvancedMagnify',
-            ]
-          : [
-              'Reset',
-              'rotate-right',
-              'flipHorizontal',
-              'ImageSliceSync',
-              'ReferenceLines',
-              'ImageOverlayViewer',
-              'StackScroll',
-              'invert',
-              'Probe',
-              'Cine',
-              'Angle',
-              'CobbAngle',
-              'Magnify',
-              'CalibrationLine',
-              'TagBrowser',
-              'AdvancedMagnify',
-              'UltrasoundDirectionalTool',
-              'WindowLevelRegion',
-              'SegmentLabelTool',
-            ]
+        getMoreToolIdsForDomain(initialMeasurementDomain, measurementToolsReadOnly)
       );
 
       customizationService.setCustomizations(

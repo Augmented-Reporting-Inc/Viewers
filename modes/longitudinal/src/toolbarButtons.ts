@@ -618,6 +618,18 @@ const toolbarButtons: Button[] = [
     },
   },
   {
+    id: 'BowelCurvedLength',
+    uiType: 'ohif.toolButton',
+    props: {
+      icon: 'icon-tool-freehand-roi',
+      label: 'Curved Length',
+      tooltip:
+        'Trace an open bowel path to measure calibrated curved length. Release to finish; keep the endpoint away from the start so the contour stays open. Press Esc to cancel.',
+      commands: 'startBowelCurvedLengthWorkflow',
+      evaluate: 'evaluate.action',
+    },
+  },
+  {
     id: 'PlanarFreehandROI',
     uiType: 'ohif.toolButton',
     props: {

@@ -1,7 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { calculateLVSimpson, LV_SIMPSON_SLOT_ORDER } from '../utils/lvSimpson';
 import { calculateLAVolume, LA_VOLUME_SLOT_ORDER } from '../utils/laVolume';
 import { getViewerMeasurementDomainFromPath } from '../utils/measurementLabelConfig';
+import { BOWEL_CURVED_LENGTH_MEASUREMENT_KIND } from '../utils/bowelMeasurementTargets';
 
 const ULTRASOUND_DIRECTIONAL_TOOL_NAME = 'UltrasoundDirectionalTool';
 const CLINICAL_REPORT_MEASUREMENTS_SAVE_TARGET = 'clinicalReportMeasurements';
@@ -254,7 +256,19 @@ function getMeasurementValue(measurement) {
   return '';
 }
 
+function isBowelCurvedLengthMeasurement(measurement) {
+  const measurementKind = String(
+    measurement?.measurementKind || measurement?.measurements?.measurementKind || ''
+  ).trim();
+
+  return measurementKind === BOWEL_CURVED_LENGTH_MEASUREMENT_KIND;
+}
+
 function isAreaMeasurement(measurement) {
+  if (isBowelCurvedLengthMeasurement(measurement)) {
+    return false;
+  }
+
   const toolName = String(measurement?.toolName || '');
   return (
     /ROI|Contour|Spline|Freehand/i.test(toolName) ||
@@ -862,13 +876,324 @@ function isClinicalReportMeasurementsTarget(saveTarget: any = {}) {
   );
 }
 
-function confirmArReportMeasurementOverwrite(saveTarget: any = {}) {
-  if (!isClinicalReportMeasurementsTarget(saveTarget)) {
+const CLINICAL_REPORT_REVIEW_PREFERENCE_KEY =
+  'ar.viewerMeasurements.reviewClinicalReportBeforeSave';
+
+function getClinicalReportReviewPreference() {
+  if (typeof window === 'undefined') {
     return true;
   }
 
-  return window.confirm(
-    'Saving these measurements will overwrite the corresponding mapped measurement values in the AR report. Continue?'
+  try {
+    return window.localStorage.getItem(CLINICAL_REPORT_REVIEW_PREFERENCE_KEY) !== 'false';
+  } catch {
+    return true;
+  }
+}
+
+function setClinicalReportReviewPreference(value) {
+  try {
+    window.localStorage.setItem(CLINICAL_REPORT_REVIEW_PREFERENCE_KEY, value ? 'true' : 'false');
+  } catch {}
+}
+
+function areClinicalReportValuesEqual(left, right) {
+  if (Object.is(left, right)) {
+    return true;
+  }
+
+  if (left && right && typeof left === 'object' && typeof right === 'object') {
+    try {
+      return JSON.stringify(left) === JSON.stringify(right);
+    } catch {
+      return false;
+    }
+  }
+
+  return false;
+}
+
+function formatClinicalReportFieldLabel(fieldName = '') {
+  const value = String(fieldName || '').trim();
+
+  if (!value) {
+    return 'Measurement';
+  }
+
+  return value
+    .replace(/_/g, ' ')
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function formatClinicalReportValue(value) {
+  if (value === null || typeof value === 'undefined' || value === '') {
+    return '—';
+  }
+
+  if (typeof value === 'boolean') {
+    return value ? 'Yes' : 'No';
+  }
+
+  if (Array.isArray(value)) {
+    return value.length ? value.map(formatClinicalReportValue).join(', ') : '—';
+  }
+
+  if (typeof value === 'object') {
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return String(value);
+    }
+  }
+
+  return String(value);
+}
+
+function buildClinicalReportReviewRows(preview: any = {}) {
+  const hasAuthoritativeServerItems = Array.isArray(preview?.items);
+  const serverItems = hasAuthoritativeServerItems
+    ? preview.items
+    : Array.isArray(preview?.reviewItems)
+      ? preview.reviewItems
+      : [];
+
+  // Current FormAPI always returns an explicit `items` array for clinical
+  // measurement review, including [] when nothing differs. Treat that empty
+  // array as authoritative. Falling through to the compatibility mapper in
+  // that case rebuilds rows from viewerReportFieldUpdates without an existing
+  // value map and falsely presents every current measurement as a new change.
+  if (hasAuthoritativeServerItems || serverItems.length > 0) {
+    return serverItems
+      .map((item, index) => {
+        const fieldNames = Array.from(
+          new Set(
+            (Array.isArray(item?.fields) ? item.fields : [])
+              .map(fieldName => String(fieldName || '').trim())
+              .filter(fieldName => /^[A-Za-z][A-Za-z0-9_]*$/.test(fieldName))
+          )
+        );
+        const key = String(item?.key || fieldNames.join('|') || `review-${index}`).trim();
+
+        if (!key || fieldNames.length === 0) {
+          return null;
+        }
+
+        return {
+          key,
+          fieldNames,
+          label:
+            String(item?.label || '').trim() ||
+            formatClinicalReportFieldLabel(fieldNames[0] || key),
+          existingValue: item?.existingValue,
+          incomingValue: item?.incomingValue,
+          changed: true,
+          isNew: item?.isNew === true,
+        };
+      })
+      .filter(Boolean);
+  }
+
+  // Compatibility fallback for an older FormAPI: pair a value with its UOM so
+  // a unit is never shown as a separate report choice.
+  const incomingValues =
+    preview?.incomingReportValues && typeof preview.incomingReportValues === 'object'
+      ? preview.incomingReportValues
+      : preview?.reportFieldUpdates && typeof preview.reportFieldUpdates === 'object'
+        ? preview.reportFieldUpdates
+        : {};
+  const existingValues =
+    preview?.existingReportValues && typeof preview.existingReportValues === 'object'
+      ? preview.existingReportValues
+      : {};
+  const consumed = new Set<string>();
+  const rows: any[] = [];
+
+  for (const fieldName of Object.keys(incomingValues)) {
+    if (consumed.has(fieldName) || /UOM$/i.test(fieldName)) {
+      continue;
+    }
+
+    const uomFieldName = `${fieldName}UOM`;
+    const hasUom = Object.prototype.hasOwnProperty.call(incomingValues, uomFieldName);
+    const fieldNames = hasUom ? [fieldName, uomFieldName] : [fieldName];
+    const existingValue = hasUom
+      ? [existingValues[fieldName], existingValues[uomFieldName]].filter(Boolean).join(' ')
+      : existingValues[fieldName];
+    const incomingValue = hasUom
+      ? [incomingValues[fieldName], incomingValues[uomFieldName]].filter(Boolean).join(' ')
+      : incomingValues[fieldName];
+
+    fieldNames.forEach(candidate => consumed.add(candidate));
+    rows.push({
+      key: fieldName,
+      fieldNames,
+      label: formatClinicalReportFieldLabel(fieldName),
+      existingValue,
+      incomingValue,
+      changed: !areClinicalReportValuesEqual(existingValue, incomingValue),
+    });
+  }
+
+  return rows;
+}
+
+function hasClinicalReportDerivedConsequences(review: any = {}) {
+  const consequences = review?.derivedConsequences;
+
+  if (Array.isArray(consequences)) {
+    return consequences.length > 0;
+  }
+
+  return !!(
+    consequences &&
+    typeof consequences === 'object' &&
+    Object.keys(consequences).length > 0
+  );
+}
+
+function ClinicalReportMeasurementReviewModal({
+  review,
+  selectedRowKeys = [],
+  showReviewBeforeSave,
+  isSaving,
+  onToggleRow,
+  onToggleAll,
+  onPreferenceChange,
+  onCancel,
+  onApply,
+}) {
+  if (!review || typeof document === 'undefined') {
+    return null;
+  }
+
+  const rows = Array.isArray(review.rows) ? review.rows : [];
+  const selected = new Set(selectedRowKeys);
+  const allSelected = rows.length > 0 && rows.every(row => selected.has(row.key));
+  const hasDerivedConsequences = hasClinicalReportDerivedConsequences(review);
+
+  return createPortal(
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      style={{ backgroundColor: 'rgba(0, 0, 0, 0.82)' }}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="ar-viewer-measurement-review-title"
+    >
+      <div
+        className="flex max-h-[88vh] w-full max-w-4xl flex-col overflow-hidden rounded-lg border border-gray-600 text-white shadow-2xl"
+        style={{ backgroundColor: '#111827' }}
+      >
+        <div className="border-b border-gray-700 p-4">
+          <div id="ar-viewer-measurement-review-title" className="text-lg font-semibold">
+            Review Viewer Measurements
+          </div>
+          <div className="mt-1 text-sm text-gray-300">
+            Select the viewer measurements that should replace values in the AR report. Units are
+            shown with their measurements. Viewer annotations are saved even when a report value is
+            not selected.
+          </div>
+          {hasDerivedConsequences ? (
+            <div className="mt-2 text-xs text-gray-400">
+              AR will also recalculate dependent indexed values from any selected source
+              measurements.
+            </div>
+          ) : null}
+        </div>
+
+        <div className="flex items-center justify-between gap-3 border-b border-gray-800 px-4 py-3">
+          <div className="text-sm text-gray-300">
+            {selected.size} of {rows.length} report value{rows.length === 1 ? '' : 's'} selected
+          </div>
+          <button
+            type="button"
+            className="rounded border border-gray-600 px-3 py-1.5 text-sm hover:border-blue-400 hover:bg-gray-900"
+            onClick={() => onToggleAll?.(!allSelected)}
+            disabled={isSaving || rows.length === 0}
+          >
+            {allSelected ? 'Deselect All' : 'Select All'}
+          </button>
+        </div>
+
+        <div className="min-h-0 flex-1 overflow-auto">
+          <table className="w-full table-fixed border-collapse text-sm">
+            <thead
+              className="sticky top-0 text-left text-xs uppercase tracking-wide text-gray-400"
+              style={{ backgroundColor: '#1f2937' }}
+            >
+              <tr>
+                <th className="w-12 px-4 py-3">Apply</th>
+                <th className="w-[28%] px-3 py-3">Measurement</th>
+                <th className="px-3 py-3">Existing AR Report</th>
+                <th className="px-3 py-3">Incoming Viewer</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map(row => (
+                <tr key={row.key} className="border-t border-gray-800 align-top">
+                  <td className="px-4 py-3">
+                    <input
+                      type="checkbox"
+                      checked={selected.has(row.key)}
+                      onChange={() => onToggleRow?.(row.key)}
+                      disabled={isSaving}
+                      aria-label={`Apply ${row.label}`}
+                    />
+                  </td>
+                  <td className="px-3 py-3">
+                    <div className="font-medium text-white">{row.label}</div>
+                    {row.isNew ? <div className="mt-1 text-xs text-gray-400">New value</div> : null}
+                  </td>
+                  <td className="break-words px-3 py-3 text-gray-300">
+                    {formatClinicalReportValue(row.existingValue)}
+                  </td>
+                  <td className="break-words px-3 py-3 font-medium text-white">
+                    {formatClinicalReportValue(row.incomingValue)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        <div className="border-t border-gray-700 p-4">
+          <label className="mb-4 flex cursor-pointer items-center gap-2 text-sm text-gray-300">
+            <input
+              type="checkbox"
+              checked={showReviewBeforeSave}
+              onChange={event => onPreferenceChange?.(event.target.checked)}
+              disabled={isSaving}
+            />
+            Review AR report values before saving viewer measurements
+          </label>
+
+          <div className="flex justify-end gap-2">
+            <button
+              type="button"
+              className="rounded border border-gray-600 px-4 py-2 text-sm font-semibold hover:bg-gray-900 disabled:opacity-50"
+              onClick={onCancel}
+              disabled={isSaving}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="rounded bg-blue-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+              onClick={onApply}
+              disabled={isSaving}
+            >
+              {isSaving
+                ? 'Saving…'
+                : selected.size > 0
+                  ? `Apply Selected (${selected.size}) & Save`
+                  : 'Save Measurements Only'}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>,
+    document.body
   );
 }
 
@@ -1011,9 +1336,16 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
   const isExternalIuscanSession = isExternalIuscanViewer(saveTarget);
 
   const isReviewWorkflowReadOnly = isReviewWorkflow && !getWritableMeasurementWorkflow(saveTarget);
+  const isClinicalReportSaveTarget = isClinicalReportMeasurementsTarget(saveTarget);
   const [measurements, setMeasurements] = useState([]);
   const [savingAction, setSavingAction] = useState('');
-  const isSaving = !!savingAction;
+  const [isPreparingClinicalReportReview, setIsPreparingClinicalReportReview] = useState(false);
+  const [showClinicalReportReviewBeforeSave, setShowClinicalReportReviewBeforeSave] = useState(
+    getClinicalReportReviewPreference
+  );
+  const [clinicalReportReview, setClinicalReportReview] = useState(null);
+  const [selectedClinicalReportRowKeys, setSelectedClinicalReportRowKeys] = useState([]);
+  const isSaving = !!savingAction || isPreparingClinicalReportReview;
   const [domain, setDomain] = useState(() => getViewerMeasurementDomainFromPath());
   const [savedAnnotations, setSavedAnnotations] = useState([]);
   const [sessionLVSimpsonMeasurements, setSessionLVSimpsonMeasurements] = useState([]);
@@ -1238,6 +1570,75 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
     };
   }, [commandsManager, applySavedAnnotationsResult]);
 
+  useEffect(() => {
+    if (domain !== 'bowel' || savedAnnotations.length === 0) {
+      return;
+    }
+
+    const curvedLengthAnnotations = savedAnnotations.filter(
+      annotation => annotation?.isSavedAnnotation === true && isBowelCurvedLengthMeasurement(annotation)
+    );
+
+    if (curvedLengthAnnotations.length === 0) {
+      return;
+    }
+
+    let cancelled = false;
+    const hydratedAnnotationIds = new Set();
+    const retryDelays = [0, 250, 750, 1500];
+
+    const hydrateVisibleCurvedLengths = async () => {
+      for (const annotation of curvedLengthAnnotations) {
+        if (cancelled) {
+          return;
+        }
+
+        const annotationId = getMeasurementKey(annotation);
+
+        if (!annotationId || hydratedAnnotationIds.has(annotationId)) {
+          continue;
+        }
+
+        try {
+          const result = await commandsManager.runCommand(
+            'hydrateSavedViewerAnnotationIfVisibleInActiveViewport',
+            {
+              annotation,
+              selectAnnotation: false,
+            }
+          );
+
+          if (result?.ok) {
+            hydratedAnnotationIds.add(annotationId);
+            continue;
+          }
+
+          if (
+            result?.reason !== 'saved-image-not-active' &&
+            result?.reason !== 'viewport-not-found'
+          ) {
+            console.warn('[ARMeasurementsPanel] curved-length hydration skipped:', result);
+          }
+        } catch (error) {
+          if (!cancelled) {
+            console.warn('[ARMeasurementsPanel] curved-length hydration failed:', error);
+          }
+        }
+      }
+    };
+
+    const timers = retryDelays.map(delay =>
+      window.setTimeout(() => {
+        void hydrateVisibleCurvedLengths();
+      }, delay)
+    );
+
+    return () => {
+      cancelled = true;
+      timers.forEach(timer => window.clearTimeout(timer));
+    };
+  }, [commandsManager, domain, savedAnnotations]);
+
   const visibleMeasurements = useMemo(() => {
     const byKey = new Map();
 
@@ -1289,7 +1690,11 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
 
       const key = getMeasurementKey(measurement);
 
-      if (key) {
+      if (key && !byKey.has(key)) {
+        // The guided-session object is only a creation-time fallback. Once the
+        // live MeasurementService contour is present, keep the live contour
+        // already resolved into byKey instead of overwriting it with stale
+        // session state.
         byKey.set(key, normalizeMeasurementForDisplay(measurement));
       }
     }
@@ -1386,18 +1791,23 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
     return calculateLAVolume(visibleMeasurements);
   }, [domain, visibleMeasurements]);
 
-  const saveCurrentMeasurements = async (scoreNow = false) => {
-    const result = await withTimeout(
+  const runMeasurementSave = async (scoreNow = false, options: any = {}) => {
+    return withTimeout(
       commandsManager.runCommand('saveViewerMeasurementsForActiveStudy', {
         domain: domain === 'generic' ? undefined : domain,
         scoringIntent: scoreNow ? 'score-attempt' : 'draft',
         educationAttemptIntent: scoreNow ? 'score-attempt' : 'draft',
+        ...options,
       }),
       30000,
-      'Save measurements'
+      options?.previewOnly ? 'Review measurements' : 'Save measurements'
     );
+  };
 
-    if (result?.annotations) {
+  const saveCurrentMeasurements = async (scoreNow = false, options: any = {}) => {
+    const result = await runMeasurementSave(scoreNow, options);
+
+    if (!result?.previewOnly && result?.annotations) {
       applySavedAnnotationsResult({
         annotations: result.annotations,
         processedAnnotations: result.annotations,
@@ -1410,8 +1820,74 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
     return result;
   };
 
-  const handleSave = async (scoreNow = false) => {
+  const executeMeasurementSave = async (scoreNow = false, options: any = {}) => {
     if (saveInFlightRef.current) {
+      return null;
+    }
+
+    saveInFlightRef.current = true;
+    setSavingAction(scoreNow ? 'score' : 'draft');
+
+    try {
+      return await saveCurrentMeasurements(scoreNow, options);
+    } catch (error) {
+      console.error('[ARMeasurementsPanel] save failed:', error);
+      uiNotificationService.show({
+        title: 'AR Measurements & Annotations',
+        message: `Save failed: ${error?.message || error}`,
+        type: 'error',
+        duration: 5000,
+      });
+      return null;
+    } finally {
+      saveInFlightRef.current = false;
+      setSavingAction('');
+    }
+  };
+
+  const handleClinicalReportReviewPreferenceChange = value => {
+    const nextValue = !!value;
+    setShowClinicalReportReviewBeforeSave(nextValue);
+    setClinicalReportReviewPreference(nextValue);
+  };
+
+  const handleClinicalReportReviewRowToggle = rowKey => {
+    setSelectedClinicalReportRowKeys(current =>
+      current.includes(rowKey)
+        ? current.filter(candidate => candidate !== rowKey)
+        : [...current, rowKey]
+    );
+  };
+
+  const handleClinicalReportReviewToggleAll = selectAll => {
+    const rows = Array.isArray(clinicalReportReview?.rows) ? clinicalReportReview.rows : [];
+    setSelectedClinicalReportRowKeys(selectAll ? rows.map(row => row.key) : []);
+  };
+
+  const handleClinicalReportReviewApply = async () => {
+    if (!clinicalReportReview || saveInFlightRef.current) {
+      return;
+    }
+
+    const scoreNow = clinicalReportReview.scoreNow === true;
+    const selectedRowKeySet = new Set(selectedClinicalReportRowKeys);
+    const rows = Array.isArray(clinicalReportReview?.rows) ? clinicalReportReview.rows : [];
+    const reportFieldNames = Array.from(
+      new Set(
+        rows
+          .filter(row => selectedRowKeySet.has(row.key))
+          .flatMap(row => (Array.isArray(row.fieldNames) ? row.fieldNames : []))
+      )
+    );
+
+    setClinicalReportReview(null);
+    setSelectedClinicalReportRowKeys([]);
+
+    await executeMeasurementSave(scoreNow, { reportFieldNames });
+  };
+
+  const handleSave = async (scoreNow = false) => {
+    if (saveInFlightRef.current || isPreparingClinicalReportReview) {
       return;
     }
 
@@ -1425,27 +1901,52 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
       return;
     }
 
-    if (!confirmArReportMeasurementOverwrite(saveTarget)) {
-      return;
+    if (isClinicalReportSaveTarget && showClinicalReportReviewBeforeSave) {
+      setIsPreparingClinicalReportReview(true);
+
+      try {
+        const preview = await runMeasurementSave(scoreNow, { previewOnly: true });
+
+        if (!preview) {
+          return;
+        }
+
+        const rows = buildClinicalReportReviewRows(preview);
+
+        if (rows.length === 0 && preview?.measurementAnnotationsChanged === false) {
+          uiNotificationService.show({
+            title: 'AR Measurements & Annotations',
+            message: 'No new measurements or annotations to save.',
+            type: 'info',
+            duration: 3000,
+          });
+          return;
+        }
+
+        if (rows.length > 0) {
+          setSelectedClinicalReportRowKeys(rows.filter(row => row.changed).map(row => row.key));
+          setClinicalReportReview({
+            scoreNow,
+            rows,
+            derivedConsequences: preview?.derivedConsequences,
+          });
+          return;
+        }
+      } catch (error) {
+        console.error('[ARMeasurementsPanel] measurement review failed:', error);
+        uiNotificationService.show({
+          title: 'AR Measurements & Annotations',
+          message: `Unable to review report values: ${error?.message || error}`,
+          type: 'error',
+          duration: 5000,
+        });
+        return;
+      } finally {
+        setIsPreparingClinicalReportReview(false);
+      }
     }
 
-    saveInFlightRef.current = true;
-    setSavingAction(scoreNow ? 'score' : 'draft');
-
-    try {
-      await saveCurrentMeasurements(scoreNow);
-    } catch (error) {
-      console.error('[ARMeasurementsPanel] save failed:', error);
-      uiNotificationService.show({
-        title: 'AR Measurements & Annotations',
-        message: `Save failed: ${error?.message || error}`,
-        type: 'error',
-        duration: 5000,
-      });
-    } finally {
-      saveInFlightRef.current = false;
-      setSavingAction('');
-    }
+    await executeMeasurementSave(scoreNow);
   };
 
   const handleIuscanDone = async () => {
@@ -1724,6 +2225,20 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
       </div>
 
       <div className="shrink-0 border-t border-gray-700 bg-black p-3">
+        {isClinicalReportSaveTarget ? (
+          <label className="mb-3 flex cursor-pointer items-center gap-2 text-xs text-gray-300">
+            <input
+              type="checkbox"
+              checked={showClinicalReportReviewBeforeSave}
+              onChange={event =>
+                handleClinicalReportReviewPreferenceChange(event.target.checked)
+              }
+              disabled={isSaving}
+            />
+            Review AR report values before saving
+          </label>
+        ) : null}
+
         {isReviewWorkflow ? (
           isExternalIuscanSession ? (
             <div className="space-y-2">
@@ -1797,10 +2312,29 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
             disabled={isSaving || visibleMeasurements.length === 0}
             onClick={() => handleSave(false)}
           >
-            {savingAction === 'draft' ? 'Saving…' : 'Save Measurements & Annotations'}
+            {isPreparingClinicalReportReview
+              ? 'Reviewing…'
+              : savingAction === 'draft'
+                ? 'Saving…'
+                : 'Save Measurements & Annotations'}
           </button>
         )}
       </div>
+
+      <ClinicalReportMeasurementReviewModal
+        review={clinicalReportReview}
+        selectedRowKeys={selectedClinicalReportRowKeys}
+        showReviewBeforeSave={showClinicalReportReviewBeforeSave}
+        isSaving={!!savingAction}
+        onToggleRow={handleClinicalReportReviewRowToggle}
+        onToggleAll={handleClinicalReportReviewToggleAll}
+        onPreferenceChange={handleClinicalReportReviewPreferenceChange}
+        onCancel={() => {
+          setClinicalReportReview(null);
+          setSelectedClinicalReportRowKeys([]);
+        }}
+        onApply={handleClinicalReportReviewApply}
+      />
     </div>
   );
 }

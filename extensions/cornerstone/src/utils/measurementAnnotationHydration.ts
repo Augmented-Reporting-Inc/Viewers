@@ -11,6 +11,7 @@ import {
   SPECTRAL_DOPPLER_MEASUREMENT_KIND,
   buildSpectralDopplerDisplayText,
 } from './spectralDoppler';
+import { BOWEL_CURVED_LENGTH_MEASUREMENT_KIND } from '../../../extension-ar-measurements/src/utils/bowelMeasurementTargets';
 
 const CONTOUR_TOOL_NAMES = new Set(['SplineROI', 'PlanarFreehandROI', 'LivewireContour']);
 const ULTRASOUND_DIRECTIONAL_TOOL_NAME = 'UltrasoundDirectionalTool';
@@ -680,9 +681,61 @@ function removeInvalidCachedStatsKeys(cachedStats = {}) {
   );
 }
 
+function isSavedBowelCurvedLengthAnnotation(annotation: any = {}) {
+  return (
+    annotation?.measurementKind === BOWEL_CURVED_LENGTH_MEASUREMENT_KIND ||
+    annotation?.measurements?.measurementKind === BOWEL_CURVED_LENGTH_MEASUREMENT_KIND
+  );
+}
+
+function getSavedCurvedLengthMM(savedAnnotation: any = {}) {
+  const measurements = savedAnnotation?.measurements || {};
+  const value =
+    finiteNumberOrNull(measurements.length) ??
+    finiteNumberOrNull(measurements.value) ??
+    finiteNumberOrNull(savedAnnotation?.length) ??
+    finiteNumberOrNull(savedAnnotation?.value);
+
+  if (value == null || value <= 0) {
+    return null;
+  }
+
+  const unit = String(
+    measurements.lengthUnit ||
+      measurements.unit ||
+      savedAnnotation?.lengthUnit ||
+      savedAnnotation?.unit ||
+      'mm'
+  )
+    .replace(/\s*US Region\s*/gi, '')
+    .replace(/\s*AR_US_REGION_CALIBRATION\s*/gi, '')
+    .trim()
+    .toLowerCase();
+
+  if (/^cm\b/.test(unit)) {
+    return value * 10;
+  }
+
+  return !unit || /^mm\b/.test(unit) ? value : null;
+}
+
 function getSavedContourStats(savedAnnotation, referencedImageId = '') {
   if (isSavedSpectralDopplerAnnotation(savedAnnotation)) {
     return null;
+  }
+
+  if (isSavedBowelCurvedLengthAnnotation(savedAnnotation)) {
+    const length = getSavedCurvedLengthMM(savedAnnotation);
+
+    return length == null
+      ? null
+      : {
+          length,
+          lengthUnit: 'mm',
+          unit: 'mm',
+          units: 'mm',
+          modalityUnit: 'mm',
+        };
   }
 
   const area = getSavedContourAreaMM2(savedAnnotation, referencedImageId);
@@ -728,6 +781,11 @@ function getSavedContourDisplayText(savedAnnotation, referencedImageId = '') {
     const spectralDoppler =
       savedAnnotation?.spectralDoppler || savedAnnotation?.measurements?.spectralDoppler || {};
     return buildSpectralDopplerDisplayText(spectralDoppler);
+  }
+
+  if (isSavedBowelCurvedLengthAnnotation(savedAnnotation)) {
+    const length = getSavedCurvedLengthMM(savedAnnotation);
+    return length == null ? [] : [`${length >= 100 ? length.toFixed(0) : length >= 10 ? length.toFixed(1) : length.toFixed(2)} mm`];
   }
 
   const area = getSavedContourAreaMM2(savedAnnotation, referencedImageId);
@@ -1059,7 +1117,7 @@ function getSavedContourClosed(annotation: any = {}) {
 function getSavedContourHandlePoints(annotation: any = {}, points = []) {
   const clonedPoints = cloneAnnotationPoints(points);
 
-  if (!isSavedSpectralDopplerAnnotation(annotation) || getSavedContourClosed(annotation)) {
+  if (getSavedContourClosed(annotation)) {
     return clonedPoints;
   }
 
@@ -1188,6 +1246,12 @@ function buildCornerstoneAnnotation(annotation, fallbackFrameOfReferenceUID = ''
     annotation?.spectralDoppler || annotation?.measurements?.spectralDoppler || null;
   const data: any = {
     label: getViewportAnnotationLabel(annotation),
+    ...(isSavedBowelCurvedLengthAnnotation(annotation)
+      ? {
+          measurementKind: BOWEL_CURVED_LENGTH_MEASUREMENT_KIND,
+          reportMapping: annotation?.reportMapping || null,
+        }
+      : {}),
     ...(isSpectralDoppler
       ? {
           spectralDoppler,
@@ -1461,7 +1525,9 @@ export function hydrateSavedViewerAnnotationForViewport({
   const annotationPoints = cloneAnnotationPoints(annotation?.points);
   const isSpectralDoppler = isSavedSpectralDopplerAnnotation(annotation);
   const isUltrasoundDirectional = isSavedUltrasoundDirectionalAnnotation(annotation);
-  const useCurrentViewportAnnotationGroup = isSpectralDoppler || isUltrasoundDirectional;
+  const isBowelCurvedLength = isSavedBowelCurvedLengthAnnotation(annotation);
+  const useCurrentViewportAnnotationGroup =
+    isSpectralDoppler || isUltrasoundDirectional || isBowelCurvedLength;
   const viewportViewReference = useCurrentViewportAnnotationGroup
     ? getViewportViewReferenceMetadata(viewport, annotationPoints)
     : {};
@@ -1478,7 +1544,17 @@ export function hydrateSavedViewerAnnotationForViewport({
         annotation?.FrameOfReferenceUID ||
         ''
       : isSpectralDoppler
-        ? viewportAnnotationGroupKey
+        ? viewportAnnotationGroupKey ||
+          viewportViewReference?.FrameOfReferenceUID ||
+          fallbackFrameOfReferenceUID ||
+          annotation?.FrameOfReferenceUID ||
+          ''
+        : isBowelCurvedLength
+          ? viewportAnnotationGroupKey ||
+            viewportViewReference?.FrameOfReferenceUID ||
+            fallbackFrameOfReferenceUID ||
+            annotation?.FrameOfReferenceUID ||
+            ''
         : annotation?.FrameOfReferenceUID ||
           viewportViewReference?.FrameOfReferenceUID ||
           fallbackFrameOfReferenceUID ||
@@ -1517,9 +1593,15 @@ export function hydrateSavedViewerAnnotationForViewport({
     toolName,
   });
 
-  const toolHydratedAnnotation = isSavedSpectralDopplerAnnotation(annotationToHydrate)
-    ? null
-    : hydrateWithToolClass({
+  // Open freehand contours are already persisted with their full polyline.
+  // Rehydrating them through PlanarFreehandROITool.hydrate() can rebuild ROI
+  // geometry instead of restoring the persisted open contour. VTI already
+  // avoids that path; Bowel curved length must do the same.
+  const toolHydratedAnnotation =
+    isSavedSpectralDopplerAnnotation(annotationToHydrate) ||
+    isSavedBowelCurvedLengthAnnotation(annotationToHydrate)
+      ? null
+      : hydrateWithToolClass({
         savedAnnotation: annotationToHydrate,
         viewportId,
         fallbackAnnotation: cornerstoneAnnotation,
@@ -1622,7 +1704,29 @@ export function hydrateSavedViewerAnnotationForViewport({
     viewportId ||
     cornerstoneAnnotation.metadata.referencedImageId;
 
-  csToolsAnnotation.state.addAnnotation(cornerstoneAnnotation, groupSelector);
+  if (isBowelCurvedLength) {
+    const annotationManager = csToolsAnnotation.state.getAnnotationManager?.();
+    let activeViewportGroupKey = viewportAnnotationGroupKey;
+
+    if (activeViewportGroupKey == null && viewport?.element && annotationManager?.getGroupKey) {
+      try {
+        activeViewportGroupKey = annotationManager.getGroupKey(viewport.element);
+      } catch {}
+    }
+
+    if (annotationManager?.addAnnotation) {
+      // Preserve the manager's exact group key even when it is undefined or an
+      // empty string. Ultrasound stack viewports can legitimately use either;
+      // normalizing/falling back here stores the annotation under a different
+      // key than getAnnotations(toolName, viewport.element) later resolves.
+      cornerstoneAnnotation.metadata.FrameOfReferenceUID = activeViewportGroupKey;
+      annotationManager.addAnnotation(cornerstoneAnnotation, activeViewportGroupKey);
+    } else {
+      csToolsAnnotation.state.addAnnotation(cornerstoneAnnotation, groupSelector);
+    }
+  } else {
+    csToolsAnnotation.state.addAnnotation(cornerstoneAnnotation, groupSelector);
+  }
 
   if (isUltrasoundDirectional && viewport?.element) {
     let directionalAnnotations: any[] = [];
@@ -1647,6 +1751,7 @@ export function hydrateSavedViewerAnnotationForViewport({
     toolName,
     isSpectralDoppler: isSavedSpectralDopplerAnnotation(annotationToHydrate),
     isUltrasoundDirectional: isSavedUltrasoundDirectionalAnnotation(annotationToHydrate),
+    isBowelCurvedLength: isSavedBowelCurvedLengthAnnotation(annotationToHydrate),
     pointCount: annotationToHydrate.points?.length || 0,
     referencedImageId: cornerstoneAnnotation.metadata?.referencedImageId || '',
     FrameOfReferenceUID: cornerstoneAnnotation.metadata?.FrameOfReferenceUID || '',
@@ -1655,6 +1760,37 @@ export function hydrateSavedViewerAnnotationForViewport({
     annotationFrameOfReferenceUID: cornerstoneAnnotation.metadata?.FrameOfReferenceUID || '',
     stateHit: !!csToolsAnnotation.state.getAnnotation?.(annotationUID),
   });
+
+  if (isBowelCurvedLength) {
+    let groupedAnnotations: any[] = [];
+    let referenceViewable = null;
+
+    try {
+      groupedAnnotations = csToolsAnnotation.state.getAnnotations?.(toolName, viewport?.element) || [];
+    } catch {}
+
+    try {
+      referenceViewable = viewport?.isReferenceViewable?.(cornerstoneAnnotation.metadata, {});
+    } catch {}
+
+    console.info('[Bowel Curved Length] saved viewport hydration', {
+      annotationId: annotationUID,
+      stateHit: !!csToolsAnnotation.state.getAnnotation?.(annotationUID),
+      groupHit: groupedAnnotations.some(candidate => candidate?.annotationUID === annotationUID),
+      groupedCount: groupedAnnotations.length,
+      referenceViewable,
+      pointCount: cornerstoneAnnotation?.data?.contour?.polyline?.length || 0,
+      closed: cornerstoneAnnotation?.data?.contour?.closed,
+      referencedImageId: cornerstoneAnnotation?.metadata?.referencedImageId || '',
+      currentImageId: viewport?.getCurrentImageId?.() || '',
+      FrameOfReferenceUID: cornerstoneAnnotation?.metadata?.FrameOfReferenceUID || '',
+      viewportAnnotationGroupKey,
+    });
+
+    try {
+      viewport?.render?.();
+    } catch {}
+  }
 
   applyReviewMeasurementAnnotationStyle({
     annotationUID,
