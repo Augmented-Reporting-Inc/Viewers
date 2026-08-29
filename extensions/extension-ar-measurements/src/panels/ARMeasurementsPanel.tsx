@@ -489,6 +489,59 @@ function getMeasurementKey(measurement) {
   return measurement?.uid || measurement?.annotationId || measurement?.id;
 }
 
+function getEchoMeasurementAnatomyGroup(measurement) {
+  if (measurement?.laVolume || measurement?.measurements?.laVolume) {
+    return 'la';
+  }
+
+  if (measurement?.lvSimpson || measurement?.measurements?.lvSimpson) {
+    return 'lv';
+  }
+
+  const reportMapping =
+    measurement?.reportMapping && typeof measurement.reportMapping === 'object'
+      ? measurement.reportMapping
+      : {};
+
+  const semanticValues = [
+    getMeasurementLabel(measurement),
+    measurement?.measurementRole,
+    measurement?.role,
+    measurement?.slot,
+    measurement?.measurementKind,
+    ...Object.values(reportMapping),
+  ]
+    .filter(value => typeof value === 'string' || typeof value === 'number')
+    .map(value =>
+      String(value || '')
+        .trim()
+        .replace(/[_:-]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .toUpperCase()
+    )
+    .filter(Boolean);
+
+  if (
+    semanticValues.some(
+      value =>
+        /^(?:LA|LAV|LAVI|LAVOL|LAVOLUME)\b/.test(value) ||
+        /^LEFT ATRI(?:UM|AL)?\b/.test(value)
+    )
+  ) {
+    return 'la';
+  }
+
+  if (
+    semanticValues.some(
+      value => /^(?:LV)\b/.test(value) || /^LEFT VENTRIC(?:LE|ULAR)?\b/.test(value)
+    )
+  ) {
+    return 'lv';
+  }
+
+  return 'other';
+}
+
 function normalizeSavedAnnotation(annotation) {
   return normalizeMeasurementForDisplay({
     ...annotation,
@@ -1338,6 +1391,7 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
   const isReviewWorkflowReadOnly = isReviewWorkflow && !getWritableMeasurementWorkflow(saveTarget);
   const isClinicalReportSaveTarget = isClinicalReportMeasurementsTarget(saveTarget);
   const [measurements, setMeasurements] = useState([]);
+  const [pendingDeletedMeasurementIds, setPendingDeletedMeasurementIds] = useState<string[]>([]);
   const [savingAction, setSavingAction] = useState('');
   const [isPreparingClinicalReportReview, setIsPreparingClinicalReportReview] = useState(false);
   const [showClinicalReportReviewBeforeSave, setShowClinicalReportReviewBeforeSave] = useState(
@@ -1740,41 +1794,6 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
     [visibleMeasurements, saveTarget]
   );
 
-  const measurementGroups = useMemo(() => {
-    if (!isReviewWorkflow) {
-      return [
-        {
-          key: 'all',
-          title: '',
-          measurements: visibleMeasurements,
-        },
-      ];
-    }
-
-    return [
-      {
-        key: 'learner',
-        title:
-          String(saveTarget.measurementWorkflowRole || '').toLowerCase() === 'learner'
-            ? 'My measurements & annotations'
-            : 'Learner measurements & annotations',
-        measurements: visibleMeasurements.filter(
-          measurement => measurement?.workflow !== REVIEWER_MEASUREMENTS_WORKFLOW
-        ),
-      },
-      {
-        key: 'coach',
-        title:
-          String(saveTarget.measurementWorkflowRole || '').toLowerCase() === 'educator'
-            ? 'My measurements & annotations'
-            : 'Coach measurements & annotations',
-        measurements: visibleMeasurements.filter(
-          measurement => measurement?.workflow === REVIEWER_MEASUREMENTS_WORKFLOW
-        ),
-      },
-    ];
-  }, [isReviewWorkflow, saveTarget, visibleMeasurements]);
-
   const lvSimpsonResult = useMemo(() => {
     if (domain !== 'echo') {
       return null;
@@ -1791,12 +1810,88 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
     return calculateLAVolume(visibleMeasurements);
   }, [domain, visibleMeasurements]);
 
+  const measurementGroups = useMemo(() => {
+    if (domain === 'echo' && !isReviewWorkflow) {
+      const laMeasurements = visibleMeasurements.filter(
+        measurement => getEchoMeasurementAnatomyGroup(measurement) === 'la'
+      );
+      const lvMeasurements = visibleMeasurements.filter(
+        measurement => getEchoMeasurementAnatomyGroup(measurement) === 'lv'
+      );
+      const otherMeasurements = visibleMeasurements.filter(
+        measurement => getEchoMeasurementAnatomyGroup(measurement) === 'other'
+      );
+
+      return [
+        {
+          key: 'la',
+          title: 'LA',
+          measurements: laMeasurements,
+          summary: 'la',
+        },
+        {
+          key: 'lv',
+          title: 'LV',
+          measurements: lvMeasurements,
+          summary: 'lv',
+        },
+        ...(otherMeasurements.length > 0
+          ? [
+              {
+                key: 'other',
+                title: 'Other measurements & annotations',
+                measurements: otherMeasurements,
+                summary: '',
+              },
+            ]
+          : []),
+      ];
+    }
+
+    if (!isReviewWorkflow) {
+      return [
+        {
+          key: 'all',
+          title: '',
+          measurements: visibleMeasurements,
+          summary: '',
+        },
+      ];
+    }
+
+    return [
+      {
+        key: 'learner',
+        title:
+          String(saveTarget.measurementWorkflowRole || '').toLowerCase() === 'learner'
+            ? 'My measurements & annotations'
+            : 'Learner measurements & annotations',
+        measurements: visibleMeasurements.filter(
+          measurement => measurement?.workflow !== REVIEWER_MEASUREMENTS_WORKFLOW
+        ),
+        summary: '',
+      },
+      {
+        key: 'coach',
+        title:
+          String(saveTarget.measurementWorkflowRole || '').toLowerCase() === 'educator'
+            ? 'My measurements & annotations'
+            : 'Coach measurements & annotations',
+        measurements: visibleMeasurements.filter(
+          measurement => measurement?.workflow === REVIEWER_MEASUREMENTS_WORKFLOW
+        ),
+        summary: '',
+      },
+    ];
+  }, [domain, isReviewWorkflow, saveTarget, visibleMeasurements]);
+
   const runMeasurementSave = async (scoreNow = false, options: any = {}) => {
     return withTimeout(
       commandsManager.runCommand('saveViewerMeasurementsForActiveStudy', {
         domain: domain === 'generic' ? undefined : domain,
         scoringIntent: scoreNow ? 'score-attempt' : 'draft',
         educationAttemptIntent: scoreNow ? 'score-attempt' : 'draft',
+        deleteAnnotationIds: pendingDeletedMeasurementIds,
         ...options,
       }),
       30000,
@@ -1815,6 +1910,7 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
         saveTarget,
         domain,
       });
+      setPendingDeletedMeasurementIds([]);
     }
 
     return result;
@@ -1957,7 +2053,10 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
     setSavingAction('complete');
 
     try {
-      if (!isReviewWorkflowReadOnly && editableMeasurements.length > 0) {
+      if (
+        !isReviewWorkflowReadOnly &&
+        (editableMeasurements.length > 0 || pendingDeletedMeasurementIds.length > 0)
+      ) {
         await saveCurrentMeasurements(false);
       }
 
@@ -1973,6 +2072,67 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
       setSavingAction('');
     }
   };
+
+  const deleteMeasurement = useCallback(
+    async measurement => {
+      const measurementId = String(getMeasurementKey(measurement) || '').trim();
+
+      if (!measurementId || measurement?.isLocked === true || !isMeasurementEditable(measurement, saveTarget)) {
+        return;
+      }
+
+      const label = getMeasurementLabel(measurement);
+      const confirmed = window.confirm(
+        `Delete ${label || 'this measurement or annotation'}? The deletion will be permanent after you save.`
+      );
+
+      if (!confirmed) {
+        return;
+      }
+
+      try {
+        await Promise.resolve(
+          commandsManager.runCommand('removeMeasurement', {
+            uid: measurementId,
+          })
+        );
+
+        setPendingDeletedMeasurementIds(current =>
+          current.includes(measurementId) ? current : [...current, measurementId]
+        );
+        setSavedAnnotations(current =>
+          current.filter(candidate => getMeasurementKey(candidate) !== measurementId)
+        );
+        setMeasurements(current =>
+          current.filter(candidate => getMeasurementKey(candidate) !== measurementId)
+        );
+        setSessionLVSimpsonMeasurements(current =>
+          current.filter(candidate => getMeasurementKey(candidate) !== measurementId)
+        );
+        setSessionLAVolumeMeasurements(current =>
+          current.filter(candidate => getMeasurementKey(candidate) !== measurementId)
+        );
+
+        void refreshLiveMeasurements();
+
+        uiNotificationService.show({
+          title: 'AR Measurements & Annotations',
+          message: 'Measurement or annotation deleted. Save to make the deletion permanent.',
+          type: 'info',
+          duration: 3500,
+        });
+      } catch (error) {
+        console.error('[ARMeasurementsPanel] delete failed:', error);
+        uiNotificationService.show({
+          title: 'AR Measurements & Annotations',
+          message: `Delete failed: ${error?.message || error}`,
+          type: 'error',
+          duration: 5000,
+        });
+      }
+    },
+    [commandsManager, refreshLiveMeasurements, saveTarget, uiNotificationService]
+  );
 
   const jumpToMeasurement = useCallback(
     async measurement => {
@@ -2168,9 +2328,6 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto p-3">
-        {domain === 'echo' ? <LAVolumeSummary result={laVolumeResult} /> : null}
-        {domain === 'echo' ? <LVSimpsonSummary result={lvSimpsonResult} /> : null}
-
         {visibleMeasurements.length === 0 ? (
           <div className="text-sm text-gray-400">No viewer measurements or annotations yet.</div>
         ) : (
@@ -2184,6 +2341,9 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
                     </div>
                   ) : null}
 
+                  {group.summary === 'la' ? <LAVolumeSummary result={laVolumeResult} /> : null}
+                  {group.summary === 'lv' ? <LVSimpsonSummary result={lvSimpsonResult} /> : null}
+
                   {group.measurements.length === 0 ? (
                     <div className="text-sm text-gray-500">
                       No measurements or annotations in this section.
@@ -2195,24 +2355,45 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
                         const value = getMeasurementValue(measurement);
                         const subtitle = getMeasurementSubtitle(measurement);
 
+                        const canDelete =
+                          measurement?.isLocked !== true &&
+                          isMeasurementEditable(measurement, saveTarget) &&
+                          !!getMeasurementKey(measurement);
+
                         return (
-                          <button
+                          <div
                             key={
                               measurement.uid ||
                               measurement.id ||
                               `${measurement.toolName}-${label}`
                             }
-                            type="button"
-                            className="w-full rounded border border-gray-700 p-2 text-left hover:border-blue-400 hover:bg-gray-900"
-                            onClick={() => jumpToMeasurement(measurement)}
-                            title="Jump to measurement or annotation"
+                            className="flex w-full overflow-hidden rounded border border-gray-700 hover:border-blue-400 hover:bg-gray-900"
                           >
-                            <div className="text-sm font-semibold">{label}</div>
+                            <button
+                              type="button"
+                              className="min-w-0 flex-1 p-2 text-left"
+                              onClick={() => jumpToMeasurement(measurement)}
+                              title="Jump to measurement or annotation"
+                            >
+                              <div className="text-sm font-semibold">{label}</div>
 
-                            <div className="text-xs text-gray-400">{subtitle}</div>
+                              <div className="text-xs text-gray-400">{subtitle}</div>
 
-                            {value ? <div className="mt-1 text-sm">{value}</div> : null}
-                          </button>
+                              {value ? <div className="mt-1 text-sm">{value}</div> : null}
+                            </button>
+
+                            {canDelete ? (
+                              <button
+                                type="button"
+                                className="shrink-0 border-l border-gray-700 px-3 text-xs font-semibold text-red-300 hover:bg-red-950 hover:text-red-100"
+                                onClick={() => deleteMeasurement(measurement)}
+                                title="Delete measurement or annotation"
+                                aria-label={`Delete ${label}`}
+                              >
+                                Delete
+                              </button>
+                            ) : null}
+                          </div>
                         );
                       })}
                     </div>
@@ -2267,7 +2448,7 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
             <button
               type="button"
               className="w-full rounded bg-blue-600 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50"
-              disabled={isSaving || editableMeasurements.length === 0}
+              disabled={isSaving || (editableMeasurements.length === 0 && pendingDeletedMeasurementIds.length === 0)}
               onClick={() => handleSave(false)}
             >
               {savingAction === 'draft'
@@ -2288,7 +2469,7 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
             <button
               type="button"
               className="rounded bg-blue-600 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50"
-              disabled={isSaving || visibleMeasurements.length === 0}
+              disabled={isSaving || (visibleMeasurements.length === 0 && pendingDeletedMeasurementIds.length === 0)}
               onClick={() => handleSave(false)}
             >
               {savingAction === 'draft' ? 'Saving…' : 'Save Draft'}
@@ -2298,7 +2479,7 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
               <button
                 type="button"
                 className="rounded bg-green-600 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50"
-                disabled={isSaving || visibleMeasurements.length === 0}
+                disabled={isSaving || (visibleMeasurements.length === 0 && pendingDeletedMeasurementIds.length === 0)}
                 onClick={() => handleSave(true)}
               >
                 {savingAction === 'score' ? 'Saving…' : 'Save & Score'}
@@ -2309,7 +2490,7 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
           <button
             type="button"
             className="w-full rounded bg-blue-600 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50"
-            disabled={isSaving || visibleMeasurements.length === 0}
+            disabled={isSaving || (visibleMeasurements.length === 0 && pendingDeletedMeasurementIds.length === 0)}
             onClick={() => handleSave(false)}
           >
             {isPreparingClinicalReportReview
