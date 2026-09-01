@@ -634,6 +634,8 @@ const ECHO_ONLY_MEASUREMENT_TOOL_IDS = [
   'LVSimpsonEF',
   'LAVolume',
   'SpectralDopplerVTI',
+  // AR_DECELERATION_TIME
+  'DecelerationTime',
   'UltrasoundDirectionalTool',
 ];
 const BOWEL_ONLY_MEASUREMENT_TOOL_IDS = ['BowelCurvedLength'];

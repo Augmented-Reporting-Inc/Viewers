@@ -1,3 +1,4 @@
+import { DECELERATION_TIME_MEASUREMENT_KIND } from './decelerationTime'; // AR_DECELERATION_TIME
 import { SPECTRAL_DOPPLER_MEASUREMENT_KIND } from './spectralDoppler';
 import {
   BOWEL_STRAIGHT_LENGTH_MEASUREMENT_KIND,
@@ -37,6 +38,12 @@ function formatVtiCentimeters(value: number) {
 
   return value >= 100 ? value.toFixed(0) : value.toFixed(1);
 }
+
+// AR_DECELERATION_TIME:BEGIN format
+function formatMilliseconds(value: number) {
+  return Number.isFinite(value) && value > 0 ? `${Math.round(value)}` : '';
+}
+// AR_DECELERATION_TIME:END format
 
 function formatBowelLengthFromMillimeters(value: number, uom: 'mm' | 'cm', decimals: number) {
   if (!Number.isFinite(value) || value <= 0) {
@@ -98,6 +105,19 @@ const ECHO_VIEWER_REPORT_TARGET_DEFINITIONS: readonly ViewerReportTargetDefiniti
     valuePath: ['spectralDoppler', 'values', 'vtiCM'],
     formatValue: formatVtiCentimeters,
   },
+
+  // AR_DECELERATION_TIME:BEGIN target
+  {
+    key: 'echo.mvDecT',
+    label: 'MV Deceleration Time',
+    measurementKinds: [DECELERATION_TIME_MEASUREMENT_KIND],
+    valueField: 'DecT',
+    uomField: 'DecTUOM',
+    uom: 'ms',
+    valuePath: ['decelerationTime', 'valueMS'],
+    formatValue: formatMilliseconds,
+  },
+  // AR_DECELERATION_TIME:END target
 ]);
 
 const BOWEL_VIEWER_REPORT_TARGET_DEFINITIONS: readonly ViewerReportTargetDefinition[] = Object.freeze(
@@ -154,6 +174,8 @@ function getAnnotationMeasurementKind(annotation: any = {}) {
   const explicitKind = String(
     annotation?.measurementKind ||
       annotation?.measurements?.measurementKind ||
+      annotation?.decelerationTime?.measurementKind ||
+      annotation?.measurements?.decelerationTime?.measurementKind ||
       annotation?.spectralDoppler?.measurementKind ||
       annotation?.measurements?.spectralDoppler?.measurementKind ||
       ''
@@ -177,6 +199,8 @@ function getAnnotationMeasurementKind(annotation: any = {}) {
 function getAnnotationReportMapping(annotation: any = {}): ViewerReportMapping | null {
   const mapping =
     annotation?.reportMapping ||
+    annotation?.decelerationTime?.reportMapping ||
+    annotation?.measurements?.decelerationTime?.reportMapping ||
     annotation?.spectralDoppler?.reportMapping ||
     annotation?.measurements?.spectralDoppler?.reportMapping ||
     null;
@@ -197,6 +221,8 @@ function getAnnotationReportMapping(annotation: any = {}): ViewerReportMapping |
 function getAnnotationMappingValueSource(annotation: any = {}) {
   return {
     ...annotation,
+    decelerationTime:
+      annotation?.decelerationTime || annotation?.measurements?.decelerationTime || null,
     spectralDoppler:
       annotation?.spectralDoppler || annotation?.measurements?.spectralDoppler || null,
   };
@@ -368,6 +394,19 @@ export function buildViewerReportFieldUpdates(annotations: any[] = []) {
     if (!definition || !definitionAcceptsMeasurementKind(definition, measurementKind)) {
       return;
     }
+
+    // AR_DECELERATION_TIME:BEGIN completion guard
+    const decelerationTime =
+      annotation?.decelerationTime || annotation?.measurements?.decelerationTime || null;
+
+    if (
+      definition.measurementKinds.includes(DECELERATION_TIME_MEASUREMENT_KIND) &&
+      String(decelerationTime?.status || '').trim() !== 'complete'
+    ) {
+      return;
+    }
+
+    // AR_DECELERATION_TIME:END completion guard
 
     const spectralDoppler =
       annotation?.spectralDoppler || annotation?.measurements?.spectralDoppler || null;

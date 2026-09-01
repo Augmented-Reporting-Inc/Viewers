@@ -460,6 +460,21 @@ const toolbarButtons: Button[] = [
       ],
     },
   },
+
+  // AR_DECELERATION_TIME:BEGIN toolbar
+  {
+    id: 'DecelerationTime',
+    uiType: 'ohif.toolButton',
+    props: {
+      icon: 'tool-length',
+      label: 'Decel Time',
+      tooltip:
+        'Measure MV/TV E-wave deceleration time. Draw from the E-wave peak down the deceleration slope to the baseline intercept. Press Esc to cancel.',
+      commands: 'startDecelerationTimeWorkflow',
+      evaluate: 'evaluate.action',
+    },
+  },
+  // AR_DECELERATION_TIME:END toolbar
   {
     id: 'UltrasoundDirectionalTool',
     uiType: 'ohif.toolButton',
