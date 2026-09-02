@@ -2771,6 +2771,69 @@ function finiteNumberOrNull(value) {
   return Number.isFinite(numberValue) ? numberValue : null;
 }
 
+const VIEWER_DERIVED_REPORT_FIELD_ALLOWLIST = new Set([
+  'LAV',
+  'LAESV',
+  'LAVUOM',
+  'LAESVUOM',
+  'LAVI',
+  'LAVIUOM',
+]);
+
+function normalizeViewerDerivedReportFieldUpdates(updates = null, seriesDoc = null) {
+  if (!updates || typeof updates !== 'object' || Array.isArray(updates)) {
+    return {};
+  }
+
+  const normalized: Record<string, any> = {};
+
+  for (const [fieldName, value] of Object.entries(updates)) {
+    if (!VIEWER_DERIVED_REPORT_FIELD_ALLOWLIST.has(fieldName)) {
+      continue;
+    }
+
+    if (/(?:UOM)$/i.test(fieldName)) {
+      const unit = String(value || '').trim();
+      if (unit) {
+        normalized[fieldName] = unit;
+      }
+      continue;
+    }
+
+    const numericValue = finiteNumberOrNull(value);
+    if (numericValue != null && numericValue > 0) {
+      normalized[fieldName] = Number(numericValue.toFixed(1)).toString();
+    }
+  }
+
+  const laVolumeML = finiteNumberOrNull(normalized.LAV ?? normalized.LAESV);
+  const bsa = finiteNumberOrNull(seriesDoc?.BSA) ?? finiteNumberOrNull(seriesDoc?.BSA_num);
+
+  if (
+    !Object.prototype.hasOwnProperty.call(normalized, 'LAVI') &&
+    laVolumeML != null &&
+    laVolumeML > 0 &&
+    bsa != null &&
+    bsa > 0
+  ) {
+    normalized.LAVI = Number((laVolumeML / bsa).toFixed(1)).toString();
+  }
+
+  if (Object.prototype.hasOwnProperty.call(normalized, 'LAV') && !normalized.LAVUOM) {
+    normalized.LAVUOM = 'ml';
+  }
+
+  if (Object.prototype.hasOwnProperty.call(normalized, 'LAESV') && !normalized.LAESVUOM) {
+    normalized.LAESVUOM = 'ml';
+  }
+
+  if (Object.prototype.hasOwnProperty.call(normalized, 'LAVI') && !normalized.LAVIUOM) {
+    normalized.LAVIUOM = 'ml/m2';
+  }
+
+  return normalized;
+}
+
 function findMeasurementServiceMeasurementById(measurementService, measurementId = '') {
   const id = String(measurementId || '').trim();
 
@@ -12647,6 +12710,7 @@ function commandsModule({
         measurementIds = null,
         previewOnly = false,
         reportFieldNames = null,
+        viewerDerivedReportFieldUpdates = null,
         suppressSuccessNotification = false,
       } = {}) => {
         const { measurementService, uiNotificationService } = servicesManager.services;
@@ -13078,11 +13142,25 @@ function commandsModule({
                 VIEWER_MEASUREMENTS_WORKFLOW,
               ]);
 
-              clinicalReportFieldUpdates = buildViewerReportFieldUpdates(reportAnnotations);
+              const mappedClinicalReportFieldUpdates = buildViewerReportFieldUpdates(reportAnnotations);
+              const panelDerivedReportFieldUpdates = normalizeViewerDerivedReportFieldUpdates(
+                viewerDerivedReportFieldUpdates,
+                seriesDoc
+              );
+
+              // Prefer the panel-derived LA biplane result for report-bound CSE
+              // fields. The panel calculates from the same visible measurement
+              // snapshot that the user sees. Recomputing here can diverge if the
+              // save serializer has stale area stats or fallback contour geometry.
+              clinicalReportFieldUpdates = {
+                ...mappedClinicalReportFieldUpdates,
+                ...panelDerivedReportFieldUpdates,
+              };
 
               if (Object.keys(clinicalReportFieldUpdates).length) {
                 console.info('[MeasurementAnnotations] clinical report field updates', {
                   fieldNames: Object.keys(clinicalReportFieldUpdates),
+                  viewerDerivedFieldNames: Object.keys(panelDerivedReportFieldUpdates),
                   updatedFields: clinicalReportFieldUpdates,
                 });
               }

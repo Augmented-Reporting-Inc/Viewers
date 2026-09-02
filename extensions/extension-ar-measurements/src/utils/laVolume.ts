@@ -100,6 +100,16 @@ function formatPercent(ratio) {
   return Number.isFinite(Number(ratio)) ? `${(Number(ratio) * 100).toFixed(0)}%` : '';
 }
 
+function formatReportNumber(value, digits = 1) {
+  const numberValue = finiteNumber(value);
+
+  if (numberValue == null) {
+    return '';
+  }
+
+  return numberValue.toFixed(digits).replace(/\.0$/, '');
+}
+
 function projectContourToAxis(contourPoints, baseLeft, baseRight, superiorPoint, longAxisLengthMM) {
   const baseMidpoint = getBaseMidpoint(baseLeft, baseRight);
   const axisVector = subtract(superiorPoint, baseMidpoint);
@@ -139,6 +149,25 @@ function projectContourToAxis(contourPoints, baseLeft, baseRight, superiorPoint,
       t: dot(relative, transverseUnit) * scaleToMM,
     };
   });
+}
+
+function calculateProjectedPolygonAreaMM2(projectedPoints = []) {
+  if (!Array.isArray(projectedPoints) || projectedPoints.length < 3) {
+    return null;
+  }
+
+  let signedArea = 0;
+
+  for (let index = 0; index < projectedPoints.length; index += 1) {
+    const current = projectedPoints[index];
+    const next = projectedPoints[(index + 1) % projectedPoints.length];
+
+    signedArea += current.s * next.t - next.s * current.t;
+  }
+
+  const areaMM2 = Math.abs(signedArea) / 2;
+
+  return Number.isFinite(areaMM2) && areaMM2 > 0 ? areaMM2 : null;
 }
 
 function sampleWidths(projectedPoints, longAxisLengthMM) {
@@ -192,7 +221,7 @@ function buildSlotGeometry(measurement, slot) {
   // The editable SplineROI is closed and may be resampled by Cornerstone.
   // Therefore its first/last samples and sample indices are not anatomical
   // landmarks. Preserve the guided annulus/superior geometry and use the
-  // current contour only to derive the 20 disk widths.
+  // current contour only to derive the projected LA area.
   const baseLeft = getPoint(geometry.baseLeftPoint);
   const baseRight = getPoint(geometry.baseRightPoint);
   const superiorPoint = getPoint(
@@ -238,6 +267,16 @@ function buildSlotGeometry(measurement, slot) {
     };
   }
 
+  const areaMM2 = calculateProjectedPolygonAreaMM2(projectedPoints);
+
+  if (!areaMM2) {
+    return {
+      ...LA_VOLUME_SLOT_INFO[slot],
+      complete: false,
+      messages: [`${display}: LA contour area could not be calculated. Recheck the contour.`],
+    };
+  }
+
   const widths = sampleWidths(projectedPoints, longAxisLengthMM);
   const coverageRatio = widths.filter(width => width > 0).length / SAMPLE_COUNT;
 
@@ -246,7 +285,8 @@ function buildSlotGeometry(measurement, slot) {
       ...LA_VOLUME_SLOT_INFO[slot],
       complete: false,
       longAxisLengthMM,
-      widths,
+      areaMM2,
+      areaCM2: areaMM2 / 100,
       coverageRatio,
       messages: [buildCoverageMessage({ display, coverageRatio })],
     };
@@ -256,7 +296,8 @@ function buildSlotGeometry(measurement, slot) {
     ...LA_VOLUME_SLOT_INFO[slot],
     complete: true,
     longAxisLengthMM,
-    widths,
+    areaMM2,
+    areaCM2: areaMM2 / 100,
     coverageRatio,
     messages: [],
   };
@@ -277,7 +318,15 @@ function uniqueMessages(messages = []) {
   });
 }
 
-export function calculateLAVolume(measurements = []) {
+function getBsaValue(seriesDocOrBsa = null) {
+  if (seriesDocOrBsa && typeof seriesDocOrBsa === 'object' && !Array.isArray(seriesDocOrBsa)) {
+    return finiteNumber(seriesDocOrBsa.BSA) ?? finiteNumber(seriesDocOrBsa.BSA_num);
+  }
+
+  return finiteNumber(seriesDocOrBsa);
+}
+
+export function calculateLAVolume(measurements = [], seriesDocOrBsa = null) {
   const slots = {};
   let hasAnyLAVolumeSlot = false;
 
@@ -324,11 +373,13 @@ export function calculateLAVolume(measurements = []) {
     )
   );
   const allSlotsComplete = LA_VOLUME_SLOT_ORDER.every(slot => slots[slot]?.complete);
+  const method =
+    'CSE biplane area-length LA volume: 0.85 × A4C area × A2C area / shorter LA length.';
 
   if (!allSlotsComplete) {
     return {
       status: 'incomplete',
-      method: 'Biplane LA volume by 20-disk summation from A4C and A2C contours.',
+      method,
       slots,
       values: null,
       messages,
@@ -339,14 +390,11 @@ export function calculateLAVolume(measurements = []) {
   const a4c = slots.A4C;
   const a2c = slots.A2C;
   const axisDifferenceMM = Math.abs(a4c.longAxisLengthMM - a2c.longAxisLengthMM);
-  const commonAxisLengthMM = Math.max(a4c.longAxisLengthMM, a2c.longAxisLengthMM);
-  const diskHeightMM = commonAxisLengthMM / SAMPLE_COUNT;
-  let volumeMM3 = 0;
-
-  for (let index = 0; index < SAMPLE_COUNT; index += 1) {
-    const diskAreaMM2 = (Math.PI / 4) * (a4c.widths[index] || 0) * (a2c.widths[index] || 0);
-    volumeMM3 += diskAreaMM2 * diskHeightMM;
-  }
+  const laLengthMM = Math.min(a4c.longAxisLengthMM, a2c.longAxisLengthMM);
+  const laLengthCM = laLengthMM / 10;
+  const a4cAreaCM2 = a4c.areaCM2;
+  const a2cAreaCM2 = a2c.areaCM2;
+  const volumeML = (0.85 * a4cAreaCM2 * a2cAreaCM2) / laLengthCM;
 
   if (axisDifferenceMM > MAX_RECOMMENDED_AXIS_DIFFERENCE_MM) {
     messages.push(
@@ -358,8 +406,6 @@ export function calculateLAVolume(measurements = []) {
     );
   }
 
-  const volumeML = volumeMM3 / 1000;
-
   if (!Number.isFinite(volumeML) || volumeML <= 0) {
     const invalidMessages = uniqueMessages([
       ...messages,
@@ -368,7 +414,7 @@ export function calculateLAVolume(measurements = []) {
 
     return {
       status: 'invalid',
-      method: 'Biplane LA volume by 20-disk summation from A4C and A2C contours.',
+      method,
       slots,
       values: null,
       axisDifferenceMM,
@@ -377,17 +423,66 @@ export function calculateLAVolume(measurements = []) {
     };
   }
 
+  const bsa = getBsaValue(seriesDocOrBsa);
+  const lavi = bsa && bsa > 0 ? volumeML / bsa : null;
+
   return {
     status: 'complete',
-    method:
-      'Biplane LA volume by 20-disk summation from A4C and A2C contours; disk height uses the longer LA long axis.',
+    method,
     slots,
     values: {
       volumeML,
+      lavi,
       axisDifferenceMM,
-      commonAxisLengthMM,
+      laLengthMM,
+      laLengthCM,
+      laLengthSource: 'shorter A4C/A2C length',
+      a4cAreaMM2: a4c.areaMM2,
+      a2cAreaMM2: a2c.areaMM2,
+      a4cAreaCM2,
+      a2cAreaCM2,
     },
     messages,
     guidance: messages,
   };
+}
+
+export function buildCseLAVolumeReportFieldUpdatesFromResult(
+  result = null,
+  seriesDocOrBsa = null
+) {
+  const values = result?.status === 'complete' ? result.values : null;
+
+  if (!values || !Number.isFinite(Number(values.volumeML)) || Number(values.volumeML) <= 0) {
+    return {};
+  }
+
+  const volume = formatReportNumber(values.volumeML, 1);
+  const updates = {
+    LAV: volume,
+    LAESV: volume,
+    LAVUOM: 'ml',
+    LAESVUOM: 'ml',
+  };
+
+  const bsa = getBsaValue(seriesDocOrBsa);
+  const lavi = Number.isFinite(Number(values.lavi)) && Number(values.lavi) > 0
+    ? Number(values.lavi)
+    : bsa && bsa > 0
+      ? Number(values.volumeML) / bsa
+      : null;
+
+  if (Number.isFinite(Number(lavi)) && Number(lavi) > 0) {
+    updates.LAVI = formatReportNumber(lavi, 1);
+    updates.LAVIUOM = 'ml/m2';
+  }
+
+  return updates;
+}
+
+export function buildCseLAVolumeReportFieldUpdates(measurements = [], seriesDocOrBsa = null) {
+  return buildCseLAVolumeReportFieldUpdatesFromResult(
+    calculateLAVolume(measurements, seriesDocOrBsa),
+    seriesDocOrBsa
+  );
 }

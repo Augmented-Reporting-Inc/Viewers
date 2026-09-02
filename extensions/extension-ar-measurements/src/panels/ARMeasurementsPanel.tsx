@@ -1,7 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { calculateLVSimpson, LV_SIMPSON_SLOT_ORDER } from '../utils/lvSimpson';
-import { calculateLAVolume, LA_VOLUME_SLOT_ORDER } from '../utils/laVolume';
+import {
+  calculateLAVolume,
+  LA_VOLUME_SLOT_ORDER,
+  buildCseLAVolumeReportFieldUpdatesFromResult,
+} from '../utils/laVolume';
 import { getViewerMeasurementDomainFromPath } from '../utils/measurementLabelConfig';
 import { BOWEL_CURVED_LENGTH_MEASUREMENT_KIND } from '../utils/bowelMeasurementTargets';
 
@@ -1810,6 +1814,11 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
     return calculateLAVolume(visibleMeasurements);
   }, [domain, visibleMeasurements]);
 
+  const cseLAVolumeReportFieldUpdates = useMemo(
+    () => buildCseLAVolumeReportFieldUpdatesFromResult(laVolumeResult),
+    [laVolumeResult]
+  );
+
   const measurementGroups = useMemo(() => {
     if (domain === 'echo' && !isReviewWorkflow) {
       const laMeasurements = visibleMeasurements.filter(
@@ -1886,6 +1895,14 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
   }, [domain, isReviewWorkflow, saveTarget, visibleMeasurements]);
 
   const runMeasurementSave = async (scoreNow = false, options: any = {}) => {
+    const viewerDerivedReportFieldUpdates =
+      isClinicalReportSaveTarget && Object.keys(cseLAVolumeReportFieldUpdates).length > 0
+        ? {
+            ...cseLAVolumeReportFieldUpdates,
+            ...(options.viewerDerivedReportFieldUpdates || {}),
+          }
+        : options.viewerDerivedReportFieldUpdates;
+
     return withTimeout(
       commandsManager.runCommand('saveViewerMeasurementsForActiveStudy', {
         domain: domain === 'generic' ? undefined : domain,
@@ -1893,6 +1910,9 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
         educationAttemptIntent: scoreNow ? 'score-attempt' : 'draft',
         deleteAnnotationIds: pendingDeletedMeasurementIds,
         ...options,
+        ...(viewerDerivedReportFieldUpdates
+          ? { viewerDerivedReportFieldUpdates }
+          : {}),
       }),
       30000,
       options?.previewOnly ? 'Review measurements' : 'Save measurements'
