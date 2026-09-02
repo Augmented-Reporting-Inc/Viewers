@@ -433,6 +433,43 @@ function getQuestionViewerTarget(question: QuizQuestion) {
   return candidates.find(targetHasNavigationIdentity) || null;
 }
 
+function getQuestionSelectionViewerTarget(
+  question: QuizQuestion,
+  viewerTarget: any,
+  revealExactFrame = false
+) {
+  if (question.type !== 'frameSelection' || revealExactFrame) {
+    return viewerTarget;
+  }
+
+  const target = plainObject(viewerTarget);
+  const referencedImageMatch = cleanString(target.referencedImageId).match(
+    /\/studies\/([^/]+)\/series\/([^/]+)\/instances\/([^/]+)/i
+  );
+  const decodeTargetId = (value: string | undefined) => {
+    try {
+      return value ? decodeURIComponent(value) : '';
+    } catch {
+      return value || '';
+    }
+  };
+
+  // A frame-selection question must identify the correct DICOM instance without
+  // revealing the gold frame when the learner opens the question. The exact
+  // frame remains available to scoring and explicit review actions.
+  return {
+    studyInstanceUID:
+      target.studyInstanceUID || target.StudyInstanceUID || decodeTargetId(referencedImageMatch?.[1]),
+    seriesInstanceUID:
+      target.seriesInstanceUID ||
+      target.SeriesInstanceUID ||
+      decodeTargetId(referencedImageMatch?.[2]),
+    sopInstanceUID:
+      target.sopInstanceUID || target.SOPInstanceUID || decodeTargetId(referencedImageMatch?.[3]),
+    displaySetInstanceUID: target.displaySetInstanceUID,
+  };
+}
+
 async function runViewerCommand(commandsManager: any, commandName: string, options: any) {
   if (!commandsManager) {
     return null;
@@ -2008,7 +2045,12 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
   async function selectQuestion(
     quiz: QuizDefinition,
     question: QuizQuestion,
-    options: { force?: boolean; viewerTarget?: any; markerOptions?: any[] } = {}
+    options: {
+      force?: boolean;
+      viewerTarget?: any;
+      markerOptions?: any[];
+      revealExactFrame?: boolean;
+    } = {}
   ) {
     const nextActiveQuestionKey = `${quiz.quizKey}:${question.questionKey}`;
 
@@ -2086,7 +2128,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
           getNestedViewerTarget(questionAnswer) ||
           getNestedViewerTarget(scoreItem?.learnerResponse)
         : null;
-    const viewerTarget = hasViewerTargetOverride
+    const resolvedViewerTarget = hasViewerTargetOverride
       ? options.viewerTarget
       : learnerFrameTarget ||
         (scoreItem
@@ -2094,6 +2136,11 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
             getCorrectReviewTarget(question, scoreItem) ||
             getQuestionViewerTarget(question)
           : getReviewAnswerTarget(question, questionAnswer) || getQuestionViewerTarget(question));
+    const viewerTarget = getQuestionSelectionViewerTarget(
+      question,
+      resolvedViewerTarget,
+      authoringMode || options.revealExactFrame === true
+    );
     const overlayMarkers = Array.isArray(options.markerOptions)
       ? options.markerOptions
       : getQuestionOverlayMarkerOptions(quiz, question, reviewQuestionAnswer, {
@@ -3588,6 +3635,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
 
                   selectQuestion(quiz, question, {
                     force: true,
+                    revealExactFrame: question.type === 'frameSelection',
                     viewerTarget:
                       question.type === 'frameSelection'
                         ? correctTarget
