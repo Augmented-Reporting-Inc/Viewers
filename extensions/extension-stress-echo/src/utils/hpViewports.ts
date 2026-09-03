@@ -44,7 +44,7 @@ const restSAX = {
   ],
 };
 
-const makeStressViewport = (viewportId, displaySetId) => ({
+const makeStressViewport = (viewportId: string, displaySetId: string) => ({
   viewportOptions: {
     viewportId,
     viewportType: 'stack',

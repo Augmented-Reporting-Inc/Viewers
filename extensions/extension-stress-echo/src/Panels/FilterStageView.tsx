@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Select } from '../../../../platform/ui/src/components';
 import PropTypes from 'prop-types';
 import { SyncControls } from '../../../extension-stress-echo/src/components/SyncControls';
@@ -28,7 +28,9 @@ const secondDropdownOptions = {
   ],
   Value: [
     { value: 'LAX', label: 'LAX' },
-    { value: 'SAX', label: 'SAX' },
+    { value: 'SAXBase', label: 'SAX-BASE' },
+    { value: 'SAXMid', label: 'SAX-PM' },
+    { value: 'SAXApex', label: 'SAX-AP' },
     { value: 'AP4', label: 'AP4' },
     { value: 'AP2', label: 'AP2' },
     { value: 'AP3', label: 'AP3' },
@@ -122,8 +124,9 @@ export default function FilterStageView({ servicesManager, commandsManager }) {
 
   const [firstDropdownValue, setFirstDropdownValue] = useState('Stage');
   const [filterBy, setFilterBy] = useState('Rest');
+  const hasUserSelectedRef = useRef(false);
 
-  const applyHangingProtocol = nextFilterBy => {
+  const applyHangingProtocol = useCallback((nextFilterBy: string) => {
     if (!nextFilterBy) {
       return;
     }
@@ -151,7 +154,38 @@ export default function FilterStageView({ servicesManager, commandsManager }) {
         error,
       });
     }
-  };
+  }, [commandsManager, servicesManager]);
+
+  useEffect(() => {
+    let cancelled = false;
+    let retryTimer: number | undefined;
+    let attempts = 0;
+
+    const applyDefaultRestWhenReady = () => {
+      if (cancelled || hasUserSelectedRef.current) {
+        return;
+      }
+
+      if (getActiveStudyUID(servicesManager)) {
+        applyHangingProtocol('Rest');
+        return;
+      }
+
+      attempts += 1;
+      if (attempts < 20) {
+        retryTimer = window.setTimeout(applyDefaultRestWhenReady, 250);
+      }
+    };
+
+    applyDefaultRestWhenReady();
+
+    return () => {
+      cancelled = true;
+      if (retryTimer) {
+        window.clearTimeout(retryTimer);
+      }
+    };
+  }, [applyHangingProtocol, servicesManager]);
 
   const handleFirstDropdownChange = options => {
     if (!options?.value) {
@@ -161,6 +195,7 @@ export default function FilterStageView({ servicesManager, commandsManager }) {
     const nextFirstDropdownValue = options.value;
     const nextFilterBy = secondDropdownFirstOptions[nextFirstDropdownValue];
 
+    hasUserSelectedRef.current = true;
     setFirstDropdownValue(nextFirstDropdownValue);
     setFilterBy(nextFilterBy);
     applyHangingProtocol(nextFilterBy);
@@ -172,6 +207,7 @@ export default function FilterStageView({ servicesManager, commandsManager }) {
         return;
       }
 
+      hasUserSelectedRef.current = true;
       setFilterBy(options.value);
       applyHangingProtocol(options.value);
     };

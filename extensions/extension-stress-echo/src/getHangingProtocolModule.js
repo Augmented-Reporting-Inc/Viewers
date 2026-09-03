@@ -165,6 +165,77 @@ const View6 = {
   viewports: [restView6, peakView6, recoveryView6],
 };
 
+const SAX_VIEW_MATCHES = {
+  SAXBase: ['SAX-BASE', 'SAX_BASE', 'SAX base', 'SAX MV', 'SAX_MV'],
+  SAXMid: ['SAX-PM', 'SAX_PM', 'SAX PM', 'SAX mid', 'SAX_MID', 'Papillary'],
+  SAXApex: ['SAX-AP', 'SAX_AP', 'SAX apex', 'SAX_APEX'],
+};
+
+const makeSaxComparisonProtocol = (suffix, viewports) => {
+  const stageDefinitions = [
+    { prefix: 'rest', matches: ['Rest', 'Baseline'] },
+    { prefix: 'peak', matches: 'Peak' },
+    { prefix: 'recovery', matches: ['Recovery', 'Post'] },
+  ];
+
+  const displaySetSelectors = Object.fromEntries(
+    stageDefinitions.map(({ prefix, matches }) => [
+      `${prefix}${suffix}DisplaySet`,
+      {
+        seriesMatchingRules: [
+          {
+            attribute: 'StageName',
+            constraint: { containsI: matches },
+            required: true,
+          },
+          {
+            attribute: 'ViewName',
+            constraint: { containsI: SAX_VIEW_MATCHES[suffix] },
+            required: true,
+          },
+        ],
+      },
+    ])
+  );
+
+  return {
+    id: `extension-stress-echo.hangingProtocolModule.hp${suffix}`,
+    locked: true,
+    name: `hp${suffix}`,
+    createdDate: '2021-02-23T19:22:08.894Z',
+    modifiedDate: '2026-09-03',
+    availableTo: {},
+    editableBy: {},
+    imageLoadStrategy: 'interleaveTopToBottom',
+    protocolMatchingRules: [],
+    toolGroupIds: ['default'],
+    hpInitiationCriteria: { minSeriesLoaded: 1 },
+    displaySetSelectors,
+    stages: [
+      {
+        name: suffix,
+        viewportStructure: {
+          layoutType: 'grid',
+          properties: { rows: 1, columns: 3 },
+        },
+        viewports,
+      },
+    ],
+  };
+};
+
+const hpSAXBase = makeSaxComparisonProtocol('SAXBase', [
+  restSAXBase,
+  peakSAXBase,
+  recoverySAXBase,
+]);
+const hpSAXMid = makeSaxComparisonProtocol('SAXMid', [restSAXMid, peakSAXMid, recoverySAXMid]);
+const hpSAXApex = makeSaxComparisonProtocol('SAXApex', [
+  restSAXApex,
+  peakSAXApex,
+  recoverySAXApex,
+]);
+
 // protocol definitions
 const hpRest = {
   id: 'extension-stress-echo.hangingProtocolModule.hpRest',
@@ -1140,6 +1211,18 @@ function getHangingProtocolModule() {
     {
       name: hpSAX.id,
       protocol: hpSAX,
+    },
+    {
+      name: hpSAXBase.id,
+      protocol: hpSAXBase,
+    },
+    {
+      name: hpSAXMid.id,
+      protocol: hpSAXMid,
+    },
+    {
+      name: hpSAXApex.id,
+      protocol: hpSAXApex,
     },
     {
       name: hpAP4.id,

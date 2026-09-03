@@ -7,10 +7,90 @@ import {
 import { id } from './id';
 import initToolGroups from './initToolGroups';
 import toolbarButtons from './toolbarButtons';
-import {
-  getMeasurementLabelConfigForDomain,
-  getViewerMeasurementDomainFromPath,
-} from '../../../extensions/extension-ar-measurements/src/utils/measurementLabelConfig';
+
+const ECHO_LENGTH_MEASUREMENT_LABELS_CONFIG = {
+  id: 'echoLengthMeasurementLabels',
+  domain: 'echo',
+  dialogTitle: 'Echo Annotation',
+  annotationTitle: 'Echo Annotation',
+  labelOnMeasure: true,
+  exclusive: true,
+  items: [
+    { value: 'LVIDd', label: 'LVIDd' },
+    { value: 'LVIDs', label: 'LVIDs' },
+    { value: 'IVSd', label: 'IVSd' },
+    { value: 'PWd', label: 'PWd' },
+    { value: 'AO', label: 'Aortic root' },
+    { value: 'AscAo', label: 'Ascending aorta' },
+    { value: 'LVOTDiam', label: 'LVOT diameter' },
+    { value: 'LAd', label: 'Left atrial dimension' },
+    { value: 'RVIDd', label: 'RVIDd' },
+    { value: 'TAPSE', label: 'TAPSE' },
+  ],
+};
+
+const BOWEL_LENGTH_MEASUREMENT_LABELS_CONFIG = {
+  id: 'bowelLengthMeasurementLabels',
+  domain: 'bowel',
+  dialogTitle: 'Bowel Annotation',
+  annotationTitle: 'Bowel Annotation',
+  labelOnMeasure: true,
+  exclusive: true,
+  items: [
+    { value: 'BowelRectumBWT', label: 'Rectum BWT' },
+    { value: 'BowelSigmoidColonBWT', label: 'Sigmoid colon BWT' },
+    { value: 'BowelDescendingColonBWT', label: 'Descending colon BWT' },
+    { value: 'BowelTransverseColonBWT', label: 'Transverse colon BWT' },
+    { value: 'BowelAscendingColonBWT', label: 'Ascending colon BWT' },
+    { value: 'BowelCecumBWT', label: 'Cecum BWT' },
+    { value: 'BowelTerminalIleumBWT', label: 'Terminal ileum BWT' },
+    { value: 'BowelIleocolicAnastomosisBWT', label: 'Ileocolic anastomosis BWT' },
+    { value: 'BowelNeoTerminalIleumBWT', label: 'Neo-terminal ileum BWT' },
+  ],
+};
+
+function getViewerMeasurementDomainFromPath() {
+  const params = getViewerUrlSearchParams();
+
+  const integration = String(params.get('arIntegration') || '')
+    .trim()
+    .toLowerCase();
+
+  if (integration === 'iuscan') {
+    return 'bowel';
+  }
+
+  const explicitDomain = String(
+    params.get('arMeasurementDomain') ||
+      params.get('arViewerDomain') ||
+      params.get('viewerDomain') ||
+      ''
+  )
+    .trim()
+    .toLowerCase();
+
+  if (['iuscan', 'bowel', 'echo', 'generic'].includes(explicitDomain)) {
+    return explicitDomain === 'iuscan' ? 'bowel' : explicitDomain;
+  }
+
+  const path = String(window.location?.pathname || '').toLowerCase();
+
+  if (path.includes('/bviewer/iuscan')) {
+    return 'bowel';
+  }
+
+  if (path.includes('/bviewer')) {
+    return 'bowel';
+  }
+
+  if (path.includes('/rviewer') || path.includes('/stressecho') || path.includes('/dobutamine')) {
+    return 'echo';
+  }
+
+  // The generic local longitudinal route is Echo unless the URL explicitly
+  // identifies a bowel or iUSCAN session.
+  return 'echo';
+}
 
 function getViewerUrlSearchParams() {
   const params = new URLSearchParams();
@@ -634,11 +714,8 @@ const ECHO_ONLY_MEASUREMENT_TOOL_IDS = [
   'LVSimpsonEF',
   'LAVolume',
   'SpectralDopplerVTI',
-  // AR_DECELERATION_TIME
-  'DecelerationTime',
   'UltrasoundDirectionalTool',
 ];
-const BOWEL_ONLY_MEASUREMENT_TOOL_IDS = ['BowelCurvedLength'];
 const ULTRASOUND_DIRECTIONAL_TOOL_NAME = 'UltrasoundDirectionalTool';
 const AR_LIVE_MEASUREMENTS_REFRESH_EVENT = 'ar-measurements:live-measurements-updated';
 
@@ -653,7 +730,6 @@ function getPrimaryToolbarIdsForDomain(domain, measurementToolsReadOnly) {
     'MeasurementTools',
     ...(measurementToolsReadOnly ? [] : ['ArrowAnnotate']),
     ...(measurementToolsReadOnly || domain !== 'echo' ? [] : ECHO_ONLY_MEASUREMENT_TOOL_IDS),
-    ...(measurementToolsReadOnly || domain !== 'bowel' ? [] : BOWEL_ONLY_MEASUREMENT_TOOL_IDS),
     'Zoom',
     'Pan',
     'TrackballRotate',
@@ -724,7 +800,7 @@ async function resolveViewerMeasurementDomain(commandsManager) {
     console.warn('[AR Measurements] could not resolve measurement domain:', error);
   }
 
-  return getViewerMeasurementDomainFromPath({ fallback: 'echo' });
+  return getViewerMeasurementDomainFromPath();
 }
 
 async function getLabelConfigForMeasurement(measurement, commandsManager) {
@@ -751,18 +827,27 @@ async function getLabelConfigForMeasurement(measurement, commandsManager) {
     console.warn('[AR Measurements] could not resolve Length label mode:', error);
   }
 
-  const labelConfig = getMeasurementLabelConfigForDomain(domain);
-
-  if (!labelConfig) {
+  if (domain === 'iuscan') {
     return null;
   }
 
-  return {
-    title: domain === 'bowel' ? 'Set Bowel Measurement' : 'Set Echo Measurement',
-    placeholder:
-      domain === 'bowel' ? 'Choose bowel measurement' : 'Choose echo measurement',
-    labelConfigOverride: labelConfig,
-  };
+  if (domain === 'bowel') {
+    return {
+      title: 'Set Bowel Measurement',
+      placeholder: 'Choose bowel measurement',
+      labelConfigOverride: BOWEL_LENGTH_MEASUREMENT_LABELS_CONFIG,
+    };
+  }
+
+  if (domain === 'echo') {
+    return {
+      title: 'Set Echo Measurement',
+      placeholder: 'Choose echo measurement',
+      labelConfigOverride: ECHO_LENGTH_MEASUREMENT_LABELS_CONFIG,
+    };
+  }
+
+  return null;
 }
 
 async function waitForViewerMeasurementServiceEntry(
@@ -953,8 +1038,19 @@ function modeFactory({ modeConfiguration }) {
       }
 
       _annotationModifiedHandler = (event: Event) => {
-        const sourceAnnotation = (event as CustomEvent)?.detail?.annotation;
+        const eventDetail = (event as CustomEvent)?.detail || {};
+        const sourceAnnotation = eventDetail.annotation;
+        const annotationId = String(sourceAnnotation?.annotationUID || '').trim();
         const toolName = String(sourceAnnotation?.metadata?.toolName || '').trim();
+
+        // Selection/navigation does not emit ANNOTATION_MODIFIED and therefore
+        // must never become save intent. Actual annotation edits do: remember
+        // those ids so clinical saves replace only genuinely changed payloads.
+        if (annotationId) {
+          commandsManager.runCommand('markViewerMeasurementModifiedInSession', {
+            uid: annotationId,
+          });
+        }
 
         if (toolName !== ULTRASOUND_DIRECTIONAL_TOOL_NAME) {
           return;
@@ -970,7 +1066,7 @@ function modeFactory({ modeConfiguration }) {
             new CustomEvent(AR_LIVE_MEASUREMENTS_REFRESH_EVENT, {
               detail: {
                 reason: 'ultrasound-directional-modified',
-                annotationId: String(sourceAnnotation?.annotationUID || '').trim(),
+                annotationId,
               },
             })
           );
@@ -1089,7 +1185,7 @@ function modeFactory({ modeConfiguration }) {
       toolbarService.register(toolbarButtons);
 
       const measurementToolsReadOnly = isViewerMeasurementReadOnlyFromUrl();
-      const initialMeasurementDomain = getViewerMeasurementDomainFromPath({ fallback: 'echo' });
+      const initialMeasurementDomain = getViewerMeasurementDomainFromPath();
 
       toolbarService.updateSection(
         toolbarService.sections.primary,

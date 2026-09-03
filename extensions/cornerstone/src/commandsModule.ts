@@ -6466,6 +6466,7 @@ function commandsModule({
   extensionManager,
 }: OhifTypes.Extensions.ExtensionParams): OhifTypes.Extensions.CommandsModule {
   const viewerMeasurementsCreatedInSession = new Set<string>();
+  const viewerMeasurementsModifiedInSession = new Set<string>();
   const viewerMeasurementsDeletedInSession = new Set<string>();
   const viewerQuizMeasurementComparisonAnnotationIds = new Set<string>();
   const {
@@ -6691,6 +6692,7 @@ function commandsModule({
   const actions = {
     clearViewerMeasurementsCreatedInSession: () => {
       viewerMeasurementsCreatedInSession.clear();
+      viewerMeasurementsModifiedInSession.clear();
       viewerMeasurementsDeletedInSession.clear();
       lvSimpsonSessionMeasurementsByUid.clear();
       laVolumeSessionMeasurementsByUid.clear();
@@ -6711,6 +6713,7 @@ function commandsModule({
       }
 
       viewerMeasurementsDeletedInSession.delete(measurementId);
+      viewerMeasurementsModifiedInSession.delete(measurementId);
       viewerMeasurementsCreatedInSession.add(measurementId);
 
       const saveTarget = getArViewerSaveTargetFromUrl();
@@ -6744,6 +6747,21 @@ function commandsModule({
         }
       }
 
+      return measurementId;
+    },
+
+    markViewerMeasurementModifiedInSession: ({ uid }: { uid?: string } = {}) => {
+      const measurementId = String(uid || '').trim();
+
+      if (
+        !measurementId ||
+        viewerMeasurementsCreatedInSession.has(measurementId) ||
+        viewerMeasurementsDeletedInSession.has(measurementId)
+      ) {
+        return measurementId;
+      }
+
+      viewerMeasurementsModifiedInSession.add(measurementId);
       return measurementId;
     },
     jumpToMeasurementViewport: ({ annotationUID, measurement }) => {
@@ -8679,6 +8697,7 @@ function commandsModule({
         }
 
         viewerMeasurementsCreatedInSession.delete(measurementId);
+        viewerMeasurementsModifiedInSession.delete(measurementId);
         viewerMeasurementsDeletedInSession.add(measurementId);
         removeLVSimpsonSessionMeasurement(measurementId);
         removeLAVolumeSessionMeasurement(measurementId);
@@ -11879,6 +11898,9 @@ function commandsModule({
     markViewerMeasurementCreatedInSession: {
       commandFn: actions.markViewerMeasurementCreatedInSession,
     },
+    markViewerMeasurementModifiedInSession: {
+      commandFn: actions.markViewerMeasurementModifiedInSession,
+    },
     getSerializedViewerMeasurements: {
       commandFn: actions.getSerializedViewerMeasurements,
     },
@@ -12020,6 +12042,9 @@ function commandsModule({
           if (isClinicalReportSave) {
             console.info('[MeasurementAnnotations] clinical save snapshot', {
               liveMeasurementCount: measurementService?.getMeasurements?.()?.length || 0,
+              createdInSessionCount: viewerMeasurementsCreatedInSession.size,
+              modifiedInSessionCount: viewerMeasurementsModifiedInSession.size,
+              deletedInSessionCount: viewerMeasurementsDeletedInSession.size,
               lvSimpsonSessionCount: getLVSimpsonSessionMeasurements().length,
               laVolumeSessionCount: getLAVolumeSessionMeasurements().length,
               cornerstoneFallbackCount: cornerstoneFallbackMeasurements.length,
@@ -12092,6 +12117,13 @@ function commandsModule({
                 : annotation
             )
             .filter(annotation => annotation.referencedImageId || annotation.points?.length);
+
+          const changedClinicalMeasurementIds = isClinicalReportSave
+            ? new Set<string>([
+                ...viewerMeasurementsCreatedInSession,
+                ...viewerMeasurementsModifiedInSession,
+              ])
+            : new Set<string>();
 
           let annotations = liveAnnotations;
 
@@ -12232,13 +12264,23 @@ function commandsModule({
               saveTarget,
             });
           } else {
+            // In a clinical report workflow, viewport presence is not edit intent.
+            // A saved annotation can become live merely because the user clicked it
+            // in the panel. Preserve the exact saved payload unless that annotation
+            // was created or genuinely modified in this viewer session.
+            const annotationsForMerge = isClinicalReportSave
+              ? annotations.filter(annotation =>
+                  changedClinicalMeasurementIds.has(getMeasurementAnnotationId(annotation))
+                )
+              : annotations;
+
             const incomingClinicalSemanticKeys = new Set(
-              annotations.map(getClinicalViewerMeasurementSemanticKey).filter(Boolean)
+              annotationsForMerge.map(getClinicalViewerMeasurementSemanticKey).filter(Boolean)
             );
             const mergedMeasurementAnnotations = upsertViewerMeasurementAnnotations({
               existingRaw: seriesDoc.MeasurementAnnotations,
               source: 'ar-measurements-panel',
-              annotations,
+              annotations: annotationsForMerge,
               replaceFilter: existing => {
                 if (!viewerMeasurementDomainsMatch(existing?.domain || 'generic', domain)) {
                   return false;
@@ -12265,7 +12307,11 @@ function commandsModule({
                   return true;
                 }
 
-                return !!existingId && savedAnnotationIds.has(existingId);
+                return !!existingId && (
+                  isClinicalReportSave
+                    ? changedClinicalMeasurementIds.has(String(existingId))
+                    : savedAnnotationIds.has(existingId)
+                );
               },
             });
 
@@ -12480,6 +12526,7 @@ function commandsModule({
           }
 
           viewerMeasurementsCreatedInSession.clear();
+          viewerMeasurementsModifiedInSession.clear();
           viewerMeasurementsDeletedInSession.clear();
 
           dispatchSavedAnnotationsRefresh({
