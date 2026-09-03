@@ -2130,8 +2130,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         : null;
     const configuredFrameTarget =
       question.type === 'frameSelection'
-        ? getNestedViewerTarget(question?.answerConfig?.goldTarget) ||
-          getQuestionViewerTarget(question)
+        ? getQuestionViewerTarget(question)
         : null;
     let resolvedViewerTarget;
 
