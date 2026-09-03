@@ -128,7 +128,7 @@ export default function FilterStageView({ servicesManager, commandsManager }) {
 
   const applyHangingProtocol = useCallback((nextFilterBy: string) => {
     if (!nextFilterBy) {
-      return;
+      return false;
     }
 
     const activeStudyUID = getActiveStudyUID(servicesManager);
@@ -137,7 +137,7 @@ export default function FilterStageView({ servicesManager, commandsManager }) {
       console.warn('[stress-echo] skipping hanging protocol switch; activeStudyUID not ready', {
         filterBy: nextFilterBy,
       });
-      return;
+      return false;
     }
 
     const protocolId = `${PROTOCOL_PREFIX}${nextFilterBy}`;
@@ -147,43 +147,77 @@ export default function FilterStageView({ servicesManager, commandsManager }) {
         activeStudyUID,
         protocolId,
       });
+      return true;
     } catch (error) {
       console.warn('[stress-echo] failed to set hanging protocol', {
         activeStudyUID,
         protocolId,
         error,
       });
+      return false;
     }
   }, [commandsManager, servicesManager]);
 
   useEffect(() => {
+    const { displaySetService } = servicesManager?.services || {};
     let cancelled = false;
     let retryTimer: number | undefined;
-    let attempts = 0;
+    let settleTimer: number | undefined;
+    let defaultRestApplied = false;
 
     const applyDefaultRestWhenReady = () => {
-      if (cancelled || hasUserSelectedRef.current) {
+      if (cancelled || defaultRestApplied || hasUserSelectedRef.current) {
         return;
       }
 
-      if (getActiveStudyUID(servicesManager)) {
-        applyHangingProtocol('Rest');
-        return;
+      const activeDisplaySets = getDisplaySetValues(
+        displaySetService?.getActiveDisplaySets?.()
+      );
+
+      // A Study UID can be available before the protocol engine receives its
+      // candidate display sets. Applying Rest during that gap maps every
+      // viewport to an empty display set.
+      if (activeDisplaySets.length > 0 && getActiveStudyUID(servicesManager)) {
+        defaultRestApplied = applyHangingProtocol('Rest');
       }
 
-      attempts += 1;
-      if (attempts < 20) {
+      if (!defaultRestApplied) {
         retryTimer = window.setTimeout(applyDefaultRestWhenReady, 250);
       }
     };
 
-    applyDefaultRestWhenReady();
+    const scheduleDefaultRest = () => {
+      if (cancelled || defaultRestApplied || hasUserSelectedRef.current) {
+        return;
+      }
+
+      if (settleTimer) {
+        window.clearTimeout(settleTimer);
+      }
+
+      // Debounce batched display-set additions so Rest is not applied against
+      // a partially populated candidate list.
+      settleTimer = window.setTimeout(applyDefaultRestWhenReady, 250);
+    };
+
+    const subscriptions = [
+      displaySetService?.EVENTS?.DISPLAY_SETS_ADDED,
+      displaySetService?.EVENTS?.DISPLAY_SETS_CHANGED,
+    ]
+      .filter(Boolean)
+      .map(eventName => displaySetService.subscribe(eventName, scheduleDefaultRest));
+
+    scheduleDefaultRest();
 
     return () => {
       cancelled = true;
       if (retryTimer) {
         window.clearTimeout(retryTimer);
       }
+      if (settleTimer) {
+        window.clearTimeout(settleTimer);
+      }
+      subscriptions.forEach(subscription => subscription?.unsubscribe?.());
     };
   }, [applyHangingProtocol, servicesManager]);
 

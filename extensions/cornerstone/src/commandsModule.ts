@@ -87,6 +87,16 @@ import {
   calculateSpectralDopplerVTI,
   getSpectralDopplerSummaryText,
 } from './utils/spectralDoppler';
+// AR_DECELERATION_TIME:BEGIN import
+import {
+  DECELERATION_TIME_MEASUREMENT_KIND,
+  buildDecelerationTimeDisplayText,
+  calculateDecelerationTimeFromDirectionalStats,
+  getDecelerationTimeSummaryText,
+  getDecelerationTimeTargetOptions,
+  normalizeDecelerationTimeTargetSelection,
+} from './utils/decelerationTime';
+// AR_DECELERATION_TIME:END import
 import {
   buildViewerReportFieldUpdates,
   buildViewerReportMapping,
@@ -643,6 +653,7 @@ function buildUltrasoundDirectionalDisplayText(stats: any = {}) {
 }
 
 function getCornerstoneUltrasoundDirectionalMeasurementFallback(stateAnnotation: any = {}) {
+  // AR_DECELERATION_TIME:fallback
   const measurementId = getMeasurementAnnotationId(stateAnnotation);
   const metadata = stateAnnotation?.metadata || {};
   const data = stateAnnotation?.data || {};
@@ -650,12 +661,7 @@ function getCornerstoneUltrasoundDirectionalMeasurementFallback(stateAnnotation:
   const points = Array.isArray(data?.handles?.points) ? data.handles.points : [];
   const stats = getUltrasoundDirectionalStatsFromAnnotationData(data);
 
-  if (
-    !measurementId ||
-    toolName !== ULTRASOUND_DIRECTIONAL_TOOL_NAME ||
-    points.length !== 2 ||
-    !stats
-  ) {
+  if (!measurementId || toolName !== ULTRASOUND_DIRECTIONAL_TOOL_NAME || points.length !== 2 || !stats) {
     return null;
   }
 
@@ -666,18 +672,40 @@ function getCornerstoneUltrasoundDirectionalMeasurementFallback(stateAnnotation:
     data?.ultrasoundDirectional && typeof data.ultrasoundDirectional === 'object'
       ? data.ultrasoundDirectional
       : {};
-  const reportMapping =
+  const storedReportMapping =
     data?.reportMapping || stateAnnotation?.reportMapping || storedDirectional?.reportMapping || null;
-  const label = String(data.label || reportMapping?.label || 'Ultrasound Directional').trim();
+  const decelerationTarget = normalizeDecelerationTimeTargetSelection(data.arDecelerationTimeTarget);
+  const decelerationTime = decelerationTarget
+    ? calculateDecelerationTimeFromDirectionalStats({ stats, target: decelerationTarget })
+    : null;
+  const decelerationReportMapping =
+    data.arDecelerationTimeReportMapping ||
+    (decelerationTarget?.reportTargetKey
+      ? buildViewerReportMapping({ key: decelerationTarget.reportTargetKey, label: decelerationTarget.label })
+      : null);
+  const reportMapping = decelerationReportMapping || storedReportMapping;
+  const label = String(
+    decelerationTarget?.label || data.label || 'Ultrasound Directional'
+  ).trim();
+  const measurementKind = decelerationTarget
+    ? DECELERATION_TIME_MEASUREMENT_KIND
+    : ULTRASOUND_DIRECTIONAL_MEASUREMENT_KIND;
+  const displayText = decelerationTarget
+    ? buildDecelerationTimeDisplayText(decelerationTime)
+    : buildUltrasoundDirectionalDisplayText(stats);
 
   return {
     uid: measurementId,
     annotationUID: measurementId,
     toolName: ULTRASOUND_DIRECTIONAL_TOOL_NAME,
-    measurementKind: ULTRASOUND_DIRECTIONAL_MEASUREMENT_KIND,
+    measurementKind,
     label,
     measurementRole: label,
     role: label,
+    ...(reportMapping ? { reportMapping } : {}),
+    ...(decelerationTime
+      ? { decelerationTime: { ...decelerationTime, ...(decelerationReportMapping ? { reportMapping: decelerationReportMapping } : {}) } }
+      : {}),
     ultrasoundDirectional: {
       ...storedDirectional,
       xValues: Array.isArray(stats.xValues) ? [...stats.xValues] : [],
@@ -689,7 +717,6 @@ function getCornerstoneUltrasoundDirectionalMeasurementFallback(stateAnnotation:
       unit: distance.unit,
       measurementKind: ULTRASOUND_DIRECTIONAL_MEASUREMENT_KIND,
     },
-    ...(reportMapping ? { reportMapping } : {}),
     referenceStudyUID: metadata.StudyInstanceUID || parsedIds.studyInstanceId || '',
     referenceSeriesUID: metadata.SeriesInstanceUID || parsedIds.seriesInstanceId || '',
     SOPInstanceUID: metadata.SOPInstanceUID || parsedIds.sopInstanceId || '',
@@ -701,9 +728,9 @@ function getCornerstoneUltrasoundDirectionalMeasurementFallback(stateAnnotation:
     viewPlaneNormal: cloneViewerMeasurementMetadataVector(metadata.viewPlaneNormal),
     viewUp: cloneViewerMeasurementMetadataVector(metadata.viewUp),
     data: data.cachedStats || {},
-    value: distance.value,
-    unit: distance.unit,
-    displayText: buildUltrasoundDirectionalDisplayText(stats),
+    value: decelerationTime?.status === 'complete' ? decelerationTime.valueMS : distance.value,
+    unit: decelerationTime?.status === 'complete' ? 'ms' : distance.unit,
+    displayText,
   };
 }
 
@@ -1451,6 +1478,17 @@ function hydrateSavedUltrasoundDirectionalForViewport({
     savedAnnotation,
     referencedImageId
   );
+  // AR_DECELERATION_TIME:BEGIN hydration
+  const savedDecelerationTime = getDecelerationTimeGeometry(savedAnnotation, savedAnnotation);
+  const decelerationTarget = isDecelerationTimeViewerMeasurement(savedAnnotation, savedAnnotation)
+    ? normalizeDecelerationTimeTargetSelection(
+        savedDecelerationTime?.target || savedAnnotation?.label || savedAnnotation?.measurementRole
+      )
+    : null;
+  if (decelerationTarget) {
+    installDecelerationTimeTextOverrideForViewport({ viewport, viewportId });
+  }
+  // AR_DECELERATION_TIME:END hydration
   const baseData: any = {
     annotationUID: annotationId,
     highlighted: false,
@@ -1477,6 +1515,15 @@ function hydrateSavedUltrasoundDirectionalForViewport({
       arMeasurementReadOnly: readOnly,
       arMeasurementReviewRound: reviewRound,
       arMeasurementDomain: domain,
+      ...(decelerationTarget
+        ? {
+            arDecelerationTimeTarget: decelerationTarget,
+            arDecelerationTimeReportMapping:
+              savedAnnotation?.reportMapping || savedDecelerationTime?.reportMapping || null,
+            arSavedMeasurementDisplayText:
+              savedAnnotation?.displayText || buildDecelerationTimeDisplayText(savedDecelerationTime),
+          }
+        : {}), // AR_DECELERATION_TIME
     },
   };
 
@@ -2273,6 +2320,63 @@ function getUltrasoundDirectionalMeasurementPayload(measurement, existingAnnotat
   };
 }
 
+
+// AR_DECELERATION_TIME:BEGIN helpers
+function getDecelerationTimeGeometry(measurement: any = {}, existingAnnotation: any = null) {
+  return (
+    measurement?.decelerationTime ||
+    measurement?.measurements?.decelerationTime ||
+    existingAnnotation?.decelerationTime ||
+    existingAnnotation?.measurements?.decelerationTime ||
+    null
+  );
+}
+
+function isDecelerationTimeViewerMeasurement(measurement: any = {}, existingAnnotation: any = null) {
+  const decelerationTime = getDecelerationTimeGeometry(measurement, existingAnnotation);
+  return !!(
+    measurement?.measurementKind === DECELERATION_TIME_MEASUREMENT_KIND ||
+    measurement?.measurements?.measurementKind === DECELERATION_TIME_MEASUREMENT_KIND ||
+    decelerationTime?.measurementKind === DECELERATION_TIME_MEASUREMENT_KIND ||
+    existingAnnotation?.measurementKind === DECELERATION_TIME_MEASUREMENT_KIND
+  );
+}
+
+function getDecelerationTimeMeasurementPayload(measurement: any = {}, existingAnnotation: any = null) {
+  const existingDecelerationTime = getDecelerationTimeGeometry(measurement, existingAnnotation);
+  const target = normalizeDecelerationTimeTargetSelection(
+    existingDecelerationTime?.target ||
+      measurement?.label ||
+      measurement?.measurementRole ||
+      existingAnnotation?.label ||
+      existingAnnotation?.measurementRole
+  );
+  const directional = getUltrasoundDirectionalGeometry(measurement, existingAnnotation) || {};
+  const calculated = calculateDecelerationTimeFromDirectionalStats({ stats: directional, target });
+  const reportMapping =
+    measurement?.reportMapping ||
+    existingDecelerationTime?.reportMapping ||
+    existingAnnotation?.reportMapping ||
+    existingAnnotation?.decelerationTime?.reportMapping ||
+    null;
+  const decelerationTime = {
+    ...existingDecelerationTime,
+    ...calculated,
+    ...(reportMapping ? { reportMapping } : {}),
+  };
+
+  return {
+    measurementKind: DECELERATION_TIME_MEASUREMENT_KIND,
+    ultrasoundDirectional: directional,
+    decelerationTime,
+    ...(decelerationTime.status === 'complete'
+      ? { value: decelerationTime.valueMS, unit: 'ms' }
+      : {}),
+    displayText: buildDecelerationTimeDisplayText(decelerationTime),
+  };
+}
+// AR_DECELERATION_TIME:END helpers
+
 function isCornerstoneOwnedViewerMeasurement(measurement: any = {}) {
   return (
     isSpectralDopplerViewerMeasurement(measurement) ||
@@ -2325,9 +2429,13 @@ function serializeViewerMeasurement(measurement, domain, existingAnnotation = nu
   const lvSimpson = getLVSimpsonGeometry(measurement, existingAnnotation);
   const laVolume = getLAVolumeGeometry(measurement, existingAnnotation);
   const spectralDoppler = getSpectralDopplerGeometry(measurement, existingAnnotation);
+  const decelerationTime = getDecelerationTimeGeometry(measurement, existingAnnotation); // AR_DECELERATION_TIME
   const ultrasoundDirectional = getUltrasoundDirectionalGeometry(measurement, existingAnnotation);
   const reportMapping =
     measurement?.reportMapping ||
+    decelerationTime?.reportMapping || // AR_DECELERATION_TIME
+    existingAnnotation?.decelerationTime?.reportMapping ||
+    existingAnnotation?.measurements?.decelerationTime?.reportMapping ||
     spectralDoppler?.reportMapping ||
     ultrasoundDirectional?.reportMapping ||
     existingAnnotation?.reportMapping ||
@@ -2341,16 +2449,21 @@ function serializeViewerMeasurement(measurement, domain, existingAnnotation = nu
   const isSpectralDoppler =
     measurement?.measurementKind === SPECTRAL_DOPPLER_MEASUREMENT_KIND ||
     spectralDoppler?.measurementKind === SPECTRAL_DOPPLER_MEASUREMENT_KIND;
-  const isUltrasoundDirectional = isUltrasoundDirectionalViewerMeasurement(measurement);
+  const isDecelerationTime =
+    domain === 'echo' && isDecelerationTimeViewerMeasurement(measurement, existingAnnotation); // AR_DECELERATION_TIME
+  const isUltrasoundDirectional =
+    !isDecelerationTime && isUltrasoundDirectionalViewerMeasurement(measurement); // AR_DECELERATION_TIME
   const frameNumber =
     measurement.frameNumber && measurement.frameNumber > 1
       ? measurement.frameNumber
       : getFrameNumberFromReferencedImageId(measurement.referencedImageId);
 
   const nextMeasurements = {
-    ...(isUltrasoundDirectional
-      ? getUltrasoundDirectionalMeasurementPayload(measurement, existingAnnotation)
-      : isContourMeasurement && !isSpectralDoppler
+    ...(isDecelerationTime
+      ? getDecelerationTimeMeasurementPayload(measurement, existingAnnotation) // AR_DECELERATION_TIME
+      : isUltrasoundDirectional
+        ? getUltrasoundDirectionalMeasurementPayload(measurement, existingAnnotation)
+        : isContourMeasurement && !isSpectralDoppler
         ? buildContourMeasurementPayload(measurement, existingAnnotation, options.displaySetService)
         : isArrowAnnotateMeasurement
           ? getArrowAnnotateMeasurementPayload(measurement, existingAnnotation)
@@ -2386,6 +2499,7 @@ function serializeViewerMeasurement(measurement, domain, existingAnnotation = nu
   delete persistedMeasurements.lvSimpson;
   delete persistedMeasurements.laVolume;
   delete persistedMeasurements.ultrasoundDirectional;
+  delete persistedMeasurements.decelerationTime; // AR_DECELERATION_TIME
 
   return {
     annotationId: measurement.uid,
@@ -2450,6 +2564,15 @@ function serializeViewerMeasurement(measurement, domain, existingAnnotation = nu
           ...(reportMapping ? { reportMapping } : {}),
         }
       : {}),
+
+    ...(isDecelerationTime
+      ? {
+          measurementKind: DECELERATION_TIME_MEASUREMENT_KIND,
+          decelerationTime: nextMeasurements.decelerationTime,
+          ultrasoundDirectional: nextMeasurements.ultrasoundDirectional,
+          ...(reportMapping ? { reportMapping } : {}),
+        }
+      : {}), // AR_DECELERATION_TIME
 
     StudyInstanceUID: measurement.referenceStudyUID || '',
     SeriesInstanceUID: measurement.referenceSeriesUID || '',
@@ -4676,6 +4799,45 @@ function installLVSimpsonContourTextCleanupForViewport({ viewport, viewportId = 
   toolInstance.__arLVSimpsonTextCleanupInstalled = true;
 }
 
+
+// AR_DECELERATION_TIME:BEGIN text-override
+function installDecelerationTimeTextOverrideForViewport({ viewport, viewportId = '' }) {
+  if (!viewport) return;
+  let toolGroup = null;
+  try {
+    toolGroup =
+      ToolGroupManager.getToolGroupForViewport?.(viewport.id || viewportId, viewport.renderingEngineId) ||
+      ToolGroupManager.getToolGroupForViewport?.(viewport.id || viewportId);
+  } catch {
+    toolGroup = null;
+  }
+  const toolInstance = toolGroup?.getToolInstance?.(ULTRASOUND_DIRECTIONAL_TOOL_NAME);
+  if (!toolInstance || toolInstance.__arDecelerationTimeTextOverrideInstalled) return;
+  const previousGetTextLines = toolInstance.configuration?.getTextLines;
+  const nextConfiguration = {
+    ...(toolInstance.configuration || {}),
+    getTextLines: function (...args) {
+      for (const arg of args) {
+        const candidates = [arg?.data, arg?.annotation?.data, arg?.annotationData, arg].filter(Boolean);
+        for (const candidate of candidates) {
+          const target = normalizeDecelerationTimeTargetSelection(candidate?.arDecelerationTimeTarget);
+          if (!target) continue;
+          const stats = getUltrasoundDirectionalStatsFromAnnotationData(candidate);
+          const calculation = calculateDecelerationTimeFromDirectionalStats({ stats, target });
+          return buildDecelerationTimeDisplayText(calculation);
+        }
+      }
+      return typeof previousGetTextLines === 'function'
+        ? previousGetTextLines.call(this, ...args)
+        : [];
+    },
+  };
+  toolInstance.configuration = nextConfiguration;
+  toolGroup?.setToolConfiguration?.(ULTRASOUND_DIRECTIONAL_TOOL_NAME, nextConfiguration, true);
+  toolInstance.__arDecelerationTimeTextOverrideInstalled = true;
+}
+// AR_DECELERATION_TIME:END text-override
+
 function installSpectralDopplerTextOverrideForViewport({ viewport, viewportId = '' }) {
   if (!viewport) {
     return;
@@ -5115,6 +5277,43 @@ async function resolveLAVolumeSlot({
 
   return slotInfo ? { label, slotInfo } : null;
 }
+
+
+// AR_DECELERATION_TIME:BEGIN target-dialog
+function getDecelerationTimeTargetDialogConfig() {
+  return {
+    id: 'spectralDopplerDecelerationTimeTarget',
+    labelOnMeasure: false,
+    exclusive: true,
+    items: getDecelerationTimeTargetOptions(),
+  };
+}
+
+async function resolveDecelerationTimeTarget({ uiDialogService, customizationService } = {}) {
+  const renderContent = customizationService.getCustomization('ui.labellingComponent');
+  const options = getDecelerationTimeTargetOptions();
+  let value = null;
+
+  try {
+    value = await callInputDialogAutoComplete({
+      uiDialogService,
+      labelConfig: getDecelerationTimeTargetDialogConfig(),
+      renderContent,
+      title: 'Deceleration Time Valve',
+    });
+  } catch (error) {
+    console.warn('[Deceleration Time] target autocomplete failed; falling back to text input:', error);
+    value = await callInputDialog({
+      uiDialogService,
+      title: 'Deceleration Time Valve',
+      placeholder: options.map(option => option.label).join(', '),
+      defaultValue: options[0]?.label || 'MV Deceleration Time',
+    });
+  }
+
+  return normalizeDecelerationTimeTargetSelection(value);
+}
+// AR_DECELERATION_TIME:END target-dialog
 
 function getSpectralDopplerVtiTargetDialogConfig({ allowGeneric = false } = {}) {
   return {
@@ -6624,6 +6823,25 @@ function commandsModule({
   let activeSpectralDopplerWorkflowSessionId = '';
   let spectralDopplerCompletionHandler: null | ((event: Event) => void) = null;
   let spectralDopplerEscapeHandler: null | ((event: KeyboardEvent) => void) = null;
+
+  // AR_DECELERATION_TIME:BEGIN listener-state
+  let activeDecelerationTimeWorkflowSessionId = '';
+  let decelerationTimeCompletionHandler: null | ((event: Event) => void) = null;
+  let decelerationTimeEscapeHandler: null | ((event: KeyboardEvent) => void) = null;
+
+  function clearDecelerationTimeWorkflowListeners({ resetSession = true } = {}) {
+    if (decelerationTimeCompletionHandler) {
+      eventTarget.removeEventListener(Enums.Events.ANNOTATION_COMPLETED, decelerationTimeCompletionHandler);
+      decelerationTimeCompletionHandler = null;
+    }
+    if (decelerationTimeEscapeHandler) {
+      window.removeEventListener('keydown', decelerationTimeEscapeHandler);
+      decelerationTimeEscapeHandler = null;
+    }
+    if (resetSession) activeDecelerationTimeWorkflowSessionId = '';
+  }
+  // AR_DECELERATION_TIME:END listener-state
+
   let activeUltrasoundDirectionalWorkflowSessionId = '';
   let ultrasoundDirectionalCompletionHandler: null | ((event: Event) => void) = null;
 
@@ -6701,6 +6919,7 @@ function commandsModule({
       activeLVSimpsonWorkflowSessionId = '';
       activeLAVolumeWorkflowSessionId = '';
       clearSpectralDopplerWorkflowListeners();
+      clearDecelerationTimeWorkflowListeners(); // AR_DECELERATION_TIME
       dispatchLVSimpsonSessionMeasurements({ reason: 'viewer-session-cleared' });
       dispatchLAVolumeSessionMeasurements({ reason: 'viewer-session-cleared' });
     },
@@ -8164,6 +8383,103 @@ function commandsModule({
         sessionId: workflowSessionId,
       };
     },
+    // AR_DECELERATION_TIME:BEGIN action
+    startDecelerationTimeWorkflow: async () => {
+      clearDecelerationTimeWorkflowListeners();
+      const activeViewportId = viewportGridService.getActiveViewportId();
+      const { viewport } = _getActiveViewportEnabledElement() || {};
+      if (!activeViewportId || !viewport?.element) {
+        uiNotificationService.show({ title: 'Deceleration Time', message: 'No active image viewport is available.', type: 'warning', duration: 3500 });
+        return null;
+      }
+
+      const selectedTarget = await resolveDecelerationTimeTarget({ uiDialogService, customizationService });
+      if (!selectedTarget) {
+        uiNotificationService.show({ title: 'Deceleration Time', message: 'Deceleration-time measurement cancelled.', type: 'info', duration: 2500 });
+        return null;
+      }
+
+      const reportMapping = selectedTarget.reportTargetKey
+        ? buildViewerReportMapping({ key: selectedTarget.reportTargetKey, label: selectedTarget.label })
+        : null;
+      const activation = actions.activateViewerMeasurementTool({ toolName: ULTRASOUND_DIRECTIONAL_TOOL_NAME, stopCine: true });
+      if (!activation?.ok) {
+        uiNotificationService.show({ title: 'Deceleration Time', message: 'The calibrated Doppler directional tool is not available in this viewport.', type: 'warning', duration: 4500 });
+        return null;
+      }
+
+      installDecelerationTimeTextOverrideForViewport({ viewport, viewportId: activeViewportId });
+      const workflowSessionId = `${csUtils.uuidv4()}`;
+      activeDecelerationTimeWorkflowSessionId = workflowSessionId;
+
+      const restoreNavigationTool = () => {
+        try {
+          const toolGroupReference = toolGroupService.getToolGroupForViewport(activeViewportId);
+          actions.setToolActive({ toolName: toolNames.WindowLevel || 'WindowLevel', toolGroupId: toolGroupReference });
+        } catch {}
+      };
+
+      decelerationTimeEscapeHandler = (event: KeyboardEvent) => {
+        if (event.key !== 'Escape' || activeDecelerationTimeWorkflowSessionId !== workflowSessionId) return;
+        clearDecelerationTimeWorkflowListeners();
+        restoreNavigationTool();
+        uiNotificationService.show({ title: 'Deceleration Time', message: 'Deceleration-time measurement cancelled.', type: 'info', duration: 2500 });
+      };
+
+      decelerationTimeCompletionHandler = (event: Event) => {
+        if (activeDecelerationTimeWorkflowSessionId !== workflowSessionId) return;
+        const sourceAnnotation = (event as CustomEvent)?.detail?.annotation;
+        if (String(sourceAnnotation?.metadata?.toolName || '') !== ULTRASOUND_DIRECTIONAL_TOOL_NAME) return;
+        const annotationId = String(sourceAnnotation?.annotationUID || '').trim();
+        if (!annotationId) return;
+
+        clearDecelerationTimeWorkflowListeners({ resetSession: false });
+        activeDecelerationTimeWorkflowSessionId = '';
+        restoreNavigationTool();
+
+        const stats = getUltrasoundDirectionalStatsFromAnnotationData(sourceAnnotation?.data || {});
+        const calculation = calculateDecelerationTimeFromDirectionalStats({ stats, target: selectedTarget });
+        const displayText = buildDecelerationTimeDisplayText(calculation);
+        sourceAnnotation.data = {
+          ...(sourceAnnotation.data || {}),
+          label: selectedTarget.label,
+          arDecelerationTimeTarget: selectedTarget,
+          arDecelerationTimeReportMapping: reportMapping,
+          arSavedMeasurementDisplayText: displayText,
+        };
+        sourceAnnotation.invalidated = false;
+
+        actions.markViewerMeasurementCreatedInSession?.({ uid: annotationId });
+        dispatchLiveMeasurementsRefresh({
+          reason: 'spectral-doppler-deceleration-time-created',
+          annotationUID: annotationId,
+          status: calculation.status,
+        });
+        try {
+          cornerstoneTools.annotation.selection.setAnnotationSelected?.(annotationId, true);
+          viewport.render?.();
+        } catch {}
+        uiNotificationService.show({
+          title: 'Deceleration Time',
+          message: calculation.status === 'complete'
+            ? getDecelerationTimeSummaryText(calculation)
+            : `${calculation.message || 'Doppler time-axis calibration unavailable.'} The line was preserved without a calculated DecT.`,
+          type: calculation.status === 'complete' ? 'success' : 'warning',
+          duration: calculation.status === 'complete' ? 5000 : 8000,
+        });
+      };
+
+      eventTarget.addEventListener(Enums.Events.ANNOTATION_COMPLETED, decelerationTimeCompletionHandler);
+      window.addEventListener('keydown', decelerationTimeEscapeHandler);
+      uiNotificationService.show({
+        title: 'Deceleration Time',
+        message: `For ${selectedTarget.label}, draw from the E-wave peak down the deceleration slope to the baseline intercept. Press Esc to cancel.`,
+        type: 'info',
+        duration: 8000,
+      });
+      return { ok: true, sessionId: workflowSessionId, toolName: ULTRASOUND_DIRECTIONAL_TOOL_NAME, target: selectedTarget.key };
+    },
+    // AR_DECELERATION_TIME:END action
     startSpectralDopplerVTIWorkflow: async () => {
       clearUltrasoundDirectionalWorkflowListeners();
       clearSpectralDopplerWorkflowListeners();
@@ -11590,6 +11906,11 @@ function commandsModule({
     startUltrasoundDirectionalWorkflow: {
       commandFn: actions.startUltrasoundDirectionalWorkflow,
     },
+    // AR_DECELERATION_TIME:BEGIN definition
+    startDecelerationTimeWorkflow: {
+      commandFn: actions.startDecelerationTimeWorkflow,
+    },
+    // AR_DECELERATION_TIME:END definition
     startSpectralDopplerVTIWorkflow: {
       commandFn: actions.startSpectralDopplerVTIWorkflow,
     },
