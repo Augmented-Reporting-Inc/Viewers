@@ -1,18 +1,27 @@
 import {
   restLAX,
   restSAX,
+  restSAXBase,
+  restSAXMid,
+  restSAXApex,
   restAP4,
   restAP2,
   restAP3,
   restView6,
   peakLAX,
   peakSAX,
+  peakSAXBase,
+  peakSAXMid,
+  peakSAXApex,
   peakAP4,
   peakAP2,
   peakAP3,
   peakView6,
   recoveryLAX,
   recoverySAX,
+  recoverySAXBase,
+  recoverySAXMid,
+  recoverySAXApex,
   recoveryAP4,
   recoveryAP2,
   recoveryAP3,
@@ -20,8 +29,8 @@ import {
 } from './utils/hpViewports';
 
 /** stages - determine grid layout
- * represents a 2x3 viewport layout configuration. The layout displays LAX, SAX, and AP4
- * images in the first row, AP3, AP2 and View 6 images in the second row.
+ * represents a 2x4 viewport layout configuration. The layout displays all seven
+ * standard exercise-stress views, including the three distinct SAX levels.
  * synchronizers are defined in each viewport
  */
 const Rest = {
@@ -30,10 +39,18 @@ const Rest = {
     layoutType: 'grid',
     properties: {
       rows: 2,
-      columns: 3,
+      columns: 4,
     },
   },
-  viewports: [restLAX, restSAX, restAP4, restAP3, restAP2, restView6],
+  viewports: [
+    restLAX,
+    restSAXBase,
+    restSAXMid,
+    restSAXApex,
+    restAP4,
+    restAP2,
+    restAP3,
+  ],
 };
 
 const Peak = {
@@ -42,10 +59,18 @@ const Peak = {
     layoutType: 'grid',
     properties: {
       rows: 2,
-      columns: 3,
+      columns: 4,
     },
   },
-  viewports: [peakLAX, peakSAX, peakAP4, peakAP3, peakAP2, peakView6],
+  viewports: [
+    peakLAX,
+    peakSAXBase,
+    peakSAXMid,
+    peakSAXApex,
+    peakAP4,
+    peakAP2,
+    peakAP3,
+  ],
 };
 
 const Recovery = {
@@ -54,10 +79,18 @@ const Recovery = {
     layoutType: 'grid',
     properties: {
       rows: 2,
-      columns: 3,
+      columns: 4,
     },
   },
-  viewports: [recoveryLAX, recoverySAX, recoveryAP4, recoveryAP3, recoveryAP2, recoveryView6],
+  viewports: [
+    recoveryLAX,
+    recoverySAXBase,
+    recoverySAXMid,
+    recoverySAXApex,
+    recoveryAP4,
+    recoveryAP2,
+    recoveryAP3,
+  ],
 };
 
 const LAX = {
@@ -189,6 +222,54 @@ const hpRest = {
         },
       ],
     },
+    restSAXBaseDisplaySet: {
+      seriesMatchingRules: [
+        {
+          attribute: 'StageName',
+          constraint: { containsI: ['Rest', 'Baseline'] },
+          required: true,
+        },
+        {
+          attribute: 'ViewName',
+          constraint: {
+            containsI: ['SAX-BASE', 'SAX_BASE', 'SAX base', 'SAX MV', 'SAX_MV'],
+          },
+          required: true,
+        },
+      ],
+    },
+    restSAXMidDisplaySet: {
+      seriesMatchingRules: [
+        {
+          attribute: 'StageName',
+          constraint: { containsI: ['Rest', 'Baseline'] },
+          required: true,
+        },
+        {
+          attribute: 'ViewName',
+          constraint: {
+            containsI: ['SAX-PM', 'SAX_PM', 'SAX PM', 'SAX mid', 'SAX_MID', 'Papillary'],
+          },
+          required: true,
+        },
+      ],
+    },
+    restSAXApexDisplaySet: {
+      seriesMatchingRules: [
+        {
+          attribute: 'StageName',
+          constraint: { containsI: ['Rest', 'Baseline'] },
+          required: true,
+        },
+        {
+          attribute: 'ViewName',
+          constraint: {
+            containsI: ['SAX-AP', 'SAX_AP', 'SAX apex', 'SAX_APEX'],
+          },
+          required: true,
+        },
+      ],
+    },
     restAP4DisplaySet: {
       seriesMatchingRules: [
         {
@@ -315,6 +396,54 @@ const hpPeak = {
         },
       ],
     },
+    peakSAXBaseDisplaySet: {
+      seriesMatchingRules: [
+        {
+          attribute: 'StageName',
+          constraint: { containsI: 'Peak' },
+          required: true,
+        },
+        {
+          attribute: 'ViewName',
+          constraint: {
+            containsI: ['SAX-BASE', 'SAX_BASE', 'SAX base', 'SAX MV', 'SAX_MV'],
+          },
+          required: true,
+        },
+      ],
+    },
+    peakSAXMidDisplaySet: {
+      seriesMatchingRules: [
+        {
+          attribute: 'StageName',
+          constraint: { containsI: 'Peak' },
+          required: true,
+        },
+        {
+          attribute: 'ViewName',
+          constraint: {
+            containsI: ['SAX-PM', 'SAX_PM', 'SAX PM', 'SAX mid', 'SAX_MID', 'Papillary'],
+          },
+          required: true,
+        },
+      ],
+    },
+    peakSAXApexDisplaySet: {
+      seriesMatchingRules: [
+        {
+          attribute: 'StageName',
+          constraint: { containsI: 'Peak' },
+          required: true,
+        },
+        {
+          attribute: 'ViewName',
+          constraint: {
+            containsI: ['SAX-AP', 'SAX_AP', 'SAX apex', 'SAX_APEX'],
+          },
+          required: true,
+        },
+      ],
+    },
     peakAP4DisplaySet: {
       seriesMatchingRules: [
         {
@@ -435,6 +564,54 @@ const hpRecovery = {
           attribute: 'ViewName',
           constraint: {
             containsI: 'SAX',
+          },
+          required: true,
+        },
+      ],
+    },
+    recoverySAXBaseDisplaySet: {
+      seriesMatchingRules: [
+        {
+          attribute: 'StageName',
+          constraint: { containsI: ['Recovery', 'Post'] },
+          required: true,
+        },
+        {
+          attribute: 'ViewName',
+          constraint: {
+            containsI: ['SAX-BASE', 'SAX_BASE', 'SAX base', 'SAX MV', 'SAX_MV'],
+          },
+          required: true,
+        },
+      ],
+    },
+    recoverySAXMidDisplaySet: {
+      seriesMatchingRules: [
+        {
+          attribute: 'StageName',
+          constraint: { containsI: ['Recovery', 'Post'] },
+          required: true,
+        },
+        {
+          attribute: 'ViewName',
+          constraint: {
+            containsI: ['SAX-PM', 'SAX_PM', 'SAX PM', 'SAX mid', 'SAX_MID', 'Papillary'],
+          },
+          required: true,
+        },
+      ],
+    },
+    recoverySAXApexDisplaySet: {
+      seriesMatchingRules: [
+        {
+          attribute: 'StageName',
+          constraint: { containsI: ['Recovery', 'Post'] },
+          required: true,
+        },
+        {
+          attribute: 'ViewName',
+          constraint: {
+            containsI: ['SAX-AP', 'SAX_AP', 'SAX apex', 'SAX_APEX'],
           },
           required: true,
         },

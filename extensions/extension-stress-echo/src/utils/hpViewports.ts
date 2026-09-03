@@ -44,6 +44,27 @@ const restSAX = {
   ],
 };
 
+const makeStressViewport = (viewportId, displaySetId) => ({
+  viewportOptions: {
+    viewportId,
+    viewportType: 'stack',
+    toolGroupId: 'default',
+    syncGroups: [
+      {
+        type: 'voi',
+        id: 'ctWLSync',
+        source: true,
+        target: true,
+      },
+    ],
+  },
+  displaySets: [{ id: displaySetId }],
+});
+
+const restSAXBase = makeStressViewport('restSAXBase', 'restSAXBaseDisplaySet');
+const restSAXMid = makeStressViewport('restSAXMid', 'restSAXMidDisplaySet');
+const restSAXApex = makeStressViewport('restSAXApex', 'restSAXApexDisplaySet');
+
 const restAP4 = {
   viewportOptions: {
     viewportId: 'restAP4',
@@ -169,6 +190,10 @@ const peakSAX = {
     },
   ],
 };
+
+const peakSAXBase = makeStressViewport('peakSAXBase', 'peakSAXBaseDisplaySet');
+const peakSAXMid = makeStressViewport('peakSAXMid', 'peakSAXMidDisplaySet');
+const peakSAXApex = makeStressViewport('peakSAXApex', 'peakSAXApexDisplaySet');
 
 const peakAP4 = {
   viewportOptions: {
@@ -296,6 +321,10 @@ const recoverySAX = {
   ],
 };
 
+const recoverySAXBase = makeStressViewport('recoverySAXBase', 'recoverySAXBaseDisplaySet');
+const recoverySAXMid = makeStressViewport('recoverySAXMid', 'recoverySAXMidDisplaySet');
+const recoverySAXApex = makeStressViewport('recoverySAXApex', 'recoverySAXApexDisplaySet');
+
 const recoveryAP4 = {
   viewportOptions: {
     viewportId: 'recoveryAP4',
@@ -383,18 +412,27 @@ const recoveryView6 = {
 export {
   restLAX,
   restSAX,
+  restSAXBase,
+  restSAXMid,
+  restSAXApex,
   restAP4,
   restAP2,
   restAP3,
   restView6,
   peakLAX,
   peakSAX,
+  peakSAXBase,
+  peakSAXMid,
+  peakSAXApex,
   peakAP4,
   peakAP2,
   peakAP3,
   peakView6,
   recoveryLAX,
   recoverySAX,
+  recoverySAXBase,
+  recoverySAXMid,
+  recoverySAXApex,
   recoveryAP4,
   recoveryAP2,
   recoveryAP3,
