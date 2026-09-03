@@ -2128,14 +2128,26 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
           getNestedViewerTarget(questionAnswer) ||
           getNestedViewerTarget(scoreItem?.learnerResponse)
         : null;
-    const resolvedViewerTarget = hasViewerTargetOverride
-      ? options.viewerTarget
-      : learnerFrameTarget ||
+    const configuredFrameTarget =
+      question.type === 'frameSelection'
+        ? getNestedViewerTarget(question?.answerConfig?.goldTarget) ||
+          getQuestionViewerTarget(question)
+        : null;
+    let resolvedViewerTarget;
+
+    if (hasViewerTargetOverride) {
+      resolvedViewerTarget = options.viewerTarget;
+    } else if (question.type === 'frameSelection' && !authoringMode) {
+      resolvedViewerTarget = configuredFrameTarget;
+    } else {
+      resolvedViewerTarget =
+        learnerFrameTarget ||
         (scoreItem
           ? getReviewAnswerTarget(question, reviewQuestionAnswer) ||
             getCorrectReviewTarget(question, scoreItem) ||
             getQuestionViewerTarget(question)
           : getReviewAnswerTarget(question, questionAnswer) || getQuestionViewerTarget(question));
+    }
     const viewerTarget = getQuestionSelectionViewerTarget(
       question,
       resolvedViewerTarget,
