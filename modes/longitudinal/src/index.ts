@@ -1044,11 +1044,17 @@ function modeFactory({ modeConfiguration }) {
         const sourceAnnotation = eventDetail.annotation;
         const annotationId = String(sourceAnnotation?.annotationUID || '').trim();
         const toolName = String(sourceAnnotation?.metadata?.toolName || '').trim();
+        const changeType = String(eventDetail.changeType || '').trim();
 
-        // Selection/navigation does not emit ANNOTATION_MODIFIED and therefore
-        // must never become save intent. Actual annotation edits do: remember
-        // those ids so clinical saves replace only genuinely changed payloads.
-        if (annotationId) {
+        // ANNOTATION_MODIFIED is broader than persisted edit intent. Cornerstone
+        // also emits it for initial setup, stats recalculation, interaction state,
+        // and metadata-reference changes. Only durable user edits should cause a
+        // saved measurement to replace its persisted payload.
+        const isPersistedMeasurementEdit = ['HandlesUpdated', 'LabelChange', 'History'].includes(
+          changeType
+        );
+
+        if (annotationId && isPersistedMeasurementEdit) {
           commandsManager.runCommand('markViewerMeasurementModifiedInSession', {
             uid: annotationId,
           });

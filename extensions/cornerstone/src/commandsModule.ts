@@ -12413,6 +12413,13 @@ function commandsModule({
             ? getCurrentReviewMeasurementRound(seriesDoc)
             : 0;
 
+          const changedClinicalMeasurementIds = isClinicalReportSave
+            ? new Set<string>([
+                ...viewerMeasurementsCreatedInSession,
+                ...viewerMeasurementsModifiedInSession,
+              ])
+            : new Set<string>();
+
           const liveAnnotations = measurements
             .filter(measurement => {
               const measurementId = getMeasurementAnnotationId(measurement);
@@ -12430,12 +12437,27 @@ function commandsModule({
                       viewerMeasurementsCreatedInSession.has(measurementId))))
               );
             })
-            .map(measurement =>
-              serializeViewerMeasurement(measurement, domain, existingById.get(measurement.uid), {
+            .map(measurement => {
+              const measurementId = getMeasurementAnnotationId(measurement);
+              const shouldPreferDirectLiveVolumeMeasurement =
+                isClinicalReportSave &&
+                changedClinicalMeasurementIds.has(measurementId) &&
+                (isLAVolumeMeasurement(measurement) || isLVSimpsonMeasurement(measurement));
+              const directLiveMeasurement = shouldPreferDirectLiveVolumeMeasurement
+                ? findMeasurementServiceMeasurementById(measurementService, measurementId)
+                : null;
+              const sourceMeasurement = directLiveMeasurement || measurement;
+              const existingAnnotation = existingById.get(measurementId) || null;
+
+              // For genuinely changed clinical LA/LV contours, use the exact live
+              // MeasurementService object that drives the panel. This keeps contour
+              // points in parity with the panel while saved guided geometry remains
+              // authoritative through serializeViewerMeasurement().
+              return serializeViewerMeasurement(sourceMeasurement, domain, existingAnnotation, {
                 displaySetService,
                 workflow: targetWorkflow,
-              })
-            )
+              });
+            })
             .map(annotation =>
               isReviewWorkflowSave
                 ? {
@@ -12445,13 +12467,6 @@ function commandsModule({
                 : annotation
             )
             .filter(annotation => annotation.referencedImageId || annotation.points?.length);
-
-          const changedClinicalMeasurementIds = isClinicalReportSave
-            ? new Set<string>([
-                ...viewerMeasurementsCreatedInSession,
-                ...viewerMeasurementsModifiedInSession,
-              ])
-            : new Set<string>();
 
           let annotations = liveAnnotations;
 
