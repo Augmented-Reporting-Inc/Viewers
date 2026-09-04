@@ -2214,7 +2214,11 @@ function compactClinicalViewerMeasurementAnnotationsRaw(raw: any) {
 }
 
 function getLAVolumeMeasurementPayload(measurement, existingAnnotation = null) {
-  const laVolume = getLAVolumeGeometry(measurement, existingAnnotation);
+  const liveLAVolume = getLAVolumeGeometry(measurement, null);
+  const savedLAVolume = existingAnnotation
+    ? getLAVolumeGeometry(existingAnnotation, null)
+    : null;
+  const laVolume = savedLAVolume || liveLAVolume;
 
   if (!laVolume) {
     return {};
@@ -2225,10 +2229,13 @@ function getLAVolumeMeasurementPayload(measurement, existingAnnotation = null) {
   // SplineROI is a closed contour. Its first and last sampled points can be the
   // same point and its resampling can move indices, so the contour must never
   // redefine the user-confirmed annular endpoints or superior long-axis point.
-  // Preserve the guided geometry and update only the editable contour shape.
+  // For an existing slot, keep the exact saved guided geometry authoritative
+  // and replace only the editable contour points. This matches the AR Measurements
+  // panel, which displays live contour points against the saved LA axis geometry.
+  // Live geometry remains the source for a newly-created slot with no saved copy.
   const updatedGeometry = {
-    ...(existingAnnotation?.measurements?.laVolume || {}),
-    ...laVolume,
+    ...(liveLAVolume || {}),
+    ...(savedLAVolume || {}),
     ...(contourPoints.length >= 3 ? { contourPoints } : {}),
   };
 
