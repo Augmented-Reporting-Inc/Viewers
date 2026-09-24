@@ -11,6 +11,7 @@ import { BOWEL_CURVED_LENGTH_MEASUREMENT_KIND } from '../utils/bowelMeasurementT
 
 const ULTRASOUND_DIRECTIONAL_TOOL_NAME = 'UltrasoundDirectionalTool';
 const CLINICAL_REPORT_MEASUREMENTS_SAVE_TARGET = 'clinicalReportMeasurements';
+const CINE_COMMENT_ANNOTATION_KIND = 'cineComment';
 
 function isUltrasoundDirectionalMeasurement(measurement) {
   return String(measurement?.toolName || '') === ULTRASOUND_DIRECTIONAL_TOOL_NAME;
@@ -21,6 +22,10 @@ function getUltrasoundDirectionalGeometry(measurement) {
 }
 
 function getMeasurementLabel(measurement) {
+  if (isCineCommentMeasurement(measurement)) {
+    return 'Cine comment';
+  }
+
   return (
     measurement?.label ||
     measurement?.measurementRole ||
@@ -55,6 +60,19 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): 
 
 function isArrowAnnotateMeasurement(measurement) {
   return String(measurement?.toolName || '') === 'ArrowAnnotate';
+}
+
+function isCineCommentMeasurement(measurement) {
+  return (
+    isArrowAnnotateMeasurement(measurement) &&
+    String(
+      measurement?.annotationKind || measurement?.measurements?.annotationKind || ''
+    ).trim() === CINE_COMMENT_ANNOTATION_KIND
+  );
+}
+
+function getCineCommentText(measurement) {
+  return isCineCommentMeasurement(measurement) ? getArrowAnnotateText(measurement) : '';
 }
 
 function getArrowAnnotateText(measurement) {
@@ -188,6 +206,10 @@ function getMeasurementValue(measurement) {
     if (value != null) {
       return formatMeasurementValue(value, unit || 'mm');
     }
+  }
+
+  if (isCineCommentMeasurement(measurement)) {
+    return getCineCommentText(measurement);
   }
 
   if (isArrowAnnotateMeasurement(measurement)) {
@@ -571,12 +593,13 @@ function getShortId(measurement) {
 }
 
 function getMeasurementSubtitle(measurement) {
-  const parts = [measurement?.toolName];
+  const isCineComment = isCineCommentMeasurement(measurement);
+  const parts = [isCineComment ? 'Cine' : measurement?.toolName];
 
   const frameNumber = getFrameNumber(measurement);
 
   if (frameNumber) {
-    parts.push(`Frame ${frameNumber}`);
+    parts.push(isCineComment ? `Anchor frame ${frameNumber}` : `Frame ${frameNumber}`);
   }
 
   if (measurement?.measurementOwner === 'coach') {
@@ -1336,6 +1359,7 @@ function getAutoDisplayPeerMeasurements(measurements: any[] = [], saveTarget: an
   const candidates = (Array.isArray(measurements) ? measurements : []).filter(
     measurement =>
       measurement?.isSavedAnnotation === true &&
+      !isCineCommentMeasurement(measurement) &&
       isSavedReviewWorkflowMeasurement(measurement) &&
       normalizeMeasurementScoringToken(measurement?.sourceRole) === expectedSourceRole
   );
@@ -1373,6 +1397,7 @@ function getAutoDisplayAnnotationsForReferenceImage(
 
     const shouldInclude =
       measurement?.isSavedAnnotation === true &&
+      !isCineCommentMeasurement(measurement) &&
       isSavedReviewWorkflowMeasurement(measurement) &&
       (sourceRole === 'learner' || peerMeasurementKeys.has(measurementKey));
 
@@ -1397,6 +1422,7 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
   const [measurements, setMeasurements] = useState([]);
   const [pendingDeletedMeasurementIds, setPendingDeletedMeasurementIds] = useState<string[]>([]);
   const [savingAction, setSavingAction] = useState('');
+  const [isAddingCineComment, setIsAddingCineComment] = useState(false);
   const [isPreparingClinicalReportReview, setIsPreparingClinicalReportReview] = useState(false);
   const [showClinicalReportReviewBeforeSave, setShowClinicalReportReviewBeforeSave] = useState(
     getClinicalReportReviewPreference
@@ -2065,6 +2091,39 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
     await executeMeasurementSave(scoreNow);
   };
 
+  const handleAddCineComment = useCallback(async () => {
+    if (isReviewWorkflowReadOnly || isSaving || isAddingCineComment) {
+      return;
+    }
+
+    setIsAddingCineComment(true);
+
+    try {
+      const result = await commandsManager.runCommand('addViewerCineComment');
+
+      if (result?.ok) {
+        await refreshLiveMeasurements();
+      }
+    } catch (error) {
+      console.error('[ARMeasurementsPanel] add cine comment failed:', error);
+      uiNotificationService.show({
+        title: 'Cine Comment',
+        message: `Unable to add cine comment: ${error?.message || error}`,
+        type: 'error',
+        duration: 5000,
+      });
+    } finally {
+      setIsAddingCineComment(false);
+    }
+  }, [
+    commandsManager,
+    isAddingCineComment,
+    isReviewWorkflowReadOnly,
+    isSaving,
+    refreshLiveMeasurements,
+    uiNotificationService,
+  ]);
+
   const handleIuscanDone = async () => {
     if (!isExternalIuscanSession || isSaving) {
       return;
@@ -2166,6 +2225,14 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
       }
 
       try {
+        if (isCineCommentMeasurement(measurement)) {
+          return await commandsManager.runCommand('jumpToSavedViewerAnnotation', {
+            annotation: measurement,
+            selectAnnotation: false,
+            runDelayedDisplayRefresh: false,
+          });
+        }
+
         if (isUltrasoundDirectionalMeasurement(measurement)) {
           const result = await commandsManager.runCommand('jumpToSavedViewerAnnotation', {
             annotation: measurement,
@@ -2395,11 +2462,23 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
                               onClick={() => jumpToMeasurement(measurement)}
                               title="Jump to measurement or annotation"
                             >
-                              <div className="text-sm font-semibold">{label}</div>
+                              <div className="whitespace-pre-wrap break-words text-sm font-semibold">
+                                {label}
+                              </div>
 
                               <div className="text-xs text-gray-400">{subtitle}</div>
 
-                              {value ? <div className="mt-1 text-sm">{value}</div> : null}
+                              {value ? (
+                                <div
+                                  className={`mt-1 text-sm ${
+                                    isCineCommentMeasurement(measurement)
+                                      ? 'whitespace-pre-wrap break-words text-gray-100'
+                                      : ''
+                                  }`}
+                                >
+                                  {value}
+                                </div>
+                              ) : null}
                             </button>
 
                             {canDelete ? (
@@ -2438,6 +2517,22 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
             />
             Review AR report values before saving
           </label>
+        ) : null}
+
+        {isVirtualCoachingReviewWorkflow(saveTarget) && !isReviewWorkflowReadOnly ? (
+          <div className="mb-3 space-y-1">
+            <button
+              type="button"
+              className="w-full rounded border border-blue-500 bg-blue-950 px-3 py-2 text-sm font-semibold text-blue-100 hover:bg-blue-900 disabled:opacity-50"
+              disabled={isSaving || isAddingCineComment}
+              onClick={handleAddCineComment}
+            >
+              {isAddingCineComment ? 'Adding Cine Comment…' : 'Add Cine Comment'}
+            </button>
+            <div className="text-center text-[11px] text-gray-400">
+              General comment for the current cine — no arrow or shape required.
+            </div>
+          </div>
         ) : null}
 
         {isReviewWorkflow ? (

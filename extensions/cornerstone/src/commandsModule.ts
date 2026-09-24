@@ -58,6 +58,7 @@ import {
   hydrateMeasurementAnnotationsForActiveStudy as hydrateMeasurementAnnotationsForActiveStudyUtil,
 } from './utils/measurementAnnotationHydration';
 import { buildFormApiFetchOptions, buildFormApiUrl } from './utils/formApi';
+import { callMultilineTextDialog } from './utils/callMultilineTextDialog';
 import {
   LV_SIMPSON_MEASUREMENT_KIND,
   LV_TRACE_MEASUREMENT_LABELS_CONFIG,
@@ -131,6 +132,8 @@ const AR_LV_SIMPSON_SESSION_EVENT = 'ar-measurements:lv-simpson-session-updated'
 const AR_LA_VOLUME_SESSION_EVENT = 'ar-measurements:la-volume-session-updated';
 const ULTRASOUND_DIRECTIONAL_TOOL_NAME = 'UltrasoundDirectionalTool';
 const ULTRASOUND_DIRECTIONAL_MEASUREMENT_KIND = 'ultrasound-directional';
+const CINE_COMMENT_ANNOTATION_KIND = 'cineComment';
+const CINE_COMMENT_SCOPE = 'cine';
 
 const lvSimpsonSessionMeasurementsByUid = new Map<string, any>();
 const laVolumeSessionMeasurementsByUid = new Map<string, any>();
@@ -1901,12 +1904,43 @@ function getArrowAnnotateText(measurement, existingAnnotation = null) {
   );
 }
 
+function getViewerAnnotationKind(measurement, existingAnnotation = null) {
+  return String(
+    measurement?.annotationKind ||
+      measurement?.measurements?.annotationKind ||
+      existingAnnotation?.annotationKind ||
+      existingAnnotation?.measurements?.annotationKind ||
+      ''
+  ).trim();
+}
+
+function getViewerCommentScope(measurement, existingAnnotation = null) {
+  return String(
+    measurement?.commentScope ||
+      measurement?.measurements?.commentScope ||
+      existingAnnotation?.commentScope ||
+      existingAnnotation?.measurements?.commentScope ||
+      ''
+  ).trim();
+}
+
+function isCineCommentViewerMeasurement(measurement, existingAnnotation = null) {
+  return (
+    measurement?.toolName === 'ArrowAnnotate' &&
+    getViewerAnnotationKind(measurement, existingAnnotation) === CINE_COMMENT_ANNOTATION_KIND
+  );
+}
+
 function getArrowAnnotateMeasurementPayload(measurement, existingAnnotation = null) {
   const text = getArrowAnnotateText(measurement, existingAnnotation);
+  const annotationKind = getViewerAnnotationKind(measurement, existingAnnotation);
+  const commentScope = getViewerCommentScope(measurement, existingAnnotation);
 
   return {
     text,
     displayText: text ? [text] : [],
+    ...(annotationKind ? { annotationKind } : {}),
+    ...(commentScope ? { commentScope } : {}),
   };
 }
 
@@ -2430,6 +2464,12 @@ function serializeViewerMeasurement(measurement, domain, existingAnnotation = nu
   const arrowText = isArrowAnnotateMeasurement
     ? getArrowAnnotateText(measurement, existingAnnotation)
     : '';
+  const annotationKind = isArrowAnnotateMeasurement
+    ? getViewerAnnotationKind(measurement, existingAnnotation)
+    : '';
+  const commentScope = isArrowAnnotateMeasurement
+    ? getViewerCommentScope(measurement, existingAnnotation)
+    : '';
   const label = measurement?.label || arrowText || '';
   const isContourMeasurement = isViewerContourTool(measurement?.toolName);
   const lvTrace = domain === 'echo' && isContourMeasurement ? parseLVTraceLabel(label) : null;
@@ -2525,6 +2565,8 @@ function serializeViewerMeasurement(measurement, domain, existingAnnotation = nu
       ? {
           text: arrowText,
           textBox: measurement?.textBox || existingAnnotation?.textBox || null,
+          ...(annotationKind ? { annotationKind } : {}),
+          ...(commentScope ? { commentScope } : {}),
         }
       : {}),
 
@@ -9127,22 +9169,170 @@ function commandsModule({
         getArViewerSaveTargetFromUrl()
       );
 
-      const value = await callInputDialog({
-        uiDialogService,
-        title: existingText
-          ? isCoachingAnnotation
-            ? 'Edit Coaching Annotation'
-            : 'Edit Image Annotation'
-          : isCoachingAnnotation
-            ? 'Add Coaching Annotation'
-            : 'Add Image Annotation',
-        placeholder: isCoachingAnnotation
-          ? 'Describe the finding or area of interest for review'
-          : 'Enter annotation text',
-        defaultValue: existingText,
-      });
+      const title = existingText
+        ? isCoachingAnnotation
+          ? 'Edit Coaching Annotation'
+          : 'Edit Image Annotation'
+        : isCoachingAnnotation
+          ? 'Add Coaching Annotation'
+          : 'Add Image Annotation';
+
+      const value = isCoachingAnnotation
+        ? await callMultilineTextDialog({
+            uiDialogService,
+            title,
+            placeholder: 'Describe the finding or area of interest for review',
+            defaultValue: existingText,
+            helperText: 'Use Enter for new lines. Ctrl/Cmd+Enter saves the annotation.',
+            saveLabel: existingText ? 'Update Annotation' : 'Add Annotation',
+          })
+        : await callInputDialog({
+            uiDialogService,
+            title,
+            placeholder: 'Enter annotation text',
+            defaultValue: existingText,
+          });
 
       callback?.(value);
+    },
+    addViewerCineComment: async () => {
+      const saveTarget = getArViewerSaveTargetFromUrl();
+      const workflow = getWritableReviewMeasurementWorkflow(saveTarget);
+
+      if (!isReviewWorkflowMeasurementsSaveTarget(saveTarget) || !workflow) {
+        return {
+          ok: false,
+          reason: 'review-workflow-read-only',
+        };
+      }
+
+      const activeViewportId = viewportGridService.getActiveViewportId();
+      const viewport = cornerstoneViewportService.getCornerstoneViewport(activeViewportId);
+      const displaySet = getActiveViewportDisplaySet({
+        viewportGridService,
+        displaySetService,
+        viewportId: activeViewportId,
+      });
+      const imageInfo = viewport ? getCurrentViewportImageInfo(viewport) : null;
+
+      if (!viewport || !displaySet || !imageInfo?.imageId) {
+        uiNotificationService.show({
+          title: 'Cine Comment',
+          message: 'Open the cine you want to comment on, then try again.',
+          type: 'warning',
+          duration: 4000,
+        });
+
+        return {
+          ok: false,
+          reason: 'active-cine-not-found',
+        };
+      }
+
+      const value = await callMultilineTextDialog({
+        uiDialogService,
+        title: 'Add Cine Comment',
+        placeholder: 'Enter a general comment about this cine loop',
+        helperText:
+          'This comment applies to the cine as a whole; no arrow or shape is required. Use Enter for new lines.',
+        saveLabel: 'Add Cine Comment',
+      });
+
+      const text = String(value || '').trim();
+
+      if (!text) {
+        return {
+          ok: false,
+          reason: 'cancelled',
+        };
+      }
+
+      const annotationUID = `${csUtils.uuidv4()}`;
+      const frameNumber = getFrameNumberFromReferencedImageId(imageInfo.imageId);
+      let anchorWorldPoint = [0, 0, 0];
+
+      try {
+        const element = viewport.element;
+        const width = Number(element?.clientWidth || element?.getBoundingClientRect?.()?.width || 0);
+        const height = Number(element?.clientHeight || element?.getBoundingClientRect?.()?.height || 0);
+        const worldPoint =
+          width > 0 && height > 0
+            ? viewport.canvasToWorld?.([width / 2, height / 2])
+            : viewport.getCamera?.()?.focalPoint;
+
+        if (worldPoint && Array.from(worldPoint).length >= 3) {
+          const candidatePoint = Array.from(worldPoint).slice(0, 3).map(Number);
+
+          if (candidatePoint.every(Number.isFinite)) {
+            anchorWorldPoint = candidatePoint;
+          }
+        }
+      } catch {}
+
+      const sopInstanceId =
+        getSopInstanceIdFromImageId(imageInfo.imageId) ||
+        displaySet?.SOPInstanceUID ||
+        displaySet?.sopInstanceUID ||
+        '';
+      const measurementOwner =
+        workflow === REVIEWER_MEASUREMENTS_WORKFLOW ? 'coach' : 'learner';
+
+      const measurement = {
+        uid: annotationUID,
+        annotationUID,
+        toolName: 'ArrowAnnotate',
+        label: 'Cine comment',
+        measurementRole: 'Cine comment',
+        role: 'Cine comment',
+        annotationKind: CINE_COMMENT_ANNOTATION_KIND,
+        commentScope: CINE_COMMENT_SCOPE,
+        text,
+        textBox: null,
+        workflow,
+        measurementOwner,
+        isLocked: false,
+        arCreatedInViewerSession: true,
+        referenceStudyUID: displaySet?.StudyInstanceUID || displaySet?.studyInstanceUID || '',
+        referenceSeriesUID: displaySet?.SeriesInstanceUID || displaySet?.seriesInstanceUID || '',
+        SOPInstanceUID: sopInstanceId,
+        FrameOfReferenceUID: viewport.getFrameOfReferenceUID?.() || '',
+        displaySetInstanceUID: displaySet?.displaySetInstanceUID || '',
+        referencedImageId: imageInfo.imageId,
+        frameNumber,
+        // The review-workflow API requires canonical annotations to carry at least
+        // one point. Cine comments keep a single invisible viewport-center anchor
+        // for persistence/navigation, but are never hydrated as ArrowAnnotate geometry.
+        points: [anchorWorldPoint],
+        displayText: [text],
+        measurements: {
+          text,
+          displayText: [text],
+          annotationKind: CINE_COMMENT_ANNOTATION_KIND,
+          commentScope: CINE_COMMENT_SCOPE,
+        },
+      };
+
+      viewerMeasurementsDeletedInSession.delete(annotationUID);
+      viewerMeasurementsModifiedInSession.delete(annotationUID);
+      viewerMeasurementsCreatedInSession.add(annotationUID);
+      measurementService.update(annotationUID, measurement, true);
+
+      dispatchLiveMeasurementsRefresh({
+        reason: 'cine-comment-created',
+        annotationUID,
+      });
+
+      uiNotificationService.show({
+        title: 'Cine Comment',
+        message: 'Cine comment added. It will be saved with this coaching review.',
+        type: 'success',
+        duration: 3000,
+      });
+
+      return {
+        ok: true,
+        annotationUID,
+      };
     },
     toggleCine: () => {
       const { viewports } = viewportGridService.getState();
@@ -11092,6 +11282,22 @@ function commandsModule({
         ) ||
         viewport;
 
+      if (isCineCommentViewerMeasurement(savedAnnotation)) {
+        hydratedViewport.render?.();
+
+        return {
+          ok: true,
+          source: 'cine-comment',
+          annotationId,
+          viewportId: hydratedViewport.id || targetViewportId,
+          referencedImageId:
+            readyReferencedImageId ||
+            actualReferencedImageId ||
+            savedAnnotation.referencedImageId ||
+            '',
+        };
+      }
+
       const hydratedAnnotation = isUltrasoundDirectionalViewerMeasurement(savedAnnotation)
         ? hydrateSavedUltrasoundDirectionalForViewport({
             savedAnnotation,
@@ -11338,6 +11544,10 @@ function commandsModule({
       let hydratedCount = 1;
 
       for (const savedAnnotation of orderedAnnotations.slice(1)) {
+        if (isCineCommentViewerMeasurement(savedAnnotation)) {
+          continue;
+        }
+
         const hydratedAnnotation = isUltrasoundDirectionalViewerMeasurement(savedAnnotation)
           ? hydrateSavedUltrasoundDirectionalForViewport({
               savedAnnotation,
@@ -12066,6 +12276,9 @@ function commandsModule({
     },
     arrowTextCallback: {
       commandFn: actions.arrowTextCallback,
+    },
+    addViewerCineComment: {
+      commandFn: actions.addViewerCineComment,
     },
     setViewportActive: {
       commandFn: actions.setViewportActive,

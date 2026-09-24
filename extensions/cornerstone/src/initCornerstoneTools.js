@@ -48,6 +48,64 @@ import * as polySeg from '@cornerstonejs/polymorphic-segmentation';
 import CalibrationLineTool from './tools/CalibrationLineTool';
 import ImageOverlayViewerTool from './tools/ImageOverlayViewerTool';
 
+function wrapAnnotationTextLine(value, maxChars) {
+  const source = String(value ?? '');
+
+  if (!source) {
+    return [''];
+  }
+
+  const lines = [];
+  let remaining = source;
+
+  while (remaining.length > maxChars) {
+    const windowText = remaining.slice(0, maxChars + 1);
+    const whitespaceIndex = Math.max(windowText.lastIndexOf(' '), windowText.lastIndexOf('\t'));
+    const splitIndex = whitespaceIndex >= Math.floor(maxChars * 0.55) ? whitespaceIndex : maxChars;
+
+    lines.push(remaining.slice(0, splitIndex).trimEnd());
+    remaining = remaining.slice(splitIndex).trimStart();
+  }
+
+  lines.push(remaining);
+  return lines;
+}
+
+function wrapAnnotationTextLines(textLines = [], maxChars = 0) {
+  const resolvedMaxChars = Number(maxChars);
+
+  if (!Number.isFinite(resolvedMaxChars) || resolvedMaxChars < 10) {
+    return textLines;
+  }
+
+  return (Array.isArray(textLines) ? textLines : [textLines]).flatMap(value =>
+    String(value ?? '')
+      .split(/\r?\n/)
+      .flatMap(line => wrapAnnotationTextLine(line, Math.floor(resolvedMaxChars)))
+  );
+}
+
+class ARArrowAnnotateTool extends ArrowAnnotateTool {
+  renderLinkedTextBoxAnnotation(options) {
+    const maxChars = Number(this.configuration?.arTextWrapMaxChars || 0);
+    const shouldWrap =
+      typeof this.configuration?.arShouldWrapAnnotationText === 'function'
+        ? this.configuration.arShouldWrapAnnotationText()
+        : true;
+
+    if (!shouldWrap || !Number.isFinite(maxChars) || maxChars < 10) {
+      return super.renderLinkedTextBoxAnnotation(options);
+    }
+
+    const wrappedTextLines = wrapAnnotationTextLines(options?.textLines || [], maxChars);
+
+    return super.renderLinkedTextBoxAnnotation({
+      ...options,
+      textLines: wrappedTextLines.length ? wrappedTextLines : options?.textLines,
+    });
+  }
+}
+
 export default function initCornerstoneTools(configuration = {}) {
   CrosshairsTool.isAnnotation = false;
   LabelmapSlicePropagationTool.isAnnotation = false;
@@ -80,7 +138,7 @@ export default function initCornerstoneTools(configuration = {}) {
   addTool(EllipticalROITool);
   addTool(CircleROITool);
   addTool(BidirectionalTool);
-  addTool(ArrowAnnotateTool);
+  addTool(ARArrowAnnotateTool);
   addTool(DragProbeTool);
   addTool(AngleTool);
   addTool(CobbAngleTool);
