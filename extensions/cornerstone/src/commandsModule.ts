@@ -137,6 +137,7 @@ const CINE_COMMENT_SCOPE = 'cine';
 
 const lvSimpsonSessionMeasurementsByUid = new Map<string, any>();
 const laVolumeSessionMeasurementsByUid = new Map<string, any>();
+const cineCommentSessionMeasurementsById = new Map<string, any>();
 
 const clinicalViewerSeriesReadCache = new Map<string, any>();
 const clinicalViewerSeriesReadPending = new Map<string, Promise<any>>();
@@ -309,6 +310,35 @@ function removeLAVolumeSessionMeasurement(uid = '') {
     uid: measurementUid,
     slot: existing?.slot || existing?.laVolume?.slot || '',
   });
+}
+
+function getCineCommentSessionMeasurements() {
+  return Array.from(cineCommentSessionMeasurementsById.values());
+}
+
+function upsertCineCommentSessionMeasurement(measurement: any = {}) {
+  const measurementId = getMeasurementAnnotationId(measurement);
+
+  if (!measurementId) {
+    return '';
+  }
+
+  cineCommentSessionMeasurementsById.set(measurementId, measurement);
+  return measurementId;
+}
+
+function removeCineCommentSessionMeasurement(measurementId = '') {
+  const normalizedMeasurementId = String(measurementId || '').trim();
+
+  if (!normalizedMeasurementId) {
+    return false;
+  }
+
+  return cineCommentSessionMeasurementsById.delete(normalizedMeasurementId);
+}
+
+function clearCineCommentSessionMeasurements() {
+  cineCommentSessionMeasurementsById.clear();
 }
 
 function getViewerMeasurementSnapshotPoints(measurement: any = {}, geometry: any = {}) {
@@ -517,6 +547,19 @@ function getCurrentViewerMeasurementSnapshot(
   // Cornerstone annotation state is the source of truth for tools that AR owns
   // directly rather than round-tripping through OHIF MeasurementService.
   for (const measurement of fallbackMeasurements.filter(isUltrasoundDirectionalViewerMeasurement)) {
+    const measurementId = getMeasurementAnnotationId(measurement);
+
+    if (measurementId) {
+      measurementsById.set(measurementId, measurement);
+    } else {
+      measurementsWithoutId.push(measurement);
+    }
+  }
+
+  // Cine comments intentionally have no Cornerstone geometry. MeasurementService.update()
+  // only updates IDs it already owns, so newly-created comments live in this small
+  // session map until the normal viewerMeasurements/reviewerMeasurements save succeeds.
+  for (const measurement of getCineCommentSessionMeasurements()) {
     const measurementId = getMeasurementAnnotationId(measurement);
 
     if (measurementId) {
@@ -6963,6 +7006,7 @@ function commandsModule({
       viewerMeasurementsDeletedInSession.clear();
       lvSimpsonSessionMeasurementsByUid.clear();
       laVolumeSessionMeasurementsByUid.clear();
+      clearCineCommentSessionMeasurements();
       cancelActiveLVSimpsonCapture();
       cancelActiveLAVolumeCapture();
       activeLVSimpsonWorkflowSessionId = '';
@@ -9066,6 +9110,7 @@ function commandsModule({
         viewerMeasurementsDeletedInSession.add(measurementId);
         removeLVSimpsonSessionMeasurement(measurementId);
         removeLAVolumeSessionMeasurement(measurementId);
+        removeCineCommentSessionMeasurement(measurementId);
 
         if (sourceAnnotation) {
           cornerstoneTools.annotation.selection.setAnnotationSelected?.(measurementId, false);
@@ -9316,7 +9361,7 @@ function commandsModule({
       viewerMeasurementsDeletedInSession.delete(annotationUID);
       viewerMeasurementsModifiedInSession.delete(annotationUID);
       viewerMeasurementsCreatedInSession.add(annotationUID);
-      measurementService.update(annotationUID, measurement, true);
+      upsertCineCommentSessionMeasurement(measurement);
 
       dispatchLiveMeasurementsRefresh({
         reason: 'cine-comment-created',
@@ -13080,6 +13125,18 @@ function commandsModule({
               updatedFields,
               source: 'viewer-measurements',
             });
+          }
+
+          const persistedMeasurementIds = new Set(
+            refreshedAnnotations.map(getMeasurementAnnotationId).filter(Boolean)
+          );
+
+          for (const cineComment of getCineCommentSessionMeasurements()) {
+            const measurementId = getMeasurementAnnotationId(cineComment);
+
+            if (measurementId && persistedMeasurementIds.has(measurementId)) {
+              removeCineCommentSessionMeasurement(measurementId);
+            }
           }
 
           viewerMeasurementsCreatedInSession.clear();

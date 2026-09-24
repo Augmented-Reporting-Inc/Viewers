@@ -27,6 +27,7 @@ import {
   init,
   addTool,
   annotation,
+  drawing,
   ReferenceLinesTool,
   TrackballRotateTool,
   AdvancedMagnifyTool,
@@ -85,24 +86,141 @@ function wrapAnnotationTextLines(textLines = [], maxChars = 0) {
   );
 }
 
+const DEFAULT_ARROW_ANNOTATION_WRAP_MAX_CHARS = 48;
+
 class ARArrowAnnotateTool extends ArrowAnnotateTool {
-  renderLinkedTextBoxAnnotation(options) {
-    const maxChars = Number(this.configuration?.arTextWrapMaxChars || 0);
+  constructor(...args) {
+    super(...args);
+
+    // Cornerstone 3.33.x defines renderAnnotation as an instance field rather
+    // than a prototype method. Capture the bound base renderer here, then wrap
+    // only the text-box portion so arrows/handles keep upstream behavior.
+    const renderBaseAnnotation = this.renderAnnotation;
+
+    this.renderAnnotation = (enabledElement, svgDrawingHelper) =>
+      this.renderWrappedAnnotation(enabledElement, svgDrawingHelper, renderBaseAnnotation);
+  }
+
+  renderWrappedAnnotation(enabledElement, svgDrawingHelper, renderBaseAnnotation) {
+    const { viewport } = enabledElement;
+    const { element } = viewport;
+    const configuredMaxChars = Number(
+      this.configuration?.arTextWrapMaxChars || DEFAULT_ARROW_ANNOTATION_WRAP_MAX_CHARS
+    );
     const shouldWrap =
       typeof this.configuration?.arShouldWrapAnnotationText === 'function'
         ? this.configuration.arShouldWrapAnnotationText()
         : true;
 
-    if (!shouldWrap || !Number.isFinite(maxChars) || maxChars < 10) {
-      return super.renderLinkedTextBoxAnnotation(options);
+    if (!shouldWrap || !Number.isFinite(configuredMaxChars) || configuredMaxChars < 10) {
+      return renderBaseAnnotation(enabledElement, svgDrawingHelper);
     }
 
-    const wrappedTextLines = wrapAnnotationTextLines(options?.textLines || [], maxChars);
+    let annotations = annotation.state.getAnnotations?.(this.getToolName(), element) || [];
+    annotations = this.filterInteractableAnnotationsForElement(element, annotations) || [];
 
-    return super.renderLinkedTextBoxAnnotation({
-      ...options,
-      textLines: wrappedTextLines.length ? wrappedTextLines : options?.textLines,
-    });
+    const maxChars = Math.floor(configuredMaxChars);
+    const wrapTargets = annotations
+      .filter(candidate => !!candidate?.data?.text)
+      .map(candidate => ({
+        annotation: candidate,
+        text: String(candidate.data.text),
+      }));
+
+    if (!wrapTargets.length) {
+      return renderBaseAnnotation(enabledElement, svgDrawingHelper);
+    }
+
+    // Prevent the upstream renderer from drawing its hard-coded `[text]`
+    // single-line text box. It still draws all arrows and handles.
+    for (const target of wrapTargets) {
+      target.annotation.data.text = '';
+    }
+
+    let renderStatus;
+    try {
+      renderStatus = renderBaseAnnotation(enabledElement, svgDrawingHelper);
+    } finally {
+      for (const target of wrapTargets) {
+        target.annotation.data.text = target.text;
+      }
+    }
+
+    if (!viewport.getRenderingEngine?.()) {
+      return renderStatus;
+    }
+
+    let wrappedTextRendered = false;
+
+    for (const target of wrapTargets) {
+      const targetAnnotation = target.annotation;
+      const annotationId = targetAnnotation?.annotationUID;
+      const handles = targetAnnotation?.data?.handles;
+      const points = handles?.points;
+
+      if (
+        !annotationId ||
+        !Array.isArray(points) ||
+        points.length < 2 ||
+        !handles?.textBox ||
+        annotation.visibility?.isAnnotationVisible?.(annotationId) === false
+      ) {
+        continue;
+      }
+
+      const styleSpecifier = {
+        toolGroupId: this.toolGroupId,
+        toolName: this.getToolName(),
+        viewportId: viewport.id,
+        annotationUID: annotationId,
+      };
+      const options = this.getLinkedTextBoxStyle(styleSpecifier, targetAnnotation);
+
+      if (!options.visibility) {
+        handles.textBox = {
+          hasMoved: false,
+          worldPosition: [0, 0, 0],
+          worldBoundingBox: {
+            topLeft: [0, 0, 0],
+            topRight: [0, 0, 0],
+            bottomLeft: [0, 0, 0],
+            bottomRight: [0, 0, 0],
+          },
+        };
+        continue;
+      }
+
+      const canvasCoordinates = points.map(point => viewport.worldToCanvas(point));
+
+      if (!handles.textBox.hasMoved) {
+        handles.textBox.worldPosition = viewport.canvasToWorld(canvasCoordinates[1]);
+      }
+
+      const textBoxPosition = viewport.worldToCanvas(handles.textBox.worldPosition);
+      const textLines = wrapAnnotationTextLines([target.text], maxChars);
+      const boundingBox = drawing.drawLinkedTextBox(
+        svgDrawingHelper,
+        annotationId,
+        '1',
+        textLines,
+        textBoxPosition,
+        canvasCoordinates,
+        {},
+        options
+      );
+
+      const { x: left, y: top, width, height } = boundingBox;
+      handles.textBox.worldBoundingBox = {
+        topLeft: viewport.canvasToWorld([left, top]),
+        topRight: viewport.canvasToWorld([left + width, top]),
+        bottomLeft: viewport.canvasToWorld([left, top + height]),
+        bottomRight: viewport.canvasToWorld([left + width, top + height]),
+      };
+
+      wrappedTextRendered = true;
+    }
+
+    return renderStatus || wrappedTextRendered;
   }
 }
 
