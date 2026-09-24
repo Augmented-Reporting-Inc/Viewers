@@ -9177,34 +9177,32 @@ function commandsModule({
           ? 'Add Coaching Annotation'
           : 'Add Image Annotation';
 
-      const value = isCoachingAnnotation
-        ? await callMultilineTextDialog({
-            uiDialogService,
-            title,
-            placeholder: 'Describe the finding or area of interest for review',
-            defaultValue: existingText,
-            helperText: 'Use Enter for new lines. Ctrl/Cmd+Enter saves the annotation.',
-            saveLabel: existingText ? 'Update Annotation' : 'Add Annotation',
-          })
-        : await callInputDialog({
-            uiDialogService,
-            title,
-            placeholder: 'Enter annotation text',
-            defaultValue: existingText,
-          });
+      const value = await callMultilineTextDialog({
+        uiDialogService,
+        title,
+        placeholder: isCoachingAnnotation
+          ? 'Describe the finding or area of interest for review'
+          : 'Enter annotation text',
+        defaultValue: existingText,
+        helperText: 'Use Enter for new lines. Ctrl/Cmd+Enter saves the annotation.',
+        saveLabel: existingText ? 'Update Annotation' : 'Add Annotation',
+      });
 
       callback?.(value);
     },
     addViewerCineComment: async () => {
       const saveTarget = getArViewerSaveTargetFromUrl();
-      const workflow = getWritableReviewMeasurementWorkflow(saveTarget);
+      const isReviewWorkflow = isReviewWorkflowMeasurementsSaveTarget(saveTarget);
+      const reviewWorkflow = getWritableReviewMeasurementWorkflow(saveTarget);
 
-      if (!isReviewWorkflowMeasurementsSaveTarget(saveTarget) || !workflow) {
+      if (isReviewWorkflow && !reviewWorkflow) {
         return {
           ok: false,
           reason: 'review-workflow-read-only',
         };
       }
+
+      const workflow = reviewWorkflow || VIEWER_MEASUREMENTS_WORKFLOW;
 
       const activeViewportId = viewportGridService.getActiveViewportId();
       const viewport = cornerstoneViewportService.getCornerstoneViewport(activeViewportId);
@@ -9274,8 +9272,11 @@ function commandsModule({
         displaySet?.SOPInstanceUID ||
         displaySet?.sopInstanceUID ||
         '';
-      const measurementOwner =
-        workflow === REVIEWER_MEASUREMENTS_WORKFLOW ? 'coach' : 'learner';
+      const measurementOwner = isReviewWorkflow
+        ? workflow === REVIEWER_MEASUREMENTS_WORKFLOW
+          ? 'coach'
+          : 'learner'
+        : '';
 
       const measurement = {
         uid: annotationUID,
@@ -9289,7 +9290,7 @@ function commandsModule({
         text,
         textBox: null,
         workflow,
-        measurementOwner,
+        ...(measurementOwner ? { measurementOwner } : {}),
         isLocked: false,
         arCreatedInViewerSession: true,
         referenceStudyUID: displaySet?.StudyInstanceUID || displaySet?.studyInstanceUID || '',
@@ -9299,9 +9300,9 @@ function commandsModule({
         displaySetInstanceUID: displaySet?.displaySetInstanceUID || '',
         referencedImageId: imageInfo.imageId,
         frameNumber,
-        // The review-workflow API requires canonical annotations to carry at least
-        // one point. Cine comments keep a single invisible viewport-center anchor
-        // for persistence/navigation, but are never hydrated as ArrowAnnotate geometry.
+        // Keep one invisible viewport-center anchor so cine comments use the same
+        // canonical viewer-annotation persistence/navigation contract in every workflow,
+        // while never hydrating that anchor as visible ArrowAnnotate geometry.
         points: [anchorWorldPoint],
         displayText: [text],
         measurements: {
@@ -9324,7 +9325,7 @@ function commandsModule({
 
       uiNotificationService.show({
         title: 'Cine Comment',
-        message: 'Cine comment added. It will be saved with this coaching review.',
+        message: 'Cine comment added. Save measurements & annotations to persist it.',
         type: 'success',
         duration: 3000,
       });

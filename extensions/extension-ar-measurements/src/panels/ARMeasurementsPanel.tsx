@@ -2519,7 +2519,7 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
           </label>
         ) : null}
 
-        {isVirtualCoachingReviewWorkflow(saveTarget) && !isReviewWorkflowReadOnly ? (
+        {!isReviewWorkflowReadOnly ? (
           <div className="mb-3 space-y-1">
             <button
               type="button"

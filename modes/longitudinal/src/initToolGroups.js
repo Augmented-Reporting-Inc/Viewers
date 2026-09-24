@@ -12,17 +12,6 @@ const colorsByOrientation = {
   coronal: 'rgb(0, 200, 0)',
 };
 
-function shouldWrapArrowAnnotationText() {
-  try {
-    return (
-      new URLSearchParams(window.location.search).get('arSaveTarget') ===
-      'reviewWorkflowMeasurements'
-    );
-  } catch {
-    return false;
-  }
-}
-
 function initDefaultToolGroup(extensionManager, toolGroupService, commandsManager, toolGroupId) {
   const utilityModule = extensionManager.getModuleEntry(
     '@ohif/extension-cornerstone.utilityModule.tools'
@@ -55,7 +44,6 @@ function initDefaultToolGroup(extensionManager, toolGroupService, commandsManage
         toolName: toolNames.ArrowAnnotate,
         configuration: {
           arTextWrapMaxChars: 48,
-          arShouldWrapAnnotationText: shouldWrapArrowAnnotationText,
           getTextCallback: (callback, eventDetails) => {
             commandsManager.runCommand('arrowTextCallback', {
               callback,
@@ -220,7 +208,6 @@ function initMPRToolGroup(extensionManager, toolGroupService, commandsManager) {
         toolName: toolNames.ArrowAnnotate,
         configuration: {
           arTextWrapMaxChars: 48,
-          arShouldWrapAnnotationText: shouldWrapArrowAnnotationText,
           getTextCallback: (callback, eventDetails) => {
             commandsManager.runCommand('arrowTextCallback', {
               callback,
