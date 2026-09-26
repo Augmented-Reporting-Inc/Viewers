@@ -2660,6 +2660,7 @@ function serializeViewerMeasurement(measurement, domain, existingAnnotation = nu
     ...(isBowelCurvedLength
       ? {
           measurementKind: BOWEL_CURVED_LENGTH_MEASUREMENT_KIND,
+          contourClosed: false,
           ...(reportMapping ? { reportMapping } : {}),
         }
       : {}),
@@ -5567,6 +5568,7 @@ function getBowelCurvedLengthMeasurementPayload(measurement: any = {}, existingA
 
   return {
     measurementKind: BOWEL_CURVED_LENGTH_MEASUREMENT_KIND,
+    contourClosed: false,
     length: lengthMM,
     value: lengthMM,
     lengthUnit: 'mm',
@@ -8924,12 +8926,14 @@ function commandsModule({
           measurements: {
             ...(mappedMeasurement?.measurements || {}),
             measurementKind: BOWEL_CURVED_LENGTH_MEASUREMENT_KIND,
+            contourClosed: false,
             length: lengthMM,
             value: lengthMM,
             lengthUnit: 'mm',
             unit: 'mm',
             displayText,
           },
+          contourClosed: false,
           displayText,
         };
 
@@ -8943,6 +8947,12 @@ function commandsModule({
           label: measurementLabel,
           measurementKind: BOWEL_CURVED_LENGTH_MEASUREMENT_KIND,
           ...(reportMapping ? { reportMapping } : {}),
+          contour: {
+            ...(sourceAnnotation.data?.contour || {}),
+            closed: false,
+            polyline: contourPoints,
+          },
+          isOpenUShapeContour: true,
           arBowelCurvedLengthDisplayText: displayText,
           arSavedMeasurementDisplayText: displayText,
         };
