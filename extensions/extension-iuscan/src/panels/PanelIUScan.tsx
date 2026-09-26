@@ -29,14 +29,19 @@ const isCurvedLengthAnnotation = annotation =>
     annotation?.measurementKind || annotation?.measurements?.measurementKind || ''
   ).trim() === BOWEL_CURVED_LENGTH_MEASUREMENT_KIND;
 
+const isArrowAnnotation = annotation =>
+  String(annotation?.toolName || '').trim() === 'ArrowAnnotate';
+
 const preserveIuscanSavedAnnotations = annotations => {
   const source = Array.isArray(annotations) ? annotations : [];
   const repeated = normalizeSavedIuscanRepeatedAnnotations(
     source.filter(annotation => annotation?.mode === 'repeated' || annotation?.repeatedMeasurement)
   );
-  const curved = source.filter(isCurvedLengthAnnotation);
+  const supplemental = source.filter(
+    annotation => isCurvedLengthAnnotation(annotation) || isArrowAnnotation(annotation)
+  );
 
-  return [...repeated, ...curved];
+  return [...repeated, ...supplemental];
 };
 
 const emptyObservations = () =>
@@ -153,12 +158,14 @@ export default function PanelIUScan({ servicesManager, commandsManager }) {
           annotation => annotation?.mode === 'repeated' || annotation?.repeatedMeasurement
         )
       );
-      const curved = persistedAnnotations.filter(isCurvedLengthAnnotation);
+      const supplemental = persistedAnnotations.filter(
+        annotation => isCurvedLengthAnnotation(annotation) || isArrowAnnotation(annotation)
+      );
       const legacyPlaceholders = getLegacyIuscanMeasurementPlaceholders(
         result?.seriesDoc || {},
         repeated
       );
-      const panelAnnotations = [...repeated, ...curved, ...legacyPlaceholders];
+      const panelAnnotations = [...repeated, ...supplemental, ...legacyPlaceholders];
 
       setSavedAnnotations(panelAnnotations);
       setObservationsBySite({
