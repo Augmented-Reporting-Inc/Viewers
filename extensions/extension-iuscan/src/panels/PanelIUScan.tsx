@@ -197,6 +197,61 @@ export default function PanelIUScan({ servicesManager, commandsManager }) {
     loadSavedState();
   }, [loadSavedState]);
 
+  useEffect(() => {
+    const supplementalAnnotations = savedAnnotations.filter(
+      annotation => isCurvedLengthAnnotation(annotation) || isArrowAnnotation(annotation)
+    );
+
+    if (supplementalAnnotations.length === 0) {
+      return;
+    }
+
+    let cancelled = false;
+    const hydratedAnnotationIds = new Set();
+    const retryDelays = [0, 250, 750, 1500];
+
+    const hydrateVisibleSupplementalAnnotations = async () => {
+      for (const annotation of supplementalAnnotations) {
+        if (cancelled) {
+          return;
+        }
+
+        const annotationId = getIuscanRepeatedAnnotationId(annotation);
+        if (!annotationId || hydratedAnnotationIds.has(annotationId)) {
+          continue;
+        }
+
+        try {
+          const result = await commandsManager.runCommand(
+            'hydrateSavedViewerAnnotationIfVisibleInActiveViewport',
+            {
+              annotation,
+              selectAnnotation: false,
+            }
+          );
+
+          if (result?.ok) {
+            hydratedAnnotationIds.add(annotationId);
+          }
+        } catch (error) {
+          console.warn(
+            '[iUSCAN] supplemental annotation hydration failed:',
+            error?.message || error
+          );
+        }
+      }
+    };
+
+    const timers = retryDelays.map(delay =>
+      window.setTimeout(hydrateVisibleSupplementalAnnotations, delay)
+    );
+
+    return () => {
+      cancelled = true;
+      timers.forEach(timer => window.clearTimeout(timer));
+    };
+  }, [commandsManager, savedAnnotations]);
+
   const measurementState = useMemo(
     () =>
       buildIuscanSiteMeasurementState({
@@ -216,6 +271,19 @@ export default function PanelIUScan({ servicesManager, commandsManager }) {
       ),
     [measurementState, visibleSites]
   );
+
+  const hasSupplementalAnnotationData = useMemo(() => {
+    const removedIds = removedAnnotationIds;
+
+    return [...measurements, ...savedAnnotations].some(annotation => {
+      if (!isCurvedLengthAnnotation(annotation) && !isArrowAnnotation(annotation)) {
+        return false;
+      }
+
+      const annotationId = getIuscanRepeatedAnnotationId(annotation);
+      return !annotationId || !removedIds.has(annotationId);
+    });
+  }, [measurements, removedAnnotationIds, savedAnnotations]);
 
   const hasObservationData = useMemo(
     () =>
@@ -370,12 +438,25 @@ export default function PanelIUScan({ servicesManager, commandsManager }) {
       }
     }
 
+    for (const annotation of savedAnnotations) {
+      if (!isCurvedLengthAnnotation(annotation) && !isArrowAnnotation(annotation)) {
+        continue;
+      }
+
+      const id = getIuscanRepeatedAnnotationId(annotation);
+      if (id) currentIds.add(id);
+    }
+
     setRemovedAnnotationIds(currentIds);
     setObservationsBySite(emptyObservations());
     commandsManager.runCommand('clearIUScanMeasurements');
   }
 
-  const hasAnyData = hasMeasurementData || hasObservationData || removedAnnotationIds.size > 0;
+  const hasAnyData =
+    hasMeasurementData ||
+    hasSupplementalAnnotationData ||
+    hasObservationData ||
+    removedAnnotationIds.size > 0;
   const panelTitle = researchContext ? researchContext.title : 'Bowel Measurements';
 
   return (
