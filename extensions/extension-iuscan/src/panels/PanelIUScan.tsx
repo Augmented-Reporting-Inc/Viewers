@@ -22,6 +22,27 @@ import {
   loadResearchContextFromViewer,
   subscribeResearchContext,
 } from '../utils/researchProtocol';
+import { BOWEL_CURVED_LENGTH_MEASUREMENT_KIND } from '../../../extension-ar-measurements/src/utils/bowelMeasurementTargets';
+
+const isCurvedLengthAnnotation = annotation =>
+  String(
+    annotation?.measurementKind || annotation?.measurements?.measurementKind || ''
+  ).trim() === BOWEL_CURVED_LENGTH_MEASUREMENT_KIND;
+
+const isArrowAnnotation = annotation =>
+  String(annotation?.toolName || '').trim() === 'ArrowAnnotate';
+
+const preserveIuscanSavedAnnotations = annotations => {
+  const source = Array.isArray(annotations) ? annotations : [];
+  const repeated = normalizeSavedIuscanRepeatedAnnotations(
+    source.filter(annotation => annotation?.mode === 'repeated' || annotation?.repeatedMeasurement)
+  );
+  const supplemental = source.filter(
+    annotation => isCurvedLengthAnnotation(annotation) || isArrowAnnotation(annotation)
+  );
+
+  return [...repeated, ...supplemental];
+};
 
 const emptyObservations = () =>
   Object.fromEntries(
@@ -101,13 +122,11 @@ export default function PanelIUScan({ servicesManager, commandsManager }) {
       if (researchContext?.reviewKey) {
         const review =
           getActiveResearchReview() || (await loadActiveResearchReviewFromViewer({ forceRefresh: true }));
-        const repeated = normalizeSavedIuscanRepeatedAnnotations(
-          (review?.measurementAnnotations || []).filter(
-            annotation => annotation?.mode === 'repeated' || annotation?.repeatedMeasurement
-          )
+        const savedReviewAnnotations = preserveIuscanSavedAnnotations(
+          review?.measurementAnnotations || []
         );
 
-        setSavedAnnotations(repeated);
+        setSavedAnnotations(savedReviewAnnotations);
         setObservationsBySite({
           ...emptyObservations(),
           ...(review?.observationsBySite || {}),
@@ -116,7 +135,7 @@ export default function PanelIUScan({ servicesManager, commandsManager }) {
 
         const measurementState = buildIuscanSiteMeasurementState({
           liveMeasurements: measurements,
-          savedAnnotations: repeated,
+          savedAnnotations: savedReviewAnnotations,
         });
         const firstPopulatedSite = getResearchVisibleSites(researchContext).find(site =>
           Object.values(measurementState[site.key] || {}).some(group =>
@@ -133,16 +152,20 @@ export default function PanelIUScan({ servicesManager, commandsManager }) {
         includeRepeated: true,
       });
 
+      const persistedAnnotations = Array.isArray(result?.annotations) ? result.annotations : [];
       const repeated = normalizeSavedIuscanRepeatedAnnotations(
-        (result?.annotations || []).filter(
+        persistedAnnotations.filter(
           annotation => annotation?.mode === 'repeated' || annotation?.repeatedMeasurement
         )
+      );
+      const supplemental = persistedAnnotations.filter(
+        annotation => isCurvedLengthAnnotation(annotation) || isArrowAnnotation(annotation)
       );
       const legacyPlaceholders = getLegacyIuscanMeasurementPlaceholders(
         result?.seriesDoc || {},
         repeated
       );
-      const panelAnnotations = [...repeated, ...legacyPlaceholders];
+      const panelAnnotations = [...repeated, ...supplemental, ...legacyPlaceholders];
 
       setSavedAnnotations(panelAnnotations);
       setObservationsBySite({
@@ -174,6 +197,61 @@ export default function PanelIUScan({ servicesManager, commandsManager }) {
     loadSavedState();
   }, [loadSavedState]);
 
+  useEffect(() => {
+    const supplementalAnnotations = savedAnnotations.filter(
+      annotation => isCurvedLengthAnnotation(annotation) || isArrowAnnotation(annotation)
+    );
+
+    if (supplementalAnnotations.length === 0) {
+      return;
+    }
+
+    let cancelled = false;
+    const hydratedAnnotationIds = new Set();
+    const retryDelays = [0, 250, 750, 1500];
+
+    const hydrateVisibleSupplementalAnnotations = async () => {
+      for (const annotation of supplementalAnnotations) {
+        if (cancelled) {
+          return;
+        }
+
+        const annotationId = getIuscanRepeatedAnnotationId(annotation);
+        if (!annotationId || hydratedAnnotationIds.has(annotationId)) {
+          continue;
+        }
+
+        try {
+          const result = await commandsManager.runCommand(
+            'hydrateSavedViewerAnnotationIfVisibleInActiveViewport',
+            {
+              annotation,
+              selectAnnotation: false,
+            }
+          );
+
+          if (result?.ok) {
+            hydratedAnnotationIds.add(annotationId);
+          }
+        } catch (error) {
+          console.warn(
+            '[iUSCAN] supplemental annotation hydration failed:',
+            error?.message || error
+          );
+        }
+      }
+    };
+
+    const timers = retryDelays.map(delay =>
+      window.setTimeout(hydrateVisibleSupplementalAnnotations, delay)
+    );
+
+    return () => {
+      cancelled = true;
+      timers.forEach(timer => window.clearTimeout(timer));
+    };
+  }, [commandsManager, savedAnnotations]);
+
   const measurementState = useMemo(
     () =>
       buildIuscanSiteMeasurementState({
@@ -193,6 +271,19 @@ export default function PanelIUScan({ servicesManager, commandsManager }) {
       ),
     [measurementState, visibleSites]
   );
+
+  const hasSupplementalAnnotationData = useMemo(() => {
+    const removedIds = removedAnnotationIds;
+
+    return [...measurements, ...savedAnnotations].some(annotation => {
+      if (!isCurvedLengthAnnotation(annotation) && !isArrowAnnotation(annotation)) {
+        return false;
+      }
+
+      const annotationId = getIuscanRepeatedAnnotationId(annotation);
+      return !annotationId || !removedIds.has(annotationId);
+    });
+  }, [measurements, removedAnnotationIds, savedAnnotations]);
 
   const hasObservationData = useMemo(
     () =>
@@ -283,13 +374,11 @@ export default function PanelIUScan({ servicesManager, commandsManager }) {
           removedAnnotationIds: Array.from(removedAnnotationIds),
         });
 
-        const repeated = normalizeSavedIuscanRepeatedAnnotations(
-          (savedReview?.measurementAnnotations || []).filter(
-            annotation => annotation?.mode === 'repeated' || annotation?.repeatedMeasurement
-          )
+        const savedReviewAnnotations = preserveIuscanSavedAnnotations(
+          savedReview?.measurementAnnotations || []
         );
 
-        setSavedAnnotations(repeated);
+        setSavedAnnotations(savedReviewAnnotations);
         setObservationsBySite({
           ...emptyObservations(),
           ...(savedReview?.observationsBySite || observationsBySite),
@@ -349,12 +438,25 @@ export default function PanelIUScan({ servicesManager, commandsManager }) {
       }
     }
 
+    for (const annotation of savedAnnotations) {
+      if (!isCurvedLengthAnnotation(annotation) && !isArrowAnnotation(annotation)) {
+        continue;
+      }
+
+      const id = getIuscanRepeatedAnnotationId(annotation);
+      if (id) currentIds.add(id);
+    }
+
     setRemovedAnnotationIds(currentIds);
     setObservationsBySite(emptyObservations());
     commandsManager.runCommand('clearIUScanMeasurements');
   }
 
-  const hasAnyData = hasMeasurementData || hasObservationData || removedAnnotationIds.size > 0;
+  const hasAnyData =
+    hasMeasurementData ||
+    hasSupplementalAnnotationData ||
+    hasObservationData ||
+    removedAnnotationIds.size > 0;
   const panelTitle = researchContext ? researchContext.title : 'Bowel Measurements';
 
   return (

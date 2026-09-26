@@ -94,6 +94,8 @@ function modeFactory({ modeConfiguration }) {
       // buttons come from extension-iuscan and @ohif/extension-cornerstone)
       toolbarService.updateSection(toolbarService.sections.primary, [
         'Length', // core caliper — left-click to draw
+        'ArrowAnnotate',
+        'BowelCurvedLength',
         'WindowLevel', // W/L adjustment
         'Pan',
         'Zoom',
@@ -117,12 +119,17 @@ function modeFactory({ modeConfiguration }) {
       // ── Cine: enable auto-play so clips play when their display set loads ─
       cineService.setIsCineEnabled(true);
 
-      // Fire label picker after each caliper is completed
+      // Fire the BWT/Submucosa label picker only for the straight Length caliper.
+      // Annotation and Curved Length own their own completion workflows.
       _annotationCompletedHandler = evt => {
-        const uid = evt.detail?.annotation?.annotationUID;
-        if (!uid) {
+        const completedAnnotation = evt.detail?.annotation;
+        const uid = completedAnnotation?.annotationUID;
+        const toolName = String(completedAnnotation?.metadata?.toolName || '').trim();
+
+        if (!uid || toolName !== 'Length') {
           return;
         }
+
         setTimeout(() => {
           commandsManager.runCommand('setIUScanMeasurementLabel', { uid });
         }, 0);

@@ -110,6 +110,11 @@ import {
   getUltrasoundDirectionalTargetOptionsForUnit,
   normalizeUltrasoundDirectionalTargetSelection,
 } from './utils/ultrasoundDirectionalReportMapping';
+import {
+  BOWEL_CURVED_LENGTH_MEASUREMENT_KIND,
+  getBowelCurvedLengthTargetOptions,
+  normalizeBowelCurvedLengthTargetSelection,
+} from '../../extension-ar-measurements/src/utils/bowelMeasurementTargets';
 
 const { DefaultHistoryMemo } = csUtils.HistoryMemo;
 const toggleSyncFunctions = {
@@ -2515,6 +2520,7 @@ function serializeViewerMeasurement(measurement, domain, existingAnnotation = nu
     : '';
   const label = measurement?.label || arrowText || '';
   const isContourMeasurement = isViewerContourTool(measurement?.toolName);
+  const isBowelCurvedLength = isBowelCurvedLengthViewerMeasurement(measurement, existingAnnotation);
   const lvTrace = domain === 'echo' && isContourMeasurement ? parseLVTraceLabel(label) : null;
   const lvSimpson = getLVSimpsonGeometry(measurement, existingAnnotation);
   const laVolume = getLAVolumeGeometry(measurement, existingAnnotation);
@@ -2553,7 +2559,9 @@ function serializeViewerMeasurement(measurement, domain, existingAnnotation = nu
       ? getDecelerationTimeMeasurementPayload(measurement, existingAnnotation) // AR_DECELERATION_TIME
       : isUltrasoundDirectional
         ? getUltrasoundDirectionalMeasurementPayload(measurement, existingAnnotation)
-        : isContourMeasurement && !isSpectralDoppler
+        : isBowelCurvedLength
+          ? getBowelCurvedLengthMeasurementPayload(measurement, existingAnnotation)
+          : isContourMeasurement && !isSpectralDoppler
         ? buildContourMeasurementPayload(measurement, existingAnnotation, options.displaySetService)
         : isArrowAnnotateMeasurement
           ? getArrowAnnotateMeasurementPayload(measurement, existingAnnotation)
@@ -2645,6 +2653,14 @@ function serializeViewerMeasurement(measurement, domain, existingAnnotation = nu
       ? {
           measurementKind: SPECTRAL_DOPPLER_MEASUREMENT_KIND,
           spectralDoppler: nextMeasurements.spectralDoppler,
+          ...(reportMapping ? { reportMapping } : {}),
+        }
+      : {}),
+
+    ...(isBowelCurvedLength
+      ? {
+          measurementKind: BOWEL_CURVED_LENGTH_MEASUREMENT_KIND,
+          contourClosed: false,
           ...(reportMapping ? { reportMapping } : {}),
         }
       : {}),
@@ -4930,7 +4946,7 @@ function installDecelerationTimeTextOverrideForViewport({ viewport, viewportId =
 }
 // AR_DECELERATION_TIME:END text-override
 
-function installSpectralDopplerTextOverrideForViewport({ viewport, viewportId = '' }) {
+function installPlanarFreehandMeasurementTextOverrideForViewport({ viewport, viewportId = '' }) {
   if (!viewport) {
     return;
   }
@@ -4950,7 +4966,7 @@ function installSpectralDopplerTextOverrideForViewport({ viewport, viewportId = 
   const toolName = toolNames.PlanarFreehandROI || 'PlanarFreehandROI';
   const toolInstance = toolGroup?.getToolInstance?.(toolName);
 
-  if (!toolInstance || toolInstance.__arSpectralDopplerTextOverrideInstalled) {
+  if (!toolInstance || toolInstance.__arPlanarFreehandMeasurementTextOverrideInstalled) {
     return;
   }
 
@@ -4962,7 +4978,9 @@ function installSpectralDopplerTextOverrideForViewport({ viewport, viewportId = 
 
       for (const candidate of candidates) {
         const overrideText =
-          candidate?.arSpectralDopplerDisplayText || candidate?.arSavedMeasurementDisplayText;
+          candidate?.arSpectralDopplerDisplayText ||
+          candidate?.arBowelCurvedLengthDisplayText ||
+          candidate?.arSavedMeasurementDisplayText;
 
         if (Array.isArray(overrideText) && overrideText.length > 0) {
           return overrideText;
@@ -4990,7 +5008,7 @@ function installSpectralDopplerTextOverrideForViewport({ viewport, viewportId = 
 
   toolInstance.configuration = nextConfiguration;
   toolGroup?.setToolConfiguration?.(toolName, nextConfiguration, true);
-  toolInstance.__arSpectralDopplerTextOverrideInstalled = true;
+  toolInstance.__arPlanarFreehandMeasurementTextOverrideInstalled = true;
 }
 
 function captureLVSimpsonDrag({ viewport, onPreview, isCancelled, setCancelHandler }) {
@@ -5406,6 +5424,158 @@ async function resolveDecelerationTimeTarget({ uiDialogService, customizationSer
   return normalizeDecelerationTimeTargetSelection(value);
 }
 // AR_DECELERATION_TIME:END target-dialog
+
+function isIuscanViewerContext() {
+  const params = getViewerUrlSearchParams();
+  const integration = String(params.get('arIntegration') || '').trim().toLowerCase();
+  const explicitDomain = String(
+    params.get('arMeasurementDomain') ||
+      params.get('arViewerDomain') ||
+      params.get('viewerDomain') ||
+      ''
+  )
+    .trim()
+    .toLowerCase();
+  const path = String(window.location?.pathname || '').toLowerCase();
+
+  return integration === 'iuscan' || explicitDomain === 'iuscan' || path.includes('/iuscan');
+}
+
+function getBowelCurvedLengthTargetDialogConfig({ isIuscan = false } = {}) {
+  return {
+    id: 'bowelCurvedLengthReportTarget',
+    labelOnMeasure: false,
+    exclusive: true,
+    items: getBowelCurvedLengthTargetOptions({ isIuscan }),
+  };
+}
+
+async function resolveBowelCurvedLengthTarget({
+  uiDialogService,
+  customizationService,
+  isIuscan = false,
+} = {}) {
+  const renderContent = customizationService.getCustomization('ui.labellingComponent');
+  const options = getBowelCurvedLengthTargetOptions({ isIuscan });
+  let value = null;
+
+  try {
+    value = await callInputDialogAutoComplete({
+      uiDialogService,
+      labelConfig: getBowelCurvedLengthTargetDialogConfig({ isIuscan }),
+      renderContent,
+      title: 'Curved Length Measurement',
+    });
+  } catch (error) {
+    console.warn(
+      '[Bowel Curved Length] target autocomplete failed; falling back to text input:',
+      error
+    );
+    value = await callInputDialog({
+      uiDialogService,
+      title: 'Curved Length Measurement',
+      placeholder: options.map(option => option.label).join(', '),
+      defaultValue: options[0]?.label || '',
+    });
+  }
+
+  return normalizeBowelCurvedLengthTargetSelection(value, { isIuscan });
+}
+
+function calculateBowelCurvedLengthMM(points: any[] = []) {
+  if (!Array.isArray(points) || points.length < 2) {
+    return null;
+  }
+
+  let total = 0;
+
+  for (let index = 1; index < points.length; index += 1) {
+    const previous = points[index - 1];
+    const current = points[index];
+
+    if (!Array.isArray(previous) || !Array.isArray(current)) {
+      return null;
+    }
+
+    const dx = Number(current[0]) - Number(previous[0]);
+    const dy = Number(current[1]) - Number(previous[1]);
+    const dz = Number(current[2] || 0) - Number(previous[2] || 0);
+    const distance = Math.hypot(dx, dy, dz);
+
+    if (!Number.isFinite(distance)) {
+      return null;
+    }
+
+    total += distance;
+  }
+
+  return Number.isFinite(total) && total > 0 ? total : null;
+}
+
+function formatBowelCurvedLengthDisplayText(lengthMM) {
+  const value = Number(lengthMM);
+
+  if (!Number.isFinite(value) || value <= 0) {
+    return [];
+  }
+
+  const formatted = value >= 100 ? value.toFixed(0) : value >= 10 ? value.toFixed(1) : value.toFixed(2);
+  return [`${formatted} mm`];
+}
+
+function isBowelCurvedLengthViewerMeasurement(measurement: any = {}, existingAnnotation: any = null) {
+  return (
+    measurement?.measurementKind === BOWEL_CURVED_LENGTH_MEASUREMENT_KIND ||
+    measurement?.measurements?.measurementKind === BOWEL_CURVED_LENGTH_MEASUREMENT_KIND ||
+    existingAnnotation?.measurementKind === BOWEL_CURVED_LENGTH_MEASUREMENT_KIND ||
+    existingAnnotation?.measurements?.measurementKind === BOWEL_CURVED_LENGTH_MEASUREMENT_KIND
+  );
+}
+
+function getBowelCurvedLengthMeasurementPayload(measurement: any = {}, existingAnnotation: any = null) {
+  const measurements = measurement?.measurements || {};
+  const existingMeasurements = existingAnnotation?.measurements || {};
+  const rawValue =
+    finiteNumberOrNull(measurements.length) ??
+    finiteNumberOrNull(measurements.value) ??
+    finiteNumberOrNull(measurement?.length) ??
+    finiteNumberOrNull(measurement?.value) ??
+    finiteNumberOrNull(existingMeasurements.length) ??
+    finiteNumberOrNull(existingMeasurements.value) ??
+    finiteNumberOrNull(existingAnnotation?.length) ??
+    finiteNumberOrNull(existingAnnotation?.value);
+  const rawUnit = String(
+    measurements.lengthUnit ||
+      measurements.unit ||
+      measurement?.lengthUnit ||
+      measurement?.unit ||
+      existingMeasurements.lengthUnit ||
+      existingMeasurements.unit ||
+      existingAnnotation?.lengthUnit ||
+      existingAnnotation?.unit ||
+      'mm'
+  )
+    .replace(/\s*US Region\s*/gi, '')
+    .replace(/\s*AR_US_REGION_CALIBRATION\s*/gi, '')
+    .trim()
+    .toLowerCase();
+  const lengthMM =
+    rawValue == null ? null : /^cm\b/.test(rawUnit) ? rawValue * 10 : !rawUnit || /^mm\b/.test(rawUnit) ? rawValue : null;
+  const displayText =
+    lengthMM == null
+      ? existingMeasurements.displayText || existingAnnotation?.displayText || []
+      : formatBowelCurvedLengthDisplayText(lengthMM);
+
+  return {
+    measurementKind: BOWEL_CURVED_LENGTH_MEASUREMENT_KIND,
+    contourClosed: false,
+    length: lengthMM,
+    value: lengthMM,
+    lengthUnit: 'mm',
+    unit: 'mm',
+    displayText,
+  };
+}
 
 function getSpectralDopplerVtiTargetDialogConfig({ allowGeneric = false } = {}) {
   return {
@@ -6916,6 +7086,10 @@ function commandsModule({
   let spectralDopplerCompletionHandler: null | ((event: Event) => void) = null;
   let spectralDopplerEscapeHandler: null | ((event: KeyboardEvent) => void) = null;
 
+  let activeBowelCurvedLengthWorkflowSessionId = '';
+  let bowelCurvedLengthCompletionHandler: null | ((event: Event) => void) = null;
+  let bowelCurvedLengthEscapeHandler: null | ((event: KeyboardEvent) => void) = null;
+
   // AR_DECELERATION_TIME:BEGIN listener-state
   let activeDecelerationTimeWorkflowSessionId = '';
   let decelerationTimeCompletionHandler: null | ((event: Event) => void) = null;
@@ -6967,6 +7141,25 @@ function commandsModule({
     }
   }
 
+  function clearBowelCurvedLengthWorkflowListeners({ resetSession = true } = {}) {
+    if (bowelCurvedLengthCompletionHandler) {
+      eventTarget.removeEventListener(
+        Enums.Events.ANNOTATION_COMPLETED,
+        bowelCurvedLengthCompletionHandler
+      );
+      bowelCurvedLengthCompletionHandler = null;
+    }
+
+    if (bowelCurvedLengthEscapeHandler) {
+      window.removeEventListener('keydown', bowelCurvedLengthEscapeHandler);
+      bowelCurvedLengthEscapeHandler = null;
+    }
+
+    if (resetSession) {
+      activeBowelCurvedLengthWorkflowSessionId = '';
+    }
+  }
+
   function cancelActiveLVSimpsonCapture() {
     const cancel = activeLVSimpsonCaptureCancel;
     activeLVSimpsonCaptureCancel = null;
@@ -7012,6 +7205,7 @@ function commandsModule({
       activeLVSimpsonWorkflowSessionId = '';
       activeLAVolumeWorkflowSessionId = '';
       clearSpectralDopplerWorkflowListeners();
+      clearBowelCurvedLengthWorkflowListeners();
       clearDecelerationTimeWorkflowListeners(); // AR_DECELERATION_TIME
       dispatchLVSimpsonSessionMeasurements({ reason: 'viewer-session-cleared' });
       dispatchLAVolumeSessionMeasurements({ reason: 'viewer-session-cleared' });
@@ -8573,6 +8767,248 @@ function commandsModule({
       return { ok: true, sessionId: workflowSessionId, toolName: ULTRASOUND_DIRECTIONAL_TOOL_NAME, target: selectedTarget.key };
     },
     // AR_DECELERATION_TIME:END action
+    startBowelCurvedLengthWorkflow: async () => {
+      clearBowelCurvedLengthWorkflowListeners();
+      clearSpectralDopplerWorkflowListeners();
+
+      const activeViewportId = viewportGridService.getActiveViewportId();
+      const { viewport } = _getActiveViewportEnabledElement() || {};
+
+      if (!activeViewportId || !viewport?.element) {
+        uiNotificationService.show({
+          title: 'Curved Length',
+          message: 'No active image viewport is available.',
+          type: 'warning',
+          duration: 3500,
+        });
+        return null;
+      }
+
+      const selectedTarget = await resolveBowelCurvedLengthTarget({
+        uiDialogService,
+        customizationService,
+        isIuscan: isIuscanViewerContext(),
+      });
+
+      if (!selectedTarget) {
+        uiNotificationService.show({
+          title: 'Curved Length',
+          message: 'Curved length measurement cancelled.',
+          type: 'info',
+          duration: 2500,
+        });
+        return null;
+      }
+
+      const reportMapping = buildViewerReportMapping(selectedTarget);
+      const measurementLabel = selectedTarget.label;
+      const activation = actions.activateViewerMeasurementTool({
+        toolName: toolNames.PlanarFreehandROI || 'PlanarFreehandROI',
+        stopCine: true,
+      });
+
+      if (!activation?.ok) {
+        uiNotificationService.show({
+          title: 'Curved Length',
+          message: 'The freehand contour tool is not available in this viewport.',
+          type: 'warning',
+          duration: 4500,
+        });
+        return null;
+      }
+
+      const workflowSessionId = `${csUtils.uuidv4()}`;
+      activeBowelCurvedLengthWorkflowSessionId = workflowSessionId;
+
+      const restoreNavigationTool = () => {
+        try {
+          const toolGroupReference = toolGroupService.getToolGroupForViewport(activeViewportId);
+          actions.setToolActive({
+            toolName: toolNames.WindowLevel || 'WindowLevel',
+            toolGroupId: toolGroupReference,
+          });
+        } catch {}
+      };
+
+      bowelCurvedLengthEscapeHandler = (event: KeyboardEvent) => {
+        if (
+          event.key !== 'Escape' ||
+          activeBowelCurvedLengthWorkflowSessionId !== workflowSessionId
+        ) {
+          return;
+        }
+
+        clearBowelCurvedLengthWorkflowListeners();
+        restoreNavigationTool();
+        uiNotificationService.show({
+          title: 'Curved Length',
+          message: 'Curved length measurement cancelled.',
+          type: 'info',
+          duration: 2500,
+        });
+      };
+
+      bowelCurvedLengthCompletionHandler = async (event: Event) => {
+        if (activeBowelCurvedLengthWorkflowSessionId !== workflowSessionId) {
+          return;
+        }
+
+        const eventDetail = (event as CustomEvent)?.detail || {};
+        const sourceAnnotation = eventDetail.annotation;
+        const sourceToolName = String(sourceAnnotation?.metadata?.toolName || '');
+
+        if (sourceToolName !== (toolNames.PlanarFreehandROI || 'PlanarFreehandROI')) {
+          return;
+        }
+
+        const annotationId = String(sourceAnnotation?.annotationUID || '').trim();
+
+        if (!annotationId) {
+          return;
+        }
+
+        clearBowelCurvedLengthWorkflowListeners({ resetSession: false });
+        activeBowelCurvedLengthWorkflowSessionId = '';
+        restoreNavigationTool();
+
+        const mappedMeasurement = await waitForViewerMeasurementServiceEntry(
+          measurementService,
+          annotationId
+        );
+        const contourPoints =
+          sourceAnnotation?.data?.contour?.polyline ||
+          sourceAnnotation?.data?.handles?.points ||
+          mappedMeasurement?.points ||
+          [];
+        const lengthMM = calculateBowelCurvedLengthMM(contourPoints);
+
+        if (!lengthMM) {
+          uiNotificationService.show({
+            title: 'Curved Length',
+            message: 'The traced path could not be converted to a calibrated curved length.',
+            type: 'warning',
+            duration: 5000,
+          });
+          return;
+        }
+
+        const referencedImageId =
+          mappedMeasurement?.referencedImageId || sourceAnnotation?.metadata?.referencedImageId || '';
+        const displayText = formatBowelCurvedLengthDisplayText(lengthMM);
+        const nextMeasurement = {
+          ...(mappedMeasurement || {}),
+          uid: annotationId,
+          annotationUID: annotationId,
+          toolName: toolNames.PlanarFreehandROI || 'PlanarFreehandROI',
+          label: measurementLabel,
+          measurementRole: measurementLabel,
+          role: measurementLabel,
+          measurementKind: BOWEL_CURVED_LENGTH_MEASUREMENT_KIND,
+          ...(reportMapping ? { reportMapping } : {}),
+          points: contourPoints,
+          value: lengthMM,
+          length: lengthMM,
+          unit: 'mm',
+          lengthUnit: 'mm',
+          referencedImageId,
+          SOPInstanceUID:
+            mappedMeasurement?.SOPInstanceUID || sourceAnnotation?.metadata?.SOPInstanceUID || '',
+          referenceSeriesUID:
+            mappedMeasurement?.referenceSeriesUID ||
+            sourceAnnotation?.metadata?.SeriesInstanceUID ||
+            '',
+          referenceStudyUID:
+            mappedMeasurement?.referenceStudyUID || sourceAnnotation?.metadata?.StudyInstanceUID || '',
+          FrameOfReferenceUID:
+            mappedMeasurement?.FrameOfReferenceUID ||
+            sourceAnnotation?.metadata?.FrameOfReferenceUID ||
+            '',
+          measurements: {
+            ...(mappedMeasurement?.measurements || {}),
+            measurementKind: BOWEL_CURVED_LENGTH_MEASUREMENT_KIND,
+            contourClosed: false,
+            length: lengthMM,
+            value: lengthMM,
+            lengthUnit: 'mm',
+            unit: 'mm',
+            displayText,
+          },
+          contourClosed: false,
+          displayText,
+        };
+
+        sourceAnnotation.metadata = {
+          ...(sourceAnnotation.metadata || {}),
+          toolName: toolNames.PlanarFreehandROI || 'PlanarFreehandROI',
+          referencedImageId,
+        };
+        sourceAnnotation.data = {
+          ...(sourceAnnotation.data || {}),
+          label: measurementLabel,
+          measurementKind: BOWEL_CURVED_LENGTH_MEASUREMENT_KIND,
+          ...(reportMapping ? { reportMapping } : {}),
+          contour: {
+            ...(sourceAnnotation.data?.contour || {}),
+            closed: false,
+            polyline: contourPoints,
+          },
+          isOpenUShapeContour: true,
+          arBowelCurvedLengthDisplayText: displayText,
+          arSavedMeasurementDisplayText: displayText,
+        };
+        sourceAnnotation.invalidated = false;
+
+        try {
+          measurementService.update(annotationId, nextMeasurement, true);
+          actions.markViewerMeasurementCreatedInSession?.({ uid: annotationId });
+        } catch (error) {
+          console.warn('[Bowel Curved Length] measurementService.update failed:', error);
+        }
+
+        installPlanarFreehandMeasurementTextOverrideForViewport({
+          viewport,
+          viewportId: activeViewportId,
+        });
+        dispatchLiveMeasurementsRefresh({
+          reason: 'bowel-curved-length-created',
+          annotationUID: annotationId,
+          lengthMM,
+        });
+
+        try {
+          cornerstoneTools.annotation.selection.setAnnotationSelected?.(annotationId, true);
+          viewport.render?.();
+        } catch {}
+
+        uiNotificationService.show({
+          title: 'Curved Length',
+          message: `${measurementLabel}: ${displayText[0]}`,
+          type: 'success',
+          duration: 5000,
+        });
+      };
+
+      eventTarget.addEventListener(
+        Enums.Events.ANNOTATION_COMPLETED,
+        bowelCurvedLengthCompletionHandler
+      );
+      window.addEventListener('keydown', bowelCurvedLengthEscapeHandler);
+
+      uiNotificationService.show({
+        title: 'Curved Length',
+        message: `Trace the open bowel path for ${measurementLabel}. Release to finish and press Esc to cancel.`,
+        type: 'info',
+        duration: 7000,
+      });
+
+      return {
+        ok: true,
+        sessionId: workflowSessionId,
+        toolName: toolNames.PlanarFreehandROI || 'PlanarFreehandROI',
+        target: selectedTarget.key,
+      };
+    },
+
     startSpectralDopplerVTIWorkflow: async () => {
       clearUltrasoundDirectionalWorkflowListeners();
       clearSpectralDopplerWorkflowListeners();
@@ -8774,7 +9210,7 @@ function commandsModule({
           console.warn('[VTI Trace] measurementService.update failed:', error);
         }
 
-        installSpectralDopplerTextOverrideForViewport({
+        installPlanarFreehandMeasurementTextOverrideForViewport({
           viewport,
           viewportId: activeViewportId,
         });
@@ -12174,6 +12610,9 @@ function commandsModule({
       commandFn: actions.startDecelerationTimeWorkflow,
     },
     // AR_DECELERATION_TIME:END definition
+    startBowelCurvedLengthWorkflow: {
+      commandFn: actions.startBowelCurvedLengthWorkflow,
+    },
     startSpectralDopplerVTIWorkflow: {
       commandFn: actions.startSpectralDopplerVTIWorkflow,
     },
