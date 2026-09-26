@@ -32,8 +32,16 @@ function isIuscanCurvedLengthMeasurement(value = {}) {
   );
 }
 
+function isIuscanAnnotationMeasurement(value = {}) {
+  return String(value?.toolName || '').trim() === 'ArrowAnnotate';
+}
+
 function isIuscanPersistableMeasurement(value = {}) {
-  return isIuscanRepeatedMeasurement(value) || isIuscanCurvedLengthMeasurement(value);
+  return (
+    isIuscanRepeatedMeasurement(value) ||
+    isIuscanCurvedLengthMeasurement(value) ||
+    isIuscanAnnotationMeasurement(value)
+  );
 }
 
 export default function getCommandsModule({ servicesManager, commandsManager }) {
@@ -95,7 +103,8 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
               annotation =>
                 annotation?.mode === 'repeated' ||
                 annotation?.repeatedMeasurement ||
-                isIuscanCurvedLengthMeasurement(annotation)
+                isIuscanCurvedLengthMeasurement(annotation) ||
+                isIuscanAnnotationMeasurement(annotation)
             );
             const persistedRepeated = persistedRelevant.filter(
               annotation => annotation?.mode === 'repeated' || annotation?.repeatedMeasurement
