@@ -231,6 +231,36 @@ export function getBowelCurvedLengthTargetOptions({ isIuscan = false } = {}) {
   }));
 }
 
+export function normalizeBowelCurvedLengthTargetSelection(
+  value: unknown,
+  { isIuscan = false } = {}
+) {
+  const source =
+    value && typeof value === 'object'
+      ? (value as Record<string, unknown>).value ||
+        (value as Record<string, unknown>).key ||
+        (value as Record<string, unknown>).label ||
+        ''
+      : value;
+  const raw = String(source || '').trim();
+
+  if (!raw) {
+    return null;
+  }
+
+  const normalized = normalizeTargetText(raw);
+  const options = getBowelCurvedLengthTargetOptions({ isIuscan });
+
+  return (
+    options.find(
+      option =>
+        option.key === raw ||
+        option.value === raw ||
+        normalizeTargetText(option.label) === normalized
+    ) || null
+  );
+}
+
 export function findBowelMeasurementTarget({
   targetKey = '',
   label = '',
