@@ -343,8 +343,12 @@ export function buildIuscanSiteMeasurementState({
   return state;
 }
 
-export function getIuscanRepeatedAnnotationId(value) {
+export function getIuscanAnnotationId(value) {
   return getMeasurementId(value);
+}
+
+export function getIuscanRepeatedAnnotationId(value) {
+  return getIuscanAnnotationId(value);
 }
 
 export function isIuscanRepeatedMeasurement(value) {

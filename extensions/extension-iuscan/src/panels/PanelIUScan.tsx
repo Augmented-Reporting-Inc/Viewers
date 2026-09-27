@@ -1,10 +1,13 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useMeasurements } from '@ohif/extension-cornerstone';
 import SiteAccordion from './components/SiteAccordion';
+import ViewerAnnotations from './components/ViewerAnnotations';
 import { SITES } from '../utils/labelMap';
 import {
   buildIuscanSiteMeasurementState,
+  getIuscanAnnotationId,
   getIuscanRepeatedAnnotationId,
+  isIuscanRepeatedMeasurement,
   normalizeSavedIuscanRepeatedAnnotations,
 } from '../utils/repeatedMeasurements';
 import {
@@ -22,6 +25,21 @@ import {
   loadResearchContextFromViewer,
   subscribeResearchContext,
 } from '../utils/researchProtocol';
+
+function normalizeSavedIuscanAnnotations(annotations = []) {
+  const source = Array.isArray(annotations) ? annotations : [];
+  const normalizedRepeated = normalizeSavedIuscanRepeatedAnnotations(source);
+  const repeatedById = new Map(
+    normalizedRepeated
+      .map(annotation => [getIuscanAnnotationId(annotation), annotation])
+      .filter(([annotationId]) => !!annotationId)
+  );
+
+  return source.map(annotation => {
+    const annotationId = getIuscanAnnotationId(annotation);
+    return (annotationId && repeatedById.get(annotationId)) || annotation;
+  });
+}
 
 const emptyObservations = () =>
   Object.fromEntries(
@@ -101,13 +119,11 @@ export default function PanelIUScan({ servicesManager, commandsManager }) {
       if (researchContext?.reviewKey) {
         const review =
           getActiveResearchReview() || (await loadActiveResearchReviewFromViewer({ forceRefresh: true }));
-        const repeated = normalizeSavedIuscanRepeatedAnnotations(
-          (review?.measurementAnnotations || []).filter(
-            annotation => annotation?.mode === 'repeated' || annotation?.repeatedMeasurement
-          )
+        const reviewAnnotations = normalizeSavedIuscanAnnotations(
+          review?.measurementAnnotations || []
         );
 
-        setSavedAnnotations(repeated);
+        setSavedAnnotations(reviewAnnotations);
         setObservationsBySite({
           ...emptyObservations(),
           ...(review?.observationsBySite || {}),
@@ -116,7 +132,7 @@ export default function PanelIUScan({ servicesManager, commandsManager }) {
 
         const measurementState = buildIuscanSiteMeasurementState({
           liveMeasurements: measurements,
-          savedAnnotations: repeated,
+          savedAnnotations: reviewAnnotations,
         });
         const firstPopulatedSite = getResearchVisibleSites(researchContext).find(site =>
           Object.values(measurementState[site.key] || {}).some(group =>
@@ -133,16 +149,13 @@ export default function PanelIUScan({ servicesManager, commandsManager }) {
         includeRepeated: true,
       });
 
-      const repeated = normalizeSavedIuscanRepeatedAnnotations(
-        (result?.annotations || []).filter(
-          annotation => annotation?.mode === 'repeated' || annotation?.repeatedMeasurement
-        )
-      );
+      const persistedAnnotations = normalizeSavedIuscanAnnotations(result?.annotations || []);
+      const repeatedAnnotations = persistedAnnotations.filter(isIuscanRepeatedMeasurement);
       const legacyPlaceholders = getLegacyIuscanMeasurementPlaceholders(
         result?.seriesDoc || {},
-        repeated
+        repeatedAnnotations
       );
-      const panelAnnotations = [...repeated, ...legacyPlaceholders];
+      const panelAnnotations = [...persistedAnnotations, ...legacyPlaceholders];
 
       setSavedAnnotations(panelAnnotations);
       setObservationsBySite({
@@ -183,6 +196,39 @@ export default function PanelIUScan({ servicesManager, commandsManager }) {
       }),
     [measurements, savedAnnotations, removedAnnotationIds]
   );
+
+  const viewerAnnotations = useMemo(() => {
+    const removedIds = new Set(
+      Array.from(removedAnnotationIds)
+        .map(value => String(value || '').trim())
+        .filter(Boolean)
+    );
+    const byId = new Map();
+
+    for (const annotation of savedAnnotations || []) {
+      const annotationId = getIuscanAnnotationId(annotation);
+      if (
+        annotationId &&
+        !removedIds.has(annotationId) &&
+        !isIuscanRepeatedMeasurement(annotation)
+      ) {
+        byId.set(annotationId, annotation);
+      }
+    }
+
+    for (const measurement of measurements || []) {
+      const annotationId = getIuscanAnnotationId(measurement);
+      if (
+        annotationId &&
+        !removedIds.has(annotationId) &&
+        !isIuscanRepeatedMeasurement(measurement)
+      ) {
+        byId.set(annotationId, measurement);
+      }
+    }
+
+    return Array.from(byId.values());
+  }, [measurements, savedAnnotations, removedAnnotationIds]);
 
   const hasMeasurementData = useMemo(
     () =>
@@ -283,13 +329,11 @@ export default function PanelIUScan({ servicesManager, commandsManager }) {
           removedAnnotationIds: Array.from(removedAnnotationIds),
         });
 
-        const repeated = normalizeSavedIuscanRepeatedAnnotations(
-          (savedReview?.measurementAnnotations || []).filter(
-            annotation => annotation?.mode === 'repeated' || annotation?.repeatedMeasurement
-          )
+        const persistedAnnotations = normalizeSavedIuscanAnnotations(
+          savedReview?.measurementAnnotations || []
         );
 
-        setSavedAnnotations(repeated);
+        setSavedAnnotations(persistedAnnotations);
         setObservationsBySite({
           ...emptyObservations(),
           ...(savedReview?.observationsBySite || observationsBySite),
@@ -349,12 +393,21 @@ export default function PanelIUScan({ servicesManager, commandsManager }) {
       }
     }
 
+    for (const annotation of viewerAnnotations) {
+      const annotationId = getIuscanAnnotationId(annotation);
+      if (annotationId) currentIds.add(annotationId);
+    }
+
     setRemovedAnnotationIds(currentIds);
     setObservationsBySite(emptyObservations());
     commandsManager.runCommand('clearIUScanMeasurements');
   }
 
-  const hasAnyData = hasMeasurementData || hasObservationData || removedAnnotationIds.size > 0;
+  const hasAnyData =
+    hasMeasurementData ||
+    viewerAnnotations.length > 0 ||
+    hasObservationData ||
+    removedAnnotationIds.size > 0;
   const panelTitle = researchContext ? researchContext.title : 'Bowel Measurements';
 
   return (
@@ -401,6 +454,14 @@ export default function PanelIUScan({ servicesManager, commandsManager }) {
       )}
 
       <div className="gi-panel-body flex-1 overflow-y-auto">
+        <ViewerAnnotations
+          annotations={viewerAnnotations}
+          measurementService={measurementService}
+          commandsManager={commandsManager}
+          onRemove={handleRemoveMeasurement}
+          readOnly={researchReviewCompleted}
+        />
+
         {visibleSites.map(site => (
           <SiteAccordion
             key={site.key}

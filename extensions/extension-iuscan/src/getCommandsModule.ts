@@ -11,7 +11,7 @@ import {
   buildReportPayload,
   getLegacyIuscanMeasurementPlaceholders,
 } from './utils/reportBuilder';
-import { getIuscanRepeatedAnnotationId, isIuscanRepeatedMeasurement } from './utils/repeatedMeasurements';
+import { getIuscanAnnotationId } from './utils/repeatedMeasurements';
 import { saveActiveResearchReviewResults } from './utils/researchProtocol';
 
 const IUSCAN_MEASUREMENT_LABELS_CONFIG = {
@@ -51,18 +51,17 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
           try {
             const liveMeasurements = measurementService.getMeasurements?.() || [];
 
-            // Persist canonical viewer annotations through the shared Cornerstone path.
-            // Observation-only saves do not need to invoke annotation persistence.
-            const repeatedMeasurementIds = liveMeasurements
-              .filter(isIuscanRepeatedMeasurement)
+            // Persist every live annotation supported by the shared Cornerstone serializer.
+            // The repeated bowel rows remain a separate presentation/report concern below.
+            const liveMeasurementIds = liveMeasurements
               .map(measurement => String(measurement?.uid || '').trim())
               .filter(Boolean);
 
-            if (repeatedMeasurementIds.length > 0 || removedAnnotationIds.length > 0) {
+            if (liveMeasurementIds.length > 0 || removedAnnotationIds.length > 0) {
               await commandsManager.runCommand('saveViewerMeasurementsForActiveStudy', {
                 domain: 'iuscan',
                 deleteAnnotationIds: removedAnnotationIds,
-                measurementIds: repeatedMeasurementIds,
+                measurementIds: liveMeasurementIds,
                 suppressSuccessNotification: true,
               });
             }
@@ -133,26 +132,25 @@ export default function getCommandsModule({ servicesManager, commandsManager }) 
               (removedAnnotationIds || []).map(value => String(value || '').trim()).filter(Boolean)
             );
             const liveMeasurements = measurementService.getMeasurements?.() || [];
-            const repeatedMeasurementIds = liveMeasurements
-              .filter(isIuscanRepeatedMeasurement)
+            const liveMeasurementIds = liveMeasurements
               .map(measurement => String(measurement?.uid || '').trim())
               .filter(Boolean);
 
             const serialized = await commandsManager.runCommand('getSerializedViewerMeasurements', {
               domain: 'iuscan',
               workflow: 'viewerMeasurements',
-              measurementIds: repeatedMeasurementIds,
+              measurementIds: liveMeasurementIds,
             });
 
             const merged = new Map();
             for (const annotation of savedAnnotations || []) {
-              const annotationId = getIuscanRepeatedAnnotationId(annotation);
+              const annotationId = getIuscanAnnotationId(annotation);
               if (annotationId && !removedIds.has(annotationId)) {
                 merged.set(annotationId, annotation);
               }
             }
             for (const annotation of serialized?.annotations || []) {
-              const annotationId = getIuscanRepeatedAnnotationId(annotation);
+              const annotationId = getIuscanAnnotationId(annotation);
               if (annotationId && !removedIds.has(annotationId)) {
                 merged.set(annotationId, annotation);
               }

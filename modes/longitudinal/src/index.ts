@@ -731,6 +731,9 @@ function getPrimaryToolbarIdsForDomain(domain, measurementToolsReadOnly) {
   return [
     'MeasurementTools',
     ...(measurementToolsReadOnly ? [] : ['ArrowAnnotate']),
+    ...(measurementToolsReadOnly || !['bowel', 'iuscan'].includes(domain)
+      ? []
+      : ['BowelCurvedLength']),
     ...(measurementToolsReadOnly || domain !== 'echo' ? [] : ECHO_ONLY_MEASUREMENT_TOOL_IDS),
     'Zoom',
     'Pan',
@@ -1228,7 +1231,9 @@ function modeFactory({ modeConfiguration }) {
 
       toolbarService.updateSection(
         'MeasurementTools',
-        measurementToolsReadOnly ? [] : getMeasurementToolIdsForDomain()
+        measurementToolsReadOnly
+          ? []
+          : getMeasurementToolIdsForDomain(initialMeasurementDomain)
       );
 
       Promise.resolve(resolveViewerMeasurementDomain(commandsManager))
@@ -1241,7 +1246,9 @@ function modeFactory({ modeConfiguration }) {
           );
           toolbarService.updateSection(
             'MeasurementTools',
-            measurementToolsReadOnly ? [] : getMeasurementToolIdsForDomain()
+            measurementToolsReadOnly
+              ? []
+              : getMeasurementToolIdsForDomain(measurementDomain)
           );
           toolbarService.updateSection(
             'MoreTools',

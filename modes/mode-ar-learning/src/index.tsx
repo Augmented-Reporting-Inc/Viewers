@@ -639,6 +639,25 @@ function getMeasurementToolIdsForDomain(domain) {
   ];
 }
 
+function getEditablePrimaryToolbarIdsForDomain(domain) {
+  return [
+    'MeasurementTools',
+    'ArrowAnnotate',
+    ...(['bowel', 'iuscan'].includes(domain) ? ['BowelCurvedLength'] : []),
+    'Zoom',
+    'Pan',
+    'TrackballRotate',
+    'WindowLevel',
+    'Capture',
+    'Layout',
+    'Cine',
+    'Previous',
+    'Next',
+    'Crosshairs',
+    'MoreTools',
+  ];
+}
+
 function getRegisteredToolbarButtonIds(buttons = []) {
   const entries = Array.isArray(buttons) ? buttons : [];
 
@@ -1342,24 +1361,12 @@ function modeFactory({ modeConfiguration }) {
         toolbarService.updateSection(toolbarService.sections.viewportActionMenu.topRight, []);
         toolbarService.updateSection(toolbarService.sections.viewportActionMenu.bottomLeft, []);
       } else {
+        const initialMeasurementDomain = getViewerMeasurementDomainFromPath();
+
         toolbarService.updateSection(
           toolbarService.sections.primary,
           safeToolbarIds(
-            [
-              'MeasurementTools',
-              'ArrowAnnotate',
-              'Zoom',
-              'Pan',
-              'TrackballRotate',
-              'WindowLevel',
-              'Capture',
-              'Layout',
-              'Cine',
-              'Previous',
-              'Next',
-              'Crosshairs',
-              'MoreTools',
-            ],
+            getEditablePrimaryToolbarIdsForDomain(initialMeasurementDomain),
             'primary-editable'
           )
         );
@@ -1400,8 +1407,6 @@ function modeFactory({ modeConfiguration }) {
           safeToolbarIds(['windowLevelMenu'], 'viewport-bottom-left')
         );
 
-        const initialMeasurementDomain = getViewerMeasurementDomainFromPath();
-
         if (registeredToolbarButtonIds.has('MeasurementTools')) {
           toolbarService.updateSection(
             'MeasurementTools',
@@ -1413,12 +1418,20 @@ function modeFactory({ modeConfiguration }) {
 
           Promise.resolve(resolveViewerMeasurementDomain(commandsManager))
             .then(resolvedDomain => {
+              const measurementDomain = resolvedDomain || initialMeasurementDomain;
+
+              toolbarService.updateSection(toolbarService.sections.primary, []);
+              toolbarService.updateSection(
+                toolbarService.sections.primary,
+                safeToolbarIds(
+                  getEditablePrimaryToolbarIdsForDomain(measurementDomain),
+                  'primary-editable-resolved'
+                )
+              );
               toolbarService.updateSection(
                 'MeasurementTools',
                 safeToolbarIds(
-                  getMeasurementToolIdsForDomain(
-                    resolvedDomain || initialMeasurementDomain
-                  ),
+                  getMeasurementToolIdsForDomain(measurementDomain),
                   'MeasurementTools-resolved'
                 )
               );
