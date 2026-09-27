@@ -55,19 +55,82 @@ export function isResearchPreviewFromViewerUrl() {
   return ['1', 'true', 'yes'].includes(value);
 }
 
+function getConfiguredIuscanReadSchema(protocol: any = {}) {
+  const imagingProfiles = Array.isArray(protocol?.imagingProfiles)
+    ? protocol.imagingProfiles
+    : [];
+
+  const iuscanProfile =
+    imagingProfiles.find(
+      profile => cleanString(profile?.readSchema?.domain).toLowerCase() === 'iuscan'
+    ) ||
+    imagingProfiles.find(
+      profile => cleanString(profile?.profileKey).toLowerCase() === 'intestinal-ultrasound'
+    );
+
+  const readSchema = iuscanProfile?.readSchema;
+  if (!readSchema || typeof readSchema !== 'object' || Array.isArray(readSchema)) {
+    return null;
+  }
+
+  const hasConfiguredSchema =
+    !!cleanString(readSchema.schemaKey) ||
+    !!cleanString(readSchema.schemaVersion) ||
+    !!cleanString(readSchema.domain) ||
+    (Array.isArray(readSchema.segments) && readSchema.segments.length > 0) ||
+    (Array.isArray(readSchema.components) && readSchema.components.length > 0);
+
+  return hasConfiguredSchema ? readSchema : null;
+}
+
 function normalizeProtocol(study: any = {}, review: any = null) {
   const protocol = study?.protocol || {};
-  const selectedSiteKeys = (Array.isArray(protocol.segmentKeys) ? protocol.segmentKeys : [])
+  const readSchema = getConfiguredIuscanReadSchema(protocol);
+
+  const segmentKeys = readSchema
+    ? (Array.isArray(readSchema.segments) ? readSchema.segments : [])
+        .map(segment => cleanString(typeof segment === 'string' ? segment : segment?.key))
+        .filter(Boolean)
+    : Array.isArray(protocol.segmentKeys)
+      ? protocol.segmentKeys
+      : [];
+
+  const rawComponents = readSchema
+    ? Array.isArray(readSchema.components)
+      ? readSchema.components
+      : []
+    : Array.isArray(protocol.components)
+      ? protocol.components
+      : [];
+
+  const selectedSiteKeys = segmentKeys
     .map(segmentKey => RESEARCH_SEGMENT_TO_IUSCAN_SITE[segmentKey])
     .filter(Boolean);
 
-  const components = (Array.isArray(protocol.components) ? protocol.components : [])
+  const components = rawComponents
+    .map(component =>
+      typeof component === 'string'
+        ? {
+            componentKey: cleanString(component),
+            label: cleanString(component),
+            kind: 'observation',
+            required: true,
+            segmentKeys: [],
+            config: {},
+          }
+        : component
+    )
     .filter(component => cleanString(component?.componentKey))
     .map(component => ({
       ...component,
       componentKey: cleanString(component.componentKey),
       segmentKeys: Array.isArray(component.segmentKeys) ? component.segmentKeys : [],
-      config: component?.config && typeof component.config === 'object' ? component.config : {},
+      config:
+        component?.config &&
+        typeof component.config === 'object' &&
+        !Array.isArray(component.config)
+          ? component.config
+          : {},
     }));
 
   return {
@@ -77,6 +140,15 @@ function normalizeProtocol(study: any = {}, review: any = null) {
     status: cleanString(study?.status),
     selectedSiteKeys,
     components,
+    readSchema: readSchema
+      ? {
+          schemaKey: cleanString(readSchema.schemaKey),
+          schemaVersion: cleanString(readSchema.schemaVersion),
+          domain: cleanString(readSchema.domain).toLowerCase(),
+          compatibilitySource: cleanString(readSchema.compatibilitySource),
+        }
+      : null,
+    readSchemaSource: readSchema ? 'imaging-profile' : 'legacy-protocol',
     preview: isResearchPreviewFromViewerUrl(),
     reviewKey: cleanString(review?.reviewKey),
     reviewStatus: cleanString(review?.status),
