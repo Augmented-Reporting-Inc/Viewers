@@ -199,6 +199,7 @@ module.exports = (env, argv) => {
           __dirname,
           'C:/Users/ot196/Downloads/Viewers/modes/mode-ar-learning/node_modules'
         ),
+        path.resolve(__dirname, 'extensions/extension-ar-research/node_modules'),
       ],
     },
     plugins: [

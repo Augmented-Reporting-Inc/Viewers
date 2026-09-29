@@ -1,0 +1,49 @@
+{
+  "name": "extension-ar-research",
+  "version": "1.0.0",
+  "description": "AR schema-driven Research Read panel",
+  "author": "Augmented Reporting",
+  "license": "MIT",
+  "main": "dist/umd/extension-ar-research/index.umd.js",
+  "files": [
+    "dist/**",
+    "README.md"
+  ],
+  "repository": "OHIF/Viewers",
+  "keywords": [
+    "ohif-extension",
+    "research",
+    "core-lab"
+  ],
+  "module": "src/index.tsx",
+  "engines": {
+    "node": ">=18",
+    "yarn": ">=1.20.0"
+  },
+  "scripts": {
+    "build": "cross-env NODE_ENV=production webpack --config .webpack/webpack.prod.js",
+    "build:package": "yarn run build"
+  },
+  "peerDependencies": {
+    "@ohif/core": "^3.11.0",
+    "@ohif/extension-cornerstone": "^3.11.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "dependencies": {
+    "@babel/runtime": "^7.20.13"
+  },
+  "devDependencies": {
+    "@babel/core": "7.28.0",
+    "@babel/plugin-transform-class-properties": "^7.27.1",
+    "@babel/plugin-transform-private-methods": "^7.27.1",
+    "@babel/plugin-transform-private-property-in-object": "^7.27.1",
+    "@babel/preset-env": "7.28.0",
+    "@babel/preset-react": "^7.27.1",
+    "@babel/preset-typescript": "^7.28.0",
+    "babel-loader": "^8.2.4",
+    "cross-env": "^7.0.3",
+    "webpack": "5.89.0",
+    "webpack-cli": "^5.1.4"
+  }
+}

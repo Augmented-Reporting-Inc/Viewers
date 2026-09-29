@@ -155,6 +155,20 @@ function shouldEnableCineOnModeEnter() {
   return !isVirtualCoachingWorkflowFromUrl();
 }
 
+function isResearchViewerContextFromUrl() {
+  const params = getViewerUrlSearchParams();
+
+  return !!(
+    String(params.get('arResearchReviewKey') || '').trim() ||
+    String(params.get('arResearchStudyKey') || '').trim() ||
+    ['1', 'true', 'yes'].includes(
+      String(params.get('arResearchPreview') || '')
+        .trim()
+        .toLowerCase()
+    )
+  );
+}
+
 function shouldOpenARMeasurementsPanelByDefault() {
   return isVirtualCoachingWorkflowFromUrl();
 }
@@ -904,6 +918,10 @@ const arMeasurements = {
   panel: 'extension-ar-measurements.panelModule.arMeasurements',
 };
 
+const arResearch = {
+  panel: 'extension-ar-research.panelModule.researchRead',
+};
+
 const dicomsr = {
   sopClassHandler: '@ohif/extension-cornerstone-dicom-sr.sopClassHandlerModule.dicom-sr',
   sopClassHandler3D: '@ohif/extension-cornerstone-dicom-sr.sopClassHandlerModule.dicom-sr-3d',
@@ -940,6 +958,7 @@ const extensionDependencies = {
   '@ohif/extension-default': '^3.0.0',
   '@ohif/extension-cornerstone': '^3.0.0',
   'extension-ar-measurements': '^1.0.0',
+  'extension-ar-research': '^1.0.0',
   '@ohif/extension-cornerstone-dicom-sr': '^3.0.0',
   '@ohif/extension-cornerstone-dicom-seg': '^3.0.0',
   '@ohif/extension-cornerstone-dicom-pmap': '^3.0.0',
@@ -1401,15 +1420,21 @@ function modeFactory({ modeConfiguration }) {
           //defaultViewerRouteInit
         },*/
         layoutTemplate: () => {
+          const researchViewerContext = isResearchViewerContextFromUrl();
+
           return {
             id: ohif.layout,
             props: {
               leftPanels: [ohif.thumbnailList],
               leftPanelResizable: true,
-              // Keep AR Measurements first so the right panel defaults to
-              // Measurements when opened. Segmentation remains available as tab 2.
-              rightPanels: [arMeasurements.panel, cornerstone.segmentation],
-              rightPanelClosed: !shouldOpenARMeasurementsPanelByDefault(),
+              // Research launches open the schema-driven Research Read first.
+              // Normal clinical /rviewer behavior remains AR Measurements first.
+              rightPanels: researchViewerContext
+                ? [arResearch.panel, arMeasurements.panel, cornerstone.segmentation]
+                : [arMeasurements.panel, cornerstone.segmentation],
+              rightPanelClosed: researchViewerContext
+                ? false
+                : !shouldOpenARMeasurementsPanelByDefault(),
               rightPanelResizable: true,
               viewports: [
                 {

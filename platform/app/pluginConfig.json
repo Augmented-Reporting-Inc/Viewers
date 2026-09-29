@@ -85,6 +85,10 @@
     {
       "packageName": "extension-ar-learning",
       "version": "0.0.1"
+    },
+    {
+      "packageName": "extension-ar-research",
+      "version": "1.0.0"
     }
   ],
   "modes": [
