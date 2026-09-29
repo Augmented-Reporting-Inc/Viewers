@@ -922,6 +922,12 @@ const arResearch = {
   panel: 'extension-ar-research.panelModule.researchRead',
 };
 
+function getMeasurementCompletionPanel() {
+  return isResearchViewerContextFromUrl()
+    ? arResearch.panel
+    : arMeasurements.panel;
+}
+
 const dicomsr = {
   sopClassHandler: '@ohif/extension-cornerstone-dicom-sr.sopClassHandlerModule.dicom-sr',
   sopClassHandler3D: '@ohif/extension-cornerstone-dicom-sr.sopClassHandlerModule.dicom-sr-3d',
@@ -1143,7 +1149,7 @@ function modeFactory({ modeConfiguration }) {
             })
           );
 
-          panelService?.activatePanel?.('extension-ar-measurements.panelModule.arMeasurements', true);
+          panelService?.activatePanel?.(getMeasurementCompletionPanel(), true);
           return;
         }
 
@@ -1200,7 +1206,7 @@ function modeFactory({ modeConfiguration }) {
           }
         }
 
-        panelService?.activatePanel?.('extension-ar-measurements.panelModule.arMeasurements', true);
+        panelService?.activatePanel?.(getMeasurementCompletionPanel(), true);
       };
 
       eventTarget.addEventListener(

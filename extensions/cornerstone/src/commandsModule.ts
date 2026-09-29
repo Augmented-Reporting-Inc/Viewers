@@ -192,7 +192,7 @@ function getLVSimpsonAxisWarning({ slot, axisLengthMM, slotCandidates }) {
   if (axisLengthMM < LV_SIMPSON_MIN_AXIS_MM || axisLengthMM > LV_SIMPSON_MAX_AXIS_MM) {
     return `LV long-axis length is ${axisLengthMM.toFixed(
       1
-    )} mm, which is outside the expected range. Replace this slot.`;
+    )} mm, which is outside the expected range. Verify hinge and apex placement if this is unexpected.`;
   }
 
   const pairedSlot = getLVSimpsonPairedSlot(slot);
@@ -214,7 +214,7 @@ function getLVSimpsonAxisWarning({ slot, axisLengthMM, slotCandidates }) {
       1
     )} mm but ${pairedSlot.replace('_', ' ')} is ${pairedAxis.toFixed(
       1
-    )} mm. Replace this slot before calculating EF.`;
+    )} mm. Recheck hinge and apex placement if this difference is unexpected.`;
   }
 
   return '';
@@ -8026,21 +8026,34 @@ function commandsModule({
         baseRightPoint: hinge.endWorld,
         apexPoint: apexDrag.endWorld,
       });
-      const axisWarning = getLVSimpsonAxisWarning({
-        slot: slotInfo.slot,
-        axisLengthMM: geometry?.longAxisLengthMM,
-        slotCandidates,
-      });
+      const axisLengthMM = Number(geometry?.longAxisLengthMM);
 
-      if (axisWarning) {
+      if (!Number.isFinite(axisLengthMM) || axisLengthMM <= 0) {
         return retryCurrentLVSimpsonSlot({
-          message: `${axisWarning} Redraw ${slotInfo.slot}; LV EF remains active.`,
+          message:
+            'Could not calculate the LV long-axis length. Redraw the hinge line, then drag from the hinge midpoint to the LV apex; LV EF remains active.',
         });
       }
+
       if (!geometry?.points?.length) {
         return retryCurrentLVSimpsonSlot({
           message:
             'Could not generate LV contour from hinge/apex geometry. Redraw the hinge line, then drag from the hinge midpoint to the LV apex; LV EF remains active.',
+        });
+      }
+
+      const axisWarning = getLVSimpsonAxisWarning({
+        slot: slotInfo.slot,
+        axisLengthMM,
+        slotCandidates,
+      });
+
+      if (axisWarning) {
+        uiNotificationService.show({
+          title: `LV EF step ${stepNumber}/4`,
+          message: axisWarning,
+          type: 'warning',
+          duration: 7000,
         });
       }
 
