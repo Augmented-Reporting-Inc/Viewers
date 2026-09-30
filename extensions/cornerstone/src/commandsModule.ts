@@ -116,6 +116,7 @@ import {
   getBowelCurvedLengthTargetOptions,
   normalizeBowelMeasurementTargetSelection,
 } from '../../extension-ar-measurements/src/utils/bowelMeasurementTargets';
+import { calculateLVSimpson } from '../../extension-ar-measurements/src/utils/lvSimpson';
 
 const { DefaultHistoryMemo } = csUtils.HistoryMemo;
 const toggleSyncFunctions = {
@@ -156,7 +157,44 @@ const LV_SIMPSON_MIN_AXIS_MM = 25;
 const LV_SIMPSON_MAX_AXIS_MM = 130;
 const LV_SIMPSON_SLOT_PAIR_AXIS_WARNING_RATIO = 0.35;
 const LV_SIMPSON_AUTO_CONTINUE_DELAY_MS = 250;
+const LV_SIMPSON_GUIDANCE_DURATION_MS = 10000;
+const LV_SIMPSON_WARNING_DURATION_MS = 15000;
 const LA_VOLUME_AUTO_CONTINUE_DELAY_MS = 250;
+
+function showLVSimpsonNotification(
+  uiNotificationService: any,
+  {
+    title,
+    message,
+    type = 'info',
+    duration = LV_SIMPSON_GUIDANCE_DURATION_MS,
+    actionLabel = 'Dismiss',
+    onAction = null,
+  }: any = {}
+) {
+  let notificationId = '';
+
+  notificationId = uiNotificationService.show({
+    title,
+    message,
+    type,
+    duration,
+    action: {
+      label: actionLabel,
+      onClick: () => {
+        if (notificationId) {
+          uiNotificationService.hide(notificationId);
+        }
+
+        if (typeof onAction === 'function') {
+          onAction();
+        }
+      },
+    },
+  });
+
+  return notificationId;
+}
 
 function getLVSimpsonAxisLengthFromMeasurement(measurement: any = {}) {
   const geometry = measurement?.lvSimpson || measurement?.measurements?.lvSimpson || {};
@@ -7914,7 +7952,7 @@ function commandsModule({
         getLVSimpsonExistingMeasurementIds(existingSlotMeasurements);
       const retryCurrentLVSimpsonSlot = ({
         message,
-        duration = 7000,
+        duration = LV_SIMPSON_WARNING_DURATION_MS,
       }: {
         message: string;
         duration?: number;
@@ -7923,34 +7961,45 @@ function commandsModule({
           return null;
         }
 
-        uiNotificationService.show({
-          title: 'LV EF',
-          message,
-          type: 'warning',
-          duration,
-        });
+        let retried = false;
 
-        window.setTimeout(() => {
-          if (activeLVSimpsonWorkflowSessionId !== workflowSessionId) {
+        const retrySlot = () => {
+          if (
+            retried ||
+            activeLVSimpsonWorkflowSessionId !== workflowSessionId
+          ) {
             return;
           }
+
+          retried = true;
 
           actions.startLVSimpsonEFWorkflow({
             slot: slotInfo.slot,
             sessionId: workflowSessionId,
             singleSlot,
           });
-        }, LV_SIMPSON_AUTO_CONTINUE_DELAY_MS);
+        };
+
+        showLVSimpsonNotification(uiNotificationService, {
+          title: `LV EF step ${stepNumber}/4 - redraw required`,
+          message,
+          type: 'warning',
+          duration,
+          actionLabel: 'Retry',
+          onAction: retrySlot,
+        });
+
+        window.setTimeout(retrySlot, duration);
 
         return null;
       };
       const overlay = createLVSimpsonPreviewOverlay(viewport.element);
 
-      uiNotificationService.show({
-        title: `LV EF step ${stepNumber}/4`,
-        message: `Navigate to ${slotDisplayName}, then draw the mitral annular hinge line. Press Esc to cancel.`,
+      showLVSimpsonNotification(uiNotificationService, {
+        title: `LV EF step ${stepNumber}/4 - ${slotDisplayName}`,
+        message: `Select the correct ${slotDisplayName} frame. First draw hinge-to-hinge across the mitral annulus at the LV endocardial insertion points. Next you will mark the true LV apex. Press Esc to cancel.`,
         type: 'info',
-        duration: 7000,
+        duration: LV_SIMPSON_GUIDANCE_DURATION_MS,
       });
 
       const hinge = await captureLVSimpsonDrag({
@@ -7987,11 +8036,11 @@ function commandsModule({
         baseRightPoint: hinge.endWorld,
       });
 
-      uiNotificationService.show({
-        title: `LV EF step ${stepNumber}/4`,
-        message: `Now drag from the hinge midpoint to the LV apex for ${slotDisplayName}.`,
+      showLVSimpsonNotification(uiNotificationService, {
+        title: `LV EF step ${stepNumber}/4 - mark LV apex`,
+        message: `Drag from the hinge midpoint to the true endocardial LV apex along the LV long axis for ${slotDisplayName}. The generated contour should enclose the LV cavity from the mitral annulus to the apex.`,
         type: 'info',
-        duration: 7000,
+        duration: LV_SIMPSON_GUIDANCE_DURATION_MS,
       });
 
       const apexDrag = await captureLVSimpsonDrag({
@@ -8048,14 +8097,9 @@ function commandsModule({
         slotCandidates,
       });
 
-      if (axisWarning) {
-        uiNotificationService.show({
-          title: `LV EF step ${stepNumber}/4`,
-          message: axisWarning,
-          type: 'warning',
-          duration: 7000,
-        });
-      }
+      // Keep non-blocking geometry warnings until the step result is known.
+      // They are shown with the next-step/final-result notification instead
+      // of being immediately replaced by another toast.
 
       for (const existingMeasurementId of existingSlotMeasurementIds) {
         actions.removeMeasurement({ uid: existingMeasurementId });
@@ -8188,20 +8232,63 @@ function commandsModule({
         viewport.render?.();
       } catch {}
 
-      const remainingSlotCandidates = getLVSimpsonSlotCandidates([
+      const currentLVSimpsonMeasurements = [
         ...measurementService.getMeasurements?.(),
         ...getLVSimpsonSessionMeasurements(),
-      ]);
+      ];
+      const remainingSlotCandidates = getLVSimpsonSlotCandidates(
+        currentLVSimpsonMeasurements
+      );
       const nextSlot = getNextMissingLVSimpsonSlot(remainingSlotCandidates);
+      const lvSimpsonResult = calculateLVSimpson(
+        currentLVSimpsonMeasurements
+      );
 
       if (nextSlot && !singleSlot && !isWorkflowCancelled()) {
-        uiNotificationService.show({
+        const nextDisplayName = getLVSimpsonSlotDisplayName(nextSlot);
+
+        if (axisWarning) {
+          let continued = false;
+
+          const continueToNextSlot = () => {
+            if (
+              continued ||
+              activeLVSimpsonWorkflowSessionId !== workflowSessionId
+            ) {
+              return;
+            }
+
+            continued = true;
+
+            actions.startLVSimpsonEFWorkflow({
+              slot: nextSlot,
+              sessionId: workflowSessionId,
+              singleSlot,
+            });
+          };
+
+          showLVSimpsonNotification(uiNotificationService, {
+            title: 'LV EF - review contour',
+            message: `${axisWarning} ${slotDisplayName} was recorded. Next: ${nextDisplayName}.`,
+            type: 'warning',
+            duration: LV_SIMPSON_WARNING_DURATION_MS,
+            actionLabel: 'Continue',
+            onAction: continueToNextSlot,
+          });
+
+          window.setTimeout(
+            continueToNextSlot,
+            LV_SIMPSON_WARNING_DURATION_MS
+          );
+
+          return measurement;
+        }
+
+        showLVSimpsonNotification(uiNotificationService, {
           title: 'LV EF',
-          message: `${slotInfo.slot} created. Next: navigate to ${getLVSimpsonSlotDisplayName(
-            nextSlot
-          )}. LV EF remains active; draw the hinge line when ready. Press Esc to cancel.`,
+          message: `${slotDisplayName} recorded. Next: ${nextDisplayName}. Confirm the correct frame, then draw hinge-to-hinge across the mitral annulus.`,
           type: 'success',
-          duration: 7000,
+          duration: LV_SIMPSON_GUIDANCE_DURATION_MS,
         });
 
         window.setTimeout(() => {
@@ -8219,13 +8306,75 @@ function commandsModule({
         return measurement;
       }
 
+      if (nextSlot && singleSlot) {
+        clearLVSimpsonWorkflowIfCurrent(workflowSessionId);
+
+        showLVSimpsonNotification(uiNotificationService, {
+          title: 'LV EF',
+          message: `${slotDisplayName} recorded. Simpson LVEF still requires all four A4C/A2C end-diastolic and end-systolic contours. Next missing: ${getLVSimpsonSlotDisplayName(
+            nextSlot
+          )}.`,
+          type: axisWarning ? 'warning' : 'info',
+          duration: axisWarning
+            ? LV_SIMPSON_WARNING_DURATION_MS
+            : LV_SIMPSON_GUIDANCE_DURATION_MS,
+        });
+
+        return measurement;
+      }
+
       clearLVSimpsonWorkflowIfCurrent(workflowSessionId);
 
-      uiNotificationService.show({
-        title: 'LV EF',
-        message: `${slotInfo.slot} created. All four LV EF slots are now present.`,
-        type: 'success',
-        duration: 5000,
+      const resultGuidance = Array.isArray(lvSimpsonResult?.guidance)
+        ? lvSimpsonResult.guidance
+            .map(value => String(value || '').trim())
+            .filter(Boolean)
+        : [];
+
+      if (
+        lvSimpsonResult?.status === 'complete' &&
+        Number.isFinite(Number(lvSimpsonResult?.values?.ejectionFraction))
+      ) {
+        const ejectionFraction = Number(
+          lvSimpsonResult.values.ejectionFraction
+        ).toFixed(0);
+
+        const reviewMessages = Array.from(
+          new Set(
+            [axisWarning, ...resultGuidance]
+              .map(value => String(value || '').trim())
+              .filter(Boolean)
+          )
+        );
+
+        showLVSimpsonNotification(uiNotificationService, {
+          title: reviewMessages.length
+            ? 'LV EF calculated - review contour'
+            : 'LV EF calculated',
+          message: reviewMessages.length
+            ? `Simpson LVEF: ${ejectionFraction}%. ${reviewMessages
+                .slice(0, 2)
+                .join(' ')}`
+            : `All four required contours are valid. Simpson LVEF: ${ejectionFraction}%.`,
+          type: reviewMessages.length ? 'warning' : 'success',
+          duration: reviewMessages.length
+            ? LV_SIMPSON_WARNING_DURATION_MS
+            : LV_SIMPSON_GUIDANCE_DURATION_MS,
+        });
+
+        return measurement;
+      }
+
+      showLVSimpsonNotification(uiNotificationService, {
+        title: 'LV EF could not be calculated',
+        message: `All four contours are present, but the Simpson result is ${
+          lvSimpsonResult?.status || 'invalid'
+        }. ${
+          resultGuidance.slice(0, 2).join(' ') ||
+          'Recheck the A4C/A2C ED/ES frames, mitral hinge placement, true LV apex, and contour coverage.'
+        }`,
+        type: 'warning',
+        duration: LV_SIMPSON_WARNING_DURATION_MS,
       });
 
       return measurement;
