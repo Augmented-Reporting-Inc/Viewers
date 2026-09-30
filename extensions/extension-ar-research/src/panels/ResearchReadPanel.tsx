@@ -1,8 +1,16 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
+import { buildViewerMeasurementValueCandidates } from 'extension-ar-measurements';
 import {
   buildReadFields,
   buildReadResultEntries,
-  buildReadValueMap,
+  buildReadValueState,
+  buildViewerMeasurementReadUpdates,
   getMissingRequiredReadFields,
 } from '../utils/readSchema';
 import {
@@ -163,6 +171,8 @@ function ReadField({
 export default function ResearchReadPanel({ servicesManager, commandsManager }) {
   const [context, setContext] = useState<any>(null);
   const [values, setValues] = useState<Record<string, any>>({});
+  const [valueSources, setValueSources] = useState<Record<string, any>>({});
+  const valueSourcesRef = useRef<Record<string, any>>({});
   const [savedAnnotations, setSavedAnnotations] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -175,8 +185,14 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
 
     try {
       const next = await loadResearchReadContext();
+      const readState = buildReadValueState(
+        next?.review?.readResults || {}
+      );
+
       setContext(next);
-      setValues(buildReadValueMap(next?.review?.readResults || {}));
+      setValues(readState.values);
+      valueSourcesRef.current = readState.sources;
+      setValueSources(readState.sources);
       setSavedAnnotations(
         Array.isArray(next?.review?.measurementAnnotations)
           ? next.review.measurementAnnotations
@@ -208,7 +224,178 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
       ...current,
       [fieldKey]: nextValue,
     }));
+
+    setValueSources(current => {
+      const next = {
+        ...current,
+        [fieldKey]: {
+          source: 'manual',
+          sourceMeasurementKey: '',
+        },
+      };
+
+      valueSourcesRef.current = next;
+      return next;
+    });
   }, []);
+
+  const refreshViewerMeasurementBindings = useCallback(async () => {
+    if (
+      !commandsManager ||
+      !fields.length ||
+      !context ||
+      context.readOnly ||
+      context.preview
+    ) {
+      return;
+    }
+
+    try {
+      const serialized = await commandsManager.runCommand(
+        'getSerializedViewerMeasurements',
+        {
+          domain: cleanString(context?.readSchema?.domain) || 'generic',
+          workflow: VIEWER_MEASUREMENTS_WORKFLOW,
+        }
+      );
+
+      const candidates = buildViewerMeasurementValueCandidates(
+        Array.isArray(serialized?.annotations)
+          ? serialized.annotations
+          : []
+      );
+
+      const updates = buildViewerMeasurementReadUpdates(
+        fields,
+        candidates,
+        valueSourcesRef.current
+      );
+
+      if (!updates.length) {
+        return;
+      }
+
+      setValues(current => {
+        let changed = false;
+        const next = { ...current };
+
+        for (const update of updates) {
+          if (next[update.fieldKey] !== update.value) {
+            next[update.fieldKey] = update.value;
+            changed = true;
+          }
+        }
+
+        return changed ? next : current;
+      });
+
+      setValueSources(current => {
+        let changed = false;
+        const next = { ...current };
+
+        for (const update of updates) {
+          const previous = current?.[update.fieldKey] || {};
+
+          if (
+            previous.source !== update.source ||
+            previous.sourceMeasurementKey !== update.sourceMeasurementKey
+          ) {
+            next[update.fieldKey] = {
+              source: update.source,
+              sourceMeasurementKey: update.sourceMeasurementKey,
+            };
+            changed = true;
+          }
+        }
+
+        if (changed) {
+          valueSourcesRef.current = next;
+          return next;
+        }
+
+        return current;
+      });
+    } catch (bindingError) {
+      console.warn(
+        '[AR Research] viewer measurement binding refresh failed',
+        bindingError
+      );
+    }
+  }, [
+    commandsManager,
+    context?.preview,
+    context?.readOnly,
+    context?.readSchema?.domain,
+    fields,
+  ]);
+
+  useEffect(() => {
+    const measurementService =
+      servicesManager?.services?.measurementService;
+
+    if (
+      !measurementService ||
+      context?.readOnly ||
+      context?.preview ||
+      !fields.length
+    ) {
+      return;
+    }
+
+    let cancelled = false;
+
+    const refresh = () => {
+      if (!cancelled) {
+        void refreshViewerMeasurementBindings();
+      }
+    };
+
+    const events = measurementService.EVENTS || {};
+    const subscriptions = [
+      events.MEASUREMENT_ADDED,
+      events.MEASUREMENT_UPDATED,
+      events.MEASUREMENT_REMOVED,
+      events.MEASUREMENTS_CLEARED,
+      events.RAW_MEASUREMENT_ADDED,
+    ]
+      .filter(Boolean)
+      .map(eventName =>
+        measurementService.subscribe(eventName, refresh)
+      );
+
+    const windowEvents = [
+      'ar-measurements:live-measurements-updated',
+      'ar-measurements:lv-simpson-session-updated',
+    ];
+
+    windowEvents.forEach(eventName =>
+      window.addEventListener(eventName, refresh)
+    );
+
+    const timers = [0, 250, 1000].map(delay =>
+      window.setTimeout(refresh, delay)
+    );
+
+    return () => {
+      cancelled = true;
+
+      subscriptions.forEach(subscription =>
+        subscription?.unsubscribe?.()
+      );
+
+      timers.forEach(timer => window.clearTimeout(timer));
+
+      windowEvents.forEach(eventName =>
+        window.removeEventListener(eventName, refresh)
+      );
+    };
+  }, [
+    servicesManager,
+    context?.readOnly,
+    context?.preview,
+    fields.length,
+    refreshViewerMeasurementBindings,
+  ]);
 
   const captureViewerAnnotations = useCallback(async () => {
     if (!commandsManager) return savedAnnotations;
@@ -248,7 +435,11 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
       const readResults = {
         schemaKey: cleanString(context?.readSchema?.schemaKey),
         schemaVersion: cleanString(context?.readSchema?.schemaVersion),
-        entries: buildReadResultEntries(fields, values),
+        entries: buildReadResultEntries(
+          fields,
+          values,
+          valueSources
+        ),
       };
       const saved = await saveResearchReadReview({
         reviewKey: context.reviewKey,
@@ -261,7 +452,13 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
         review: saved,
         readOnly: cleanString(saved?.status).toLowerCase() === 'completed',
       }));
-      setValues(buildReadValueMap(saved?.readResults || readResults));
+      const savedReadState = buildReadValueState(
+        saved?.readResults || readResults
+      );
+
+      setValues(savedReadState.values);
+      valueSourcesRef.current = savedReadState.sources;
+      setValueSources(savedReadState.sources);
       setSavedAnnotations(
         Array.isArray(saved?.measurementAnnotations)
           ? saved.measurementAnnotations
@@ -289,6 +486,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
     fields,
     servicesManager,
     values,
+    valueSources,
   ]);
 
   const complete = useCallback(async () => {

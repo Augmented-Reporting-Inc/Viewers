@@ -9,6 +9,77 @@ function cleanKey(value: unknown) {
     .slice(0, 120);
 }
 
+function normalizeMeasurementLabels(value: any) {
+  return Array.from(
+    new Set(
+      (Array.isArray(value) ? value : [])
+        .map(cleanString)
+        .filter(Boolean)
+    )
+  );
+}
+
+function normalizeMeasurementLabelToken(value: unknown) {
+  return cleanString(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '');
+}
+
+function normalizeMeasurementUnit(value: unknown) {
+  return cleanString(value)
+    .replace(/[\u00b5\u03bc]/g, 'u')
+    .toLowerCase();
+}
+
+function convertMeasurementValue(
+  value: unknown,
+  sourceUnit: unknown,
+  targetUnit: unknown
+) {
+  const numericValue = Number(value);
+
+  if (!Number.isFinite(numericValue)) {
+    return null;
+  }
+
+  const source = normalizeMeasurementUnit(sourceUnit);
+  const target = normalizeMeasurementUnit(targetUnit);
+
+  if (!target) {
+    return numericValue;
+  }
+
+  if (!source) {
+    return null;
+  }
+
+  if (source === target) {
+    return numericValue;
+  }
+
+  if (source === 'cm' && target === 'mm') {
+    return numericValue * 10;
+  }
+
+  if (source === 'mm' && target === 'cm') {
+    return numericValue / 10;
+  }
+
+  return null;
+}
+
+function roundToConfiguredStep(value: number, step: unknown) {
+  const numericStep = Number(step);
+
+  if (!Number.isFinite(numericStep) || numericStep <= 0) {
+    return value;
+  }
+
+  return Number(
+    (Math.round(value / numericStep) * numericStep).toFixed(8)
+  );
+}
+
 function normalizeOptions(value: any) {
   return (Array.isArray(value) ? value : [])
     .map(option => {
@@ -88,6 +159,9 @@ export function normalizeReadSchema(readSchema: any = {}) {
             ...config,
             unit: cleanString(config.unit),
             options: normalizeOptions(config.options),
+            measurementLabels: normalizeMeasurementLabels(
+              config.measurementLabels
+            ),
           },
         };
       })
@@ -124,21 +198,39 @@ export function buildReadFields(readSchema: any = {}) {
   return fields;
 }
 
-export function buildReadValueMap(readResults: any = {}) {
+export function buildReadValueState(readResults: any = {}) {
   const values: Record<string, any> = {};
+  const sources: Record<string, any> = {};
 
   for (const entry of Array.isArray(readResults?.entries) ? readResults.entries : []) {
     const componentKey = cleanKey(entry?.componentKey);
     const segmentKey = cleanKey(entry?.segmentKey);
     if (!componentKey) continue;
 
-    values[`${componentKey}|${segmentKey}`] = entry.value;
+    const fieldKey = `${componentKey}|${segmentKey}`;
+
+    values[fieldKey] = entry.value;
+    sources[fieldKey] = {
+      source: cleanString(entry?.source || 'manual').toLowerCase() || 'manual',
+      sourceMeasurementKey: cleanString(entry?.sourceMeasurementKey),
+    };
   }
 
-  return values;
+  return {
+    values,
+    sources,
+  };
 }
 
-export function buildReadResultEntries(fields: any[] = [], values: Record<string, any> = {}) {
+export function buildReadValueMap(readResults: any = {}) {
+  return buildReadValueState(readResults).values;
+}
+
+export function buildReadResultEntries(
+  fields: any[] = [],
+  values: Record<string, any> = {},
+  valueSources: Record<string, any> = {}
+) {
   return fields.flatMap(field => {
     const rawValue = values[field.key];
 
@@ -170,10 +262,106 @@ export function buildReadResultEntries(fields: any[] = [], values: Record<string
         segmentKey: field.segmentKey,
         value,
         unit: cleanString(field.config?.unit),
-        source: 'manual',
+        source:
+          cleanString(valueSources?.[field.key]?.source).toLowerCase() ||
+          'manual',
+        sourceMeasurementKey: cleanString(
+          valueSources?.[field.key]?.sourceMeasurementKey
+        ),
       },
     ];
   });
+}
+
+export function buildViewerMeasurementReadUpdates(
+  fields: any[] = [],
+  candidates: any[] = [],
+  valueSources: Record<string, any> = {}
+) {
+  const updates: any[] = [];
+
+  for (const field of fields) {
+    const numericKind = ['measurement', 'continuous', 'number', 'numeric'].includes(
+      cleanString(field?.kind).toLowerCase()
+    );
+
+    if (!numericKind) {
+      continue;
+    }
+
+    const configuredTokens = new Set(
+      normalizeMeasurementLabels(field?.config?.measurementLabels)
+        .map(normalizeMeasurementLabelToken)
+        .filter(Boolean)
+    );
+
+    if (!configuredTokens.size) {
+      continue;
+    }
+
+    const currentSource = cleanString(
+      valueSources?.[field.key]?.source
+    ).toLowerCase();
+
+    if (
+      currentSource &&
+      !['viewer-measurement', 'viewer-derived'].includes(currentSource)
+    ) {
+      continue;
+    }
+
+    let matchedCandidate = null;
+
+    for (const candidate of Array.isArray(candidates) ? candidates : []) {
+      const candidateTokens = normalizeMeasurementLabels(candidate?.labels)
+        .map(normalizeMeasurementLabelToken)
+        .filter(Boolean);
+
+      if (candidateTokens.some(token => configuredTokens.has(token))) {
+        matchedCandidate = candidate;
+      }
+    }
+
+    if (!matchedCandidate) {
+      continue;
+    }
+
+    let value = convertMeasurementValue(
+      matchedCandidate.value,
+      matchedCandidate.unit,
+      field?.config?.unit
+    );
+
+    if (value === null) {
+      continue;
+    }
+
+    value = roundToConfiguredStep(value, field?.config?.step);
+
+    const min = Number(field?.config?.min);
+    const max = Number(field?.config?.max);
+
+    if (Number.isFinite(min) && value < min) {
+      continue;
+    }
+
+    if (Number.isFinite(max) && value > max) {
+      continue;
+    }
+
+    updates.push({
+      fieldKey: field.key,
+      value,
+      source:
+        cleanString(matchedCandidate?.source).toLowerCase() ||
+        'viewer-measurement',
+      sourceMeasurementKey: cleanString(
+        matchedCandidate?.sourceMeasurementKey
+      ),
+    });
+  }
+
+  return updates;
 }
 
 export function getMissingRequiredReadFields(

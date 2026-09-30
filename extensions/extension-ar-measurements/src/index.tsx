@@ -6,6 +6,8 @@ import {
   getViewerMeasurementDomainFromPath,
 } from './utils/measurementLabelConfig';
 
+export { buildViewerMeasurementValueCandidates } from './utils/measurementValueCandidates';
+
 const arMeasurementsExtension = {
   id,
 
