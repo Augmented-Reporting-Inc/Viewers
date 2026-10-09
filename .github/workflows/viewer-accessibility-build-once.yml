@@ -1,11 +1,7 @@
 name: Viewer Accessibility Build One-Time
 
 on:
-  push:
-    branches:
-      - ops/a11y-viewer-build-once-20261009
-    paths:
-      - ".github/workflows/viewer-accessibility-build-once.yml"
+  workflow_dispatch:
 
 permissions:
   contents: read
