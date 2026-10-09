@@ -1729,6 +1729,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
   const [authoringSaving, setAuthoringSaving] = useState(false);
   const [capturingAuthoringKey, setCapturingAuthoringKey] = useState('');
   const [authoringMeasurementDomain, setAuthoringMeasurementDomain] = useState('');
+  const [showStudyTypeSelector, setShowStudyTypeSelector] = useState(false);
 
   const quizzes: QuizDefinition[] = useMemo(() => {
     return Array.isArray(payload?.quizzes) ? payload.quizzes : [];
@@ -1786,6 +1787,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       setAuthoringPayload(nextPayload);
       setAuthoringDefinition(selectedDefinition);
       setAuthoringMeasurementDomain(selectedMeasurementDomain);
+      setShowStudyTypeSelector(false);
       setAuthoringRubric(selectedRubric);
       authoringQuestionsRef.current = questionsToUse;
       setAuthoringQuestions(questionsToUse);
@@ -4072,26 +4074,44 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                   Content key: {authoringPayload?.libraryContentKey || 'unknown'} · v
                   {Number(authoringDefinition.quizVersion || 1)}
                 </div>
-                <label className="mt-2 block text-xs font-semibold text-purple-100">
-                  Study type
-                </label>
-                <select
-                  className="mt-1 w-full rounded border border-purple-700 bg-black px-2 py-1 text-sm text-white"
-                  value={authoringMeasurementDomain}
-                  disabled={authoringSaving || !canEditDraft}
-                  onChange={event => {
-                    const nextDomain = normalizeQuizMeasurementDomain(event.target.value);
-                    setAuthoringMeasurementDomain(nextDomain);
-                    setAuthoringDefinition(current =>
-                      current ? { ...current, domain: nextDomain } : current
-                    );
-                    syncQuizAuthoringMeasurementDomainToUrl(nextDomain, { overwrite: true });
-                  }}
-                >
-                  <option value="">Choose Echo or Bowel</option>
-                  <option value="bowel">Bowel</option>
-                  <option value="echo">Echo</option>
-                </select>
+                <div className="mt-2 flex items-center justify-between gap-2">
+                  <span className="text-xs font-semibold text-purple-100">Study type</span>
+                  {authoringMeasurementDomain && !showStudyTypeSelector ? (
+                    <button
+                      type="button"
+                      className="text-xs text-purple-200 underline hover:text-white"
+                      disabled={authoringSaving || !canEditDraft}
+                      onClick={() => setShowStudyTypeSelector(true)}
+                    >
+                      Change study type
+                    </button>
+                  ) : null}
+                </div>
+                {authoringMeasurementDomain && !showStudyTypeSelector ? (
+                  <div className="mt-1 text-sm text-purple-100">
+                    {authoringMeasurementDomain === 'echo' ? 'Echo' : 'Bowel'}
+                  </div>
+                ) : (
+                  <select
+                    aria-label="Study type"
+                    className="mt-1 w-full rounded border border-purple-700 bg-black px-2 py-1 text-sm text-white"
+                    value={authoringMeasurementDomain}
+                    disabled={authoringSaving || !canEditDraft}
+                    onChange={event => {
+                      const nextDomain = normalizeQuizMeasurementDomain(event.target.value);
+                      setAuthoringMeasurementDomain(nextDomain);
+                      setAuthoringDefinition(current =>
+                        current ? { ...current, domain: nextDomain } : current
+                      );
+                      syncQuizAuthoringMeasurementDomainToUrl(nextDomain, { overwrite: true });
+                      if (nextDomain) setShowStudyTypeSelector(false);
+                    }}
+                  >
+                    <option value="">Choose Echo or Bowel</option>
+                    <option value="bowel">Bowel</option>
+                    <option value="echo">Echo</option>
+                  </select>
+                )}
                 <div className="mt-1 text-[11px] text-purple-200">
                   Controls the measurement labels used while authoring this quiz.
                 </div>
