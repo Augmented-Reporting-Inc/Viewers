@@ -313,10 +313,21 @@ interface NumberStepperProps {
   children?: React.ReactNode;
   direction?: 'horizontal' | 'vertical';
   inputWidth?: string;
+  inputAriaLabel?: string;
+  decrementAriaLabel?: string;
+  incrementAriaLabel?: string;
 }
 
 // Modified NumberStepper component to properly position left/right controls
-function NumberStepper({ className, children, direction, inputWidth }: NumberStepperProps) {
+function NumberStepper({
+  className,
+  children,
+  direction,
+  inputWidth,
+  inputAriaLabel = 'Numeric value',
+  decrementAriaLabel = 'Decrease value',
+  incrementAriaLabel = 'Increase value',
+}: NumberStepperProps) {
   const ctx = useContext(NumericMetaContext);
   if (!ctx) {
     throw new Error('NumberStepper must be used inside <Numeric.Container>.');
@@ -374,9 +385,11 @@ function NumberStepper({ className, children, direction, inputWidth }: NumberSte
           step={step}
           value={singleValue}
           setValue={setSingleValue}
+          ariaLabel={decrementAriaLabel}
         />
         <Input
           type="text"
+          aria-label={inputAriaLabel}
           value={displayValue}
           onChange={handleInputChange}
           onBlur={handleBlur}
@@ -391,6 +404,7 @@ function NumberStepper({ className, children, direction, inputWidth }: NumberSte
           step={step}
           value={singleValue}
           setValue={setSingleValue}
+          ariaLabel={incrementAriaLabel}
         />
       </div>
     );
@@ -405,6 +419,7 @@ function NumberStepper({ className, children, direction, inputWidth }: NumberSte
     >
       <Input
         type="text"
+        aria-label={inputAriaLabel}
         value={displayValue}
         onChange={handleInputChange}
         onBlur={handleBlur}
@@ -417,6 +432,7 @@ function NumberStepper({ className, children, direction, inputWidth }: NumberSte
         <Button
           variant="ghost"
           size="icon"
+          aria-label={incrementAriaLabel}
           onClick={() => setSingleValue(singleValue + step)}
           disabled={singleValue >= max}
           className="text-primary h-3 w-5"
@@ -426,6 +442,7 @@ function NumberStepper({ className, children, direction, inputWidth }: NumberSte
         <Button
           variant="ghost"
           size="icon"
+          aria-label={decrementAriaLabel}
           onClick={() => setSingleValue(singleValue - step)}
           disabled={singleValue <= min}
           className="text-primary h-3 w-5"
@@ -438,7 +455,7 @@ function NumberStepper({ className, children, direction, inputWidth }: NumberSte
 }
 
 // New components for left and right controls
-function LeftControl({ min, step, value, setValue }) {
+function LeftControl({ min, step, value, setValue, ariaLabel }) {
   const decrement = useCallback(() => {
     const newValue = Math.max(value - step, min);
     setValue(newValue);
@@ -448,6 +465,7 @@ function LeftControl({ min, step, value, setValue }) {
     <Button
       variant="ghost"
       size="icon"
+      aria-label={ariaLabel}
       onClick={decrement}
       className="text-primary h-full w-4 cursor-pointer p-0"
     >
@@ -456,7 +474,7 @@ function LeftControl({ min, step, value, setValue }) {
   );
 }
 
-function RightControl({ max, step, value, setValue }) {
+function RightControl({ max, step, value, setValue, ariaLabel }) {
   const increment = useCallback(() => {
     const newValue = Math.min(value + step, max);
     setValue(newValue);
@@ -466,6 +484,7 @@ function RightControl({ max, step, value, setValue }) {
     <Button
       variant="ghost"
       size="icon"
+      aria-label={ariaLabel}
       onClick={increment}
       className="text-primary h-full w-4 cursor-pointer p-0"
     >

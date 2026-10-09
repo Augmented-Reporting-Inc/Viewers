@@ -151,15 +151,23 @@ function ViewerLayout({
 
   return (
     <div>
+      <a
+        href="#viewer-main-content"
+        className="absolute left-2 -top-20 z-[100] rounded bg-white px-3 py-2 font-semibold text-black focus:top-2 focus:outline focus:outline-2 focus:outline-offset-2 focus:outline-primary"
+      >
+        Skip to viewer content
+      </a>
       <ViewerHeader
         hotkeysManager={hotkeysManager}
         extensionManager={extensionManager}
         servicesManager={servicesManager}
         appConfig={appConfig}
       />
-      <div
+      <main
+        id="viewer-main-content"
+        tabIndex={-1}
         className="relative flex w-full flex-row flex-nowrap items-stretch overflow-hidden bg-black"
-        style={{ height: 'calc(100vh - 52px' }}
+        style={{ height: 'calc(100vh - 52px)' }}
       >
         <React.Fragment>
           {showLoadingIndicator && <LoadingIndicatorProgress className="h-full w-full bg-black" />}
@@ -216,7 +224,7 @@ function ViewerLayout({
             ) : null}
           </ResizablePanelGroup>
         </React.Fragment>
-      </div>
+      </main>
       <Onboarding tours={customizationService.getCustomization('ohif.tours')} />
       <InvestigationalUseDialog dialogConfiguration={appConfig?.investigationalUseDialog} />
     </div>
