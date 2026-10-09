@@ -2055,6 +2055,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     } = {}
   ) {
     const nextActiveQuestionKey = `${quiz.quizKey}:${question.questionKey}`;
+    // Change the target before awaiting tool setup: a measurement event may arrive
+    // while the tool command or prior gold-annotation display is pending.
+    setActiveQuestionKey(nextActiveQuestionKey);
 
     try {
       await runViewerCommand(commandsManager, 'clearViewerQuizMeasurementComparison', {});
@@ -2933,6 +2936,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     const captureKey = `authoring-measurement:${question.questionKey}`;
     const answerConfig = plainObject(question.answerConfig);
 
+    // Binding is always an explicit question, never inferred from the last drawing.
     setActiveQuestionKey(`authoring:${question.questionKey}`);
     setCapturingAuthoringKey(captureKey);
 
@@ -2953,6 +2957,12 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       }
 
       const answer = result.answer;
+      const expectedType = cleanString(answerConfig.measurementType).toLowerCase().replace(/[^a-z0-9]/g, '');
+      const capturedType = cleanString(answer.measurementType).toLowerCase().replace(/[^a-z0-9]/g, '');
+      // Generic Length tools are allowed; distinct named Echo measurements must not cross-bind.
+      if (expectedType && capturedType && expectedType !== 'length' && capturedType !== 'length' && expectedType !== capturedType) {
+        throw new Error(`Measurement type mismatch: ${answer.measurementType} cannot be assigned to ${answerConfig.measurementType}. Select the matching question before capturing.`);
+      }
       const target = answer.viewerTarget || question.viewerTarget;
       const unit = cleanString(answer.unit || answerConfig.unit);
       const nextQuestion = {
@@ -3673,6 +3683,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     const viewerTarget = getQuestionViewerTarget(question);
     const targetSummary = getViewerTargetSummary(viewerTarget);
     const isCapturing = capturingAuthoringKey.endsWith(`:${question.questionKey}`);
+    const isActiveAuthoringQuestion = activeQuestionKey === `authoring:${question.questionKey}`;
     const goldPoint = plainObject(answerConfig.goldPoint);
     const hasGoldPoint =
       goldPoint.x !== null &&
@@ -3683,11 +3694,12 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     return (
       <div
         key={question.questionKey}
-        className="bg-gray-950/50 rounded border border-gray-700 p-2"
+        className={`bg-gray-950/50 rounded border p-2 ${isActiveAuthoringQuestion ? 'border-blue-400' : 'border-gray-700'}`}
         onClick={() => selectQuestion({ quizKey: 'authoring', quizVersion: 1 }, question)}
       >
         <div className="text-sm font-semibold">
           {index + 1}. {question.title || question.prompt || question.questionKey}
+          {isActiveAuthoringQuestion ? <span className="ml-2 text-xs text-blue-300">Active question</span> : null}
         </div>
         <div className="mt-1 text-[11px] uppercase tracking-wide text-gray-400">
           {question.type}
@@ -3808,6 +3820,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
 
         {question.type === 'measurementNumeric' ? (
           <div className="mt-2 rounded border border-gray-700 p-2">
+            {!isActiveAuthoringQuestion ? (
+              <div className="mb-2 text-xs text-amber-200">Select this question before drawing its measurement. A new measurement is associated with the active question.</div>
+            ) : null}
             <button
               type="button"
               className="rounded border border-green-600 px-2 py-1 text-xs font-semibold text-green-100 disabled:opacity-50"
