@@ -283,31 +283,35 @@ const SidePanel = ({
     const _childComponents = Array.isArray(tabs) ? tabs : [tabs];
     return (
       <>
-        <div
+        <button
+          type="button"
+          aria-label={`Open ${side} side panel`}
           className={classnames(
             'bg-secondary-dark flex h-[28px] w-full cursor-pointer items-center rounded-md',
             side === 'left' ? 'justify-end pr-2' : 'justify-start pl-2'
           )}
           onClick={() => {
-            updatePanelOpen(!panelOpen);
+            updatePanelOpen(true);
           }}
           data-cy={`side-panel-header-${side}`}
         >
           <Icons.NavigationPanelReveal
             className={classnames('text-primary', side === 'left' && 'rotate-180 transform')}
           />
-        </div>
+        </button>
         <div className={classnames('mt-3 flex flex-col space-y-3')}>
           {_childComponents.map((childComponent, index) => (
             <Tooltip key={index}>
-              <TooltipTrigger>
-                <div
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
                   id={`${childComponent.name}-btn`}
                   data-cy={`${childComponent.name}-btn`}
-                  className="text-primary hover:cursor-pointer"
-                  onClick={() => {
-                    return childComponent.disabled ? null : updateActiveTabIndex(index, true);
-                  }}
+                  aria-label={childComponent.label || childComponent.iconLabel || childComponent.name}
+                  aria-pressed={index === activeTabIndex}
+                  disabled={childComponent.disabled}
+                  className="text-primary rounded hover:cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+                  onClick={() => updateActiveTabIndex(index, true)}
                 >
                   {React.createElement(Icons[childComponent.iconName] || Icons.MissingIcon, {
                     className: classnames({
@@ -319,7 +323,7 @@ const SidePanel = ({
                       height: '22px',
                     },
                   })}
-                </div>
+                </button>
               </TooltipTrigger>
               <TooltipContent side={side === 'left' ? 'right' : 'left'}>
                 <div
@@ -340,21 +344,23 @@ const SidePanel = ({
 
   const getCloseIcon = () => {
     return (
-      <div
+      <button
+        type="button"
+        aria-label={`Close ${side} side panel`}
         className={classnames(
-          'absolute flex cursor-pointer items-center justify-center',
+          'absolute flex cursor-pointer items-center justify-center rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary',
           side === 'left' ? 'right-0' : 'left-0'
         )}
         style={{ width: `${closeIconWidth}px` }}
         onClick={() => {
-          updatePanelOpen(!panelOpen);
+          updatePanelOpen(false);
         }}
         data-cy={`side-panel-header-${side}`}
       >
         {React.createElement(Icons[openStateIconName[side]] || Icons.MissingIcon, {
           className: 'text-primary',
         })}
-      </div>
+      </button>
     );
   };
 
@@ -381,19 +387,24 @@ const SidePanel = ({
                     </div>
                   )}
                   <Tooltip key={tabIndex}>
-                    <TooltipTrigger>
-                      <div
-                        className={getTabClassNames(
-                          numCols,
-                          tabs.length,
-                          tabIndex,
-                          tabIndex === activeTabIndex,
-                          disabled
+                    <TooltipTrigger asChild>
+                      <button
+                        type="button"
+                        aria-label={tab.label || tab.iconLabel || tab.name}
+                        aria-pressed={tabIndex === activeTabIndex}
+                        disabled={disabled}
+                        className={classnames(
+                          getTabClassNames(
+                            numCols,
+                            tabs.length,
+                            tabIndex,
+                            tabIndex === activeTabIndex,
+                            disabled
+                          ),
+                          'focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary'
                         )}
                         style={getTabStyle(tabs.length)}
-                        onClick={() => {
-                          return disabled ? null : updateActiveTabIndex(tabIndex);
-                        }}
+                        onClick={() => updateActiveTabIndex(tabIndex)}
                         data-cy={`${tab.name}-btn`}
                       >
                         <div
@@ -410,7 +421,7 @@ const SidePanel = ({
                             },
                           })}
                         </div>
-                      </div>
+                      </button>
                     </TooltipTrigger>
                     <TooltipContent side="bottom">
                       {getToolTipContent(tab.label, disabled)}
@@ -429,10 +440,8 @@ const SidePanel = ({
     return (
       <div
         className={classnames(
-          'text-primary flex grow cursor-pointer select-none justify-center self-center text-[13px]'
+          'text-primary flex grow select-none justify-center self-center text-[13px]'
         )}
-        data-cy={`${tabs[0].name}-btn`}
-        onClick={() => updatePanelOpen(!panelOpen)}
       >
         {getCloseIcon()}
         <span>{tabs[0].label}</span>
