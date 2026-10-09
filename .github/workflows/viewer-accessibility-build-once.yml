@@ -1,0 +1,42 @@
+name: Viewer Accessibility Build One-Time
+
+on:
+  push:
+    branches:
+      - ops/a11y-viewer-build-once-20261009
+    paths:
+      - ".github/workflows/viewer-accessibility-build-once.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build viewer accessibility changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: yarn
+
+      - name: Install locked dependencies
+        run: yarn install --frozen-lockfile --non-interactive
+
+      - name: Build UI package
+        run: yarn workspace @ohif/ui-next build
+
+      - name: Build default extension
+        run: yarn workspace @ohif/extension-default build
+
+      - name: Build viewer app
+        env:
+          APP_CONFIG: config/ar.js
+          PUBLIC_URL: /
+        run: yarn workspace @ohif/app build
