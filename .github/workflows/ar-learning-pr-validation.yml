@@ -1,0 +1,35 @@
+name: AR Learning Extension Validation
+
+on:
+  pull_request:
+    branches:
+      - port/3.11-custom
+    paths:
+      - 'extensions/extension-ar-learning/**'
+      - '.github/workflows/ar-learning-pr-validation.yml'
+      - 'package.json'
+      - 'yarn.lock'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ar-learning-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-ar-learning:
+    name: Build AR learning extension
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: yarn
+      - name: Install locked dependencies
+        run: yarn install --frozen-lockfile --non-interactive
+      - name: Compile AR learning extension
+        run: yarn workspace extension-ar-learning build
