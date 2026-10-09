@@ -7768,6 +7768,34 @@ function commandsModule({
       const renderContent = customizationService.getCustomization('ui.labellingComponent');
       const measurement = measurementService.getMeasurement(uid);
 
+      // Cancellation must not delete an existing/rehydrated annotation.
+      // Only the freshly completed Length awaiting its first label is discardable.
+      const discardPendingLength = () => {
+        const currentAnnotation = cornerstoneTools.annotation.state.getAnnotation?.(uid);
+        if (
+          currentAnnotation?.metadata?.toolName !== 'Length' ||
+          currentAnnotation?.data?.arPendingLengthLabel !== true
+        ) {
+          return;
+        }
+
+        viewerMeasurementsCreatedInSession.delete(uid);
+        viewerMeasurementsModifiedInSession.delete(uid);
+        viewerMeasurementsDeletedInSession.delete(uid);
+        cornerstoneTools.annotation.selection.setAnnotationSelected?.(uid, false);
+        if (measurementService.getMeasurement?.(uid)) {
+          measurementService.remove(uid);
+        }
+        cornerstoneTools.annotation.state.removeAnnotation?.(uid);
+        cornerstoneViewportService.getRenderingEngine()?.render?.();
+      };
+      const finishPendingLength = () => {
+        const currentAnnotation = cornerstoneTools.annotation.state.getAnnotation?.(uid);
+        if (currentAnnotation?.data?.arPendingLengthLabel) {
+          delete currentAnnotation.data.arPendingLengthLabel;
+        }
+      };
+
       if (!measurement) {
         console.debug('No measurement found for label editing');
         return null;
@@ -7834,9 +7862,11 @@ function commandsModule({
 
         if (label !== undefined && label !== null) {
           const nextLabel = options.normalizeLabel ? options.normalizeLabel(label) : label;
+          finishPendingLength();
           measurementService.update(uid, { ...measurement, label: nextLabel }, true);
           return nextLabel;
         }
+        discardPendingLength();
         return null;
       }
 
@@ -7850,10 +7880,12 @@ function commandsModule({
 
       if (val !== undefined && val !== null) {
         const nextLabel = options.normalizeLabel ? options.normalizeLabel(val) : val;
+        finishPendingLength();
         measurementService.update(uid, { ...measurement, label: nextLabel }, true);
         return nextLabel;
       }
 
+      discardPendingLength();
       return null;
     },
     /**

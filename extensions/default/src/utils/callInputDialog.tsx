@@ -66,12 +66,16 @@ export async function callInputDialog({
 }) {
   const dialogId = 'dialog-enter-annotation';
 
-  const value = await new Promise<string>(resolve => {
+  const value = await new Promise<string | null>(resolve => {
     uiDialogService.show({
       id: dialogId,
       content: InputDialogDefault,
       title: title,
       shouldCloseOnEsc: true,
+      onClose: () => {
+        uiDialogService.hide(dialogId);
+        resolve(null);
+      },
       contentProps: {
         onSave: value => {
           resolve(value);
@@ -112,7 +116,7 @@ export async function callInputDialogAutoComplete({
   const dropDownItems = labelConfig ? labelConfig.items : [];
   const dialogTitle = getAutoCompleteDialogTitle({ title, labelConfig });
 
-  const value = await new Promise<Map<string, string>>((resolve, reject) => {
+  const value = await new Promise<Map<string, string> | string | null>((resolve, reject) => {
     const labellingDoneCallback = newValue => {
       uiDialogService.hide('select-annotation');
       if (measurement && typeof newValue === 'string') {
@@ -125,6 +129,11 @@ export async function callInputDialogAutoComplete({
     uiDialogService.show({
       id: 'select-annotation',
       title: dialogTitle,
+      shouldCloseOnEsc: true,
+      onClose: () => {
+        uiDialogService.hide('select-annotation');
+        resolve(null);
+      },
       content: renderContent,
       contentProps: {
         labellingDoneCallback: labellingDoneCallback,
