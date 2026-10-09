@@ -15,7 +15,8 @@ const NavBar = ({
   isSticky?: boolean;
 }) => {
   return (
-    <div
+    <nav
+      aria-label="Viewer navigation and tools"
       className={classnames(
         'bg-secondary-dark z-20 border-black px-1',
         isSticky && stickyClasses,
@@ -24,7 +25,7 @@ const NavBar = ({
       )}
     >
       {children}
-    </div>
+    </nav>
   );
 };
 
