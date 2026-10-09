@@ -87,15 +87,17 @@ ToolButtonListDefault.displayName = 'ToolButtonListDefault';
 interface ToolButtonListDropDownProps {
   children: React.ReactNode;
   className?: string;
+  ariaLabel?: string;
 }
 
 const ToolButtonListDropDown = React.forwardRef<HTMLDivElement, ToolButtonListDropDownProps>(
-  ({ children, className, ...props }, ref) => (
+  ({ children, className, ariaLabel = 'More tools', ...props }, ref) => (
     <DropdownMenu {...props}>
       <DropdownMenuTrigger asChild>
         <Button
           variant="ghost"
           size="icon"
+          aria-label={ariaLabel}
           className={cn(
             'text-foreground/80 hover:bg-background hover:text-highlight border-primary',
             'inline-flex h-10 w-5 items-center justify-center',
