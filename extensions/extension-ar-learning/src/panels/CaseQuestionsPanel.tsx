@@ -2055,6 +2055,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     } = {}
   ) {
     const nextActiveQuestionKey = `${quiz.quizKey}:${question.questionKey}`;
+    // Change the target before awaiting tool setup: a measurement event may arrive
+    // while the tool command or prior gold-annotation display is pending.
+    setActiveQuestionKey(nextActiveQuestionKey);
 
     try {
       await runViewerCommand(commandsManager, 'clearViewerQuizMeasurementComparison', {});
@@ -2957,7 +2960,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       const expectedType = cleanString(answerConfig.measurementType).toLowerCase().replace(/[^a-z0-9]/g, '');
       const capturedType = cleanString(answer.measurementType).toLowerCase().replace(/[^a-z0-9]/g, '');
       // Generic Length tools are allowed; distinct named Echo measurements must not cross-bind.
-      if (expectedType && capturedType && capturedType !== 'length' && expectedType !== 'length' && expectedType !== capturedType) {
+      if (expectedType && capturedType && expectedType !== 'length' && capturedType !== 'length' && expectedType !== capturedType) {
         throw new Error(`Measurement type mismatch: ${answer.measurementType} cannot be assigned to ${answerConfig.measurementType}. Select the matching question before capturing.`);
       }
       const target = answer.viewerTarget || question.viewerTarget;
