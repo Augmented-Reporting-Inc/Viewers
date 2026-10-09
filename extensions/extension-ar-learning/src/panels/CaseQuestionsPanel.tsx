@@ -4076,7 +4076,8 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                 </div>
                 <div className="mt-2 flex items-center justify-between gap-2">
                   <span className="text-xs font-semibold text-purple-100">Study type</span>
-                  {authoringMeasurementDomain && !showStudyTypeSelector ? (
+                  {/* A resolved quiz/URL domain should not require another educator selection. */}
+                {authoringMeasurementDomain && !showStudyTypeSelector ? (
                     <button
                       type="button"
                       className="text-xs text-purple-200 underline hover:text-white"
