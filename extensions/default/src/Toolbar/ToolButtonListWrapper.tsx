@@ -55,7 +55,9 @@ export default function ToolButtonListWrapper({ buttonSection, id }: ToolButtonL
       </ToolButtonListDefault>
       <ToolButtonListDivider className={primary.isActive ? 'opacity-0' : 'opacity-100'} />
       <div data-cy={`${id}-split-button-secondary`}>
-        <ToolButtonListDropDown>
+        <ToolButtonListDropDown
+          ariaLabel={`More ${primary.label || primary.tooltip || id} tools`}
+        >
           {items.map(item => {
             return (
               <ToolButtonListItem
