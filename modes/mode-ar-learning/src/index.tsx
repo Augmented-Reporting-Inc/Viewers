@@ -1099,6 +1099,8 @@ function modeFactory({ modeConfiguration }) {
       const quizMeasurementWorkflow = isViewerQuizMeasurementCaptureMode();
       const completionAwareMeasurementWorkflow =
         editableReviewWorkflow || quizMeasurementWorkflow;
+      // Deduplicate concurrent completion events without dropping incomplete drawings.
+      const inFlightCompletedAnnotationIds = new Set<string>();
 
       const handleCompletedViewerMeasurement = async ({
         annotationId,
@@ -1112,11 +1114,14 @@ function modeFactory({ modeConfiguration }) {
           measurementToolsReadOnly ||
           _suppressLabelPrompt ||
           !id ||
-          _handledCompletedAnnotationIds.has(id)
+          _handledCompletedAnnotationIds.has(id) ||
+          inFlightCompletedAnnotationIds.has(id)
         ) {
           return false;
         }
 
+        inFlightCompletedAnnotationIds.add(id);
+        try {
         await new Promise(resolve => window.setTimeout(resolve, 0));
 
         const resolvedAnnotation = getMeasurementAnnotationForId(id) || sourceAnnotation;
@@ -1183,6 +1188,15 @@ function modeFactory({ modeConfiguration }) {
         const completedMeasurement =
           measurementService.getMeasurement?.(id) || currentMeasurement;
 
+        // A canceled or failed label dialog must not bind an unlabeled gold answer.
+        // Read the service entry again: label updates happen inside the dialog command.
+        if (quizMeasurementWorkflow && !String(completedMeasurement?.label || '').trim()) {
+          console.info('[AR Measurements] skipped unlabeled quiz measurement', {
+            annotationId: id,
+          });
+          return false;
+        }
+
         dispatchViewerQuizMeasurementAdded(completedMeasurement);
 
         if (!isViewerQuizMeasurementCaptureMode()) {
@@ -1190,6 +1204,9 @@ function modeFactory({ modeConfiguration }) {
         }
 
         return true;
+        } finally {
+          inFlightCompletedAnnotationIds.delete(id);
+        }
       };
 
       const sweepCompletedViewerMeasurements = async (source = 'measurement-service') => {
