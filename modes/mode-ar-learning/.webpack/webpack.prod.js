@@ -39,6 +39,27 @@ const config = {
         amd: '@ohif/ui',
         root: '@ohif/ui',
       },
+      // Align with the longitudinal mode: keep OHIF's shared browser runtime
+      // responsible for these libraries instead of bundling duplicate instances.
+      // In particular, Cornerstone event targets and annotation state must be singletons.
+      'i18next': {
+        commonjs2: 'i18next',
+        commonjs: 'i18next',
+        amd: 'i18next',
+        root: 'i18next',
+      },
+      '@cornerstonejs/core': {
+        commonjs2: '@cornerstonejs/core',
+        commonjs: '@cornerstonejs/core',
+        amd: '@cornerstonejs/core',
+        root: '@cornerstonejs/core',
+      },
+      '@cornerstonejs/tools': {
+        commonjs2: '@cornerstonejs/tools',
+        commonjs: '@cornerstonejs/tools',
+        amd: '@cornerstonejs/tools',
+        root: '@cornerstonejs/tools',
+      },
       '@ohif/mode-longitudinal': {
         commonjs2: '@ohif/mode-longitudinal',
         commonjs: '@ohif/mode-longitudinal',
