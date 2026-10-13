@@ -62,15 +62,19 @@ function Header({
       >
         <div className="relative h-[48px] items-center">
           <div className="absolute left-0 top-1/2 flex -translate-y-1/2 items-center">
-            <div
-              className={classNames(
-                'mr-3 inline-flex items-center',
-                isReturnEnabled && 'cursor-pointer'
+            <div className="mr-3 inline-flex items-center">
+              {isReturnEnabled && (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label="Return to study list"
+                  onClick={onClickReturn}
+                  data-cy="return-to-work-list"
+                  className="text-primary hover:bg-primary-dark ml-1"
+                >
+                  <Icons.ArrowLeft className="h-7 w-7" />
+                </Button>
               )}
-              onClick={onClickReturn}
-              data-cy="return-to-work-list"
-            >
-              {isReturnEnabled && <Icons.ArrowLeft className="text-primary ml-1 h-7 w-7" />}
               <div className="ml-1">
                 {WhiteLabeling?.createLogoComponentFn?.(React, props) || <Icons.OHIFLogo />}
               </div>
@@ -95,6 +99,7 @@ function Header({
                   <Button
                     variant="ghost"
                     size="icon"
+                    aria-label="Viewer settings menu"
                     className="text-primary hover:bg-primary-dark mt-2 h-full w-full"
                   >
                     <Icons.GearSettings />

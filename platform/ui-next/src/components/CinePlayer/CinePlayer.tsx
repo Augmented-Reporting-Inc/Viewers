@@ -81,6 +81,7 @@ const CinePlayer: React.FC<CinePlayerProps> = ({
         <Button
           variant="ghost"
           size="icon"
+          aria-label={isPlaying ? 'Pause cine playback' : 'Play cine playback'}
           onClick={() => onPlayPauseChange(!isPlaying)}
           data-cy={'cine-player-play-pause'}
         >
@@ -105,6 +106,7 @@ const CinePlayer: React.FC<CinePlayerProps> = ({
             <PopoverTrigger asChild>
               <Button
                 variant="ghost"
+                aria-label="Cine frame rate settings"
                 className="h-full border-none bg-transparent p-0 hover:bg-transparent"
               >
                 <Numeric.Container
@@ -119,6 +121,9 @@ const CinePlayer: React.FC<CinePlayerProps> = ({
                   <Numeric.NumberStepper
                     direction="horizontal"
                     inputWidth="w-7 max-w-7"
+                    inputAriaLabel="Cine frame rate"
+                    decrementAriaLabel="Decrease cine frame rate"
+                    incrementAriaLabel="Increase cine frame rate"
                   >
                     <div className="flex items-center justify-center gap-1">
                       <div className="text-foreground flex-shrink-0 text-center text-sm leading-[22px]">
@@ -158,6 +163,7 @@ const CinePlayer: React.FC<CinePlayerProps> = ({
         <Button
           variant="ghost"
           size="icon"
+          aria-label="Close cine controls"
           onClick={onClose}
           data-cy={'cine-player-close'}
         >

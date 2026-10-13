@@ -47,6 +47,23 @@ const Thumbnail = ({
 
   const [lastTap, setLastTap] = useState(0);
 
+  const accessibleLabel = [
+    description || modality || 'Image series',
+    seriesNumber !== undefined && seriesNumber !== null ? `series ${seriesNumber}` : '',
+    Number.isFinite(numInstances) ? `${numInstances} image${numInstances === 1 ? '' : 's'}` : '',
+  ]
+    .filter(Boolean)
+    .join(', ');
+
+  const handleKeyDown = event => {
+    if (event.key !== 'Enter' && event.key !== ' ') {
+      return;
+    }
+
+    event.preventDefault();
+    onClick(event);
+  };
+
   const handleTouchEnd = e => {
     const currentTime = new Date().getTime();
     const tapLength = currentTime - lastTap;
@@ -267,7 +284,11 @@ const Thumbnail = ({
       onClick={onClick}
       onDoubleClick={onDoubleClick}
       onTouchEnd={handleTouchEnd}
+      onKeyDown={handleKeyDown}
       role="button"
+      tabIndex={0}
+      aria-label={accessibleLabel}
+      aria-pressed={isActive}
     >
       <div
         ref={drag}
