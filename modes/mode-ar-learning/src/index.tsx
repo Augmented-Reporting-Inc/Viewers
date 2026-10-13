@@ -1122,88 +1122,88 @@ function modeFactory({ modeConfiguration }) {
 
         inFlightCompletedAnnotationIds.add(id);
         try {
-        await new Promise(resolve => window.setTimeout(resolve, 0));
+          await new Promise(resolve => window.setTimeout(resolve, 0));
 
-        const resolvedAnnotation = getMeasurementAnnotationForId(id) || sourceAnnotation;
+          const resolvedAnnotation = getMeasurementAnnotationForId(id) || sourceAnnotation;
 
-        if (isHydratedSavedWorkflowAnnotation(id, resolvedAnnotation)) {
-          return false;
-        }
+          if (isHydratedSavedWorkflowAnnotation(id, resolvedAnnotation)) {
+            return false;
+          }
 
-        const measurement = await waitForViewerMeasurementServiceEntry(measurementService, id);
+          const measurement = await waitForViewerMeasurementServiceEntry(measurementService, id);
 
-        if (!measurement || !isMeasurementDrawingComplete(measurement, resolvedAnnotation)) {
-          return false;
-        }
+          if (!measurement || !isMeasurementDrawingComplete(measurement, resolvedAnnotation)) {
+            return false;
+          }
 
-        _handledCompletedAnnotationIds.add(id);
+          _handledCompletedAnnotationIds.add(id);
 
-        commandsManager.runCommand('markViewerMeasurementCreatedInSession', {
-          uid: id,
-        });
+          commandsManager.runCommand('markViewerMeasurementCreatedInSession', {
+            uid: id,
+          });
 
-        const currentMeasurement = measurementService.getMeasurement?.(id) || measurement;
+          const currentMeasurement = measurementService.getMeasurement?.(id) || measurement;
 
-        console.info('[AR Measurements] completed viewer measurement', {
-          annotationId: id,
-          source,
-          toolName: currentMeasurement?.toolName || resolvedAnnotation?.metadata?.toolName || '',
-        });
+          console.info('[AR Measurements] completed viewer measurement', {
+            annotationId: id,
+            source,
+            toolName: currentMeasurement?.toolName || resolvedAnnotation?.metadata?.toolName || '',
+          });
 
-        if (!currentMeasurement?.label) {
-          const labelOptions = await getLabelConfigForMeasurement(
-            currentMeasurement,
-            commandsManager,
-            {
-              quizMeasurementDomain: _quizMeasurementDomain,
-            }
-          );
-
-          if (labelOptions) {
-            try {
-              console.info('[AR Measurements] label prompt config', {
-                toolName: currentMeasurement?.toolName,
-                title: labelOptions.title,
-                placeholder: labelOptions.placeholder,
-                labelConfigId: labelOptions.labelConfigOverride?.id,
-                commandName: labelOptions.commandName,
-              });
-
-              if (labelOptions.commandName) {
-                await commandsManager.runCommand(labelOptions.commandName, {
-                  uid: id,
-                });
-              } else {
-                await commandsManager.runCommand('setMeasurementLabel', {
-                  uid: id,
-                  ...labelOptions,
-                });
+          if (!currentMeasurement?.label) {
+            const labelOptions = await getLabelConfigForMeasurement(
+              currentMeasurement,
+              commandsManager,
+              {
+                quizMeasurementDomain: _quizMeasurementDomain,
               }
-            } catch (error) {
-              console.warn('[AR Measurements] label prompt failed:', error);
+            );
+
+            if (labelOptions) {
+              try {
+                console.info('[AR Measurements] label prompt config', {
+                  toolName: currentMeasurement?.toolName,
+                  title: labelOptions.title,
+                  placeholder: labelOptions.placeholder,
+                  labelConfigId: labelOptions.labelConfigOverride?.id,
+                  commandName: labelOptions.commandName,
+                });
+
+                if (labelOptions.commandName) {
+                  await commandsManager.runCommand(labelOptions.commandName, {
+                    uid: id,
+                  });
+                } else {
+                  await commandsManager.runCommand('setMeasurementLabel', {
+                    uid: id,
+                    ...labelOptions,
+                  });
+                }
+              } catch (error) {
+                console.warn('[AR Measurements] label prompt failed:', error);
+              }
             }
           }
-        }
 
-        const completedMeasurement =
-          measurementService.getMeasurement?.(id) || currentMeasurement;
+          const completedMeasurement =
+            measurementService.getMeasurement?.(id) || currentMeasurement;
 
-        // A canceled or failed label dialog must not bind an unlabeled gold answer.
-        // Read the service entry again: label updates happen inside the dialog command.
-        if (quizMeasurementWorkflow && !String(completedMeasurement?.label || '').trim()) {
-          console.info('[AR Measurements] skipped unlabeled quiz measurement', {
-            annotationId: id,
-          });
-          return false;
-        }
+          // A canceled or failed label dialog must not bind an unlabeled gold answer.
+          // Read the service entry again: label updates happen inside the dialog command.
+          if (quizMeasurementWorkflow && !String(completedMeasurement?.label || '').trim()) {
+            console.info('[AR Measurements] skipped unlabeled quiz measurement', {
+              annotationId: id,
+            });
+            return false;
+          }
 
-        dispatchViewerQuizMeasurementAdded(completedMeasurement);
+          dispatchViewerQuizMeasurementAdded(completedMeasurement);
 
-        if (!isViewerQuizMeasurementCaptureMode()) {
-          panelService?.activatePanel?.(arMeasurements.panel, true);
-        }
+          if (!isViewerQuizMeasurementCaptureMode()) {
+            panelService?.activatePanel?.(arMeasurements.panel, true);
+          }
 
-        return true;
+          return true;
         } finally {
           inFlightCompletedAnnotationIds.delete(id);
         }
