@@ -2957,6 +2957,15 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       }
 
       const answer = result.answer;
+      // Quiz metadata must never stand in for the actual measurement label.
+      if (!cleanString(answer.reviewPayload?.label)) {
+        throw new Error('Label the measurement in the viewer before capturing a gold answer.');
+      }
+      const expectedUnit = cleanString(answerConfig.unit).toLowerCase();
+      const capturedUnit = cleanString(answer.unit).toLowerCase();
+      if (expectedUnit && capturedUnit && expectedUnit !== capturedUnit) {
+        throw new Error(`Measurement unit mismatch: ${answer.unit} cannot be assigned to a question expecting ${answerConfig.unit}. Check image calibration or change the question unit.`);
+      }
       const expectedType = cleanString(answerConfig.measurementType).toLowerCase().replace(/[^a-z0-9]/g, '');
       const capturedType = cleanString(answer.measurementType).toLowerCase().replace(/[^a-z0-9]/g, '');
       // Generic Length tools are allowed; distinct named Echo measurements must not cross-bind.
@@ -3009,14 +3018,14 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     } catch (error) {
       if (options.silent) {
         console.warn('[CaseQuestionsPanel] automatic gold measurement capture failed:', error);
-      } else {
-        uiNotificationService.show({
-          title: 'Quiz Authoring',
-          message: `Measurement capture failed: ${error?.message || error}`,
-          type: 'error',
-          duration: 6000,
-        });
       }
+      // Automatic captures need educator-visible feedback too, not just a console warning.
+      uiNotificationService.show({
+        title: 'Quiz Authoring',
+        message: `Measurement capture failed: ${error?.message || error}`,
+        type: 'error',
+        duration: 6000,
+      });
     } finally {
       setCapturingAuthoringKey('');
     }
