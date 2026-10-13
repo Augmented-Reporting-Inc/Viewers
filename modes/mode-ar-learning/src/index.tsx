@@ -621,22 +621,29 @@ function createARUSRegionCalibrationProvider({ displaySetService }) {
 
 const BASE_MEASUREMENT_TOOL_IDS = [
   'Length',
+  'LengthMeasureOnly',
   'Bidirectional',
   'EllipticalROI',
   'RectangleROI',
   'CircleROI',
 ];
 
-const ECHO_ONLY_MEASUREMENT_TOOL_IDS = ['LVSimpsonEF', 'LVTraceSlot'];
+// Share the longitudinal viewer's registered specialty tools; they are
+// applicable to Echo learning exams as well as ordinary clinical reports.
+const ECHO_ONLY_MEASUREMENT_TOOL_IDS = [
+  'LVSimpsonEF',
+  'LAVolume',
+  'SpectralDopplerVTI',
+  'DecelerationTime',
+  'UltrasoundDirectionalTool',
+];
 
 const GENERIC_CONTOUR_TOOL_IDS = ['PlanarFreehandROI', 'SplineROI', 'LivewireContour'];
 
-function getMeasurementToolIdsForDomain(domain) {
-  return [
-    ...BASE_MEASUREMENT_TOOL_IDS,
-    ...(domain === 'echo' ? ECHO_ONLY_MEASUREMENT_TOOL_IDS : []),
-    ...GENERIC_CONTOUR_TOOL_IDS,
-  ];
+function getMeasurementToolIdsForDomain() {
+  // Keep shared drawing tools under Measurements. The specialty workflows
+  // have their own guided buttons on the primary toolbar.
+  return [...BASE_MEASUREMENT_TOOL_IDS, ...GENERIC_CONTOUR_TOOL_IDS];
 }
 
 function getEditablePrimaryToolbarIdsForDomain(domain) {
@@ -644,6 +651,7 @@ function getEditablePrimaryToolbarIdsForDomain(domain) {
     'MeasurementTools',
     'ArrowAnnotate',
     ...(['bowel', 'iuscan'].includes(domain) ? ['BowelCurvedLength'] : []),
+    ...(domain === 'echo' ? ECHO_ONLY_MEASUREMENT_TOOL_IDS : []),
     'Zoom',
     'Pan',
     'TrackballRotate',
@@ -1428,7 +1436,7 @@ function modeFactory({ modeConfiguration }) {
           toolbarService.updateSection(
             'MeasurementTools',
             safeToolbarIds(
-              getMeasurementToolIdsForDomain(initialMeasurementDomain),
+              getMeasurementToolIdsForDomain(),
               'MeasurementTools-initial'
             )
           );
@@ -1448,7 +1456,7 @@ function modeFactory({ modeConfiguration }) {
               toolbarService.updateSection(
                 'MeasurementTools',
                 safeToolbarIds(
-                  getMeasurementToolIdsForDomain(measurementDomain),
+                  getMeasurementToolIdsForDomain(),
                   'MeasurementTools-resolved'
                 )
               );
@@ -1479,7 +1487,8 @@ function modeFactory({ modeConfiguration }) {
                 'CalibrationLine',
                 'TagBrowser',
                 'AdvancedMagnify',
-                'UltrasoundDirectionalTool',
+                // Echo sessions already have this tool on the primary toolbar.
+                ...(initialMeasurementDomain === 'echo' ? [] : ['UltrasoundDirectionalTool']),
                 'WindowLevelRegion',
                 'SegmentLabelTool',
               ],
