@@ -3172,17 +3172,14 @@ function buildViewerQuizAnswerFromMeasurement({
       ? question.answerConfig
       : {};
 
+  // The question's expected type is not evidence of what the educator actually drew.
+  // Always capture the annotation's label so incompatible Echo measurements cannot cross-bind.
   const resolvedMeasurementType = String(
-    measurementType ||
-      questionAnswerConfig.measurementType ||
-      measurement?.measurementType ||
-      getMeasurementDisplayLabel(measurement) ||
-      ''
+    getMeasurementDisplayLabel(measurement) || measurement?.measurementType || ''
   ).trim();
 
-  const resolvedUnit = String(expectedUnit || questionAnswerConfig.unit || valueAndUnit.unit || '')
-    .trim()
-    .replace(/^px$/i, 'mm');
+  // Preserve the physical unit reported by the measurement; pixels are not millimetres.
+  const resolvedUnit = String(valueAndUnit.unit || '').trim();
 
   const viewerTarget = buildViewerQuizTargetFromMeasurement(measurement, displaySetService);
   const displayText = getMeasurementDisplayText(measurement);
@@ -7867,7 +7864,7 @@ function commandsModule({
       labelConfigOverride,
       normalizeLabel,
     } = {}) => {
-      await actions._handleMeasurementLabelDialog(uid, {
+      return actions._handleMeasurementLabelDialog(uid, {
         title,
         placeholder,
         labelConfigOverride,
