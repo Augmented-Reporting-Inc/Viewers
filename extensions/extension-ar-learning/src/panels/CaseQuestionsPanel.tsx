@@ -2929,6 +2929,36 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     });
   }
 
+  async function clearAuthoringGoldMeasurement(question: QuizQuestion) {
+    if (!authoringMode || !isDraftDefinition(authoringDefinition) || authoringSaving) {
+      return;
+    }
+
+    // Clear the source quiz answer, not the locked rubric comparison overlay.
+    // Keep the configured measurement type, unit, question target, and tolerances.
+    updateAuthoringQuestion(question.questionKey, current => ({
+      ...current,
+      answerConfig: {
+        ...plainObject(current.answerConfig),
+        goldMeasurement: null,
+        goldValue: null,
+      },
+    }));
+
+    try {
+      await runViewerCommand(commandsManager, 'clearViewerQuizMeasurementComparison', {});
+    } catch (error) {
+      console.warn('[CaseQuestionsPanel] could not clear gold measurement overlay:', error);
+    }
+
+    uiNotificationService.show({
+      title: 'Quiz Authoring',
+      message: 'Gold measurement cleared. Save the draft to persist this change.',
+      type: 'info',
+      duration: 4000,
+    });
+  }
+
   async function captureAuthoringMeasurement(
     question: QuizQuestion,
     options: { measurementId?: string; silent?: boolean } = {}
@@ -3842,8 +3872,30 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                 captureAuthoringMeasurement(question);
               }}
             >
-              {isCapturing ? 'Capturing measurement…' : 'Use selected measurement as gold answer'}
+              {isCapturing
+                ? 'Capturing measurement…'
+                : answerConfig.goldValue != null && answerConfig.goldValue !== ''
+                  ? 'Replace gold answer with selected measurement'
+                  : 'Use selected measurement as gold answer'}
             </button>
+
+            {(answerConfig.goldValue !== null &&
+              answerConfig.goldValue !== undefined &&
+              answerConfig.goldValue !== '') ||
+            hasMeasurementComparisonReference(plainObject(answerConfig.goldMeasurement)) ? (
+              <button
+                type="button"
+                className="ml-2 rounded border border-red-600 px-2 py-1 text-xs font-semibold text-red-100 disabled:opacity-50"
+                disabled={isCapturing || authoringSaving || !isDraftDefinition(authoringDefinition)}
+                onClick={event => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  void clearAuthoringGoldMeasurement(question);
+                }}
+              >
+                Clear gold answer
+              </button>
+            ) : null}
 
             {answerConfig.goldValue !== null &&
             typeof answerConfig.goldValue !== 'undefined' &&
