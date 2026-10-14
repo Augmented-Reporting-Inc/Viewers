@@ -2942,6 +2942,8 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         ...plainObject(current.answerConfig),
         goldMeasurement: null,
         goldValue: null,
+        // Anatomical label is learned from the next educator-captured gold answer.
+        measurementType: '',
       },
     }));
 
@@ -2996,12 +2998,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       if (expectedUnit && capturedUnit && expectedUnit !== capturedUnit) {
         throw new Error(`Measurement unit mismatch: ${answer.unit} cannot be assigned to a question expecting ${answerConfig.unit}. Check image calibration or change the question unit.`);
       }
-      const expectedType = cleanString(answerConfig.measurementType).toLowerCase().replace(/[^a-z0-9]/g, '');
-      const capturedType = cleanString(answer.measurementType).toLowerCase().replace(/[^a-z0-9]/g, '');
-      // Generic Length tools are allowed; distinct named Echo measurements must not cross-bind.
-      if (expectedType && capturedType && expectedType !== 'length' && capturedType !== 'length' && expectedType !== capturedType) {
-        throw new Error(`Measurement type mismatch: ${answer.measurementType} cannot be assigned to ${answerConfig.measurementType}. Select the matching question before capturing.`);
-      }
+      // The educator selects the correct anatomical label when drawing in the viewer.
+      // A previously captured label is not a restriction on replacing the gold answer.
+      // The tool restriction remains separate in answerConfig.measurementKind.
       const target = answer.viewerTarget || question.viewerTarget;
       const unit = cleanString(answer.unit || answerConfig.unit);
       const nextQuestion = {
