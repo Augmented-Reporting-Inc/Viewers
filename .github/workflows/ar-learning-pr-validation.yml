@@ -8,6 +8,8 @@ on:
     paths:
       - 'extensions/extension-ar-learning/**'
       - 'extensions/cornerstone/src/commandsModule.ts'
+      - 'extensions/cornerstone/src/utils/measurementAnnotationHydration.ts'
+      - 'extensions/cornerstone/src/utils/measurementServiceMappings/PlanarFreehandROI.ts'
       - 'modes/mode-ar-learning/**'
       - 'modes/longitudinal/src/toolbarButtons.ts'
       - '.github/workflows/ar-learning-pr-validation.yml'
