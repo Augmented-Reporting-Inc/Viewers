@@ -7124,6 +7124,16 @@ function commandsModule({
 
       const cancelledAnnotationId = lengthTool.cancel(viewportElement);
       if (!cancelledAnnotationId) return;
+
+      // Native cancellation may leave a provisional state annotation behind.
+      // Remove it only when it has never become a persisted measurement.
+      const unfinished = cornerstoneTools.annotation.state.getAnnotation?.(cancelledAnnotationId);
+      if (
+        unfinished?.metadata?.toolName === 'Length' &&
+        !measurementService.getMeasurement?.(cancelledAnnotationId)
+      ) {
+        cornerstoneTools.annotation.state.removeAnnotation?.(cancelledAnnotationId);
+      }
       event.preventDefault();
       event.stopPropagation();
     };
