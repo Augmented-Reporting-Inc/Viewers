@@ -1777,9 +1777,14 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
 
       const definitionId = getDefinitionId(selectedDefinition);
       const sessionState = readViewerQuizSessionState(sessionStateKey);
+      // Retain unsaved edits only while the draft revision on the server is unchanged.
+      // A save from another viewer/tab must not be hidden by stale in-memory questions.
+      const serverUpdatedAt = String(selectedDefinition?.updatedAt || '');
       const questionsToUse =
         definitionId &&
+        serverUpdatedAt &&
         sessionState?.authoringDefinitionId === definitionId &&
+        sessionState?.authoringServerUpdatedAt === serverUpdatedAt &&
         Array.isArray(sessionState.authoringQuestions)
           ? (sessionState.authoringQuestions as QuizQuestion[])
           : nextQuestions;
@@ -1793,6 +1798,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       setAuthoringQuestions(questionsToUse);
       writeViewerQuizSessionState(sessionStateKey, {
         authoringDefinitionId: definitionId,
+        authoringServerUpdatedAt: serverUpdatedAt,
         authoringQuestions: questionsToUse,
       });
     } catch (error) {
@@ -3105,6 +3111,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       setAuthoringQuestions(savedQuestions);
       writeViewerQuizSessionState(sessionStateKey, {
         authoringDefinitionId: definitionId,
+        authoringServerUpdatedAt: String(savedDefinition?.updatedAt || ''),
         authoringQuestions: savedQuestions,
       });
 

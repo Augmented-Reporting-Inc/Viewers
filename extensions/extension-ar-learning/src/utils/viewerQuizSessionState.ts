@@ -3,6 +3,7 @@ export type ViewerQuizSessionState = {
   answersByQuizKey?: Record<string, Record<string, any>>;
   activeQuestionKey?: string;
   authoringDefinitionId?: string;
+  authoringServerUpdatedAt?: string;
   authoringQuestions?: any[];
 };
 
