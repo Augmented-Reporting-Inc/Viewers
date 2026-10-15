@@ -157,6 +157,84 @@ describe('HotkeysManager', () => {
       expect(hotkeys.unbind.mock.calls.length).toBe(1);
       expect(hotkeys.unbind.mock.calls[0][0]).toBe('alt+e');
     });
+
+
+    it.each([
+      ['Enter', 'enter'],
+      [' ', 'space'],
+    ])(
+      'lets a focused interactive control handle the %s activation key',
+      (eventKey, hotkeyKey) => {
+        hotkeysManager.registerHotkeys({
+          commandName: 'activatePreview',
+          keys: hotkeyKey,
+        });
+
+        const callback = hotkeys.bind.mock.calls[0][1];
+        const target = {
+          closest: jest.fn().mockReturnValue({}),
+        };
+        const event = {
+          key: eventKey,
+          target,
+          preventDefault: jest.fn(),
+          stopPropagation: jest.fn(),
+        };
+
+        callback(event);
+
+        expect(target.closest).toHaveBeenCalled();
+        expect(event.preventDefault).not.toHaveBeenCalled();
+        expect(event.stopPropagation).not.toHaveBeenCalled();
+        expect(commandsManager.runCommand).not.toHaveBeenCalled();
+      }
+    );
+
+    it('continues to run an activation hotkey when focus is not on an interactive control', () => {
+      hotkeysManager.registerHotkeys({
+        commandName: 'activatePreview',
+        keys: 'enter',
+      });
+
+      const callback = hotkeys.bind.mock.calls[0][1];
+      const event = {
+        key: 'Enter',
+        target: {
+          closest: jest.fn().mockReturnValue(null),
+        },
+        preventDefault: jest.fn(),
+        stopPropagation: jest.fn(),
+      };
+
+      callback(event);
+
+      expect(event.preventDefault).toHaveBeenCalledTimes(1);
+      expect(event.stopPropagation).toHaveBeenCalledTimes(1);
+      expect(commandsManager.runCommand).toHaveBeenCalledTimes(1);
+    });
+
+    it('continues to run non-activation hotkeys when a control has focus', () => {
+      hotkeysManager.registerHotkeys({
+        commandName: 'toggleCine',
+        keys: 'c',
+      });
+
+      const callback = hotkeys.bind.mock.calls[0][1];
+      const event = {
+        key: 'c',
+        target: {
+          closest: jest.fn().mockReturnValue({}),
+        },
+        preventDefault: jest.fn(),
+        stopPropagation: jest.fn(),
+      };
+
+      callback(event);
+
+      expect(event.preventDefault).toHaveBeenCalledTimes(1);
+      expect(event.stopPropagation).toHaveBeenCalledTimes(1);
+      expect(commandsManager.runCommand).toHaveBeenCalledTimes(1);
+    });
   });
 
   describe('restoreDefaults()', () => {

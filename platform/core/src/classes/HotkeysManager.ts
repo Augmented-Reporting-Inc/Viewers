@@ -4,6 +4,47 @@ import Hotkey from './Hotkey';
 import migrateOldHotkeyDefinitions from '../utils/hotkeys/migrateHotkeys';
 import pubSubServiceInterface from '../services/_shared/pubSubServiceInterface';
 
+
+const INTERACTIVE_ACTIVATION_SELECTOR = [
+  'button',
+  'a[href]',
+  'input',
+  'select',
+  'textarea',
+  'summary',
+  '[contenteditable="true"]',
+  '[role="button"]',
+  '[role="link"]',
+  '[role="menuitem"]',
+  '[role="menuitemcheckbox"]',
+  '[role="menuitemradio"]',
+  '[role="tab"]',
+  '[role="checkbox"]',
+  '[role="radio"]',
+  '[role="switch"]',
+  '[role="slider"]',
+  '[role="combobox"]',
+].join(',');
+
+function shouldYieldActivationKeyToInteractiveControl(evt: KeyboardEvent): boolean {
+  const key = evt?.key;
+  const isActivationKey = key === 'Enter' || key === ' ' || key === 'Spacebar';
+
+  if (!isActivationKey) {
+    return false;
+  }
+
+  const target = evt?.target as {
+    closest?: (selector: string) => Element | null;
+  } | null;
+
+  return Boolean(
+    target &&
+      typeof target.closest === 'function' &&
+      target.closest(INTERACTIVE_ACTIVATION_SELECTOR)
+  );
+}
+
 /**
  *
  *
@@ -278,6 +319,10 @@ export class HotkeysManager {
     const combinedKeys = isKeyArray ? keys.join('+') : keys;
 
     mouseTrapAPI.bind(combinedKeys, evt => {
+      if (shouldYieldActivationKeyToInteractiveControl(evt)) {
+        return;
+      }
+
       evt.preventDefault();
       evt.stopPropagation();
       this._commandsManager.runCommand(commandName, { evt, ...commandOptions }, context);
