@@ -7091,6 +7091,55 @@ function commandsModule({
     displaySetService,
   } = servicesManager.services as AppTypes.Services;
 
+  // Length's label-dialog cancellation only runs after the second click.
+  // While its drawing is still in progress, delegate Escape to Cornerstone's
+  // native LengthTool.cancel rather than completing/labeling the annotation.
+  let cancelPendingLengthOnEscape: null | ((event: KeyboardEvent) => void) = null;
+
+  function updatePendingLengthEscapeHandler(toolName: string, toolGroup: any) {
+    if (cancelPendingLengthOnEscape) {
+      window.removeEventListener('keydown', cancelPendingLengthOnEscape, true);
+      cancelPendingLengthOnEscape = null;
+    }
+    if (toolName !== 'Length') return;
+
+    cancelPendingLengthOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.defaultPrevented) return;
+      const target = event.target as HTMLElement | null;
+      if (target?.closest?.('input, textarea, select, [contenteditable="true"], [role="dialog"], [aria-modal="true"]')) {
+        return;
+      }
+
+      const activeViewportId = viewportGridService.getActiveViewportId();
+      const activeReference = toolGroupService.getToolGroupForViewport(activeViewportId);
+      const activeGroup = typeof activeReference === 'string'
+        ? toolGroupService.getToolGroup(activeReference)
+        : activeReference;
+      if (activeGroup !== toolGroup || activeGroup?.getActivePrimaryMouseButtonTool?.() !== 'Length') return;
+
+      const lengthTool = activeGroup.getToolInstance?.('Length');
+      if (!lengthTool?.isDrawing || typeof lengthTool.cancel !== 'function') return;
+      const viewportElement = _getActiveViewportEnabledElement()?.viewport?.element;
+      if (!viewportElement) return;
+
+      const cancelledAnnotationId = lengthTool.cancel(viewportElement);
+      if (!cancelledAnnotationId) return;
+
+      // Native cancellation may leave a provisional state annotation behind.
+      // Remove it only when it has never become a persisted measurement.
+      const unfinished = cornerstoneTools.annotation.state.getAnnotation?.(cancelledAnnotationId);
+      if (
+        unfinished?.metadata?.toolName === 'Length' &&
+        !measurementService.getMeasurement?.(cancelledAnnotationId)
+      ) {
+        cornerstoneTools.annotation.state.removeAnnotation?.(cancelledAnnotationId);
+      }
+      event.preventDefault();
+      event.stopPropagation();
+    };
+    window.addEventListener('keydown', cancelPendingLengthOnEscape, true);
+  }
+
   function _getActiveViewportEnabledElement() {
     return getActiveViewportEnabledElement(viewportGridService);
   }
@@ -10447,6 +10496,9 @@ function commandsModule({
           ? toolGroup.setToolDisabled(activeToolName)
           : toolGroup.setToolPassive(activeToolName);
       }
+
+      // Cancel only a currently unfinished Length drawing on Escape.
+      updatePendingLengthEscapeHandler(toolName, toolGroup);
 
       // Set the new toolName to be active
       toolGroup.setToolActive(toolName, {
