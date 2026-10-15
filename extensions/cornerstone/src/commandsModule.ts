@@ -617,7 +617,39 @@ function getCurrentViewerMeasurementSnapshot(
     }
   }
 
-  return [...measurementsWithoutId, ...measurementsById.values()];
+  // MeasurementService may remap an earlier PlanarFreehandROI when another
+  // contour is completed. Prefer the calibrated spectral result retained on the
+  // original Cornerstone annotation over generic length/area statistics.
+  const restoredMeasurements = [...measurementsWithoutId, ...measurementsById.values()].map(
+    measurement => {
+      const measurementId = getMeasurementAnnotationId(measurement);
+      const annotation = measurementId
+        ? cornerstoneTools.annotation.state.getAnnotation?.(measurementId)
+        : null;
+      const spectralDoppler = annotation?.data?.spectralDoppler;
+
+      if (spectralDoppler?.measurementKind !== SPECTRAL_DOPPLER_MEASUREMENT_KIND) {
+        return measurement;
+      }
+
+      const displayText = buildSpectralDopplerDisplayText(spectralDoppler);
+
+      return {
+        ...measurement,
+        measurementKind: SPECTRAL_DOPPLER_MEASUREMENT_KIND,
+        spectralDoppler,
+        displayText,
+        measurements: {
+          ...(measurement?.measurements || {}),
+          measurementKind: SPECTRAL_DOPPLER_MEASUREMENT_KIND,
+          spectralDoppler,
+          displayText,
+        },
+      };
+    }
+  );
+
+  return restoredMeasurements;
 }
 
 function getAllCornerstoneViewerAnnotations() {
