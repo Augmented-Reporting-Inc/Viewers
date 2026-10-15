@@ -142,6 +142,50 @@ describe('HotkeysManager', () => {
       expect(hotkeys.bind.mock.calls.length).toBe(1);
       expect(hotkeys.bind.mock.calls[0][0]).toBe('shift+e');
     });
+
+    it('preserves native keyboard behavior for focused interactive controls', () => {
+      const definition = { commandName: 'resetViewport', keys: 'space' };
+      hotkeysManager.registerHotkeys(definition);
+
+      const callback = hotkeys.bind.mock.calls[0][1];
+      const event = {
+        target: {
+          closest: jest.fn(() => ({ tagName: 'BUTTON' })),
+        },
+        preventDefault: jest.fn(),
+        stopPropagation: jest.fn(),
+      };
+
+      callback(event);
+
+      expect(event.preventDefault).not.toHaveBeenCalled();
+      expect(event.stopPropagation).not.toHaveBeenCalled();
+      expect(commandsManager.runCommand).not.toHaveBeenCalled();
+    });
+
+    it('continues to run viewer hotkeys for non-interactive targets', () => {
+      const definition = { commandName: 'resetViewport', keys: 'space' };
+      hotkeysManager.registerHotkeys(definition);
+
+      const callback = hotkeys.bind.mock.calls[0][1];
+      const event = {
+        target: {
+          closest: jest.fn(() => null),
+        },
+        preventDefault: jest.fn(),
+        stopPropagation: jest.fn(),
+      };
+
+      callback(event);
+
+      expect(event.preventDefault).toHaveBeenCalledTimes(1);
+      expect(event.stopPropagation).toHaveBeenCalledTimes(1);
+      expect(commandsManager.runCommand).toHaveBeenCalledWith(
+        'resetViewport',
+        { evt: event },
+        undefined
+      );
+    });
     it('calls hotkeys.unbind if commandName was previously registered, for each previously registered set of keys', () => {
       const firstDefinition = {
         commandName: 'dance',
