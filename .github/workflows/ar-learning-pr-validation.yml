@@ -13,6 +13,7 @@ on:
       - '.github/workflows/ar-learning-pr-validation.yml'
       - 'package.json'
       - 'yarn.lock'
+      - 'Dockerfile rviewer'
   workflow_dispatch:
 
 permissions:
@@ -43,3 +44,36 @@ jobs:
         run: yarn workspace mode-ar-learning build
       - name: Compile Cornerstone extension for Length Escape changes
         run: yarn workspace @ohif/extension-cornerstone build
+
+  validate-rviewer-image-assets:
+    name: Validate production Viewer asset paths
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build production Viewer image with /rviewer/ public URL
+        run: |
+          docker build --platform linux/amd64 -f "Dockerfile rviewer" \
+            --build-arg APP_CONFIG=config/default.js \
+            --build-arg PUBLIC_URL=/rviewer/ \
+            --build-arg BUILD_COMMIT="$GITHUB_SHA" \
+            -t ar-rviewer:asset-check .
+      - name: Reject incorrect or missing production assets
+        run: |
+          container_id=$(docker create ar-rviewer:asset-check)
+          trap 'docker rm -f "$container_id" >/dev/null 2>&1 || true' EXIT
+          docker cp "$container_id:/usr/share/nginx/html/index.html" ./rviewer-build-index.html
+          docker cp "$container_id:/usr/share/nginx/html/app-config.js.gz" ./rviewer-build-app-config.js.gz
+          node <<'NODE'
+          const fs = require('node:fs');
+          const assert = require('node:assert/strict');
+          const html = fs.readFileSync('rviewer-build-index.html', 'utf8');
+          assert.match(html, /window\.PUBLIC_URL\s*=\s*['"]\/rviewer\/['"]/);
+          for (const path of ['app-config.js', 'init-service-worker.js', 'app.bundle.css']) {
+            assert.ok(html.includes('/rviewer/' + path), 'Missing /rviewer/' + path);
+            assert.ok(!html.includes('"/' + path), 'Root-relative asset reference: /' + path);
+          }
+          assert.match(html, /src=['"]\/rviewer\/app\.bundle\.[^'"]+\.js['"]/);
+          assert.ok(fs.statSync('rviewer-build-app-config.js.gz').size > 0, 'Bundled compressed app-config.js is missing or empty');
+          console.log('Production /rviewer/ asset paths and bundled app-config.js verified');
+          NODE
