@@ -820,7 +820,7 @@ function getMeasurementAnnotationForId(annotationId = '') {
   return id ? cornerstoneAnnotation.state.getAnnotation?.(id) || null : null;
 }
 
-function isMeasurementDrawingComplete(measurement = null, sourceAnnotation = null) {
+function isMeasurementDrawingComplete(measurement = null, sourceAnnotation = null, completionEventReceived = false) {
   const toolName = String(
     measurement?.toolName || sourceAnnotation?.metadata?.toolName || ''
   ).trim();
@@ -833,7 +833,9 @@ function isMeasurementDrawingComplete(measurement = null, sourceAnnotation = nul
     return false;
   }
 
-  if (activeHandleIndex !== null && activeHandleIndex !== undefined) {
+  // Cornerstone's completed event is authoritative; the handle index may
+  // remain populated even after Length drawing finishes.
+  if (!completionEventReceived && activeHandleIndex !== null && activeHandleIndex !== undefined) {
     return false;
   }
 
@@ -1140,7 +1142,11 @@ function modeFactory({ modeConfiguration }) {
 
           const measurement = await waitForViewerMeasurementServiceEntry(measurementService, id);
 
-          if (!measurement || !isMeasurementDrawingComplete(measurement, resolvedAnnotation)) {
+          if (!measurement || !isMeasurementDrawingComplete(
+            measurement,
+            resolvedAnnotation,
+            source === 'cornerstone-annotation-completed'
+          )) {
             return false;
           }
 
