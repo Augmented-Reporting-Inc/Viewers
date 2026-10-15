@@ -1,0 +1,42 @@
+name: Viewer Interactive Hotkeys Accessibility One-Time
+
+on:
+  push:
+    branches:
+      - ops/a11y-interactive-hotkeys-build-once-20261015
+    paths:
+      - ".github/workflows/viewer-interactive-hotkeys-a11y-once.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate interactive hotkey accessibility fix
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: yarn
+
+      - name: Install locked dependencies
+        run: yarn install --frozen-lockfile --non-interactive
+
+      - name: Run HotkeysManager unit tests
+        run: yarn workspace @ohif/core test:unit:ci HotkeysManager.test.js
+
+      - name: Build core package
+        run: yarn workspace @ohif/core build
+
+      - name: Build viewer app
+        env:
+          APP_CONFIG: config/ar.js
+          PUBLIC_URL: /
+        run: yarn workspace @ohif/app build
