@@ -1,11 +1,7 @@
 name: Viewer Hotkey Accessibility Verify One-Time
 
 on:
-  push:
-    branches:
-      - ops/a11y-viewer-hotkey-verify-20261015
-    paths:
-      - ".github/workflows/viewer-hotkey-a11y-verify-once.yml"
+  workflow_dispatch:
 
 permissions:
   contents: read
