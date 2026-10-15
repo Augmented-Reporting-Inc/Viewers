@@ -117,6 +117,7 @@ import {
   normalizeBowelMeasurementTargetSelection,
 } from '../../extension-ar-measurements/src/utils/bowelMeasurementTargets';
 import { calculateLVSimpson } from '../../extension-ar-measurements/src/utils/lvSimpson';
+import { resolveViewerQuizCompositeResult } from '../../extension-ar-measurements/src/utils/viewerQuizCompositeResults';
 
 const { DefaultHistoryMemo } = csUtils.HistoryMemo;
 const toggleSyncFunctions = {
@@ -3058,7 +3059,25 @@ function getScalarMeasurementKindForQuiz(measurement, fallbackKind) {
   return fallbackKind;
 }
 
+function isCompositeQuizSourceAnnotation(measurement) {
+  const kind = String(
+    measurement?.measurementKind ||
+      measurement?.measurements?.measurementKind ||
+      measurement?.metadata?.measurementKind ||
+      ''
+  ).trim();
+  return kind === LV_SIMPSON_MEASUREMENT_KIND || kind === LA_VOLUME_MEASUREMENT_KIND ||
+    Boolean(measurement?.lvSimpson || measurement?.laVolume ||
+      measurement?.measurements?.lvSimpson || measurement?.measurements?.laVolume);
+}
+
 function getMeasurementValueAndUnitForQuiz(measurement) {
+  // A contour's incidental length/area is not its composite clinical result.
+  // Prevent it from becoming an accepted scalar quiz answer.
+  if (isCompositeQuizSourceAnnotation(measurement)) {
+    return { value: null, unit: '', measurementKind: '' };
+  }
+
   const stats = getMeasurementStats(measurement);
   const displayText = getMeasurementDisplayText(measurement);
   const parsed = parseLengthDisplayText(displayText);
@@ -12943,6 +12962,27 @@ function commandsModule({
           ok: false,
           reason: 'selected-measurement-not-found',
           selectedMeasurementId,
+        };
+      }
+
+      const requestedKind = String(question?.answerConfig?.measurementKind || '').trim();
+      if (requestedKind === 'lvSimpsonEF' || requestedKind === 'laVolumeBiplane') {
+        // Resolve from the existing viewer measurement service, not from a
+        // user-supplied numeric field. Expose diagnostics only until the quiz
+        // persistence and backend scorer verify every required source component.
+        const selectedStudy = String(
+          measurement?.referenceStudyUID || measurement?.StudyInstanceUID || ''
+        ).trim();
+        const studyMeasurements = (measurementService.getMeasurements?.() || []).filter(entry => {
+          const entryStudy = String(entry?.referenceStudyUID || entry?.StudyInstanceUID || '').trim();
+          return selectedStudy && entryStudy === selectedStudy;
+        });
+        const composite = resolveViewerQuizCompositeResult(requestedKind, studyMeasurements);
+        return {
+          ok: false,
+          reason: 'composite-quiz-scoring-not-enabled',
+          selectedMeasurementId,
+          ...(composite ? { compositePreview: composite } : {}),
         };
       }
 
