@@ -1,11 +1,7 @@
 name: Viewer Interactive Hotkeys Accessibility One-Time
 
 on:
-  push:
-    branches:
-      - ops/a11y-interactive-hotkeys-build-once-20261015
-    paths:
-      - ".github/workflows/viewer-interactive-hotkeys-a11y-once.yml"
+  workflow_dispatch:
 
 permissions:
   contents: read
