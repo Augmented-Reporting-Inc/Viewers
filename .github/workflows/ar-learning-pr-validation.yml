@@ -63,7 +63,7 @@ jobs:
           container_id=$(docker create ar-rviewer:asset-check)
           trap 'docker rm -f "$container_id" >/dev/null 2>&1 || true' EXIT
           docker cp "$container_id:/usr/share/nginx/html/index.html" ./rviewer-build-index.html
-          docker cp "$container_id:/usr/share/nginx/html/app-config.js" ./rviewer-build-app-config.js
+          docker cp "$container_id:/usr/share/nginx/html/app-config.js.gz" ./rviewer-build-app-config.js.gz
           node <<'NODE'
           const fs = require('node:fs');
           const assert = require('node:assert/strict');
@@ -74,6 +74,6 @@ jobs:
             assert.ok(!html.includes('"/' + path), 'Root-relative asset reference: /' + path);
           }
           assert.match(html, /src=['"]\/rviewer\/app\.bundle\.[^'"]+\.js['"]/);
-          assert.ok(fs.statSync('rviewer-build-app-config.js').size > 0, 'Bundled app-config.js is empty');
+          assert.ok(fs.statSync('rviewer-build-app-config.js.gz').size > 0, 'Bundled compressed app-config.js is missing or empty');
           console.log('Production /rviewer/ asset paths and bundled app-config.js verified');
           NODE
