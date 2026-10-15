@@ -3035,6 +3035,29 @@ function getSelectedMeasurementIdFromViewport(element) {
   }
 }
 
+// Quiz scoring must use the kind of annotation the viewer actually produced,
+// never the type requested by the question. Composite workflows are intentionally
+// excluded here until their component-level quiz capture is implemented.
+function getScalarMeasurementKindForQuiz(measurement, fallbackKind) {
+  const explicitKind = String(
+    measurement?.measurementKind ||
+      measurement?.measurements?.measurementKind ||
+      measurement?.metadata?.measurementKind ||
+      ''
+  ).trim();
+  const normalizedKind = explicitKind.replace(/[\\s_-]+/g, '').toLowerCase();
+
+  if (normalizedKind === 'bowelcurvedlength' || normalizedKind === 'curvedlength') {
+    return fallbackKind === 'length' ? 'curvedLength' : fallbackKind;
+  }
+
+  if (normalizedKind === 'length' || normalizedKind === 'straightlength') {
+    return fallbackKind === 'length' ? 'length' : fallbackKind;
+  }
+
+  return fallbackKind;
+}
+
 function getMeasurementValueAndUnitForQuiz(measurement) {
   const stats = getMeasurementStats(measurement);
   const displayText = getMeasurementDisplayText(measurement);
@@ -3060,7 +3083,7 @@ function getMeasurementValueAndUnitForQuiz(measurement) {
     return {
       value: normalized.value ?? lengthValue,
       unit: normalized.unit,
-      measurementKind: 'length',
+      measurementKind: getScalarMeasurementKindForQuiz(measurement, 'length'),
     };
   }
 
