@@ -621,22 +621,29 @@ function createARUSRegionCalibrationProvider({ displaySetService }) {
 
 const BASE_MEASUREMENT_TOOL_IDS = [
   'Length',
+  'LengthMeasureOnly',
   'Bidirectional',
   'EllipticalROI',
   'RectangleROI',
   'CircleROI',
 ];
 
-const ECHO_ONLY_MEASUREMENT_TOOL_IDS = ['LVSimpsonEF', 'LVTraceSlot'];
+// Share the longitudinal viewer's registered specialty tools; they are
+// applicable to Echo learning exams as well as ordinary clinical reports.
+const ECHO_ONLY_MEASUREMENT_TOOL_IDS = [
+  'LVSimpsonEF',
+  'LAVolume',
+  'SpectralDopplerVTI',
+  'DecelerationTime',
+  'UltrasoundDirectionalTool',
+];
 
 const GENERIC_CONTOUR_TOOL_IDS = ['PlanarFreehandROI', 'SplineROI', 'LivewireContour'];
 
-function getMeasurementToolIdsForDomain(domain) {
-  return [
-    ...BASE_MEASUREMENT_TOOL_IDS,
-    ...(domain === 'echo' ? ECHO_ONLY_MEASUREMENT_TOOL_IDS : []),
-    ...GENERIC_CONTOUR_TOOL_IDS,
-  ];
+function getMeasurementToolIdsForDomain() {
+  // Keep shared drawing tools under Measurements. The specialty workflows
+  // have their own guided buttons on the primary toolbar.
+  return [...BASE_MEASUREMENT_TOOL_IDS, ...GENERIC_CONTOUR_TOOL_IDS];
 }
 
 function getEditablePrimaryToolbarIdsForDomain(domain) {
@@ -644,6 +651,7 @@ function getEditablePrimaryToolbarIdsForDomain(domain) {
     'MeasurementTools',
     'ArrowAnnotate',
     ...(['bowel', 'iuscan'].includes(domain) ? ['BowelCurvedLength'] : []),
+    ...(domain === 'echo' ? ECHO_ONLY_MEASUREMENT_TOOL_IDS : []),
     'Zoom',
     'Pan',
     'TrackballRotate',
@@ -812,7 +820,7 @@ function getMeasurementAnnotationForId(annotationId = '') {
   return id ? cornerstoneAnnotation.state.getAnnotation?.(id) || null : null;
 }
 
-function isMeasurementDrawingComplete(measurement = null, sourceAnnotation = null) {
+function isMeasurementDrawingComplete(measurement = null, sourceAnnotation = null, completionEventReceived = false) {
   const toolName = String(
     measurement?.toolName || sourceAnnotation?.metadata?.toolName || ''
   ).trim();
@@ -825,7 +833,9 @@ function isMeasurementDrawingComplete(measurement = null, sourceAnnotation = nul
     return false;
   }
 
-  if (activeHandleIndex !== null && activeHandleIndex !== undefined) {
+  // Cornerstone's completed event is authoritative; the handle index may
+  // remain populated even after Length drawing finishes.
+  if (!completionEventReceived && activeHandleIndex !== null && activeHandleIndex !== undefined) {
     return false;
   }
 
@@ -1099,6 +1109,8 @@ function modeFactory({ modeConfiguration }) {
       const quizMeasurementWorkflow = isViewerQuizMeasurementCaptureMode();
       const completionAwareMeasurementWorkflow =
         editableReviewWorkflow || quizMeasurementWorkflow;
+      // Deduplicate concurrent completion events without dropping incomplete drawings.
+      const inFlightCompletedAnnotationIds = new Set<string>();
 
       const handleCompletedViewerMeasurement = async ({
         annotationId,
@@ -1112,84 +1124,103 @@ function modeFactory({ modeConfiguration }) {
           measurementToolsReadOnly ||
           _suppressLabelPrompt ||
           !id ||
-          _handledCompletedAnnotationIds.has(id)
+          _handledCompletedAnnotationIds.has(id) ||
+          inFlightCompletedAnnotationIds.has(id)
         ) {
           return false;
         }
 
-        await new Promise(resolve => window.setTimeout(resolve, 0));
+        inFlightCompletedAnnotationIds.add(id);
+        try {
+          await new Promise(resolve => window.setTimeout(resolve, 0));
 
-        const resolvedAnnotation = getMeasurementAnnotationForId(id) || sourceAnnotation;
+          const resolvedAnnotation = getMeasurementAnnotationForId(id) || sourceAnnotation;
 
-        if (isHydratedSavedWorkflowAnnotation(id, resolvedAnnotation)) {
-          return false;
-        }
+          if (isHydratedSavedWorkflowAnnotation(id, resolvedAnnotation)) {
+            return false;
+          }
 
-        const measurement = await waitForViewerMeasurementServiceEntry(measurementService, id);
+          const measurement = await waitForViewerMeasurementServiceEntry(measurementService, id);
 
-        if (!measurement || !isMeasurementDrawingComplete(measurement, resolvedAnnotation)) {
-          return false;
-        }
+          if (!measurement || !isMeasurementDrawingComplete(
+            measurement,
+            resolvedAnnotation,
+            source === 'cornerstone-annotation-completed'
+          )) {
+            return false;
+          }
 
-        _handledCompletedAnnotationIds.add(id);
+          _handledCompletedAnnotationIds.add(id);
 
-        commandsManager.runCommand('markViewerMeasurementCreatedInSession', {
-          uid: id,
-        });
+          commandsManager.runCommand('markViewerMeasurementCreatedInSession', {
+            uid: id,
+          });
 
-        const currentMeasurement = measurementService.getMeasurement?.(id) || measurement;
+          const currentMeasurement = measurementService.getMeasurement?.(id) || measurement;
 
-        console.info('[AR Measurements] completed viewer measurement', {
-          annotationId: id,
-          source,
-          toolName: currentMeasurement?.toolName || resolvedAnnotation?.metadata?.toolName || '',
-        });
+          console.info('[AR Measurements] completed viewer measurement', {
+            annotationId: id,
+            source,
+            toolName: currentMeasurement?.toolName || resolvedAnnotation?.metadata?.toolName || '',
+          });
 
-        if (!currentMeasurement?.label) {
-          const labelOptions = await getLabelConfigForMeasurement(
-            currentMeasurement,
-            commandsManager,
-            {
-              quizMeasurementDomain: _quizMeasurementDomain,
-            }
-          );
-
-          if (labelOptions) {
-            try {
-              console.info('[AR Measurements] label prompt config', {
-                toolName: currentMeasurement?.toolName,
-                title: labelOptions.title,
-                placeholder: labelOptions.placeholder,
-                labelConfigId: labelOptions.labelConfigOverride?.id,
-                commandName: labelOptions.commandName,
-              });
-
-              if (labelOptions.commandName) {
-                await commandsManager.runCommand(labelOptions.commandName, {
-                  uid: id,
-                });
-              } else {
-                await commandsManager.runCommand('setMeasurementLabel', {
-                  uid: id,
-                  ...labelOptions,
-                });
+          if (!currentMeasurement?.label) {
+            const labelOptions = await getLabelConfigForMeasurement(
+              currentMeasurement,
+              commandsManager,
+              {
+                quizMeasurementDomain: _quizMeasurementDomain,
               }
-            } catch (error) {
-              console.warn('[AR Measurements] label prompt failed:', error);
+            );
+
+            if (labelOptions) {
+              try {
+                console.info('[AR Measurements] label prompt config', {
+                  toolName: currentMeasurement?.toolName,
+                  title: labelOptions.title,
+                  placeholder: labelOptions.placeholder,
+                  labelConfigId: labelOptions.labelConfigOverride?.id,
+                  commandName: labelOptions.commandName,
+                });
+
+                if (labelOptions.commandName) {
+                  await commandsManager.runCommand(labelOptions.commandName, {
+                    uid: id,
+                  });
+                } else {
+                  await commandsManager.runCommand('setMeasurementLabel', {
+                    uid: id,
+                    ...labelOptions,
+                  });
+                }
+              } catch (error) {
+                console.warn('[AR Measurements] label prompt failed:', error);
+              }
             }
           }
+
+          const completedMeasurement =
+            measurementService.getMeasurement?.(id) || currentMeasurement;
+
+          // A canceled or failed label dialog must not bind an unlabeled gold answer.
+          // Read the service entry again: label updates happen inside the dialog command.
+          if (quizMeasurementWorkflow && !String(completedMeasurement?.label || '').trim()) {
+            console.info('[AR Measurements] skipped unlabeled quiz measurement', {
+              annotationId: id,
+            });
+            return false;
+          }
+
+          dispatchViewerQuizMeasurementAdded(completedMeasurement);
+
+          if (!isViewerQuizMeasurementCaptureMode()) {
+            panelService?.activatePanel?.(arMeasurements.panel, true);
+          }
+
+          return true;
+        } finally {
+          inFlightCompletedAnnotationIds.delete(id);
         }
-
-        const completedMeasurement =
-          measurementService.getMeasurement?.(id) || currentMeasurement;
-
-        dispatchViewerQuizMeasurementAdded(completedMeasurement);
-
-        if (!isViewerQuizMeasurementCaptureMode()) {
-          panelService?.activatePanel?.(arMeasurements.panel, true);
-        }
-
-        return true;
       };
 
       const sweepCompletedViewerMeasurements = async (source = 'measurement-service') => {
@@ -1411,7 +1442,7 @@ function modeFactory({ modeConfiguration }) {
           toolbarService.updateSection(
             'MeasurementTools',
             safeToolbarIds(
-              getMeasurementToolIdsForDomain(initialMeasurementDomain),
+              getMeasurementToolIdsForDomain(),
               'MeasurementTools-initial'
             )
           );
@@ -1431,7 +1462,7 @@ function modeFactory({ modeConfiguration }) {
               toolbarService.updateSection(
                 'MeasurementTools',
                 safeToolbarIds(
-                  getMeasurementToolIdsForDomain(measurementDomain),
+                  getMeasurementToolIdsForDomain(),
                   'MeasurementTools-resolved'
                 )
               );
@@ -1462,7 +1493,8 @@ function modeFactory({ modeConfiguration }) {
                 'CalibrationLine',
                 'TagBrowser',
                 'AdvancedMagnify',
-                'UltrasoundDirectionalTool',
+                // Echo sessions already have this tool on the primary toolbar.
+                ...(initialMeasurementDomain === 'echo' ? [] : ['UltrasoundDirectionalTool']),
                 'WindowLevelRegion',
                 'SegmentLabelTool',
               ],

@@ -265,6 +265,17 @@ const connectToolsToMeasurementService = ({
         // representation is created only after completion.
         const existingMeasurement = measurementService.getMeasurement(annotationUID);
 
+        // A newly completed Length is provisional until the user accepts its
+        // labelling dialog. Never mark restored or edited measurements as provisional.
+        if (
+          csToolsEvent.type === completedEvt &&
+          toolName === toolNames.Length &&
+          !existingMeasurement
+        ) {
+          annotationAddedEventDetail.annotation.data ||= {};
+          annotationAddedEventDetail.annotation.data.arPendingLengthLabel = true;
+        }
+
         annotationToMeasurement(toolName, annotationAddedEventDetail, !!existingMeasurement);
       }
     } catch (error) {

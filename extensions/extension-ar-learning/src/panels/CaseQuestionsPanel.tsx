@@ -1777,9 +1777,14 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
 
       const definitionId = getDefinitionId(selectedDefinition);
       const sessionState = readViewerQuizSessionState(sessionStateKey);
+      // Retain unsaved edits only while the draft revision on the server is unchanged.
+      // A save from another viewer/tab must not be hidden by stale in-memory questions.
+      const serverUpdatedAt = String(selectedDefinition?.updatedAt || '');
       const questionsToUse =
         definitionId &&
+        serverUpdatedAt &&
         sessionState?.authoringDefinitionId === definitionId &&
+        sessionState?.authoringServerUpdatedAt === serverUpdatedAt &&
         Array.isArray(sessionState.authoringQuestions)
           ? (sessionState.authoringQuestions as QuizQuestion[])
           : nextQuestions;
@@ -1793,6 +1798,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       setAuthoringQuestions(questionsToUse);
       writeViewerQuizSessionState(sessionStateKey, {
         authoringDefinitionId: definitionId,
+        authoringServerUpdatedAt: serverUpdatedAt,
         authoringQuestions: questionsToUse,
       });
     } catch (error) {
@@ -2055,6 +2061,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     } = {}
   ) {
     const nextActiveQuestionKey = `${quiz.quizKey}:${question.questionKey}`;
+    // Change the target before awaiting tool setup: a measurement event may arrive
+    // while the tool command or prior gold-annotation display is pending.
+    setActiveQuestionKey(nextActiveQuestionKey);
 
     try {
       await runViewerCommand(commandsManager, 'clearViewerQuizMeasurementComparison', {});
@@ -2926,6 +2935,38 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     });
   }
 
+  async function clearAuthoringGoldMeasurement(question: QuizQuestion) {
+    if (!authoringMode || !isDraftDefinition(authoringDefinition) || authoringSaving) {
+      return;
+    }
+
+    // Clear the source quiz answer, not the locked rubric comparison overlay.
+    // Keep the configured measurement type, unit, question target, and tolerances.
+    updateAuthoringQuestion(question.questionKey, current => ({
+      ...current,
+      answerConfig: {
+        ...plainObject(current.answerConfig),
+        goldMeasurement: null,
+        goldValue: null,
+        // Anatomical label is learned from the next educator-captured gold answer.
+        measurementType: '',
+      },
+    }));
+
+    try {
+      await runViewerCommand(commandsManager, 'clearViewerQuizMeasurementComparison', {});
+    } catch (error) {
+      console.warn('[CaseQuestionsPanel] could not clear gold measurement overlay:', error);
+    }
+
+    uiNotificationService.show({
+      title: 'Quiz Authoring',
+      message: 'Gold measurement cleared. Save the draft to persist this change.',
+      type: 'info',
+      duration: 4000,
+    });
+  }
+
   async function captureAuthoringMeasurement(
     question: QuizQuestion,
     options: { measurementId?: string; silent?: boolean } = {}
@@ -2933,6 +2974,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     const captureKey = `authoring-measurement:${question.questionKey}`;
     const answerConfig = plainObject(question.answerConfig);
 
+    // Binding is always an explicit question, never inferred from the last drawing.
     setActiveQuestionKey(`authoring:${question.questionKey}`);
     setCapturingAuthoringKey(captureKey);
 
@@ -2953,6 +2995,18 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       }
 
       const answer = result.answer;
+      // Quiz metadata must never stand in for the actual measurement label.
+      if (!cleanString(answer.reviewPayload?.label)) {
+        throw new Error('Label the measurement in the viewer before capturing a gold answer.');
+      }
+      const expectedUnit = cleanString(answerConfig.unit).toLowerCase();
+      const capturedUnit = cleanString(answer.unit).toLowerCase();
+      if (expectedUnit && capturedUnit && expectedUnit !== capturedUnit) {
+        throw new Error(`Measurement unit mismatch: ${answer.unit} cannot be assigned to a question expecting ${answerConfig.unit}. Check image calibration or change the question unit.`);
+      }
+      // The educator selects the correct anatomical label when drawing in the viewer.
+      // A previously captured label is not a restriction on replacing the gold answer.
+      // The tool restriction remains separate in answerConfig.measurementKind.
       const target = answer.viewerTarget || question.viewerTarget;
       const unit = cleanString(answer.unit || answerConfig.unit);
       const nextQuestion = {
@@ -2999,14 +3053,14 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     } catch (error) {
       if (options.silent) {
         console.warn('[CaseQuestionsPanel] automatic gold measurement capture failed:', error);
-      } else {
-        uiNotificationService.show({
-          title: 'Quiz Authoring',
-          message: `Measurement capture failed: ${error?.message || error}`,
-          type: 'error',
-          duration: 6000,
-        });
       }
+      // Automatic captures need educator-visible feedback too, not just a console warning.
+      uiNotificationService.show({
+        title: 'Quiz Authoring',
+        message: `Measurement capture failed: ${error?.message || error}`,
+        type: 'error',
+        duration: 6000,
+      });
     } finally {
       setCapturingAuthoringKey('');
     }
@@ -3057,6 +3111,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       setAuthoringQuestions(savedQuestions);
       writeViewerQuizSessionState(sessionStateKey, {
         authoringDefinitionId: definitionId,
+        authoringServerUpdatedAt: String(savedDefinition?.updatedAt || ''),
         authoringQuestions: savedQuestions,
       });
 
@@ -3673,6 +3728,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     const viewerTarget = getQuestionViewerTarget(question);
     const targetSummary = getViewerTargetSummary(viewerTarget);
     const isCapturing = capturingAuthoringKey.endsWith(`:${question.questionKey}`);
+    const isActiveAuthoringQuestion = activeQuestionKey === `authoring:${question.questionKey}`;
     const goldPoint = plainObject(answerConfig.goldPoint);
     const hasGoldPoint =
       goldPoint.x !== null &&
@@ -3683,11 +3739,12 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     return (
       <div
         key={question.questionKey}
-        className="bg-gray-950/50 rounded border border-gray-700 p-2"
+        className={`bg-gray-950/50 rounded border p-2 ${isActiveAuthoringQuestion ? 'border-blue-400' : 'border-gray-700'}`}
         onClick={() => selectQuestion({ quizKey: 'authoring', quizVersion: 1 }, question)}
       >
         <div className="text-sm font-semibold">
           {index + 1}. {question.title || question.prompt || question.questionKey}
+          {isActiveAuthoringQuestion ? <span className="ml-2 text-xs text-blue-300">Active question</span> : null}
         </div>
         <div className="mt-1 text-[11px] uppercase tracking-wide text-gray-400">
           {question.type}
@@ -3808,6 +3865,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
 
         {question.type === 'measurementNumeric' ? (
           <div className="mt-2 rounded border border-gray-700 p-2">
+            {!isActiveAuthoringQuestion ? (
+              <div className="mb-2 text-xs text-amber-200">Select this question before drawing its measurement. A new measurement is associated with the active question.</div>
+            ) : null}
             <button
               type="button"
               className="rounded border border-green-600 px-2 py-1 text-xs font-semibold text-green-100 disabled:opacity-50"
@@ -3818,8 +3878,30 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                 captureAuthoringMeasurement(question);
               }}
             >
-              {isCapturing ? 'Capturing measurement…' : 'Use selected measurement as gold answer'}
+              {isCapturing
+                ? 'Capturing measurement…'
+                : answerConfig.goldValue != null && answerConfig.goldValue !== ''
+                  ? 'Replace gold answer with selected measurement'
+                  : 'Use selected measurement as gold answer'}
             </button>
+
+            {(answerConfig.goldValue !== null &&
+              answerConfig.goldValue !== undefined &&
+              answerConfig.goldValue !== '') ||
+            hasMeasurementComparisonReference(plainObject(answerConfig.goldMeasurement)) ? (
+              <button
+                type="button"
+                className="ml-2 rounded border border-red-600 px-2 py-1 text-xs font-semibold text-red-100 disabled:opacity-50"
+                disabled={isCapturing || authoringSaving || !isDraftDefinition(authoringDefinition)}
+                onClick={event => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  void clearAuthoringGoldMeasurement(question);
+                }}
+              >
+                Clear gold answer
+              </button>
+            ) : null}
 
             {answerConfig.goldValue !== null &&
             typeof answerConfig.goldValue !== 'undefined' &&

@@ -4,8 +4,12 @@ on:
   pull_request:
     branches:
       - port/3.11-custom
+      - integration/quiz-wcag-length-20261013
     paths:
       - 'extensions/extension-ar-learning/**'
+      - 'extensions/cornerstone/src/commandsModule.ts'
+      - 'modes/mode-ar-learning/**'
+      - 'modes/longitudinal/src/toolbarButtons.ts'
       - '.github/workflows/ar-learning-pr-validation.yml'
       - 'package.json'
       - 'yarn.lock'
@@ -31,5 +35,11 @@ jobs:
           cache: yarn
       - name: Install locked dependencies
         run: yarn install --frozen-lockfile --non-interactive
+      - name: Check learning toolbar domain and read-only contracts
+        run: node --test modes/mode-ar-learning/tests/toolbar-visibility.test.cjs
       - name: Compile AR learning extension
         run: yarn workspace extension-ar-learning build
+      - name: Compile AR learning mode
+        run: yarn workspace mode-ar-learning build
+      - name: Compile Cornerstone extension for Length Escape changes
+        run: yarn workspace @ohif/extension-cornerstone build

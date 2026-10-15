@@ -3172,17 +3172,14 @@ function buildViewerQuizAnswerFromMeasurement({
       ? question.answerConfig
       : {};
 
+  // The question's expected type is not evidence of what the educator actually drew.
+  // Always capture the annotation's label so incompatible Echo measurements cannot cross-bind.
   const resolvedMeasurementType = String(
-    measurementType ||
-      questionAnswerConfig.measurementType ||
-      measurement?.measurementType ||
-      getMeasurementDisplayLabel(measurement) ||
-      ''
+    getMeasurementDisplayLabel(measurement) || measurement?.measurementType || ''
   ).trim();
 
-  const resolvedUnit = String(expectedUnit || questionAnswerConfig.unit || valueAndUnit.unit || '')
-    .trim()
-    .replace(/^px$/i, 'mm');
+  // Preserve the physical unit reported by the measurement; pixels are not millimetres.
+  const resolvedUnit = String(valueAndUnit.unit || '').trim();
 
   const viewerTarget = buildViewerQuizTargetFromMeasurement(measurement, displaySetService);
   const displayText = getMeasurementDisplayText(measurement);
@@ -7094,6 +7091,55 @@ function commandsModule({
     displaySetService,
   } = servicesManager.services as AppTypes.Services;
 
+  // Length's label-dialog cancellation only runs after the second click.
+  // While its drawing is still in progress, delegate Escape to Cornerstone's
+  // native LengthTool.cancel rather than completing/labeling the annotation.
+  let cancelPendingLengthOnEscape: null | ((event: KeyboardEvent) => void) = null;
+
+  function updatePendingLengthEscapeHandler(toolName: string, toolGroup: any) {
+    if (cancelPendingLengthOnEscape) {
+      window.removeEventListener('keydown', cancelPendingLengthOnEscape, true);
+      cancelPendingLengthOnEscape = null;
+    }
+    if (toolName !== 'Length') return;
+
+    cancelPendingLengthOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.defaultPrevented) return;
+      const target = event.target as HTMLElement | null;
+      if (target?.closest?.('input, textarea, select, [contenteditable="true"], [role="dialog"], [aria-modal="true"]')) {
+        return;
+      }
+
+      const activeViewportId = viewportGridService.getActiveViewportId();
+      const activeReference = toolGroupService.getToolGroupForViewport(activeViewportId);
+      const activeGroup = typeof activeReference === 'string'
+        ? toolGroupService.getToolGroup(activeReference)
+        : activeReference;
+      if (activeGroup !== toolGroup || activeGroup?.getActivePrimaryMouseButtonTool?.() !== 'Length') return;
+
+      const lengthTool = activeGroup.getToolInstance?.('Length');
+      if (!lengthTool?.isDrawing || typeof lengthTool.cancel !== 'function') return;
+      const viewportElement = _getActiveViewportEnabledElement()?.viewport?.element;
+      if (!viewportElement) return;
+
+      const cancelledAnnotationId = lengthTool.cancel(viewportElement);
+      if (!cancelledAnnotationId) return;
+
+      // Native cancellation may leave a provisional state annotation behind.
+      // Remove it only when it has never become a persisted measurement.
+      const unfinished = cornerstoneTools.annotation.state.getAnnotation?.(cancelledAnnotationId);
+      if (
+        unfinished?.metadata?.toolName === 'Length' &&
+        !measurementService.getMeasurement?.(cancelledAnnotationId)
+      ) {
+        cornerstoneTools.annotation.state.removeAnnotation?.(cancelledAnnotationId);
+      }
+      event.preventDefault();
+      event.stopPropagation();
+    };
+    window.addEventListener('keydown', cancelPendingLengthOnEscape, true);
+  }
+
   function _getActiveViewportEnabledElement() {
     return getActiveViewportEnabledElement(viewportGridService);
   }
@@ -7768,6 +7814,34 @@ function commandsModule({
       const renderContent = customizationService.getCustomization('ui.labellingComponent');
       const measurement = measurementService.getMeasurement(uid);
 
+      // Cancellation must not delete an existing/rehydrated annotation.
+      // Only the freshly completed Length awaiting its first label is discardable.
+      const discardPendingLength = () => {
+        const currentAnnotation = cornerstoneTools.annotation.state.getAnnotation?.(uid);
+        if (
+          currentAnnotation?.metadata?.toolName !== 'Length' ||
+          currentAnnotation?.data?.arPendingLengthLabel !== true
+        ) {
+          return;
+        }
+
+        viewerMeasurementsCreatedInSession.delete(uid);
+        viewerMeasurementsModifiedInSession.delete(uid);
+        viewerMeasurementsDeletedInSession.delete(uid);
+        cornerstoneTools.annotation.selection.setAnnotationSelected?.(uid, false);
+        if (measurementService.getMeasurement?.(uid)) {
+          measurementService.remove(uid);
+        }
+        cornerstoneTools.annotation.state.removeAnnotation?.(uid);
+        cornerstoneViewportService.getRenderingEngine()?.render?.();
+      };
+      const finishPendingLength = () => {
+        const currentAnnotation = cornerstoneTools.annotation.state.getAnnotation?.(uid);
+        if (currentAnnotation?.data?.arPendingLengthLabel) {
+          delete currentAnnotation.data.arPendingLengthLabel;
+        }
+      };
+
       if (!measurement) {
         console.debug('No measurement found for label editing');
         return null;
@@ -7834,9 +7908,11 @@ function commandsModule({
 
         if (label !== undefined && label !== null) {
           const nextLabel = options.normalizeLabel ? options.normalizeLabel(label) : label;
+          finishPendingLength();
           measurementService.update(uid, { ...measurement, label: nextLabel }, true);
           return nextLabel;
         }
+        discardPendingLength();
         return null;
       }
 
@@ -7850,10 +7926,12 @@ function commandsModule({
 
       if (val !== undefined && val !== null) {
         const nextLabel = options.normalizeLabel ? options.normalizeLabel(val) : val;
+        finishPendingLength();
         measurementService.update(uid, { ...measurement, label: nextLabel }, true);
         return nextLabel;
       }
 
+      discardPendingLength();
       return null;
     },
     /**
@@ -7867,7 +7945,7 @@ function commandsModule({
       labelConfigOverride,
       normalizeLabel,
     } = {}) => {
-      await actions._handleMeasurementLabelDialog(uid, {
+      return actions._handleMeasurementLabelDialog(uid, {
         title,
         placeholder,
         labelConfigOverride,
@@ -10418,6 +10496,9 @@ function commandsModule({
           ? toolGroup.setToolDisabled(activeToolName)
           : toolGroup.setToolPassive(activeToolName);
       }
+
+      // Cancel only a currently unfinished Length drawing on Escape.
+      updatePendingLengthEscapeHandler(toolName, toolGroup);
 
       // Set the new toolName to be active
       toolGroup.setToolActive(toolName, {
