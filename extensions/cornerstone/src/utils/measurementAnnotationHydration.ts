@@ -1704,7 +1704,10 @@ export function hydrateSavedViewerAnnotationForViewport({
     viewportId ||
     cornerstoneAnnotation.metadata.referencedImageId;
 
-  if (isBowelCurvedLength) {
+  if (isBowelCurvedLength || isSpectralDoppler) {
+    // Saved Doppler traces are open contours, like bowel curved lengths. Index
+    // them under the exact active viewport key so Cornerstone's renderer can
+    // retrieve them via getAnnotations(toolName, viewport.element).
     const annotationManager = csToolsAnnotation.state.getAnnotationManager?.();
     let activeViewportGroupKey = viewportAnnotationGroupKey;
 
@@ -1761,7 +1764,7 @@ export function hydrateSavedViewerAnnotationForViewport({
     stateHit: !!csToolsAnnotation.state.getAnnotation?.(annotationUID),
   });
 
-  if (isBowelCurvedLength) {
+  if (isBowelCurvedLength || isSpectralDoppler) {
     let groupedAnnotations: any[] = [];
     let referenceViewable = null;
 
@@ -1773,7 +1776,7 @@ export function hydrateSavedViewerAnnotationForViewport({
       referenceViewable = viewport?.isReferenceViewable?.(cornerstoneAnnotation.metadata, {});
     } catch {}
 
-    console.info('[Bowel Curved Length] saved viewport hydration', {
+    console.info(isSpectralDoppler ? '[VTI Trace] saved viewport hydration' : '[Bowel Curved Length] saved viewport hydration', {
       annotationId: annotationUID,
       stateHit: !!csToolsAnnotation.state.getAnnotation?.(annotationUID),
       groupHit: groupedAnnotations.some(candidate => candidate?.annotationUID === annotationUID),
