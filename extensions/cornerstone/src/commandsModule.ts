@@ -3045,7 +3045,7 @@ function getScalarMeasurementKindForQuiz(measurement, fallbackKind) {
       measurement?.metadata?.measurementKind ||
       ''
   ).trim();
-  const normalizedKind = explicitKind.replace(/[\\s_-]+/g, '').toLowerCase();
+  const normalizedKind = explicitKind.replace(/[\s_-]+/g, '').toLowerCase();
 
   if (normalizedKind === 'bowelcurvedlength' || normalizedKind === 'curvedlength') {
     return fallbackKind === 'length' ? 'curvedLength' : fallbackKind;
