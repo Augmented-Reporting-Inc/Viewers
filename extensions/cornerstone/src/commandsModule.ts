@@ -13049,8 +13049,8 @@ function commandsModule({
       const requestedKind = String(question?.answerConfig?.measurementKind || '').trim();
       if (requestedKind === 'lvSimpsonEF' || requestedKind === 'laVolumeBiplane') {
         // Resolve from the existing viewer measurement service, not from a
-        // user-supplied numeric field. Expose diagnostics only until the quiz
-        // persistence and backend scorer verify every required source component.
+        // user-supplied numeric field. Include source references for review;
+        // numeric practice scoring does not independently validate contours.
         const selectedStudy = String(
           measurement?.referenceStudyUID || measurement?.StudyInstanceUID || ''
         ).trim();
