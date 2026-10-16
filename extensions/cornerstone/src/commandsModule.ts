@@ -12797,10 +12797,39 @@ function commandsModule({
           learnerSeriesDoc,
         ]) || getViewerQuizMeasurementAnnotationFromService(rubricMeasurement);
 
-      if (!learnerAnnotation && !rubricAnnotation) {
+      // Composite answers retain several source contour IDs rather than a
+      // single drawable annotation. Resolve each exact persisted contour and
+      // keep the original image/frame association; never substitute a nearby
+      // unrelated measurement for a missing slot.
+      const rubricComponents = Array.isArray(rubricMeasurement?.compositeResult?.components)
+        ? rubricMeasurement.compositeResult.components
+        : [];
+      const expectedSlots =
+        rubricMeasurement?.measurementKind === 'lvSimpsonEF'
+          ? ['A4C_ED', 'A4C_ES', 'A2C_ED', 'A2C_ES']
+          : rubricMeasurement?.measurementKind === 'laVolumeBiplane'
+            ? ['A4C', 'A2C']
+            : [];
+      const compositeRubric = expectedSlots.length > 0;
+      const resolvedRubricContours = compositeRubric
+        ? expectedSlots.map(slot => {
+            const component = rubricComponents.find(item => item?.slot === slot);
+            const sourceId = String(component?.annotationId || '').trim();
+            if (!sourceId) return null;
+            const reference = { sourceAnnotationId: sourceId };
+            const persisted = [baseSeriesDoc, learnerSeriesDoc].flatMap(seriesDoc =>
+              getRequestedWorkflowAnnotations(seriesDoc?.MeasurementAnnotations)
+            ).find(item => getMeasurementAnnotationId(item) === sourceId);
+            const sourceAnnotation =
+              persisted || getViewerQuizMeasurementAnnotationFromService(reference);
+            return sourceAnnotation ? { sourceAnnotation, slot } : null;
+          }).filter(Boolean)
+        : [];
+
+      if (!learnerAnnotation && !rubricAnnotation && resolvedRubricContours.length === 0) {
         return {
           ok: false,
-          reason: 'measurement-annotations-not-found',
+          reason: compositeRubric ? 'composite-source-contours-not-found' : 'measurement-annotations-not-found',
           renderedCount: 0,
         };
       }
@@ -12860,19 +12889,27 @@ function commandsModule({
           sourceAnnotation: learnerRendered ? null : learnerAnnotation,
           variant: 'learner' as const,
         },
-        {
-          sourceAnnotation: rubricAnnotation,
-          variant: 'rubric' as const,
-        },
+        ...(compositeRubric
+          ? resolvedRubricContours.map(entry => ({
+              sourceAnnotation: entry.sourceAnnotation,
+              variant: 'rubric' as const,
+              slot: entry.slot,
+            }))
+          : [{ sourceAnnotation: rubricAnnotation, variant: 'rubric' as const }]),
       ].filter(entry => !!entry.sourceAnnotation);
 
       for (const entry of entries) {
         const comparisonAnnotation = buildViewerQuizMeasurementComparisonAnnotation({
           sourceAnnotation: entry.sourceAnnotation,
           variant: entry.variant,
-          questionKey,
+          questionKey: entry.slot ? `${questionKey}-${entry.slot}` : questionKey,
         });
-        const match = await waitForSavedAnnotationImageMatch(viewport, comparisonAnnotation);
+        // A composite can span different source frames. Rehydrate every
+        // contour against its own image rather than navigating the viewport to
+        // each subsequent frame (which would leave the wrong frame visible).
+        const match = entry.slot
+          ? { imageId: comparisonAnnotation.referencedImageId || '' }
+          : await waitForSavedAnnotationImageMatch(viewport, comparisonAnnotation);
         const hydrated = hydrateViewerQuizMeasurementComparisonAnnotation({
           comparisonAnnotation,
           viewport,
@@ -12951,6 +12988,8 @@ function commandsModule({
         renderedCount,
         learnerRendered,
         rubricRendered,
+        compositeContoursExpected: compositeRubric ? expectedSlots.length : 0,
+        compositeContoursResolved: resolvedRubricContours.length,
         toleranceCircleRendered,
       };
     },
