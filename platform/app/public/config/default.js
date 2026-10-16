@@ -8,6 +8,9 @@ window.config = {
   modes: [],
   customizationService: {},
   showStudyList: true,
+  // Default preserves patient history. Set 'requested-only' for the learning viewer
+  // to limit study-browser sections to explicitly requested StudyInstanceUIDs.
+  studyBrowserDiscoveryPolicy: 'patient-history',
   // some windows systems have issues with more than 3 web workers
   maxNumberOfWebWorkers: 3,
   // below flag is for performance reasons, but it might not work for all servers
