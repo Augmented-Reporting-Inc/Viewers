@@ -2047,6 +2047,17 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       });
     }
 
+    if (
+      Number(result?.compositeContoursExpected) > 0 &&
+      Number(result?.compositeContoursResolved) < Number(result?.compositeContoursExpected)
+    ) {
+      console.warn('[CaseQuestionsPanel] saved gold contours are incomplete', {
+        questionKey: question.questionKey,
+        expected: result.compositeContoursExpected,
+        resolved: result.compositeContoursResolved,
+      });
+    }
+
     return result;
   }
 
