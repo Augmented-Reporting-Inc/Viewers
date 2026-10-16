@@ -16,6 +16,7 @@ function PanelStudyBrowser({
   getStudiesForPatientByMRN,
   requestDisplaySetCreationForStudy,
   dataSource,
+  studyBrowserDiscoveryPolicy = 'patient-history',
 }: withAppTypes) {
   const { hangingProtocolService, displaySetService, uiNotificationService } =
     servicesManager.services;
@@ -74,12 +75,22 @@ function PanelStudyBrowser({
 
       let qidoStudiesForPatient = qidoForStudyUID;
 
-      // try to fetch the prior studies based on the patientID if the
-      // server can respond.
-      try {
-        qidoStudiesForPatient = await getStudiesForPatientByMRN(qidoForStudyUID);
-      } catch (error) {
-        console.warn(error);
+      // Patient-wide discovery is opt-in for explicit-study-only workflows.
+      // Preserve the existing patient-history behavior unless configured otherwise.
+      if (studyBrowserDiscoveryPolicy !== 'requested-only') {
+        try {
+          qidoStudiesForPatient = await getStudiesForPatientByMRN(qidoForStudyUID);
+        } catch (error) {
+          console.warn(error);
+        }
+      }
+
+      // Even if a datasource returns extra studies, requested-only launches
+      // must never add them to the left-hand study browser.
+      if (studyBrowserDiscoveryPolicy === 'requested-only') {
+        qidoStudiesForPatient = qidoStudiesForPatient.filter(study =>
+          StudyInstanceUIDs.includes(study.studyInstanceUid)
+        );
       }
 
       const mappedStudies = _mapDataSourceStudies(qidoStudiesForPatient);
@@ -105,7 +116,7 @@ function PanelStudyBrowser({
     }
 
     StudyInstanceUIDs.forEach(sid => fetchStudiesForPatient(sid));
-  }, [StudyInstanceUIDs, dataSource, getStudiesForPatientByMRN, navigate]);
+  }, [StudyInstanceUIDs, dataSource, getStudiesForPatientByMRN, navigate, studyBrowserDiscoveryPolicy]);
 
   // // ~~ Initial Thumbnails
   useEffect(() => {
@@ -273,6 +284,7 @@ PanelStudyBrowser.propTypes = {
   getImageSrc: PropTypes.func.isRequired,
   getStudiesForPatientByMRN: PropTypes.func.isRequired,
   requestDisplaySetCreationForStudy: PropTypes.func.isRequired,
+  studyBrowserDiscoveryPolicy: PropTypes.oneOf(['patient-history', 'requested-only']),
 };
 
 export default PanelStudyBrowser;
