@@ -55,9 +55,8 @@ function collectComponents(measurements: Measurement[], kind: CompositeKind) {
 /**
  * Read-only resolver for complete viewer-generated composite measurement results.
  *
- * This does not enable quiz authoring or grading by itself. The API scorer must
- * independently validate each component against the learner's persisted attempt
- * before these results can be accepted as automatically graded answers.
+ * This supplies a viewer-calculated numeric result and source references for
+ * practice-quiz scoring. It is not independent, exam-grade evidence validation.
  */
 export function resolveViewerQuizCompositeResult(
   kind: CompositeKind,
