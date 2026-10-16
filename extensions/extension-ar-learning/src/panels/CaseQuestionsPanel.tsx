@@ -2436,6 +2436,13 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
           return;
         }
 
+        // Composite results require several contours; the explicit result
+        // action captures the finished calculation, not intermediate drawings.
+        const measurementKind = cleanString(plainObject(question.answerConfig).measurementKind);
+        if (measurementKind === 'lvSimpsonEF' || measurementKind === 'laVolumeBiplane') {
+          return;
+        }
+
         void captureAuthoringMeasurement(question, {
           measurementId,
           silent: true,
@@ -3890,8 +3897,8 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               {isCapturing
                 ? 'Capturing measurement…'
                 : answerConfig.goldValue != null && answerConfig.goldValue !== ''
-                  ? 'Replace gold answer with selected measurement'
-                  : 'Use selected measurement as gold answer'}
+                  ? (cleanString(answerConfig.measurementKind) === 'lvSimpsonEF' || cleanString(answerConfig.measurementKind) === 'laVolumeBiplane') ? 'Replace gold answer with calculated result' : 'Replace gold answer with selected measurement'
+                  : (cleanString(answerConfig.measurementKind) === 'lvSimpsonEF' || cleanString(answerConfig.measurementKind) === 'laVolumeBiplane') ? 'Use calculated result as gold answer' : 'Use selected measurement as gold answer'}
             </button>
 
             {(answerConfig.goldValue !== null &&
@@ -3921,12 +3928,16 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               </div>
             ) : (
               <div className="mt-2 text-xs text-orange-200">
-                Select a measurement annotation in the viewport, then capture it as the gold answer.
+                {(cleanString(answerConfig.measurementKind) === 'lvSimpsonEF' || cleanString(answerConfig.measurementKind) === 'laVolumeBiplane')
+                  ? 'Complete all required contours, then capture the calculated result as the gold answer. No annotation selection is required.'
+                  : 'Select a measurement annotation in the viewport, then capture it as the gold answer.'}
               </div>
             )}
 
             <label className="mt-2 block text-xs font-semibold text-gray-200">
-              Length tolerance
+              {(cleanString(answerConfig.measurementKind) === 'lvSimpsonEF' || cleanString(answerConfig.measurementKind) === 'laVolumeBiplane')
+                ? `Numeric tolerance (${cleanString(answerConfig.measurementKind) === 'lvSimpsonEF' ? '%' : 'mL'})`
+                : 'Length tolerance'}
             </label>
             <input
               className="mt-1 w-36 rounded border border-gray-700 bg-black px-2 py-1 text-sm text-white"
@@ -3947,6 +3958,8 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               }
             />
 
+            {cleanString(answerConfig.measurementKind) !== 'lvSimpsonEF' && cleanString(answerConfig.measurementKind) !== 'laVolumeBiplane' ? (
+              <>
             <label className="mt-3 block text-xs font-semibold text-gray-200">
               Position radius tolerance
             </label>
@@ -3972,6 +3985,12 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               The learner measurement must be within both the allowed length difference and this
               radius from the center of the correct measurement.
             </div>
+              </>
+            ) : (
+              <div className="mt-1 text-[11px] text-gray-400">
+                The learner's calculated result must be within the numeric tolerance of the gold result.
+              </div>
+            )}
           </div>
         ) : null}
 
