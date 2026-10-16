@@ -54,14 +54,13 @@ function collectComponents(measurements: Measurement[], kind: CompositeKind) {
         ? point.slice(0, 3)
         : [point?.x, point?.y, point?.z ?? 0])
       : [];
-    if (points.length < 3 || points.some(point =>
-      point.length < 2 || point.some(value => !Number.isFinite(Number(value))))) {
-      return null;
-    }
+    const validPoints = points.length >= 3 &&
+      points.every(point => point.length >= 2 &&
+        point.every(value => Number.isFinite(Number(value))));
     components.set(slot, {
       slot,
       annotationId,
-      points: points.map(point => [Number(point[0]), Number(point[1]), Number(point[2] ?? 0)]),
+      points: validPoints ? points.map(point => [Number(point[0]), Number(point[1]), Number(point[2] ?? 0)]) : [],
       target: {
         studyInstanceUID: clean(measurement.referenceStudyUID || measurement.StudyInstanceUID),
         seriesInstanceUID: clean(measurement.referenceSeriesUID || measurement.SeriesInstanceUID),
