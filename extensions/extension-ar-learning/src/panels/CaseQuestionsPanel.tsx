@@ -3928,7 +3928,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               </div>
             ) : (
               <div className="mt-2 text-xs text-orange-200">
-                Select a measurement annotation in the viewport, then capture it as the gold answer.
+                {(cleanString(answerConfig.measurementKind) === 'lvSimpsonEF' || cleanString(answerConfig.measurementKind) === 'laVolumeBiplane')
+                  ? 'Complete all required contours, then capture the calculated result as the gold answer. No annotation selection is required.'
+                  : 'Select a measurement annotation in the viewport, then capture it as the gold answer.'}
               </div>
             )}
 
