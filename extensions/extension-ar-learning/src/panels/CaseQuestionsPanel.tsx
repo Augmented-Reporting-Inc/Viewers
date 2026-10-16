@@ -2436,6 +2436,13 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
           return;
         }
 
+        // Composite results require several contours; the explicit result
+        // action captures the finished calculation, not intermediate drawings.
+        const measurementKind = cleanString(plainObject(question.answerConfig).measurementKind);
+        if (measurementKind === 'lvSimpsonEF' || measurementKind === 'laVolumeBiplane') {
+          return;
+        }
+
         void captureAuthoringMeasurement(question, {
           measurementId,
           silent: true,
@@ -3890,8 +3897,8 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               {isCapturing
                 ? 'Capturing measurement…'
                 : answerConfig.goldValue != null && answerConfig.goldValue !== ''
-                  ? 'Replace gold answer with selected measurement'
-                  : 'Use selected measurement as gold answer'}
+                  ? (cleanString(answerConfig.measurementKind) === 'lvSimpsonEF' || cleanString(answerConfig.measurementKind) === 'laVolumeBiplane') ? 'Replace gold answer with calculated result' : 'Replace gold answer with selected measurement'
+                  : (cleanString(answerConfig.measurementKind) === 'lvSimpsonEF' || cleanString(answerConfig.measurementKind) === 'laVolumeBiplane') ? 'Use calculated result as gold answer' : 'Use selected measurement as gold answer'}
             </button>
 
             {(answerConfig.goldValue !== null &&
