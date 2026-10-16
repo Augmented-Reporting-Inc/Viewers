@@ -28,6 +28,10 @@ function PanelStudyBrowser({
   const { displaySetService, customizationService } = servicesManager.services;
   const navigate = useNavigate();
   const studyMode = customizationService.getCustomization('studyBrowser.studyMode') || 'all';
+  const discoveryPolicy =
+    extensionManager._appConfig?.studyBrowserDiscoveryPolicy === 'requested-only'
+      ? 'requested-only'
+      : 'patient-history';
 
   const internalImageViewer = useImageViewer();
   const StudyInstanceUIDs = internalImageViewer.StudyInstanceUIDs;
@@ -125,12 +129,19 @@ function PanelStudyBrowser({
 
       let qidoStudiesForPatient = qidoForStudyUID;
 
-      // try to fetch the prior studies based on the patientID if the
-      // server can respond.
-      try {
-        qidoStudiesForPatient = await getStudiesForPatientByMRN(qidoForStudyUID);
-      } catch (error) {
-        console.warn(error);
+      // Only discover patient history when explicitly allowed by viewer config.
+      // The default remains backward compatible for other workflows.
+      if (discoveryPolicy === 'patient-history') {
+        try {
+          qidoStudiesForPatient = await getStudiesForPatientByMRN(qidoForStudyUID);
+        } catch (error) {
+          console.warn(error);
+        }
+      } else {
+        // Keep the left browser scoped to all explicitly requested studies.
+        qidoStudiesForPatient = qidoForStudyUID.filter(study =>
+          StudyInstanceUIDs.includes(study.studyInstanceUid)
+        );
       }
 
       const mappedStudies = _mapDataSourceStudies(qidoStudiesForPatient);
@@ -156,7 +167,7 @@ function PanelStudyBrowser({
     }
 
     StudyInstanceUIDs.forEach(sid => fetchStudiesForPatient(sid));
-  }, [StudyInstanceUIDs, dataSource, getStudiesForPatientByMRN, navigate]);
+  }, [StudyInstanceUIDs, dataSource, getStudiesForPatientByMRN, navigate, discoveryPolicy]);
 
   // ~~ Initial Thumbnails
   useEffect(() => {
