@@ -13033,10 +13033,16 @@ function commandsModule({
         };
       }
 
-      const measurement = findMeasurementServiceMeasurementById(
-        measurementService,
-        selectedMeasurementId
-      );
+      const requestedKind = String(question?.answerConfig?.measurementKind || '').trim();
+      const isCompositeKind = requestedKind === 'lvSimpsonEF' || requestedKind === 'laVolumeBiplane';
+      // Composite contours can live in AR's session fallback before OHIF
+      // MeasurementService receives the completed/calibrated annotation.
+      const quizMeasurements = isCompositeKind
+        ? getCurrentViewerMeasurementSnapshot(measurementService)
+        : null;
+      const measurement = isCompositeKind
+        ? quizMeasurements.find(entry => getMeasurementAnnotationId(entry) === selectedMeasurementId)
+        : findMeasurementServiceMeasurementById(measurementService, selectedMeasurementId);
 
       if (!measurement) {
         return {
@@ -13046,15 +13052,14 @@ function commandsModule({
         };
       }
 
-      const requestedKind = String(question?.answerConfig?.measurementKind || '').trim();
-      if (requestedKind === 'lvSimpsonEF' || requestedKind === 'laVolumeBiplane') {
+      if (isCompositeKind) {
         // Resolve from the existing viewer measurement service, not from a
         // user-supplied numeric field. Include source references for review;
         // numeric practice scoring does not independently validate contours.
         const selectedStudy = String(
           measurement?.referenceStudyUID || measurement?.StudyInstanceUID || ''
         ).trim();
-        const studyMeasurements = (measurementService.getMeasurements?.() || []).filter(entry => {
+        const studyMeasurements = quizMeasurements.filter(entry => {
           const entryStudy = String(entry?.referenceStudyUID || entry?.StudyInstanceUID || '').trim();
           return selectedStudy && entryStudy === selectedStudy;
         });
