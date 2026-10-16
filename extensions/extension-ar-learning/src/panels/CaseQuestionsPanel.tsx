@@ -3958,6 +3958,51 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               }
             />
 
+            {(cleanString(answerConfig.measurementKind) === 'lvSimpsonEF' || cleanString(answerConfig.measurementKind) === 'laVolumeBiplane') ? (
+              <div className="mt-3 border-t border-gray-700 pt-2">
+                <label className="flex items-center gap-2 text-xs text-gray-200">
+                  <input
+                    type="checkbox"
+                    checked={plainObject(plainObject(question.scoringConfig).compositeContour).enabled === true}
+                    disabled={authoringSaving || !isDraftDefinition(authoringDefinition)}
+                    onChange={event => patchAuthoringQuestion(question, {
+                      scoringConfig: {
+                        ...plainObject(question.scoringConfig),
+                        compositeContour: {
+                          ...plainObject(plainObject(question.scoringConfig).compositeContour),
+                          enabled: event.target.checked,
+                          minDice: Number(plainObject(plainObject(question.scoringConfig).compositeContour).minDice ?? 0.8),
+                        },
+                      },
+                    })}
+                  />
+                  Also require correct contour placement and shape
+                </label>
+                {plainObject(plainObject(question.scoringConfig).compositeContour).enabled === true ? (
+                  <label className="mt-2 block text-xs text-gray-200">
+                    Minimum Dice overlap (0–1)
+                    <input
+                      className="mt-1 block w-28 rounded border border-gray-700 bg-black px-2 py-1 text-sm text-white"
+                      type="number" min="0" max="1" step="0.05"
+                      value={Number(plainObject(plainObject(question.scoringConfig).compositeContour).minDice ?? 0.8)}
+                      disabled={authoringSaving || !isDraftDefinition(authoringDefinition)}
+                      onChange={event => patchAuthoringQuestion(question, {
+                        scoringConfig: {
+                          ...plainObject(question.scoringConfig),
+                          compositeContour: {
+                            ...plainObject(plainObject(question.scoringConfig).compositeContour),
+                            enabled: true,
+                            minDice: Number(event.target.value),
+                          },
+                        },
+                      })}
+                    />
+                    Each contour must match the same image/frame as its gold contour. Missing geometry fails this check.
+                  </label>
+                ) : null}
+              </div>
+            ) : null}
+
             {cleanString(answerConfig.measurementKind) !== 'lvSimpsonEF' && cleanString(answerConfig.measurementKind) !== 'laVolumeBiplane' ? (
               <>
             <label className="mt-3 block text-xs font-semibold text-gray-200">
