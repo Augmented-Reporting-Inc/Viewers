@@ -12972,6 +12972,31 @@ function commandsModule({
           continue;
         }
 
+        // A successful hydration call does not prove that Cornerstone indexed
+        // the contour in the active stack viewport's annotation group.
+        // Quiz overlays are temporary, so re-register only these composite
+        // gold contours under the viewport element when necessary.
+        if (entry.slot && viewport.element) {
+          const toolName = String(hydratedAnnotation.metadata?.toolName || '');
+          const visibleInViewport = () =>
+            (annotation.state.getAnnotations?.(toolName, viewport.element) || []).some(
+              candidate => candidate.annotationUID === comparisonAnnotationId
+            );
+          if (!visibleInViewport()) {
+            annotation.state.removeAnnotation?.(comparisonAnnotationId);
+            annotation.state.addAnnotation?.(hydratedAnnotation, viewport.element);
+          }
+          if (!visibleInViewport()) {
+            console.warn('[ViewerQuiz] saved composite contour not indexed for viewport', {
+              questionKey,
+              slot: entry.slot,
+              toolName,
+              hasReferencedImageId: !!hydratedAnnotation.metadata?.referencedImageId,
+            });
+            continue;
+          }
+        }
+
         hydratedAnnotation.isLocked = true;
         hydratedAnnotation.isVisible = true;
         annotation.config.style.setAnnotationStyles(
