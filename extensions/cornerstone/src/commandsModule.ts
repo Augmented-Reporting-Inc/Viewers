@@ -12888,6 +12888,7 @@ function commandsModule({
         {
           sourceAnnotation: learnerRendered ? null : learnerAnnotation,
           variant: 'learner' as const,
+          slot: '',
         },
         ...(compositeRubric
           ? resolvedRubricContours.map(entry => ({
@@ -12895,7 +12896,7 @@ function commandsModule({
               variant: 'rubric' as const,
               slot: entry.slot,
             }))
-          : [{ sourceAnnotation: rubricAnnotation, variant: 'rubric' as const }]),
+          : [{ sourceAnnotation: rubricAnnotation, variant: 'rubric' as const, slot: '' }]),
       ].filter(entry => !!entry.sourceAnnotation);
 
       for (const entry of entries) {
