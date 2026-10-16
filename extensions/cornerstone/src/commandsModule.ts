@@ -13026,13 +13026,6 @@ function commandsModule({
         explicitMeasurementId ||
         getSelectedMeasurementIdFromViewport(activeEnabledElement?.viewport?.element);
 
-      if (!selectedMeasurementId) {
-        return {
-          ok: false,
-          reason: 'no-selected-measurement',
-        };
-      }
-
       const requestedKind = String(question?.answerConfig?.measurementKind || '').trim();
       const isCompositeKind = requestedKind === 'lvSimpsonEF' || requestedKind === 'laVolumeBiplane';
       // Composite contours can live in AR's session fallback before OHIF
@@ -13041,10 +13034,13 @@ function commandsModule({
         ? getCurrentViewerMeasurementSnapshot(measurementService)
         : null;
       const measurement = isCompositeKind
-        ? quizMeasurements.find(entry => getMeasurementAnnotationId(entry) === selectedMeasurementId)
+        ? null
         : findMeasurementServiceMeasurementById(measurementService, selectedMeasurementId);
 
-      if (!measurement) {
+      if (!isCompositeKind && !selectedMeasurementId) {
+        return { ok: false, reason: 'no-selected-measurement' };
+      }
+      if (!isCompositeKind && !measurement) {
         return {
           ok: false,
           reason: 'selected-measurement-not-found',
@@ -13056,9 +13052,24 @@ function commandsModule({
         // Resolve from the existing viewer measurement service, not from a
         // user-supplied numeric field. Include source references for review;
         // numeric practice scoring does not independently validate contours.
-        const selectedStudy = String(
-          measurement?.referenceStudyUID || measurement?.StudyInstanceUID || ''
+        const activeViewportId = viewportGridService.getActiveViewportId();
+        const activeDisplaySet = getActiveViewportDisplaySet({
+          viewportGridService,
+          displaySetService,
+          viewportId: activeViewportId,
+        });
+        const activeStudy = String(
+          activeDisplaySet?.StudyInstanceUID || activeDisplaySet?.studyInstanceUID || ''
         ).trim();
+        const selectedSource = quizMeasurements.find(
+          entry => getMeasurementAnnotationId(entry) === selectedMeasurementId
+        );
+        const selectedStudy = activeStudy || String(
+          selectedSource?.referenceStudyUID || selectedSource?.StudyInstanceUID || ''
+        ).trim();
+        if (!selectedStudy) {
+          return { ok: false, reason: 'composite-study-not-resolved' };
+        }
         const studyMeasurements = quizMeasurements.filter(entry => {
           const entryStudy = String(entry?.referenceStudyUID || entry?.StudyInstanceUID || '').trim();
           return selectedStudy && entryStudy === selectedStudy;
@@ -13071,10 +13082,8 @@ function commandsModule({
             selectedMeasurementId,
           };
         }
-        // The selected annotation may be an OHIF remapping or a derived
-        // measurement rather than one of the contour snapshots. The composite
-        // resolver already requires a complete, unambiguous set of same-study
-        // contour slots. Anchor the gold answer to an actual source contour.
+        // Capture the calculated composite result, not any particular contour.
+        // Selection is optional; every source remains anchored to the active study.
         const componentIds = new Set(composite.components.map(component => component.annotationId));
         const sourceAnnotationId = componentIds.has(selectedMeasurementId)
           ? selectedMeasurementId
