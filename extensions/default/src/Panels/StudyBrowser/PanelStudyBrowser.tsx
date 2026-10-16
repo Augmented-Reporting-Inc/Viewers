@@ -28,8 +28,15 @@ function PanelStudyBrowser({
   const { displaySetService, customizationService } = servicesManager.services;
   const navigate = useNavigate();
   const studyMode = customizationService.getCustomization('studyBrowser.studyMode') || 'all';
+  // Scoped AR launch intent overrides the shared default without affecting other workflows.
+  // This controls thumbnail discovery only; authorization remains in the API and DICOMweb layers.
+  const launchDiscoveryPolicy = new URLSearchParams(window.location.search).get(
+    'arStudyBrowserPolicy'
+  );
   const discoveryPolicy =
-    extensionManager._appConfig?.studyBrowserDiscoveryPolicy === 'requested-only'
+    launchDiscoveryPolicy === 'requested-only' ||
+    (!launchDiscoveryPolicy &&
+      extensionManager._appConfig?.studyBrowserDiscoveryPolicy === 'requested-only')
       ? 'requested-only'
       : 'patient-history';
 
