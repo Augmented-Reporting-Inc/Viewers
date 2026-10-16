@@ -12811,6 +12811,47 @@ function commandsModule({
             ? ['A4C', 'A2C']
             : [];
       const compositeRubric = expectedSlots.length > 0;
+      const embeddedContourFromComponent = (component: any, slot: string) => {
+        const points = component?.points;
+        const target = component?.target || {};
+        const imageId = String(target.referencedImageId || '').trim();
+        const expectedStudy = String(
+          rubricMeasurement?.viewerTarget?.studyInstanceUID ||
+          rubricMeasurement?.sourceRefs?.studyInstanceUID || ''
+        ).trim();
+        const study = String(target.studyInstanceUID || '').trim();
+        if (
+          !Array.isArray(points) || points.length < 3 ||
+          points.length > 5000 || !imageId ||
+          (expectedStudy && (!study || study !== expectedStudy))
+        ) {
+          return null;
+        }
+        const safePoints = points.map(point =>
+          Array.isArray(point) && point.length >= 2 && point.length <= 3
+            ? [Number(point[0]), Number(point[1]), Number(point[2] ?? 0)]
+            : null
+        );
+        if (safePoints.some(point => !point || point.some(value => !Number.isFinite(value)))) {
+          return null;
+        }
+        return {
+          annotationId: String(component.annotationId || '').trim(),
+          uid: String(component.annotationId || '').trim(),
+          workflow: VIEWER_MEASUREMENTS_WORKFLOW,
+          toolName: 'PlanarFreehandROI',
+          label: slot,
+          measurementRole: slot,
+          measurementKind: rubricMeasurement.measurementKind,
+          StudyInstanceUID: study,
+          SeriesInstanceUID: String(target.seriesInstanceUID || ''),
+          SOPInstanceUID: String(target.sopInstanceUID || ''),
+          referencedImageId: imageId,
+          frameNumber: Number(target.frameNumber || 0),
+          points: safePoints,
+          contourClosed: true,
+        };
+      };
       const resolvedRubricContours = compositeRubric
         ? expectedSlots.map(slot => {
             const component = rubricComponents.find(item => item?.slot === slot);
@@ -12821,7 +12862,9 @@ function commandsModule({
               getRequestedWorkflowAnnotations(seriesDoc?.MeasurementAnnotations)
             ).find(item => getMeasurementAnnotationId(item) === sourceId);
             const sourceAnnotation =
-              persisted || getViewerQuizMeasurementAnnotationFromService(reference);
+              persisted ||
+              getViewerQuizMeasurementAnnotationFromService(reference) ||
+              embeddedContourFromComponent(component, slot);
             return sourceAnnotation ? { sourceAnnotation, slot } : null;
           }).filter(Boolean)
         : [];
