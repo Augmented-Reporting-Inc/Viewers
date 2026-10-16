@@ -12869,6 +12869,19 @@ function commandsModule({
           }).filter(Boolean)
         : [];
 
+      if (compositeRubric) {
+        console.info('[ViewerQuiz] composite gold contour resolution', {
+          questionKey,
+          expected: expectedSlots.length,
+          resolved: resolvedRubricContours.length,
+          sources: resolvedRubricContours.map(entry => ({
+            slot: entry.slot,
+            pointCount: entry.sourceAnnotation?.points?.length || 0,
+            hasImageReference: !!entry.sourceAnnotation?.referencedImageId,
+          })),
+        });
+      }
+
       if (!learnerAnnotation && !rubricAnnotation && resolvedRubricContours.length === 0) {
         return {
           ok: false,
