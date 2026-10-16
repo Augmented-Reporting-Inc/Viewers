@@ -36,7 +36,7 @@ function slotOf(measurement: Measurement, kind: CompositeKind): string {
 function collectComponents(measurements: Measurement[], kind: CompositeKind) {
   const expectedKind = kind === 'lvSimpsonEF' ? 'lvSimpsonSlot' : 'laVolumeSlot';
   const requiredSlots = kind === 'lvSimpsonEF' ? LV_SIMPSON_SLOT_ORDER : LA_VOLUME_SLOT_ORDER;
-  const components = new Map<string, { slot: string; annotationId: string }>();
+  const components = new Map<string, { slot: string; annotationId: string; points: number[][]; target: Record<string, unknown> }>();
 
   for (const measurement of measurements) {
     if (sourceKind(measurement) !== expectedKind) continue;
@@ -45,7 +45,31 @@ function collectComponents(measurements: Measurement[], kind: CompositeKind) {
     if (!requiredSlots.includes(slot) || !annotationId || components.has(slot)) {
       return null; // Ambiguous, incomplete, or untraceable evidence must not be scored.
     }
-    components.set(slot, { slot, annotationId });
+    const contour = geometry(measurement, kind);
+    const rawPoints = Array.isArray(measurement?.points) && measurement.points.length >= 3
+      ? measurement.points
+      : (contour.contourPoints || contour.points || []);
+    const points = Array.isArray(rawPoints)
+      ? rawPoints.map(point => Array.isArray(point)
+        ? point.slice(0, 3)
+        : [point?.x, point?.y, point?.z ?? 0])
+      : [];
+    if (points.length < 3 || points.some(point =>
+      point.length < 2 || point.some(value => !Number.isFinite(Number(value))))) {
+      return null;
+    }
+    components.set(slot, {
+      slot,
+      annotationId,
+      points: points.map(point => [Number(point[0]), Number(point[1]), Number(point[2] ?? 0)]),
+      target: {
+        studyInstanceUID: clean(measurement.referenceStudyUID || measurement.StudyInstanceUID),
+        seriesInstanceUID: clean(measurement.referenceSeriesUID || measurement.SeriesInstanceUID),
+        sopInstanceUID: clean(measurement.SOPInstanceUID || measurement.metadata?.SOPInstanceUID),
+        referencedImageId: clean(measurement.referencedImageId || measurement.metadata?.referencedImageId),
+        frameNumber: Number(measurement.frameNumber || measurement.metadata?.frameNumber || 0),
+      },
+    });
   }
 
   if (components.size !== requiredSlots.length) return null;
