@@ -13071,14 +13071,25 @@ function commandsModule({
             selectedMeasurementId,
           };
         }
-        if (!composite.components.some(component => component.annotationId === selectedMeasurementId)) {
+        // The selected annotation may be an OHIF remapping or a derived
+        // measurement rather than one of the contour snapshots. The composite
+        // resolver already requires a complete, unambiguous set of same-study
+        // contour slots. Anchor the gold answer to an actual source contour.
+        const componentIds = new Set(composite.components.map(component => component.annotationId));
+        const sourceAnnotationId = componentIds.has(selectedMeasurementId)
+          ? selectedMeasurementId
+          : composite.components[0].annotationId;
+        const sourceMeasurement = quizMeasurements.find(
+          entry => getMeasurementAnnotationId(entry) === sourceAnnotationId
+        );
+        if (!sourceMeasurement) {
           return {
             ok: false,
-            reason: 'selected-measurement-not-in-composite-result',
+            reason: 'composite-source-measurement-not-found',
             selectedMeasurementId,
           };
         }
-        const viewerTarget = buildViewerQuizTargetFromMeasurement(measurement, displaySetService);
+        const viewerTarget = buildViewerQuizTargetFromMeasurement(sourceMeasurement, displaySetService);
         return {
           ok: true,
           selectedMeasurementId,
@@ -13087,11 +13098,11 @@ function commandsModule({
             unit: composite.unit,
             measurementKind: composite.measurementKind,
             measurementType: composite.measurementKind,
-            sourceAnnotationId: selectedMeasurementId,
+            sourceAnnotationId,
             viewerTarget,
             sourceRefs: {
-              annotationId: selectedMeasurementId,
-              measurementId: selectedMeasurementId,
+              annotationId: sourceAnnotationId,
+              measurementId: sourceAnnotationId,
               studyInstanceUID: selectedStudy,
             },
             compositeResult: composite,
