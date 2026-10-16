@@ -3935,7 +3935,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
             )}
 
             <label className="mt-2 block text-xs font-semibold text-gray-200">
-              Length tolerance
+              {(cleanString(answerConfig.measurementKind) === 'lvSimpsonEF' || cleanString(answerConfig.measurementKind) === 'laVolumeBiplane')
+                ? `Numeric tolerance (${cleanString(answerConfig.measurementKind) === 'lvSimpsonEF' ? '%' : 'mL'})`
+                : 'Length tolerance'}
             </label>
             <input
               className="mt-1 w-36 rounded border border-gray-700 bg-black px-2 py-1 text-sm text-white"
@@ -3956,6 +3958,8 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               }
             />
 
+            {cleanString(answerConfig.measurementKind) !== 'lvSimpsonEF' && cleanString(answerConfig.measurementKind) !== 'laVolumeBiplane' ? (
+              <>
             <label className="mt-3 block text-xs font-semibold text-gray-200">
               Position radius tolerance
             </label>
@@ -3981,6 +3985,12 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               The learner measurement must be within both the allowed length difference and this
               radius from the center of the correct measurement.
             </div>
+              </>
+            ) : (
+              <div className="mt-1 text-[11px] text-gray-400">
+                The learner's calculated result must be within the numeric tolerance of the gold result.
+              </div>
+            )}
           </div>
         ) : null}
 
