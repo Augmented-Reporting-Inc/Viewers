@@ -2999,10 +2999,19 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       if (!cleanString(answer.reviewPayload?.label)) {
         throw new Error('Label the measurement in the viewer before capturing a gold answer.');
       }
-      const expectedUnit = cleanString(answerConfig.unit).toLowerCase();
+      // Changing the measurement kind must not retain the prior Length unit (mm).
+      // Composite results use fixed clinical units supplied by the viewer.
+      const configuredKind = cleanString(answerConfig.measurementKind);
+      const compositeUnit =
+        configuredKind === 'lvSimpsonEF' ? '%' :
+        configuredKind === 'laVolumeBiplane' ? 'mL' : '';
+      const expectedUnit = cleanString(compositeUnit || answerConfig.unit).toLowerCase();
       const capturedUnit = cleanString(answer.unit).toLowerCase();
+      if (compositeUnit && cleanString(answer.measurementKind) !== configuredKind) {
+        throw new Error(`Selected measurement is not a ${configuredKind} result.`);
+      }
       if (expectedUnit && capturedUnit && expectedUnit !== capturedUnit) {
-        throw new Error(`Measurement unit mismatch: ${answer.unit} cannot be assigned to a question expecting ${answerConfig.unit}. Check image calibration or change the question unit.`);
+        throw new Error(`Measurement unit mismatch: ${answer.unit} cannot be assigned to a question expecting ${compositeUnit || answerConfig.unit}. Check image calibration or change the question unit.`);
       }
       // The educator selects the correct anatomical label when drawing in the viewer.
       // A previously captured label is not a restriction on replacing the gold answer.
