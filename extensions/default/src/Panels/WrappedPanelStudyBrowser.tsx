@@ -17,6 +17,11 @@ function WrappedPanelStudyBrowser({ commandsManager, extensionManager, servicesM
   // TODO: This should be made available a different way; route should have
   // already determined our datasource
   const dataSource = extensionManager.getDataSources()[0];
+  // Reuse OHIF runtime application configuration; retain existing browsing by default.
+  const studyBrowserDiscoveryPolicy =
+    window.config?.studyBrowserDiscoveryPolicy === 'requested-only'
+      ? 'requested-only'
+      : 'patient-history';
   const _getStudiesForPatientByMRN = getStudiesForPatientByMRN.bind(null, dataSource);
   const _getImageSrcFromImageId = useCallback(
     _createGetImageSrcFromImageIdFn(extensionManager),
@@ -31,6 +36,7 @@ function WrappedPanelStudyBrowser({ commandsManager, extensionManager, servicesM
     <PanelStudyBrowser
       servicesManager={servicesManager}
       dataSource={dataSource}
+      studyBrowserDiscoveryPolicy={studyBrowserDiscoveryPolicy}
       getImageSrc={_getImageSrcFromImageId}
       getStudiesForPatientByMRN={_getStudiesForPatientByMRN}
       requestDisplaySetCreationForStudy={_requestDisplaySetCreationForStudy}
