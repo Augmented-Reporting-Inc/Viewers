@@ -5,6 +5,10 @@ import { getIsLocked } from './utils/getIsLocked';
 import { getIsVisible } from './utils/getIsVisible';
 import { getDisplayUnit } from './utils';
 import { getStatisticDisplayString } from './utils/getValueDisplayString';
+import {
+  SPECTRAL_DOPPLER_MEASUREMENT_KIND,
+  buildSpectralDopplerDisplayText,
+} from '../spectralDoppler';
 /**
  * Represents a mapping utility for Planar Freehand ROI measurements.
  */
@@ -58,7 +62,14 @@ const PlanarFreehandROI = {
     }
 
     const mappedAnnotations = getMappedAnnotations(annotation, displaySetService);
-    const displayText = getDisplayText(mappedAnnotations, displaySet);
+    // A spectral Doppler trace is represented by PlanarFreehandROI geometry,
+    // but its clinically meaningful value is VTI, not generic ROI statistics.
+    const spectralDoppler = data.spectralDoppler || null;
+    const isSpectralDoppler =
+      spectralDoppler?.measurementKind === SPECTRAL_DOPPLER_MEASUREMENT_KIND;
+    const displayText = isSpectralDoppler
+      ? { primary: buildSpectralDopplerDisplayText(spectralDoppler), secondary: [] }
+      : getDisplayText(mappedAnnotations, displaySet);
 
     return {
       uid: annotationUID,
@@ -75,6 +86,9 @@ const PlanarFreehandROI = {
       displaySetInstanceUID: displaySet.displaySetInstanceUID,
       label: data.label,
       displayText: displayText,
+      ...(isSpectralDoppler
+        ? { measurementKind: SPECTRAL_DOPPLER_MEASUREMENT_KIND, spectralDoppler }
+        : {}),
       data: data.cachedStats,
       type: getValueTypeFromToolType(toolName),
       getReport: () => getColumnValueReport(annotation, customizationService),
