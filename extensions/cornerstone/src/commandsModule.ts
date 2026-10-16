@@ -12978,11 +12978,44 @@ function commandsModule({
           return selectedStudy && entryStudy === selectedStudy;
         });
         const composite = resolveViewerQuizCompositeResult(requestedKind, studyMeasurements);
+        if (!composite) {
+          return {
+            ok: false,
+            reason: 'composite-measurement-incomplete',
+            selectedMeasurementId,
+          };
+        }
+        if (!composite.components.some(component => component.annotationId === selectedMeasurementId)) {
+          return {
+            ok: false,
+            reason: 'selected-measurement-not-in-composite-result',
+            selectedMeasurementId,
+          };
+        }
+        const viewerTarget = buildViewerQuizTargetFromMeasurement(measurement, displaySetService);
         return {
-          ok: false,
-          reason: 'composite-quiz-scoring-not-enabled',
+          ok: true,
           selectedMeasurementId,
-          ...(composite ? { compositePreview: composite } : {}),
+          answer: {
+            value: roundQuizMeasurementValue(composite.value, 2),
+            unit: composite.unit,
+            measurementKind: composite.measurementKind,
+            measurementType: composite.measurementKind,
+            sourceAnnotationId: selectedMeasurementId,
+            viewerTarget,
+            sourceRefs: {
+              annotationId: selectedMeasurementId,
+              measurementId: selectedMeasurementId,
+              studyInstanceUID: selectedStudy,
+            },
+            compositeResult: composite,
+            reviewPayload: {
+              label: composite.measurementKind,
+              toolName: 'viewer-composite-measurement',
+              capturedAt: new Date().toISOString(),
+              components: composite.components,
+            },
+          },
         };
       }
 
