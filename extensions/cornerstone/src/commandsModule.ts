@@ -117,6 +117,7 @@ import {
   normalizeBowelMeasurementTargetSelection,
 } from '../../extension-ar-measurements/src/utils/bowelMeasurementTargets';
 import { calculateLVSimpson } from '../../extension-ar-measurements/src/utils/lvSimpson';
+import { resolveViewerQuizCompositeResult } from '../../extension-ar-measurements/src/utils/viewerQuizCompositeResults';
 
 const { DefaultHistoryMemo } = csUtils.HistoryMemo;
 const toggleSyncFunctions = {
@@ -3067,7 +3068,45 @@ function getSelectedMeasurementIdFromViewport(element) {
   }
 }
 
+function getScalarMeasurementKindForQuiz(measurement, fallbackKind) {
+  const explicitKind = String(
+    measurement?.measurementKind ||
+      measurement?.measurements?.measurementKind ||
+      measurement?.metadata?.measurementKind ||
+      ''
+  ).trim();
+  const normalizedKind = explicitKind.replace(/[\s_-]+/g, '').toLowerCase();
+
+  if (normalizedKind === 'bowelcurvedlength' || normalizedKind === 'curvedlength') {
+    return fallbackKind === 'length' ? 'curvedLength' : fallbackKind;
+  }
+
+  if (normalizedKind === 'length' || normalizedKind === 'straightlength') {
+    return fallbackKind === 'length' ? 'length' : fallbackKind;
+  }
+
+  return fallbackKind;
+}
+
+function isCompositeQuizSourceAnnotation(measurement) {
+  const kind = String(
+    measurement?.measurementKind ||
+      measurement?.measurements?.measurementKind ||
+      measurement?.metadata?.measurementKind ||
+      ''
+  ).trim();
+  return kind === LV_SIMPSON_MEASUREMENT_KIND || kind === LA_VOLUME_MEASUREMENT_KIND ||
+    Boolean(measurement?.lvSimpson || measurement?.laVolume ||
+      measurement?.measurements?.lvSimpson || measurement?.measurements?.laVolume);
+}
+
 function getMeasurementValueAndUnitForQuiz(measurement) {
+  // A contour's incidental length/area is not its composite clinical result.
+  // Prevent it from becoming an accepted scalar quiz answer.
+  if (isCompositeQuizSourceAnnotation(measurement)) {
+    return { value: null, unit: '', measurementKind: '' };
+  }
+
   const stats = getMeasurementStats(measurement);
   const displayText = getMeasurementDisplayText(measurement);
   const parsed = parseLengthDisplayText(displayText);
@@ -3092,7 +3131,7 @@ function getMeasurementValueAndUnitForQuiz(measurement) {
     return {
       value: normalized.value ?? lengthValue,
       unit: normalized.unit,
-      measurementKind: 'length',
+      measurementKind: getScalarMeasurementKindForQuiz(measurement, 'length'),
     };
   }
 
@@ -13004,6 +13043,60 @@ function commandsModule({
           ok: false,
           reason: 'selected-measurement-not-found',
           selectedMeasurementId,
+        };
+      }
+
+      const requestedKind = String(question?.answerConfig?.measurementKind || '').trim();
+      if (requestedKind === 'lvSimpsonEF' || requestedKind === 'laVolumeBiplane') {
+        // Resolve from the existing viewer measurement service, not from a
+        // user-supplied numeric field. Include source references for review;
+        // numeric practice scoring does not independently validate contours.
+        const selectedStudy = String(
+          measurement?.referenceStudyUID || measurement?.StudyInstanceUID || ''
+        ).trim();
+        const studyMeasurements = (measurementService.getMeasurements?.() || []).filter(entry => {
+          const entryStudy = String(entry?.referenceStudyUID || entry?.StudyInstanceUID || '').trim();
+          return selectedStudy && entryStudy === selectedStudy;
+        });
+        const composite = resolveViewerQuizCompositeResult(requestedKind, studyMeasurements);
+        if (!composite) {
+          return {
+            ok: false,
+            reason: 'composite-measurement-incomplete',
+            selectedMeasurementId,
+          };
+        }
+        if (!composite.components.some(component => component.annotationId === selectedMeasurementId)) {
+          return {
+            ok: false,
+            reason: 'selected-measurement-not-in-composite-result',
+            selectedMeasurementId,
+          };
+        }
+        const viewerTarget = buildViewerQuizTargetFromMeasurement(measurement, displaySetService);
+        return {
+          ok: true,
+          selectedMeasurementId,
+          answer: {
+            value: roundQuizMeasurementValue(composite.value, 2),
+            unit: composite.unit,
+            measurementKind: composite.measurementKind,
+            measurementType: composite.measurementKind,
+            sourceAnnotationId: selectedMeasurementId,
+            viewerTarget,
+            sourceRefs: {
+              annotationId: selectedMeasurementId,
+              measurementId: selectedMeasurementId,
+              studyInstanceUID: selectedStudy,
+            },
+            compositeResult: composite,
+            reviewPayload: {
+              label: composite.measurementKind,
+              toolName: 'viewer-composite-measurement',
+              capturedAt: new Date().toISOString(),
+              components: composite.components,
+            },
+          },
         };
       }
 
