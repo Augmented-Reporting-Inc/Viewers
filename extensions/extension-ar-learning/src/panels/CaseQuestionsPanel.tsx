@@ -1698,6 +1698,11 @@ function getOverlayMarkerOptionsForQuestion(
 function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsPanelProps) {
   const { uiNotificationService } = servicesManager.services;
   const authoringMode = isViewerQuizAuthoringMode();
+  // The backend authorizes the launch and supplies this scoring mode. Combined
+  // report assessments collect answers here but release scores in the report.
+  const deferredReportScoring = !authoringMode &&
+    new URLSearchParams(window.location.search)
+      .get('arEducationScoringMode')?.trim().toLowerCase() === 'reportcombined';
   const [sessionStateKey] = useState(() => getViewerQuizSessionKeyFromUrl());
   const [initialSessionState] = useState(() => readViewerQuizSessionState(sessionStateKey));
 
@@ -1739,10 +1744,17 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     return Array.isArray(payload?.responses) ? payload.responses : [];
   }, [payload]);
 
-  const viewerQuizScore = useMemo(() => getViewerQuizScore(scoringPayload), [scoringPayload]);
+  const viewerQuizScore = useMemo(
+    () => deferredReportScoring ? null : getViewerQuizScore(scoringPayload),
+    [scoringPayload, deferredReportScoring]
+  );
 
   async function refreshScoringPayload() {
     try {
+      if (deferredReportScoring) {
+        setScoringPayload(null);
+        return null;
+      }
       const nextScoringPayload = await getViewerQuizScoreForActiveStudy();
       setScoringPayload(nextScoringPayload);
       return nextScoringPayload;
@@ -2510,7 +2522,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
 
       let scoredPayload: any = null;
 
-      if (status === 'submitted') {
+      if (status === 'submitted' && !deferredReportScoring) {
         scoredPayload = await submitAndRefreshViewerQuizScoreForActiveStudy();
         setScoringPayload(scoredPayload);
       }
@@ -2521,7 +2533,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       uiNotificationService.show({
         title: 'Case Questions',
         message:
-          status === 'submitted'
+          status === 'submitted' && deferredReportScoring
+            ? 'Viewer answers submitted. Return to the report to submit for scoring.'
+            : status === 'submitted'
             ? scoredQuiz
               ? `Quiz submitted and scored: ${Number(scoredQuiz.total || 0)} / ${Number(scoredQuiz.max || 0)}`
               : 'Quiz submitted and scored.'
@@ -2566,6 +2580,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     setErrorMessage('');
 
     try {
+      if (deferredReportScoring) {
+        throw new Error('Scoring is available from the reporting assessment only.');
+      }
       const scoredPayload = await submitAndRefreshViewerQuizScoreForActiveStudy();
       setScoringPayload(scoredPayload);
 
@@ -4334,7 +4351,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         const submitted = cleanString(response?.status).toLowerCase() === 'submitted';
         const quizScore = viewerQuizScore ? getQuizScoreItem(viewerQuizScore, quiz) : null;
 
-        return !submitted || !quizScore;
+        return !submitted || (!quizScore && !deferredReportScoring);
       })
     : [];
 
@@ -4507,7 +4524,11 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                     </div>
                   ) : null}
 
-                  {submitted && !quizScore ? (
+                  {submitted && deferredReportScoring ? (
+                    <div className="text-xs text-green-200">
+                      Answers submitted. Return to the report and select Submit for Scoring.
+                    </div>
+                  ) : submitted && !quizScore ? (
                     <div className="space-y-2">
                       <div className="text-xs text-green-200">
                         Submitted, but no score is available yet.
@@ -4538,7 +4559,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                         disabled={quizSaving || submitting}
                         onClick={() => saveQuiz(quiz, 'submitted')}
                       >
-                        {quizSaving ? 'Submitting…' : 'Submit Quiz'}
+                        {quizSaving ? 'Submitting…' : deferredReportScoring ? 'Submit answers' : 'Submit Quiz'}
                       </button>
                     </div>
                   )}
