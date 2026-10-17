@@ -329,7 +329,7 @@ async function resolveViewerSaveSeriesDoc() {
   const saveTarget = getArViewerSaveTargetFromUrl();
 
   if (saveTarget.attemptOwner === 'report') {
-    if (!saveTarget.learnerSeriesId) {
+    if (!isLearnerCopyOnSaveTarget(saveTarget) || !saveTarget.learnerSeriesId) {
       throw new Error('Open View Echo from the report to resolve its learner attempt before saving answers.');
     }
     return fetchSeriesDocById(saveTarget.learnerSeriesId);
