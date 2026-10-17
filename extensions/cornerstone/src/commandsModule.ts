@@ -12996,8 +12996,19 @@ function commandsModule({
               candidate => candidate.annotationUID === comparisonAnnotationId
             );
           if (!visibleInViewport()) {
-            annotation.state.removeAnnotation?.(comparisonAnnotationId);
-            annotation.state.addAnnotation?.(hydratedAnnotation, viewport.element);
+            // Ultrasound stack viewports can have an undefined/empty annotation
+            // group key. The manager's exact key (not the viewport element or
+            // an inferred FrameOfReferenceUID) must be used for reindexing.
+            const annotationManager = annotation.state.getAnnotationManager?.();
+            if (annotationManager?.getGroupKey && annotationManager?.addAnnotation) {
+              const activeGroupKey = annotationManager.getGroupKey(viewport.element);
+              annotation.state.removeAnnotation?.(comparisonAnnotationId);
+              hydratedAnnotation.metadata = {
+                ...(hydratedAnnotation.metadata || {}),
+                FrameOfReferenceUID: activeGroupKey,
+              };
+              annotationManager.addAnnotation(hydratedAnnotation, activeGroupKey);
+            }
           }
           if (!visibleInViewport()) {
             console.warn('[ViewerQuiz] saved composite contour not indexed for viewport', {
