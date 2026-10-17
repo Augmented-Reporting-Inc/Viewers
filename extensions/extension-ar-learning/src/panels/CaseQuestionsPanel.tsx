@@ -1702,7 +1702,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
   // report assessments collect answers here but release scores in the report.
   const deferredReportScoring = !authoringMode &&
     new URLSearchParams(window.location.search)
-      .get('arEducationScoringMode')?.trim().toLowerCase() === 'combined';
+      .get('arEducationScoringMode')?.trim().toLowerCase() === 'reportcombined';
   const [sessionStateKey] = useState(() => getViewerQuizSessionKeyFromUrl());
   const [initialSessionState] = useState(() => readViewerQuizSessionState(sessionStateKey));
 
