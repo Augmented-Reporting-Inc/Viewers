@@ -6541,6 +6541,7 @@ function getArViewerSaveTargetFromUrl() {
     baseSeriesId: String(qs.get('arBaseSeriesId') || '').trim(),
     seriesId: String(qs.get('arSeriesId') || '').trim(),
     learnerSeriesId: String(qs.get('arLearnerSeriesId') || '').trim(),
+    attemptOwner: String(qs.get('arAttemptOwner') || '').trim(),
     launchSource: String(qs.get('arLaunchSource') || '').trim(),
     measurementWorkflowRole: String(qs.get('arMeasurementWorkflowRole') || '').trim(),
     reviewWorkflowType: String(qs.get('arReviewWorkflowType') || '').trim(),
@@ -7046,6 +7047,15 @@ async function resolveViewerReadSeriesDoc(servicesManager, { allowBaseFallback =
 
 async function resolveViewerSaveSeriesDoc({ servicesManager, currentSeriesDoc }) {
   const saveTarget = getArViewerSaveTargetFromUrl();
+
+  // Report-first attempts must persist against the copy selected by the
+  // report. Never create a second learner attempt from a measurement save.
+  if (saveTarget.attemptOwner === 'report') {
+    if (!isLearnerCopyOnSaveTarget(saveTarget) || !saveTarget.learnerSeriesId) {
+      throw new Error('Open View Echo from the report to resolve its learner attempt before saving measurements.');
+    }
+    return fetchSeriesDocById(saveTarget.learnerSeriesId);
+  }
 
   if (isClinicalReportMeasurementsSaveTarget(saveTarget)) {
     if (String(currentSeriesDoc?._id || '') === String(saveTarget.seriesId || '')) {
