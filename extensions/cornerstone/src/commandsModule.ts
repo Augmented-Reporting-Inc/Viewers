@@ -12869,6 +12869,19 @@ function commandsModule({
           }).filter(Boolean)
         : [];
 
+      if (compositeRubric) {
+        console.info('[ViewerQuiz] composite gold contour resolution', {
+          questionKey,
+          expected: expectedSlots.length,
+          resolved: resolvedRubricContours.length,
+          sources: resolvedRubricContours.map(entry => ({
+            slot: entry.slot,
+            pointCount: entry.sourceAnnotation?.points?.length || 0,
+            hasImageReference: !!entry.sourceAnnotation?.referencedImageId,
+          })),
+        });
+      }
+
       if (!learnerAnnotation && !rubricAnnotation && resolvedRubricContours.length === 0) {
         return {
           ok: false,
@@ -12970,6 +12983,42 @@ function commandsModule({
 
         if (!comparisonAnnotationId || !hydratedAnnotation) {
           continue;
+        }
+
+        // A successful hydration call does not prove that Cornerstone indexed
+        // the contour in the active stack viewport's annotation group.
+        // Quiz overlays are temporary, so re-register only these composite
+        // gold contours under the viewport element when necessary.
+        if (entry.slot && viewport.element) {
+          const toolName = String(hydratedAnnotation.metadata?.toolName || '');
+          const visibleInViewport = () =>
+            (annotation.state.getAnnotations?.(toolName, viewport.element) || []).some(
+              candidate => candidate.annotationUID === comparisonAnnotationId
+            );
+          if (!visibleInViewport()) {
+            // Ultrasound stack viewports can have an undefined/empty annotation
+            // group key. The manager's exact key (not the viewport element or
+            // an inferred FrameOfReferenceUID) must be used for reindexing.
+            const annotationManager = annotation.state.getAnnotationManager?.();
+            if (annotationManager?.getGroupKey && annotationManager?.addAnnotation) {
+              const activeGroupKey = annotationManager.getGroupKey(viewport.element);
+              annotation.state.removeAnnotation?.(comparisonAnnotationId);
+              hydratedAnnotation.metadata = {
+                ...(hydratedAnnotation.metadata || {}),
+                FrameOfReferenceUID: activeGroupKey,
+              };
+              annotationManager.addAnnotation(hydratedAnnotation, activeGroupKey);
+            }
+          }
+          if (!visibleInViewport()) {
+            console.warn('[ViewerQuiz] saved composite contour not indexed for viewport', {
+              questionKey,
+              slot: entry.slot,
+              toolName,
+              hasReferencedImageId: !!hydratedAnnotation.metadata?.referencedImageId,
+            });
+            continue;
+          }
         }
 
         hydratedAnnotation.isLocked = true;
