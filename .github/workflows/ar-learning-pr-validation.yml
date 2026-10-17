@@ -4,6 +4,7 @@ on:
   pull_request:
     branches:
       - port/3.11-custom
+      - integration/ef-progress-current
       - integration/quiz-wcag-length-20261013
     paths:
       - 'extensions/extension-ar-learning/**'
