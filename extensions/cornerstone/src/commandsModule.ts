@@ -5612,7 +5612,7 @@ function renderLVSimpsonWorkflowPanel({
     controls.appendChild(item);
   };
   if (onContinue) button(continueLabel || 'Continue', onContinue);
-  if (onCancel) button('Cancel EF', onCancel);
+  if (onCancel) button(resultText ? 'Close panel' : 'Cancel EF', onCancel);
   panel.appendChild(controls);
 }
 
