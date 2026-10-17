@@ -8489,9 +8489,17 @@ function commandsModule({
         currentLVSimpsonMeasurements
       );
       const nextSlot = getNextMissingLVSimpsonSlot(remainingSlotCandidates);
-      const lvSimpsonResult = calculateLVSimpson(
-        currentLVSimpsonMeasurements
+      // Match the quiz capture path: live and session measurements are reconciled
+      // before calculating the composite gold-answer value.
+      const snapshotMeasurements = getCurrentViewerMeasurementSnapshot(measurementService);
+      const currentStudyId = String(
+        displaySet?.StudyInstanceUID || displaySet?.studyInstanceUID || ''
+      ).trim();
+      const studyMeasurements = snapshotMeasurements.filter(entry =>
+        String(entry?.referenceStudyUID || entry?.StudyInstanceUID || '').trim() === currentStudyId
       );
+      const lvSimpsonResult = calculateLVSimpson(studyMeasurements);
+      const goldComposite = resolveViewerQuizCompositeResult('lvSimpsonEF', studyMeasurements);
 
       if (nextSlot && !singleSlot && !isWorkflowCancelled()) {
         const nextDisplayName = getLVSimpsonSlotDisplayName(nextSlot);
@@ -8575,12 +8583,10 @@ function commandsModule({
         : [];
 
       if (
-        lvSimpsonResult?.status === 'complete' &&
-        Number.isFinite(Number(lvSimpsonResult?.values?.ejectionFraction))
+        goldComposite &&
+        Number.isFinite(Number(goldComposite.value))
       ) {
-        const ejectionFraction = Number(
-          lvSimpsonResult.values.ejectionFraction
-        ).toFixed(0);
+        const ejectionFraction = roundQuizMeasurementValue(goldComposite.value, 2).toFixed(2);
 
         const reviewMessages = Array.from(
           new Set(
@@ -8623,7 +8629,7 @@ function commandsModule({
             ? resultGuidance
             : ['Recheck the A4C/A2C ED/ES frames, mitral hinge placement, true LV apex, and contour coverage.']),
         ],
-        instruction: 'Review and correct the contours before capturing a gold answer.',
+        instruction: 'Review and correct the contours before capturing a gold answer. The quiz will not accept an incomplete composite.',
         onCancel: hideLVSimpsonWorkflowPanel,
       });
 
