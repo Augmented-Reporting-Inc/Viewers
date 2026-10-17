@@ -5516,6 +5516,7 @@ function getNextMissingLVSimpsonSlot(slotCandidates: Map<string, any[]>) {
 }
 
 const LV_SIMPSON_PROGRESS_PANEL_ID = 'ar-lv-simpson-progress-panel';
+const AR_LV_SIMPSON_GOLD_CAPTURED_EVENT = 'ar-measurements:lv-simpson-gold-captured';
 
 function hideLVSimpsonWorkflowPanel() {
   document.getElementById(LV_SIMPSON_PROGRESS_PANEL_ID)?.remove();
@@ -5529,12 +5530,16 @@ function renderLVSimpsonWorkflowPanel({
   continueLabel = '',
   onContinue = null,
   onCancel = null,
+  resultText = '',
+  warnings = [],
 }: {
   measurements?: any[];
   instruction?: string;
   continueLabel?: string;
   onContinue?: null | (() => void);
   onCancel?: null | (() => void);
+  resultText?: string;
+  warnings?: string[];
 } = {}) {
   if (typeof document === 'undefined') return;
 
@@ -5576,6 +5581,10 @@ function renderLVSimpsonWorkflowPanel({
     addText(`${slots.get(slot)?.length ? '✓' : '○'}  ${getLVSimpsonSlotDisplayName(slot)}`, {
       padding: '3px 0',
     });
+  }
+  if (resultText) addText(resultText, { fontWeight: '700', fontSize: '18px', marginTop: '9px' });
+  for (const warning of warnings) {
+    addText(warning, { color: '#fcd34d', paddingTop: '5px' });
   }
   if (instruction) {
     const hint = addText(instruction, {
@@ -8554,7 +8563,10 @@ function commandsModule({
         return measurement;
       }
 
-      clearLVSimpsonWorkflowIfCurrent(workflowSessionId);
+      // End interactive drawing, but retain the result panel until the
+      // educator captures a gold answer or the user explicitly closes it.
+      activeLVSimpsonWorkflowSessionId = '';
+      cancelActiveLVSimpsonCapture();
 
       const resultGuidance = Array.isArray(lvSimpsonResult?.guidance)
         ? lvSimpsonResult.guidance
@@ -8578,34 +8590,41 @@ function commandsModule({
           )
         );
 
-        showLVSimpsonNotification(uiNotificationService, {
-          title: reviewMessages.length
-            ? 'LV EF calculated - review contour'
-            : 'LV EF calculated',
-          message: reviewMessages.length
-            ? `Simpson LVEF: ${ejectionFraction}%. ${reviewMessages
-                .slice(0, 2)
-                .join(' ')}`
-            : `All four required contours are valid. Simpson LVEF: ${ejectionFraction}%.`,
-          type: reviewMessages.length ? 'warning' : 'success',
-          duration: reviewMessages.length
-            ? LV_SIMPSON_WARNING_DURATION_MS
-            : LV_SIMPSON_GUIDANCE_DURATION_MS,
+        const goldCaptureListener = () => {
+          if (!document.getElementById(LV_SIMPSON_PROGRESS_PANEL_ID)) return;
+          renderLVSimpsonWorkflowPanel({
+            measurements: currentLVSimpsonMeasurements,
+            resultText: `Calculated LVEF: ${ejectionFraction}%`,
+            warnings: reviewMessages,
+            instruction: 'Gold answer captured. Save the quiz draft to persist it.',
+            onCancel: hideLVSimpsonWorkflowPanel,
+          });
+        };
+        window.addEventListener(AR_LV_SIMPSON_GOLD_CAPTURED_EVENT, goldCaptureListener, {
+          once: true,
+        });
+        renderLVSimpsonWorkflowPanel({
+          measurements: currentLVSimpsonMeasurements,
+          resultText: `Calculated LVEF: ${ejectionFraction}%`,
+          warnings: reviewMessages,
+          instruction: 'Review the result, then capture it as the gold answer in the quiz panel. Close when finished.',
+          onCancel: hideLVSimpsonWorkflowPanel,
         });
 
         return measurement;
       }
 
-      showLVSimpsonNotification(uiNotificationService, {
-        title: 'LV EF could not be calculated',
-        message: `All four contours are present, but the Simpson result is ${
-          lvSimpsonResult?.status || 'invalid'
-        }. ${
-          resultGuidance.slice(0, 2).join(' ') ||
-          'Recheck the A4C/A2C ED/ES frames, mitral hinge placement, true LV apex, and contour coverage.'
-        }`,
-        type: 'warning',
-        duration: LV_SIMPSON_WARNING_DURATION_MS,
+      renderLVSimpsonWorkflowPanel({
+        measurements: currentLVSimpsonMeasurements,
+        resultText: 'LVEF not calculated',
+        warnings: [
+          `Calculation status: ${lvSimpsonResult?.status || 'invalid'}`,
+          ...(resultGuidance.length
+            ? resultGuidance
+            : ['Recheck the A4C/A2C ED/ES frames, mitral hinge placement, true LV apex, and contour coverage.']),
+        ],
+        instruction: 'Review and correct the contours before capturing a gold answer.',
+        onCancel: hideLVSimpsonWorkflowPanel,
       });
 
       return measurement;
