@@ -8265,7 +8265,12 @@ function commandsModule({
 
       const hinge = await captureLVSimpsonDrag({
         viewport,
-        toolGroup: toolGroupService.getToolGroupForViewport(activeViewportId),
+        toolGroup: (() => {
+          const reference = toolGroupService.getToolGroupForViewport(activeViewportId);
+          return typeof reference === 'string'
+            ? toolGroupService.getToolGroup(reference)
+            : reference;
+        })(),
         isCancelled: isWorkflowCancelled,
         setCancelHandler: cancel => {
           if (activeLVSimpsonWorkflowSessionId === workflowSessionId) {
@@ -8306,7 +8311,12 @@ function commandsModule({
 
       const apexDrag = await captureLVSimpsonDrag({
         viewport,
-        toolGroup: toolGroupService.getToolGroupForViewport(activeViewportId),
+        toolGroup: (() => {
+          const reference = toolGroupService.getToolGroupForViewport(activeViewportId);
+          return typeof reference === 'string'
+            ? toolGroupService.getToolGroup(reference)
+            : reference;
+        })(),
         isCancelled: isWorkflowCancelled,
         setCancelHandler: cancel => {
           if (activeLVSimpsonWorkflowSessionId === workflowSessionId) {
