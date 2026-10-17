@@ -157,7 +157,6 @@ let activeLAVolumeCaptureCancel: null | (() => void) = null;
 const LV_SIMPSON_MIN_AXIS_MM = 25;
 const LV_SIMPSON_MAX_AXIS_MM = 130;
 const LV_SIMPSON_SLOT_PAIR_AXIS_WARNING_RATIO = 0.35;
-const LV_SIMPSON_AUTO_CONTINUE_DELAY_MS = 250;
 const LV_SIMPSON_GUIDANCE_DURATION_MS = 10000;
 const LV_SIMPSON_WARNING_DURATION_MS = 15000;
 const LA_VOLUME_AUTO_CONTINUE_DELAY_MS = 250;
@@ -5516,6 +5515,98 @@ function getNextMissingLVSimpsonSlot(slotCandidates: Map<string, any[]>) {
   return LV_TRACE_REQUIRED_SLOTS.find(slot => !slotCandidates.get(slot)?.length) || '';
 }
 
+const LV_SIMPSON_PROGRESS_PANEL_ID = 'ar-lv-simpson-progress-panel';
+
+function hideLVSimpsonWorkflowPanel() {
+  document.getElementById(LV_SIMPSON_PROGRESS_PANEL_ID)?.remove();
+}
+
+// The panel is mounted outside the viewport so changing the cine image/frame
+// cannot destroy the guidance. Progress is derived from actual measurements.
+function renderLVSimpsonWorkflowPanel({
+  measurements = [],
+  instruction = '',
+  continueLabel = '',
+  onContinue = null,
+  onCancel = null,
+}: {
+  measurements?: any[];
+  instruction?: string;
+  continueLabel?: string;
+  onContinue?: null | (() => void);
+  onCancel?: null | (() => void);
+} = {}) {
+  if (typeof document === 'undefined') return;
+
+  let panel = document.getElementById(LV_SIMPSON_PROGRESS_PANEL_ID);
+  if (!panel) {
+    panel = document.createElement('aside');
+    panel.id = LV_SIMPSON_PROGRESS_PANEL_ID;
+    panel.setAttribute('aria-label', 'LV Simpson EF measurement progress');
+    Object.assign(panel.style, {
+      position: 'fixed',
+      top: '88px',
+      right: '16px',
+      width: 'min(330px, calc(100vw - 32px))',
+      zIndex: '999',
+      background: '#111827',
+      color: '#f9fafb',
+      padding: '14px',
+      border: '1px solid #64748b',
+      borderRadius: '10px',
+      boxShadow: '0 8px 24px rgba(0,0,0,0.35)',
+      fontSize: '13px',
+      lineHeight: '1.45',
+    });
+    document.body.appendChild(panel);
+  }
+  panel.replaceChildren();
+  const slots = getLVSimpsonSlotCandidates(measurements);
+  const completeCount = LV_TRACE_REQUIRED_SLOTS.filter(slot => slots.get(slot)?.length).length;
+  const addText = (text, style: any = {}) => {
+    const node = document.createElement('div');
+    node.textContent = text;
+    Object.assign(node.style, style);
+    panel?.appendChild(node);
+    return node;
+  };
+  addText('LV Simpson Biplane EF', { fontWeight: '700', fontSize: '15px' });
+  addText(`${completeCount} of 4 contours complete`, { marginBottom: '8px', color: '#cbd5e1' });
+  for (const slot of LV_TRACE_REQUIRED_SLOTS) {
+    addText(`${slots.get(slot)?.length ? '✓' : '○'}  ${getLVSimpsonSlotDisplayName(slot)}`, {
+      padding: '3px 0',
+    });
+  }
+  if (instruction) {
+    const hint = addText(instruction, {
+      marginTop: '10px',
+      paddingTop: '8px',
+      borderTop: '1px solid #475569',
+    });
+    hint.setAttribute('role', 'status');
+  }
+  const controls = document.createElement('div');
+  Object.assign(controls.style, { display: 'flex', gap: '8px', marginTop: '10px' });
+  const button = (label: string, callback: () => void) => {
+    const item = document.createElement('button');
+    item.type = 'button';
+    item.textContent = label;
+    Object.assign(item.style, {
+      border: '1px solid #94a3b8',
+      borderRadius: '6px',
+      padding: '5px 10px',
+      background: '#334155',
+      color: '#ffffff',
+      cursor: 'pointer',
+    });
+    item.addEventListener('click', callback, { once: true });
+    controls.appendChild(item);
+  };
+  if (onContinue) button(continueLabel || 'Continue', onContinue);
+  if (onCancel) button('Cancel EF', onCancel);
+  panel.appendChild(controls);
+}
+
 function getLVSimpsonStepNumber(slot = '') {
   const index = LV_TRACE_REQUIRED_SLOTS.indexOf(normalizeLVSimpsonSlot(slot));
 
@@ -7444,6 +7535,7 @@ function commandsModule({
 
     activeLVSimpsonWorkflowSessionId = '';
     cancelActiveLVSimpsonCapture();
+    hideLVSimpsonWorkflowPanel();
     return true;
   }
 
@@ -7469,6 +7561,7 @@ function commandsModule({
       cancelActiveLAVolumeCapture();
       activeLVSimpsonWorkflowSessionId = '';
       activeLAVolumeWorkflowSessionId = '';
+      hideLVSimpsonWorkflowPanel();
       clearSpectralDopplerWorkflowListeners();
       clearDecelerationTimeWorkflowListeners(); // AR_DECELERATION_TIME
       clearBowelCurvedLengthWorkflowListeners();
@@ -8144,11 +8237,10 @@ function commandsModule({
       };
       const overlay = createLVSimpsonPreviewOverlay(viewport.element);
 
-      showLVSimpsonNotification(uiNotificationService, {
-        title: `LV EF step ${stepNumber}/4 - ${slotDisplayName}`,
-        message: `Select the correct ${slotDisplayName} frame. First draw hinge-to-hinge across the mitral annulus at the LV endocardial insertion points. Next you will mark the true LV apex. Press Esc to cancel.`,
-        type: 'info',
-        duration: LV_SIMPSON_GUIDANCE_DURATION_MS,
+      renderLVSimpsonWorkflowPanel({
+        measurements: [...liveMeasurements, ...sessionLVSimpsonMeasurements],
+        instruction: `Step ${stepNumber}/4: On the correct ${slotDisplayName} frame, draw hinge-to-hinge across the mitral annulus.`,
+        onCancel: () => clearLVSimpsonWorkflowIfCurrent(workflowSessionId),
       });
 
       const hinge = await captureLVSimpsonDrag({
@@ -8185,11 +8277,10 @@ function commandsModule({
         baseRightPoint: hinge.endWorld,
       });
 
-      showLVSimpsonNotification(uiNotificationService, {
-        title: `LV EF step ${stepNumber}/4 - mark LV apex`,
-        message: `Drag from the hinge midpoint to the true endocardial LV apex along the LV long axis for ${slotDisplayName}. The generated contour should enclose the LV cavity from the mitral annulus to the apex.`,
-        type: 'info',
-        duration: LV_SIMPSON_GUIDANCE_DURATION_MS,
+      renderLVSimpsonWorkflowPanel({
+        measurements: [...liveMeasurements, ...sessionLVSimpsonMeasurements],
+        instruction: `Step ${stepNumber}/4: Drag from the hinge midpoint to the true LV apex for ${slotDisplayName}.`,
+        onCancel: () => clearLVSimpsonWorkflowIfCurrent(workflowSessionId),
       });
 
       const apexDrag = await captureLVSimpsonDrag({
@@ -8416,41 +8507,32 @@ function commandsModule({
             });
           };
 
-          showLVSimpsonNotification(uiNotificationService, {
-            title: 'LV EF - review contour',
-            message: `${axisWarning} ${slotDisplayName} was recorded. Next: ${nextDisplayName}.`,
-            type: 'warning',
-            duration: LV_SIMPSON_WARNING_DURATION_MS,
-            actionLabel: 'Continue',
-            onAction: continueToNextSlot,
+          renderLVSimpsonWorkflowPanel({
+            measurements: currentLVSimpsonMeasurements,
+            instruction: `${axisWarning} Select the correct frame for ${nextDisplayName}, then continue.`,
+            continueLabel: 'Continue to next contour',
+            onContinue: continueToNextSlot,
+            onCancel: () => clearLVSimpsonWorkflowIfCurrent(workflowSessionId),
           });
-
-          window.setTimeout(
-            continueToNextSlot,
-            LV_SIMPSON_WARNING_DURATION_MS
-          );
 
           return measurement;
         }
 
-        showLVSimpsonNotification(uiNotificationService, {
-          title: 'LV EF',
-          message: `${slotDisplayName} recorded. Next: ${nextDisplayName}. Confirm the correct frame, then draw hinge-to-hinge across the mitral annulus.`,
-          type: 'success',
-          duration: LV_SIMPSON_GUIDANCE_DURATION_MS,
-        });
-
-        window.setTimeout(() => {
-          if (activeLVSimpsonWorkflowSessionId !== workflowSessionId) {
-            return;
-          }
-
+        const continueToNextSlot = () => {
+          if (activeLVSimpsonWorkflowSessionId !== workflowSessionId) return;
           actions.startLVSimpsonEFWorkflow({
             slot: nextSlot,
             sessionId: workflowSessionId,
             singleSlot,
           });
-        }, LV_SIMPSON_AUTO_CONTINUE_DELAY_MS);
+        };
+        renderLVSimpsonWorkflowPanel({
+          measurements: currentLVSimpsonMeasurements,
+          instruction: `${slotDisplayName} recorded. Navigate to the correct ${nextDisplayName} image/frame, then continue.`,
+          continueLabel: 'Continue to next contour',
+          onContinue: continueToNextSlot,
+          onCancel: () => clearLVSimpsonWorkflowIfCurrent(workflowSessionId),
+        });
 
         return measurement;
       }
