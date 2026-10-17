@@ -3056,6 +3056,14 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
 
       updateAuthoringQuestion(question.questionKey, () => nextQuestion);
 
+      if (configuredKind === 'lvSimpsonEF') {
+        window.dispatchEvent(
+          new CustomEvent('ar-measurements:lv-simpson-gold-captured', {
+            detail: { questionKey: question.questionKey },
+          })
+        );
+      }
+
       try {
         const displayResult = await showAuthoringGoldMeasurement(nextQuestion);
 
