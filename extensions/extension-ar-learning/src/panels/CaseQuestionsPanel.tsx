@@ -4559,7 +4559,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                         disabled={quizSaving || submitting}
                         onClick={() => saveQuiz(quiz, 'submitted')}
                       >
-                        {quizSaving ? 'Submitting…' : 'Submit Quiz'}
+                        {quizSaving ? 'Submitting…' : deferredReportScoring ? 'Submit answers' : 'Submit Quiz'}
                       </button>
                     </div>
                   )}
