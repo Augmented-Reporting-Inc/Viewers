@@ -5329,7 +5329,7 @@ function installSpectralDopplerTextOverrideForViewport({ viewport, viewportId = 
   toolInstance.__arSpectralDopplerTextOverrideInstalled = true;
 }
 
-function captureLVSimpsonDrag({ viewport, onPreview, isCancelled, setCancelHandler }) {
+function captureLVSimpsonDrag({ viewport, onPreview, isCancelled, setCancelHandler, toolGroup }) {
   const element = viewport?.element;
 
   if (!element) {
@@ -5338,6 +5338,12 @@ function captureLVSimpsonDrag({ viewport, onPreview, isCancelled, setCancelHandl
 
   return new Promise(resolve => {
     const previousCursor = element.style.cursor;
+    // EF captures pointer drags directly; a previously active Length tool must
+    // not also handle the same gesture and create an accidental measurement.
+    const previousToolName = toolGroup?.getActivePrimaryMouseButtonTool?.() || '';
+    if (previousToolName) {
+      toolGroup?.setToolPassive?.(previousToolName);
+    }
     let startWorld = null;
     let done = false;
 
@@ -5347,6 +5353,11 @@ function captureLVSimpsonDrag({ viewport, onPreview, isCancelled, setCancelHandl
       }
 
       done = true;
+      if (previousToolName && toolGroup?.hasTool?.(previousToolName)) {
+        toolGroup.setToolActive(previousToolName, {
+          bindings: [{ mouseButton: Enums.MouseBindings.Primary }],
+        });
+      }
       restoreLVSimpsonViewportCursor(element, previousCursor);
       element.removeEventListener('mousedown', handleMouseDown, true);
       window.removeEventListener('mousemove', handleMouseMove, true);
@@ -8254,6 +8265,7 @@ function commandsModule({
 
       const hinge = await captureLVSimpsonDrag({
         viewport,
+        toolGroup: toolGroupService.getToolGroupForViewport(activeViewportId),
         isCancelled: isWorkflowCancelled,
         setCancelHandler: cancel => {
           if (activeLVSimpsonWorkflowSessionId === workflowSessionId) {
@@ -8294,6 +8306,7 @@ function commandsModule({
 
       const apexDrag = await captureLVSimpsonDrag({
         viewport,
+        toolGroup: toolGroupService.getToolGroupForViewport(activeViewportId),
         isCancelled: isWorkflowCancelled,
         setCancelHandler: cancel => {
           if (activeLVSimpsonWorkflowSessionId === workflowSessionId) {
