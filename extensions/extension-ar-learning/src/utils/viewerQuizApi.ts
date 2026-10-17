@@ -6,6 +6,7 @@ type ViewerSaveTarget = {
   mongoId: string;
   launchSource: string;
   measurementWorkflowRole: string;
+  attemptOwner: string;
 };
 
 function cleanString(value: unknown): string {
@@ -102,6 +103,7 @@ function getArViewerSaveTargetFromUrl(): ViewerSaveTarget {
       cleanString(qs.get('arMongoId')),
     launchSource: cleanString(qs.get('arLaunchSource')),
     measurementWorkflowRole: cleanString(qs.get('arMeasurementWorkflowRole')),
+    attemptOwner: cleanString(qs.get('arAttemptOwner')),
   };
 }
 
@@ -326,6 +328,13 @@ async function resolveViewerReadSeriesDoc() {
 async function resolveViewerSaveSeriesDoc() {
   const saveTarget = getArViewerSaveTargetFromUrl();
 
+  if (saveTarget.attemptOwner === 'report') {
+    if (!saveTarget.learnerSeriesId) {
+      throw new Error('Open View Echo from the report to resolve its learner attempt before saving answers.');
+    }
+    return fetchSeriesDocById(saveTarget.learnerSeriesId);
+  }
+
   if (isLearnerCopyOnSaveTarget(saveTarget)) {
     if (saveTarget.learnerSeriesId) {
       return fetchSeriesDocById(saveTarget.learnerSeriesId);
@@ -347,6 +356,10 @@ async function resolveViewerSaveSeriesDoc() {
 
 async function resolveViewerQuizScoreSeriesDoc() {
   const saveTarget = getArViewerSaveTargetFromUrl();
+
+  if (saveTarget.attemptOwner === 'report' && !saveTarget.learnerSeriesId) {
+    return null;
+  }
 
   if (isLearnerCopyOnSaveTarget(saveTarget)) {
     if (saveTarget.learnerSeriesId) {
