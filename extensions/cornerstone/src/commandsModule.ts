@@ -3146,6 +3146,67 @@ function getMeasurementDisplayLabel(measurement) {
   );
 }
 
+function isLVSimpsonEFQuizQuestion(question: any = {}, measurementType = '') {
+  const configuredType = String(
+    measurementType || question?.answerConfig?.measurementType || ''
+  ).trim().replace(/[\\s_-]+/g, '').toLowerCase();
+
+  return [
+    'efsimpsons',
+    'lvsimpsonef',
+    'lvbiplaneef',
+    'simpsonbiplaneef',
+    'lvejectionfractionsimpsons',
+  ].includes(configuredType);
+}
+
+function getLVSimpsonEFQuizAnswer(measurementService: any) {
+  // Use the same canonical calculator and session geometry as the EF panel/
+  // guided contour workflow, not the scalar of a selected contour annotation.
+  const candidates = [
+    ...(measurementService.getMeasurements?.() || []),
+    ...getLVSimpsonSessionMeasurements(),
+  ];
+  const computed = calculateLVSimpson(candidates);
+  const ef = Number(computed?.values?.ejectionFraction);
+
+  if (computed?.status !== 'complete' || !Number.isFinite(ef)) {
+    return { ok: false, reason: 'lv-simpson-ef-incomplete' };
+  }
+
+  const contourIds = Array.from(new Set(candidates
+    .filter(isLVSimpsonMeasurement)
+    .map(measurement => String(
+      measurement?.uid || measurement?.annotationUID ||
+      measurement?.annotationId || measurement?.id || ''
+    ).trim())
+    .filter(Boolean)));
+
+  const roundedEF = roundQuizMeasurementValue(ef, 2);
+  return {
+    ok: true,
+    selectedMeasurementId: '',
+    answer: {
+      value: roundedEF,
+      unit: '%',
+      measurementType: 'EFSimpsons',
+      measurementKind: 'lvSimpsonEF',
+      sourceAnnotationId: '',
+      viewerTarget: {},
+      sourceRefs: {
+        toolName: 'LVSimpson',
+        sourceMeasurementIds: contourIds,
+      },
+      reviewPayload: {
+        label: 'LV Simpson EF',
+        toolName: 'LVSimpson',
+        displayText: [`${roundedEF} %`],
+        capturedAt: new Date().toISOString(),
+      },
+    },
+  };
+}
+
 function buildViewerQuizAnswerFromMeasurement({
   measurement,
   question = {},
@@ -12907,6 +12968,10 @@ function commandsModule({
       unit = '',
       measurementId = '',
     } = {}) => {
+      if (isLVSimpsonEFQuizQuestion(question, measurementType)) {
+        return getLVSimpsonEFQuizAnswer(measurementService);
+      }
+
       const activeEnabledElement = _getActiveViewportEnabledElement();
       const explicitMeasurementId = String(measurementId || '').trim();
       const selectedMeasurementId =
