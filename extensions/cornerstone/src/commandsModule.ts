@@ -6723,6 +6723,7 @@ function getArViewerSaveTargetFromUrl() {
     baseSeriesId: String(qs.get('arBaseSeriesId') || '').trim(),
     seriesId: String(qs.get('arSeriesId') || '').trim(),
     learnerSeriesId: String(qs.get('arLearnerSeriesId') || '').trim(),
+    attemptOwner: String(qs.get('arAttemptOwner') || '').trim(),
     launchSource: String(qs.get('arLaunchSource') || '').trim(),
     measurementWorkflowRole: String(qs.get('arMeasurementWorkflowRole') || '').trim(),
     reviewWorkflowType: String(qs.get('arReviewWorkflowType') || '').trim(),
@@ -6856,6 +6857,14 @@ function isReviewWorkflowMeasurementsSaveTarget(saveTarget: any = {}) {
     isLibraryLaunchSource(saveTarget.launchSource) &&
     !!normalizeReviewMeasurementRole(saveTarget.measurementWorkflowRole) &&
     !!String(saveTarget.reviewWorkflowType || '').trim()
+  );
+}
+
+function isReportOwnedLearnerMeasurementTarget(saveTarget: any = {}) {
+  return (
+    saveTarget.attemptOwner === 'report' &&
+    !!String(saveTarget.learnerSeriesId || '').trim() &&
+    isLearnerCopyOnSaveTarget(saveTarget)
   );
 }
 
@@ -7228,6 +7237,15 @@ async function resolveViewerReadSeriesDoc(servicesManager, { allowBaseFallback =
 
 async function resolveViewerSaveSeriesDoc({ servicesManager, currentSeriesDoc }) {
   const saveTarget = getArViewerSaveTargetFromUrl();
+
+  // Report-first attempts must use the exact report-selected learner copy.
+  // Never fall through to a viewer-owned ensure-learner-copy operation.
+  if (saveTarget.attemptOwner === 'report') {
+    if (!isReportOwnedLearnerMeasurementTarget(saveTarget)) {
+      throw new Error('Open View Echo from the report to resolve its learner attempt before saving measurements.');
+    }
+    return fetchSeriesDocById(saveTarget.learnerSeriesId);
+  }
 
   if (isClinicalReportMeasurementsSaveTarget(saveTarget)) {
     if (String(currentSeriesDoc?._id || '') === String(saveTarget.seriesId || '')) {
@@ -13805,7 +13823,13 @@ function commandsModule({
           );
 
           const isReviewWorkflowSave = isReviewWorkflowMeasurementsSaveTarget(saveTarget);
-          const isClinicalReportSave = isClinicalReportMeasurementsSaveTarget(saveTarget);
+          // In a report-owned learning attempt, FormAPI derives report fields
+          // from the persisted annotations on the same learner-copy Series.
+          const isReportOwnedMeasurementSave =
+            isReportOwnedLearnerMeasurementTarget(saveTarget);
+          const isClinicalReportSave =
+            isClinicalReportMeasurementsSaveTarget(saveTarget) ||
+            isReportOwnedMeasurementSave;
 
           if (previewOnly && !isClinicalReportSave) {
             return {
@@ -13828,7 +13852,11 @@ function commandsModule({
           let activeSeriesDoc = null;
 
           if (isClinicalReportSave) {
-            activeSeriesDoc = await fetchSeriesDocById(saveTarget.seriesId);
+            activeSeriesDoc = await fetchSeriesDocById(
+              isReportOwnedMeasurementSave
+                ? saveTarget.learnerSeriesId
+                : saveTarget.seriesId
+            );
           } else if (isLearnerCopyOnSaveTarget(saveTarget)) {
             if (saveTarget.learnerSeriesId) {
               activeSeriesDoc = await fetchSeriesDocById(saveTarget.learnerSeriesId);
