@@ -6739,6 +6739,14 @@ function isReviewWorkflowMeasurementsSaveTarget(saveTarget: any = {}) {
   );
 }
 
+function isReportOwnedLearnerMeasurementTarget(saveTarget: any = {}) {
+  return (
+    saveTarget.attemptOwner === 'report' &&
+    !!saveTarget.learnerSeriesId &&
+    isLearnerCopyOnSaveTarget(saveTarget)
+  );
+}
+
 function isClinicalReportMeasurementsSaveTarget(saveTarget: any = {}) {
   return (
     saveTarget.mode === CLINICAL_REPORT_MEASUREMENTS_SAVE_TARGET &&
@@ -13416,7 +13424,13 @@ function commandsModule({
           );
 
           const isReviewWorkflowSave = isReviewWorkflowMeasurementsSaveTarget(saveTarget);
-          const isClinicalReportSave = isClinicalReportMeasurementsSaveTarget(saveTarget);
+          // Report-owned learner measurements belong to the report Series and
+          // must use the existing server-side annotation-to-report mapping.
+          const isReportOwnedMeasurementSave =
+            isReportOwnedLearnerMeasurementTarget(saveTarget);
+          const isClinicalReportSave =
+            isClinicalReportMeasurementsSaveTarget(saveTarget) ||
+            isReportOwnedMeasurementSave;
 
           if (previewOnly && !isClinicalReportSave) {
             return {
@@ -13439,7 +13453,11 @@ function commandsModule({
           let activeSeriesDoc = null;
 
           if (isClinicalReportSave) {
-            activeSeriesDoc = await fetchSeriesDocById(saveTarget.seriesId);
+            activeSeriesDoc = await fetchSeriesDocById(
+              isReportOwnedMeasurementSave
+                ? saveTarget.learnerSeriesId
+                : saveTarget.seriesId
+            );
           } else if (isLearnerCopyOnSaveTarget(saveTarget)) {
             if (saveTarget.learnerSeriesId) {
               activeSeriesDoc = await fetchSeriesDocById(saveTarget.learnerSeriesId);
