@@ -14094,9 +14094,22 @@ function commandsModule({
           if (
             annotations.length === 0 &&
             !isReviewWorkflowSave &&
-            shouldSubmitForScore &&
-            existingScorableAnnotations.length > 0
+            existingScorableAnnotations.length > 0 &&
+            (
+              shouldSubmitForScore ||
+              (
+                previewOnly &&
+                isReportOwnedMeasurementSave &&
+                changedClinicalMeasurementIds.size === 0 &&
+                viewerMeasurementsDeletedInSession.size === 0 &&
+                explicitDeleteIds.size === 0
+              )
+            )
           ) {
+            // A reopened report-owned learner attempt may have no live annotations,
+            // while the exact learner Series already contains saved scoring evidence.
+            // Reuse that persisted evidence only for an unchanged preview; pending
+            // edits/deletions must still follow the normal review/save path.
             annotations = existingScorableAnnotations;
           }
 
