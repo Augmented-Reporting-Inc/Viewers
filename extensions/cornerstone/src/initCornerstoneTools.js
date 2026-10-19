@@ -308,7 +308,7 @@ const toolNames = {
   Zoom: ZoomTool.toolName,
   VolumeRotate: VolumeRotateTool.toolName,
   MipJumpToClick: MIPJumpToClickTool.toolName,
-  Length: LengthTool.toolName,
+  Length: ARCalibratedLengthTool.toolName,
   DragProbe: DragProbeTool.toolName,
   Probe: ProbeTool.toolName,
   RectangleROI: RectangleROITool.toolName,
