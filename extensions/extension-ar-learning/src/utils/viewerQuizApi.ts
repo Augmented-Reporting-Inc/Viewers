@@ -436,6 +436,16 @@ export async function getViewerQuizzesForActiveStudy() {
   };
 }
 
+// Resolve the same report-owned learner document used by report Save/Sign.
+// Never mint an independent attempt from the viewer when the report owns it.
+export async function ensureViewerQuizSaveSeriesDoc() {
+  const seriesDoc = await resolveViewerSaveSeriesDoc();
+  if (!seriesDoc?.isLearnerCopy || !getSeriesId(seriesDoc)) {
+    throw new Error('No writable learner report was found for this viewer session.');
+  }
+  return seriesDoc;
+}
+
 export async function saveViewerQuizResponseForActiveStudy({
   quizKey,
   quizVersion,
