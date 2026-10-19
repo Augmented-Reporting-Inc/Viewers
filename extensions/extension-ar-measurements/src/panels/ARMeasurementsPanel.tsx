@@ -2042,17 +2042,6 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
     finishQuizMeasurementSave(!!result);
   };
 
-  useEffect(() => {
-    const onQuizSaveRequest = (event: Event) => {
-      const requestId = String((event as CustomEvent)?.detail?.requestId || '');
-      if (!requestId || !isClinicalReportSaveTarget || quizSaveRequestRef.current) return;
-      quizSaveRequestRef.current = requestId;
-      void handleSave(false);
-    };
-    window.addEventListener('ar:quiz-measurements-save-request', onQuizSaveRequest);
-    return () => window.removeEventListener('ar:quiz-measurements-save-request', onQuizSaveRequest);
-  });
-
   const handleAddCineComment = useCallback(async () => {
     if (isReviewWorkflowReadOnly || isSaving || isAddingCineComment) {
       return;
