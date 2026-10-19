@@ -14326,6 +14326,7 @@ function commandsModule({
                 return {
                   ...serverPreview,
                   previewOnly: true,
+                  isClinicalReportSave: true,
                   shouldSyncReportFields: true,
                   seriesDoc,
                   saveTarget,
