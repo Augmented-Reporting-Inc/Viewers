@@ -1997,6 +1997,7 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
         const preview = await runMeasurementSave(scoreNow, { previewOnly: true });
 
         if (!preview) {
+          finishQuizMeasurementSave(false);
           return;
         }
 
