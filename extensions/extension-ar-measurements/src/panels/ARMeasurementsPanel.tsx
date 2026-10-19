@@ -1036,7 +1036,7 @@ function formatClinicalReportValue(value) {
   return String(value);
 }
 
-function buildClinicalReportReviewRows(preview: any = {}) {
+export function buildClinicalReportReviewRows(preview: any = {}) {
   const hasAuthoritativeServerItems = Array.isArray(preview?.items);
   const serverItems = hasAuthoritativeServerItems
     ? preview.items
@@ -1138,7 +1138,7 @@ function hasClinicalReportDerivedConsequences(review: any = {}) {
   );
 }
 
-function ClinicalReportMeasurementReviewModal({
+export function ClinicalReportMeasurementReviewModal({
   review,
   selectedRowKeys = [],
   showReviewBeforeSave,
