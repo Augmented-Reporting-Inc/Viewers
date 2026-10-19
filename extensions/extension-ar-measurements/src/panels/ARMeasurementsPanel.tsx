@@ -859,6 +859,7 @@ function getArViewerSaveTargetFromUrl() {
       baseSeriesId: String(qs.get('arBaseSeriesId') || '').trim(),
       seriesId: String(qs.get('arSeriesId') || '').trim(),
       learnerSeriesId: String(qs.get('arLearnerSeriesId') || '').trim(),
+      attemptOwner: String(qs.get('arAttemptOwner') || '').trim(),
       launchSource: String(qs.get('arLaunchSource') || '').trim(),
       measurementWorkflowRole: String(qs.get('arMeasurementWorkflowRole') || '').trim(),
       reviewWorkflowType: String(qs.get('arReviewWorkflowType') || '').trim(),
@@ -871,6 +872,7 @@ function getArViewerSaveTargetFromUrl() {
       baseSeriesId: '',
       seriesId: '',
       learnerSeriesId: '',
+      attemptOwner: '',
       launchSource: '',
       measurementWorkflowRole: '',
       reviewWorkflowType: '',
@@ -949,11 +951,14 @@ const VIEWER_MEASUREMENTS_WORKFLOW = 'viewerMeasurements';
 const REVIEWER_MEASUREMENTS_WORKFLOW = 'reviewerMeasurements';
 
 function isClinicalReportMeasurementsTarget(saveTarget: any = {}) {
-  return (
-    saveTarget.mode === CLINICAL_REPORT_MEASUREMENTS_SAVE_TARGET &&
+  const clinical = saveTarget.mode === CLINICAL_REPORT_MEASUREMENTS_SAVE_TARGET &&
     !!saveTarget.seriesId &&
-    String(saveTarget.launchSource || '').trim().toLowerCase() === 'report'
-  );
+    String(saveTarget.launchSource || '').trim().toLowerCase() === 'report';
+  const reportOwnedLearner = saveTarget.mode === 'learnerCopyOnSave' &&
+    saveTarget.attemptOwner === 'report' && !!saveTarget.learnerSeriesId &&
+    String(saveTarget.measurementWorkflowRole || '').toLowerCase() === 'learner' &&
+    String(saveTarget.launchSource || '').toLowerCase() === 'library';
+  return clinical || reportOwnedLearner;
 }
 
 const CLINICAL_REPORT_REVIEW_PREFERENCE_KEY =
@@ -1031,7 +1036,7 @@ function formatClinicalReportValue(value) {
   return String(value);
 }
 
-function buildClinicalReportReviewRows(preview: any = {}) {
+export function buildClinicalReportReviewRows(preview: any = {}) {
   const hasAuthoritativeServerItems = Array.isArray(preview?.items);
   const serverItems = hasAuthoritativeServerItems
     ? preview.items
@@ -1133,7 +1138,7 @@ function hasClinicalReportDerivedConsequences(review: any = {}) {
   );
 }
 
-function ClinicalReportMeasurementReviewModal({
+export function ClinicalReportMeasurementReviewModal({
   review,
   selectedRowKeys = [],
   showReviewBeforeSave,
@@ -1435,6 +1440,15 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
   const [sessionLVSimpsonMeasurements, setSessionLVSimpsonMeasurements] = useState([]);
   const [sessionLAVolumeMeasurements, setSessionLAVolumeMeasurements] = useState([]);
   const saveInFlightRef = useRef(false);
+  const quizSaveRequestRef = useRef<string | null>(null);
+  const finishQuizMeasurementSave = (ok: boolean) => {
+    const requestId = quizSaveRequestRef.current;
+    if (!requestId) return;
+    quizSaveRequestRef.current = null;
+    window.dispatchEvent(new CustomEvent('ar:quiz-measurements-save-result', {
+      detail: { requestId, ok },
+    }));
+  };
   const autoDisplayPeerMeasurementStateRef = useRef({
     key: '',
     status: 'idle',
@@ -1957,7 +1971,8 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
     setClinicalReportReview(null);
     setSelectedClinicalReportRowKeys([]);
 
-    await executeMeasurementSave(scoreNow, { reportFieldNames });
+    const result = await executeMeasurementSave(scoreNow, { reportFieldNames });
+    finishQuizMeasurementSave(!!result);
   };
 
   const handleSave = async (scoreNow = false) => {
@@ -1975,13 +1990,14 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
       return;
     }
 
-    if (isClinicalReportSaveTarget && showClinicalReportReviewBeforeSave) {
+    if (isClinicalReportSaveTarget && (showClinicalReportReviewBeforeSave || !!quizSaveRequestRef.current)) {
       setIsPreparingClinicalReportReview(true);
 
       try {
         const preview = await runMeasurementSave(scoreNow, { previewOnly: true });
 
         if (!preview) {
+          finishQuizMeasurementSave(false);
           return;
         }
 
@@ -1994,6 +2010,7 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
             type: 'info',
             duration: 3000,
           });
+          finishQuizMeasurementSave(true);
           return;
         }
 
@@ -2008,6 +2025,7 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
         }
       } catch (error) {
         console.error('[ARMeasurementsPanel] measurement review failed:', error);
+        finishQuizMeasurementSave(false);
         uiNotificationService.show({
           title: 'AR Measurements & Annotations',
           message: `Unable to review report values: ${error?.message || error}`,
@@ -2020,7 +2038,8 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
       }
     }
 
-    await executeMeasurementSave(scoreNow);
+    const result = await executeMeasurementSave(scoreNow);
+    finishQuizMeasurementSave(!!result);
   };
 
   const handleAddCineComment = useCallback(async () => {
@@ -2560,6 +2579,7 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
         onCancel={() => {
           setClinicalReportReview(null);
           setSelectedClinicalReportRowKeys([]);
+          finishQuizMeasurementSave(false);
         }}
         onApply={handleClinicalReportReviewApply}
       />

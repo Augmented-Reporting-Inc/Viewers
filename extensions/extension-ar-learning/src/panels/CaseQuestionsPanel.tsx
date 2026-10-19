@@ -8,8 +8,13 @@ import {
   isViewerQuizAuthoringMode,
   saveViewerQuizAuthoringDraft,
   saveViewerQuizResponseForActiveStudy,
+  ensureViewerQuizSaveSeriesDoc,
   submitAndRefreshViewerQuizScoreForActiveStudy,
 } from '../utils/viewerQuizApi';
+import {
+  buildClinicalReportReviewRows,
+  ClinicalReportMeasurementReviewModal,
+} from '../../../extension-ar-measurements/src/panels/ARMeasurementsPanel';
 import {
   readViewerQuizSessionState,
   writeViewerQuizSessionState,
@@ -1708,6 +1713,10 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
 
   const [loading, setLoading] = useState(true);
   const [savingQuizKey, setSavingQuizKey] = useState('');
+  const [quizMeasurementReview, setQuizMeasurementReview] = useState<any>(null);
+  const [quizMeasurementSelectedRows, setQuizMeasurementSelectedRows] = useState<string[]>([]);
+  const [quizMeasurementApplying, setQuizMeasurementApplying] = useState(false);
+  const quizMeasurementResolveRef = useRef<((ok: boolean) => void) | null>(null);
   const [scoringQuizKey, setScoringQuizKey] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [payload, setPayload] = useState<any>(null);
@@ -2494,6 +2503,74 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     };
   }, [activeQuestionKey, authoringMode, payload, answersByQuizKey]);
 
+  // Case Questions owns this review. It must not depend on AR Measurements being mounted.
+  const finishQuizMeasurementReview = (ok: boolean) => {
+    setQuizMeasurementReview(null);
+    setQuizMeasurementSelectedRows([]);
+    const resolve = quizMeasurementResolveRef.current;
+    quizMeasurementResolveRef.current = null;
+    resolve?.(ok);
+  };
+
+  const applyQuizMeasurementReview = async () => {
+    if (!quizMeasurementReview || quizMeasurementApplying) return;
+    const fields = Array.from(new Set(
+      quizMeasurementReview.rows
+        .filter(row => quizMeasurementSelectedRows.includes(row.key))
+        .flatMap(row => row.fieldNames)
+    ));
+    setQuizMeasurementApplying(true);
+    try {
+      const result = await Promise.resolve(commandsManager.runCommand(
+        'saveViewerMeasurementsForActiveStudy',
+        { domain: 'echo', scoringIntent: 'draft', educationAttemptIntent: 'draft', reportFieldNames: fields }
+      ));
+      if (!result || result?.ok === false) throw new Error('Measurement save did not succeed.');
+      finishQuizMeasurementReview(true);
+    } catch (error) {
+      console.error('[CaseQuestionsPanel] measurement save failed:', error);
+      uiNotificationService.show({
+        title: 'Case Questions',
+        message: `Measurement save failed: ${error?.message || error}`,
+        type: 'error',
+        duration: 5000,
+      });
+      finishQuizMeasurementReview(false);
+    } finally {
+      setQuizMeasurementApplying(false);
+    }
+  };
+
+  async function confirmReportOwnedMeasurementSave(): Promise<void> {
+    await ensureViewerQuizSaveSeriesDoc();
+    const preview = await Promise.resolve(commandsManager.runCommand(
+      'saveViewerMeasurementsForActiveStudy',
+      { domain: 'echo', scoringIntent: 'draft', educationAttemptIntent: 'draft', previewOnly: true }
+    ));
+    if (!preview?.previewOnly || preview?.isClinicalReportSave !== true) {
+      throw new Error('Measurement review is unavailable for this learner report. Answers were not saved.');
+    }
+    const rows = buildClinicalReportReviewRows(preview);
+    if (!rows.length && preview?.measurementAnnotationsChanged === false) return;
+    // If annotations changed without mapped report fields, save annotations explicitly.
+    if (!rows.length) {
+      const result = await Promise.resolve(commandsManager.runCommand(
+        'saveViewerMeasurementsForActiveStudy',
+        { domain: 'echo', scoringIntent: 'draft', educationAttemptIntent: 'draft', reportFieldNames: [] }
+      ));
+      if (!result || result?.ok === false) {
+        throw new Error('Viewer annotations could not be saved.');
+      }
+      return;
+    }
+    setQuizMeasurementSelectedRows(rows.filter(row => row.changed).map(row => row.key));
+    setQuizMeasurementReview({ rows, derivedConsequences: preview?.derivedConsequences });
+    const approved = await new Promise<boolean>(resolve => {
+      quizMeasurementResolveRef.current = resolve;
+    });
+    if (!approved) throw new Error('Measurement review was cancelled or failed. Answers were not saved.');
+  }
+
   async function saveQuiz(quiz: QuizDefinition, status: 'draft' | 'submitted') {
     const quizAnswers = answersByQuizKey[quiz.quizKey] || {};
 
@@ -2513,6 +2590,11 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     }
 
     try {
+      // Combined report assessment: measurement review and persistence precede quiz answer save.
+      // Ordinary imaging quizzes retain their existing independent save/score workflow.
+      if (deferredReportScoring && quiz.questions.some(q => q.type === 'measurementNumeric')) {
+        await confirmReportOwnedMeasurementSave();
+      }
       const result = await saveViewerQuizResponseForActiveStudy({
         quizKey: quiz.quizKey,
         quizVersion: Number(quiz.quizVersion) || 1,
@@ -4569,6 +4651,17 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
           </div>
         </div>
       ) : null}
+      <ClinicalReportMeasurementReviewModal
+        review={quizMeasurementReview}
+        selectedRowKeys={quizMeasurementSelectedRows}
+        showReviewBeforeSave={true}
+        isSaving={quizMeasurementApplying}
+        onToggleRow={key => setQuizMeasurementSelectedRows(current => current.includes(key) ? current.filter(item => item !== key) : [...current, key])}
+        onToggleAll={selectAll => setQuizMeasurementSelectedRows(selectAll ? quizMeasurementReview?.rows.map(row => row.key) || [] : [])}
+        onPreferenceChange={() => {}}
+        onCancel={() => finishQuizMeasurementReview(false)}
+        onApply={applyQuizMeasurementReview}
+      />
     </div>
   );
 }
