@@ -13414,6 +13414,16 @@ function commandsModule({
           }
 
           const domain = inferDomainFromSeriesDoc(seriesDoc, explicitDomain);
+          // A report-scored learner copy owns its own report fields. Reuse the
+          // clinical annotation -> report mapping against that learner copy,
+          // never against the educator's source Series document.
+          const isLearnerReportSave =
+            isLearnerCopyOnSaveTarget(saveTarget) &&
+            String(saveTarget.measurementWorkflowRole || '').toLowerCase() === 'learner' &&
+            seriesDoc?.isLearnerCopy === true &&
+            String(seriesDoc.educationScoringMode || '').toLowerCase() === 'report' &&
+            domain === 'echo';
+          const shouldSyncReportFields = isClinicalReportSave || isLearnerReportSave;
 
           const normalizedScoringIntent = String(scoringIntent || educationAttemptIntent || '')
             .trim()
@@ -13429,7 +13439,7 @@ function commandsModule({
           ].includes(normalizedScoringIntent);
 
           const cornerstoneFallbackMeasurements = [
-            ...(isClinicalReportSave
+            ...(shouldSyncReportFields
               ? getCornerstoneVolumeMeasurementFallbacks({
                   studyInstanceUID: String(seriesDoc?.StudyInstanceUID || ''),
                   excludedMeasurementIds: viewerMeasurementsDeletedInSession,
@@ -13439,7 +13449,7 @@ function commandsModule({
               studyInstanceUID: String(seriesDoc?.StudyInstanceUID || ''),
               excludedMeasurementIds: viewerMeasurementsDeletedInSession,
             }),
-            ...(isClinicalReportSave
+            ...(shouldSyncReportFields
               ? getCornerstoneBowelCurvedLengthMeasurementFallbacks({
                   studyInstanceUID: String(seriesDoc?.StudyInstanceUID || ''),
                   excludedMeasurementIds: viewerMeasurementsDeletedInSession,
@@ -13451,7 +13461,7 @@ function commandsModule({
             cornerstoneFallbackMeasurements
           );
 
-          if (isClinicalReportSave) {
+          if (shouldSyncReportFields) {
             console.info('[MeasurementAnnotations] clinical save snapshot', {
               liveMeasurementCount: measurementService?.getMeasurements?.()?.length || 0,
               createdInSessionCount: viewerMeasurementsCreatedInSession.size,
@@ -13497,7 +13507,7 @@ function commandsModule({
             ? getCurrentReviewMeasurementRound(seriesDoc)
             : 0;
 
-          const changedClinicalMeasurementIds = isClinicalReportSave
+          const changedClinicalMeasurementIds = shouldSyncReportFields
             ? new Set<string>([
                 ...viewerMeasurementsCreatedInSession,
                 ...viewerMeasurementsModifiedInSession,
@@ -13524,7 +13534,7 @@ function commandsModule({
             .map(measurement => {
               const measurementId = getMeasurementAnnotationId(measurement);
               const shouldPreferDirectLiveVolumeMeasurement =
-                isClinicalReportSave &&
+                shouldSyncReportFields &&
                 changedClinicalMeasurementIds.has(measurementId) &&
                 (isLAVolumeMeasurement(measurement) || isLVSimpsonMeasurement(measurement));
               const directLiveMeasurement = shouldPreferDirectLiveVolumeMeasurement
@@ -13585,7 +13595,7 @@ function commandsModule({
             annotations = Array.from(annotationsById.values());
           }
 
-          if (isClinicalReportSave) {
+          if (shouldSyncReportFields) {
             annotations = canonicalizeClinicalViewerMeasurementAnnotations(annotations);
           }
 
@@ -13623,7 +13633,7 @@ function commandsModule({
           );
           const deletedClinicalSemanticKeys = new Set<string>();
 
-          if (isClinicalReportSave) {
+          if (shouldSyncReportFields) {
             for (const measurementId of [
               ...viewerMeasurementsDeletedInSession,
               ...explicitDeleteIds,
@@ -13695,7 +13705,7 @@ function commandsModule({
             // A saved annotation can become live merely because the user clicked it
             // in the panel. Preserve the exact saved payload unless that annotation
             // was created or genuinely modified in this viewer session.
-            const annotationsForMerge = isClinicalReportSave
+            const annotationsForMerge = shouldSyncReportFields
               ? annotations.filter(annotation =>
                   changedClinicalMeasurementIds.has(getMeasurementAnnotationId(annotation))
                 )
@@ -13714,7 +13724,7 @@ function commandsModule({
                 }
 
                 const existingId = existing?.annotationId || existing?.uid;
-                const semanticKey = isClinicalReportSave
+                const semanticKey = shouldSyncReportFields
                   ? getClinicalViewerMeasurementSemanticKey(existing)
                   : '';
 
@@ -13735,7 +13745,7 @@ function commandsModule({
                 }
 
                 return !!existingId && (
-                  isClinicalReportSave
+                  shouldSyncReportFields
                     ? changedClinicalMeasurementIds.has(String(existingId))
                     : savedAnnotationIds.has(existingId)
                 );
@@ -13744,7 +13754,7 @@ function commandsModule({
 
             let nextMeasurementAnnotations = mergedMeasurementAnnotations;
 
-            if (isClinicalReportSave) {
+            if (shouldSyncReportFields) {
               const mergedViewerAnnotations = getRequestedWorkflowAnnotations(
                 mergedMeasurementAnnotations,
                 [VIEWER_MEASUREMENTS_WORKFLOW]
@@ -13769,7 +13779,7 @@ function commandsModule({
               });
             }
 
-            if (isClinicalReportSave) {
+            if (shouldSyncReportFields) {
               // Enforce single-copy volume geometry at the final serialized
               // MeasurementAnnotations boundary, after every merge/upsert step.
               nextMeasurementAnnotations =
@@ -13824,7 +13834,7 @@ function commandsModule({
                 return {
                   ...serverPreview,
                   previewOnly: true,
-                  isClinicalReportSave: true,
+                  shouldSyncReportFields: true,
                   seriesDoc,
                   saveTarget,
                   domain,
@@ -13847,7 +13857,7 @@ function commandsModule({
 
             const payload = {
               accessType: 'update',
-              ...(isClinicalReportSave
+              ...(shouldSyncReportFields
                 ? {
                     viewerMeasurementIntent: 'clinical-report',
                     viewerReportFieldUpdates: clinicalReportFieldUpdates,
@@ -13863,7 +13873,7 @@ function commandsModule({
 
             const serializedPayload = JSON.stringify(payload);
 
-            if (isClinicalReportSave) {
+            if (shouldSyncReportFields) {
               const diagnosticAnnotations = getRequestedWorkflowAnnotations(
                 nextMeasurementAnnotations,
                 [VIEWER_MEASUREMENTS_WORKFLOW]
@@ -13906,7 +13916,7 @@ function commandsModule({
               savedSeriesDoc = updatedSeries;
             }
 
-            if (isClinicalReportSave) {
+            if (shouldSyncReportFields) {
               try {
                 const refreshedSeriesDoc = await fetchSeriesDocById(seriesDoc._id);
 
@@ -13932,7 +13942,7 @@ function commandsModule({
             );
           }
 
-          if (isClinicalReportSave && savedSeriesDoc?._id) {
+          if (shouldSyncReportFields && savedSeriesDoc?._id) {
             rememberClinicalViewerSeriesDoc(savedSeriesDoc);
 
             // AR's Series schema is the acceptance contract. Notify the opener
