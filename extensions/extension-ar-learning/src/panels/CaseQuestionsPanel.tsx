@@ -8,6 +8,7 @@ import {
   isViewerQuizAuthoringMode,
   saveViewerQuizAuthoringDraft,
   saveViewerQuizResponseForActiveStudy,
+  ensureViewerQuizSaveSeriesDoc,
   submitAndRefreshViewerQuizScoreForActiveStudy,
 } from '../utils/viewerQuizApi';
 import {
@@ -2494,6 +2495,34 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     };
   }, [activeQuestionKey, authoringMode, payload, answersByQuizKey]);
 
+  async function confirmReportOwnedMeasurementSave(): Promise<void> {
+    await ensureViewerQuizSaveSeriesDoc();
+    const requestId = `quiz-measurements-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const success = await new Promise<boolean>((resolve, reject) => {
+      const onResult = (event: Event) => {
+        const detail = (event as CustomEvent).detail || {};
+        if (detail.requestId !== requestId) return;
+        cleanup();
+        resolve(detail.ok === true);
+      };
+      const cleanup = () => {
+        window.clearTimeout(timer);
+        window.removeEventListener('ar:quiz-measurements-save-result', onResult);
+      };
+      const timer = window.setTimeout(() => {
+        cleanup();
+        reject(new Error('Measurement review did not respond. Open AR Measurements and save there first.'));
+      }, 60000);
+      window.addEventListener('ar:quiz-measurements-save-result', onResult);
+      window.dispatchEvent(new CustomEvent('ar:quiz-measurements-save-request', {
+        detail: { requestId },
+      }));
+    });
+    if (!success) {
+      throw new Error('Measurement save was cancelled or failed. Viewer answers were not saved.');
+    }
+  }
+
   async function saveQuiz(quiz: QuizDefinition, status: 'draft' | 'submitted') {
     const quizAnswers = answersByQuizKey[quiz.quizKey] || {};
 
@@ -2513,6 +2542,11 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     }
 
     try {
+      // Combined report assessment: measurement review and persistence precede quiz answer save.
+      // Ordinary imaging quizzes retain their existing independent save/score workflow.
+      if (deferredReportScoring && quiz.questions.some(q => q.type === 'measurementNumeric')) {
+        await confirmReportOwnedMeasurementSave();
+      }
       const result = await saveViewerQuizResponseForActiveStudy({
         quizKey: quiz.quizKey,
         quizVersion: Number(quiz.quizVersion) || 1,
