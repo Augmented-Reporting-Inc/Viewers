@@ -6,7 +6,6 @@ import {
   VolumeRotateTool,
   ZoomTool,
   MIPJumpToClickTool,
-  LengthTool,
   RectangleROITool,
   RectangleROIThresholdTool,
   EllipticalROITool,
@@ -47,6 +46,7 @@ import { LabelmapSlicePropagationTool, MarkerLabelmapTool } from '@cornerstonejs
 import * as polySeg from '@cornerstonejs/polymorphic-segmentation';
 
 import CalibrationLineTool from './tools/CalibrationLineTool';
+import ARCalibratedLengthTool from './tools/ARCalibratedLengthTool';
 import ImageOverlayViewerTool from './tools/ImageOverlayViewerTool';
 
 function wrapAnnotationTextLine(value, maxChars) {
@@ -250,7 +250,7 @@ export default function initCornerstoneTools(configuration = {}) {
   addTool(ZoomTool);
   addTool(ProbeTool);
   addTool(MIPJumpToClickTool);
-  addTool(LengthTool);
+  addTool(ARCalibratedLengthTool);
   addTool(RectangleROITool);
   addTool(RectangleROIThresholdTool);
   addTool(EllipticalROITool);
@@ -308,7 +308,7 @@ const toolNames = {
   Zoom: ZoomTool.toolName,
   VolumeRotate: VolumeRotateTool.toolName,
   MipJumpToClick: MIPJumpToClickTool.toolName,
-  Length: LengthTool.toolName,
+  Length: ARCalibratedLengthTool.toolName,
   DragProbe: DragProbeTool.toolName,
   Probe: ProbeTool.toolName,
   RectangleROI: RectangleROITool.toolName,
