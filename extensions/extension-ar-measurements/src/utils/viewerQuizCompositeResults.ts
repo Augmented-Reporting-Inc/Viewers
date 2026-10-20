@@ -76,6 +76,23 @@ function collectComponents(measurements: Measurement[], kind: CompositeKind) {
 }
 
 /**
+ * Compare the value reviewed in the persistent EF progress panel with the
+ * freshly recalculated quiz-capture value at the quiz's two-decimal precision.
+ * A different value must be reviewed again, rather than silently captured.
+ */
+export function isViewerQuizCompositeReviewCurrent(
+  reviewedValue: unknown,
+  captureValue: unknown
+): boolean {
+  const reviewed = Number(reviewedValue);
+  const captured = Number(captureValue);
+
+  return Number.isFinite(reviewed) &&
+    Number.isFinite(captured) &&
+    Math.round(reviewed * 100) === Math.round(captured * 100);
+}
+
+/**
  * Read-only resolver for complete viewer-generated composite measurement results.
  *
  * This supplies a viewer-calculated numeric result and source references for
