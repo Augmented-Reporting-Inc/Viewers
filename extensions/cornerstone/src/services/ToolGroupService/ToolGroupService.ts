@@ -3,6 +3,7 @@ import { eventTarget } from '@cornerstonejs/core';
 
 import { Types as OhifTypes, pubSubServiceInterface } from '@ohif/core';
 import getActiveViewportEnabledElement from '../../utils/getActiveViewportEnabledElement';
+import { createCalibratedLengthTextLines } from '../../utils/createCalibratedLengthTextLines';
 
 const EVENTS = {
   VIEWPORT_ADDED: 'event::cornerstone::toolgroupservice:viewportadded',
@@ -279,6 +280,18 @@ export default class ToolGroupService {
           });
         } else {
           toolGroup.addTool(toolName, { ...configuration });
+        }
+
+        // All modes (including learning and iUSCAN) use the native Length tool.
+        // Change only its displayed text when the actual DICOM image contains a
+        // matching spatial ultrasound region. The original tool remains the
+        // owner of drawing, completion, and persisted annotation state.
+        if (toolName === 'Length') {
+          const tool = toolGroup.getToolInstance('Length');
+          const nativeGetTextLines = tool?.configuration?.getTextLines;
+          if (typeof nativeGetTextLines === 'function') {
+            tool.configuration.getTextLines = createCalibratedLengthTextLines(nativeGetTextLines);
+          }
         }
       });
     };
