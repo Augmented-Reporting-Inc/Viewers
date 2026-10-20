@@ -1395,6 +1395,15 @@ function modeFactory({ modeConfiguration }) {
             ...lengthConfig,
             getTextLines: cornerstoneTools.createCalibratedLengthTextLines(nativeGetTextLines),
           });
+          console.info('[AR Length] calibrated preview installed for quiz', {
+            toolGroupId: 'default',
+            scoringMode: getLearningUrlParam('arEducationScoringMode') || '',
+          });
+        } else {
+          console.warn('[AR Length] calibrated preview not installed', {
+            hasNativeFormatter: typeof nativeGetTextLines === 'function',
+            hasFormatterFactory: typeof cornerstoneTools?.createCalibratedLengthTextLines === 'function',
+          });
         }
       }
 
