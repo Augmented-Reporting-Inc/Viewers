@@ -8191,9 +8191,7 @@ function commandsModule({
           type: 'warning',
           duration: 3500,
         });
-        if (!requestedSessionId) {
-          clearLVSimpsonWorkflowIfCurrent(workflowSessionId);
-        }
+        clearLVSimpsonWorkflowIfCurrent(workflowSessionId);
         return null;
       }
 
@@ -8329,9 +8327,9 @@ function commandsModule({
       if (!hinge) {
         clearLVSimpsonPreviewOverlay(viewport.element);
         setLVSimpsonViewportCursor(viewport.element, 'default');
-        if (!requestedSessionId) {
-          clearLVSimpsonWorkflowIfCurrent(workflowSessionId);
-        }
+        // Escape/cancel during any of the four contour steps ends the entire EF
+        // session. Do not leave Length suppressed after a later-step cancel.
+        clearLVSimpsonWorkflowIfCurrent(workflowSessionId);
         return null;
       }
 
