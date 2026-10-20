@@ -1,4 +1,4 @@
-import { isViewerQuizCompositeReviewCurrent, resolveViewerQuizCompositeResult } from './viewerQuizCompositeResults';
+import { isViewerQuizCompositeReviewCurrent, resolveViewerQuizCompositeResult, resolveViewerQuizLVSimpsonForStudy } from './viewerQuizCompositeResults';
 
 describe('viewer quiz composite result evidence', () => {
   it('rejects missing required Simpson slots', () => {
@@ -53,5 +53,76 @@ describe('LV EF progress versus quiz capture precision', () => {
     expect(isViewerQuizCompositeReviewCurrent(undefined, 53)).toBe(false);
     expect(isViewerQuizCompositeReviewCurrent(NaN, 53)).toBe(false);
     expect(isViewerQuizCompositeReviewCurrent(53, Infinity)).toBe(false);
+  });
+});
+
+function makeEFSlot(studyId: string, slot: string, halfWidth: number, height: number) {
+  const points = [
+    [-halfWidth, 0, 0],
+    [-halfWidth * 1.1, height * 0.2, 0],
+    [-halfWidth, height * 0.4, 0],
+    [-halfWidth * 0.8, height * 0.65, 0],
+    [-halfWidth * 0.45, height * 0.85, 0],
+    [0, height, 0],
+    [halfWidth * 0.45, height * 0.85, 0],
+    [halfWidth * 0.8, height * 0.65, 0],
+    [halfWidth, height * 0.4, 0],
+    [halfWidth * 1.1, height * 0.2, 0],
+    [halfWidth, 0, 0],
+  ];
+  return {
+    uid: `${studyId}-${slot}`,
+    toolName: 'SplineROI',
+    referenceStudyUID: studyId,
+    referencedImageId: `wadors:study/${studyId}/${slot}`,
+    measurementKind: 'lvSimpsonSlot',
+    lvSimpson: { measurementKind: 'lvSimpsonSlot', slot },
+    points,
+  };
+}
+
+function makeCompleteStudyEF(studyId: string, widthScale = 1) {
+  return [
+    makeEFSlot(studyId, 'A4C_ED', 17 * widthScale, 60),
+    makeEFSlot(studyId, 'A4C_ES', 11 * widthScale, 54),
+    makeEFSlot(studyId, 'A2C_ED', 15 * widthScale, 60),
+    makeEFSlot(studyId, 'A2C_ES', 9 * widthScale, 54),
+  ];
+}
+
+describe('study-scoped educator/learner EF parity', () => {
+  it('returns matching computed and quiz values from the same source contours', () => {
+    const snapshot = resolveViewerQuizLVSimpsonForStudy('study-a', makeCompleteStudyEF('study-a'));
+    expect(snapshot).not.toBeNull();
+    expect(snapshot!.result.status).toBe('complete');
+    expect(snapshot!.composite.unit).toBe('%');
+    expect(snapshot!.composite.components).toHaveLength(4);
+    expect(isViewerQuizCompositeReviewCurrent(
+      snapshot!.result.values!.ejectionFraction,
+      snapshot!.composite.value
+    )).toBe(true);
+  });
+
+  it('isolates the requested study even if another complete study is in the viewer snapshot', () => {
+    const combined = [
+      ...makeCompleteStudyEF('study-a'),
+      ...makeCompleteStudyEF('study-b', 1.3),
+    ];
+    const a = resolveViewerQuizLVSimpsonForStudy('study-a', combined);
+    const b = resolveViewerQuizLVSimpsonForStudy('study-b', combined);
+    expect(a).not.toBeNull();
+    expect(b).not.toBeNull();
+    expect(a!.composite.components.every(c => c.target.studyInstanceUID === 'study-a')).toBe(true);
+    expect(b!.composite.components.every(c => c.target.studyInstanceUID === 'study-b')).toBe(true);
+    expect(resolveViewerQuizLVSimpsonForStudy('unknown-study', combined)).toBeNull();
+  });
+
+  it('rejects an incomplete or ambiguous EF for both gold authoring and learner answers', () => {
+    const measurements = makeCompleteStudyEF('study-a');
+    expect(resolveViewerQuizLVSimpsonForStudy('study-a', measurements.slice(0, 3))).toBeNull();
+    expect(resolveViewerQuizLVSimpsonForStudy('study-a', [
+      ...measurements,
+      { ...measurements[0], uid: 'duplicate-slot' },
+    ])).toBeNull();
   });
 });
