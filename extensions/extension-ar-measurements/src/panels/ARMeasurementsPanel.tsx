@@ -780,7 +780,7 @@ function LVSimpsonSummary({ result }) {
           </div>
           <div className="rounded bg-black p-2">
             <div className="text-xs text-gray-400">EF</div>
-            <div className="font-semibold">{formatSimpsonValue(values.ejectionFraction, 0)}%</div>
+            <div className="font-semibold">{formatSimpsonValue(values.ejectionFraction, 2)}%</div>
           </div>
         </div>
       ) : null}
