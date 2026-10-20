@@ -130,3 +130,27 @@ export function resolveViewerQuizCompositeResult(
     components,
   };
 }
+
+/**
+ * Resolve the exact active-study evidence used for both the viewer EF summary
+ * and the quiz's numeric EF capture. Never blend saved annotations or contours
+ * from unrelated studies into an authoring/learner quiz gold answer.
+ */
+export function resolveViewerQuizLVSimpsonForStudy(
+  studyInstanceId: string,
+  measurements: Measurement[] = []
+) {
+  const studyId = clean(studyInstanceId);
+  if (!studyId || !Array.isArray(measurements)) return null;
+
+  const studyMeasurements = measurements.filter(measurement =>
+    clean(measurement?.referenceStudyUID || measurement?.StudyInstanceUID) === studyId
+  );
+  const composite = resolveViewerQuizCompositeResult('lvSimpsonEF', studyMeasurements);
+  if (!composite) return null;
+
+  const result = calculateLVSimpson(studyMeasurements);
+  if (result?.status !== 'complete' || !result.values) return null;
+
+  return { studyInstanceId: studyId, composite, result };
+}
