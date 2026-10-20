@@ -1,26 +1,45 @@
+import { utilities as csUtilities } from '@cornerstonejs/core';
 import { LengthTool } from '@cornerstonejs/tools';
 import { correctUSRegionLength } from '../utils/correctUSRegionLength';
 
 /**
- * Keep the live annotation text and completed report measurement on the same
- * ultrasound-region calibration path. This preserves the standard Length
- * tool name/activation and falls back to Cornerstone stats when no matching
- * ultrasound region applies.
+ * Correct only the in-viewport text for ultrasound-region Length measurements.
+ *
+ * Leave Cornerstone's cachedStats and interaction/completion lifecycle alone.
+ * The existing Length measurement-service mapping performs its own correction
+ * when creating the saved measurement and quiz answer.
  */
 export default class ARCalibratedLengthTool extends LengthTool {
   static toolName = 'Length';
 
-  _calculateCachedStats(annotation, renderingEngine, enabledElement) {
-    const result = super._calculateCachedStats(annotation, renderingEngine, enabledElement);
-    const imageId = annotation?.metadata?.referencedImageId;
-    if (!imageId) return result;
+  constructor(...args: ConstructorParameters<typeof LengthTool>) {
+    super(...args);
 
-    const stats = annotation?.data?.cachedStats || {};
-    Object.values(stats).forEach((entry: any) => {
-      if (entry && Number.isFinite(entry.length)) {
-        entry.length = correctUSRegionLength(entry.length, imageId, annotation);
+    const nativeGetTextLines = this.configuration.getTextLines;
+
+    this.configuration.getTextLines = (data, targetId) => {
+      const nativeTextLines = nativeGetTextLines?.(data, targetId);
+
+      // For volume/non-image targets, use Cornerstone's original text.
+      if (typeof targetId !== 'string' || !targetId.startsWith('imageId:')) {
+        return nativeTextLines;
       }
-    });
-    return result;
+
+      const nativeStats = data?.cachedStats?.[targetId];
+      const nativeLength = nativeStats?.length;
+
+      if (typeof nativeLength !== 'number' || !Number.isFinite(nativeLength)) {
+        return nativeTextLines;
+      }
+
+      const referencedImageId = targetId.slice('imageId:'.length);
+      const calibratedLength = correctUSRegionLength(nativeLength, referencedImageId, { data });
+
+      if (!Number.isFinite(calibratedLength) || calibratedLength === nativeLength) {
+        return nativeTextLines;
+      }
+
+      return [`${csUtilities.roundNumber(calibratedLength)} ${nativeStats.unit || 'mm'}`];
+    };
   }
 }
