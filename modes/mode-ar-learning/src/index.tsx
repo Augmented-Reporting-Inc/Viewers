@@ -1362,8 +1362,27 @@ function modeFactory({ modeConfiguration }) {
           })
         );
 
-      // Init Default and SR ToolGroups
+      // Init Default and SR ToolGroups. Keep Cornerstone's native Length class
+      // and completion callbacks; only customize its displayed text in quiz mode.
       initToolGroups(extensionManager, toolGroupService, commandsManager);
+
+      if (quizMeasurementWorkflow) {
+        const cornerstoneTools = extensionManager.getModuleEntry(
+          '@ohif/extension-cornerstone.utilityModule.tools'
+        )?.exports;
+        const lengthConfig = toolGroupService.getToolConfiguration('default', 'Length');
+        const nativeGetTextLines = lengthConfig?.getTextLines;
+
+        if (
+          typeof nativeGetTextLines === 'function' &&
+          typeof cornerstoneTools?.createCalibratedLengthTextLines === 'function'
+        ) {
+          toolGroupService.setToolConfiguration('default', 'Length', {
+            ...lengthConfig,
+            getTextLines: cornerstoneTools.createCalibratedLengthTextLines(nativeGetTextLines),
+          });
+        }
+      }
 
       toolbarService.register(toolbarButtons);
 
