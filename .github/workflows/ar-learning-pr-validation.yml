@@ -46,8 +46,6 @@ jobs:
         run: node --test modes/mode-ar-learning/tests/toolbar-visibility.test.cjs
       - name: Validate EF panel and quiz capture parity
         run: npx jest --config extensions/extension-ar-measurements/jest.config.js --runInBand --runTestsByPath extensions/extension-ar-measurements/src/utils/viewerQuizCompositeResults.test.ts
-      - name: Compile AR measurements extension
-        run: yarn workspace extension-ar-measurements build
       - name: Compile AR learning extension
         run: yarn workspace extension-ar-learning build
       - name: Compile AR learning mode
