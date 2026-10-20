@@ -1,13 +1,11 @@
 import { utilities as csUtilities } from '@cornerstonejs/core';
-import { correctUSRegionLength } from './correctUSRegionLength';
+import { getUSRegionLengthCalibration } from './correctUSRegionLength';
 
 /**
- * Override only the live Length annotation TEXT in the learning quiz.
- * Cornerstone's native Length tool owns interactions, cachedStats and the
- * ANNOTATION_COMPLETED event; the existing Length mapping owns persisted values.
- *
- * Completed AR Length displays normalize cm to mm, including the Cornerstone
- * "US Region" suffix. Apply the same normalization here.
+ * Wrap the ORIGINAL Cornerstone Length text formatter. Never modify native
+ * cachedStats or annotation interaction/completion state. For calibrated
+ * spatial US regions the DICOM deltas are centimetres, while the UI displays mm.
+ * On non-US, unsupported, or off-region measurements return native text.
  */
 export function createCalibratedLengthTextLines(nativeGetTextLines) {
   return (data, targetId) => {
@@ -16,33 +14,17 @@ export function createCalibratedLengthTextLines(nativeGetTextLines) {
       return originalLines;
     }
 
-    const nativeStats = data?.cachedStats?.[targetId];
-    const nativeLength = nativeStats?.length;
-    if (typeof nativeLength !== 'number' || !Number.isFinite(nativeLength)) {
+    if (data?.cachedStats?.[targetId]?.length == null) {
       return originalLines;
     }
 
     const referencedImageId = targetId.slice('imageId:'.length);
-    const corrected = correctUSRegionLength(nativeLength, referencedImageId, { data });
-    if (!Number.isFinite(corrected) || corrected === nativeLength) {
-      return originalLines;
-    }
+    const calibration = getUSRegionLengthCalibration(referencedImageId, { data });
+    if (!calibration) return originalLines;
 
-    const sourceUnit = String(nativeStats.unit || '')
-      .replace(/\s+US Region$/i, '')
-      .replace(/\s+AR_US_REGION_CALIBRATION$/i, '')
-      .trim()
-      .toLowerCase();
-
-    // DICOM's spatial ultrasound physicalDelta is expressed in cm for
-    // physicalUnitsXDirection/YDirection=3. AR's completed display is in mm.
-    // Keep unrecognized, nonspatial units untouched rather than invent units.
-    if (sourceUnit === 'cm') {
-      return [`${csUtilities.roundNumber(corrected * 10, 2)} mm`];
-    }
-    if (sourceUnit === 'mm') {
-      return [`${csUtilities.roundNumber(corrected, 2)} mm`];
-    }
-    return originalLines;
+    const lengthMm = calibration.lengthCm * 10;
+    return Number.isFinite(lengthMm)
+      ? [`${csUtilities.roundNumber(lengthMm, 2)} mm`]
+      : originalLines;
   };
 }
