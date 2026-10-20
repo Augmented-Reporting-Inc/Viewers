@@ -1147,6 +1147,13 @@ function modeFactory({ modeConfiguration }) {
             resolvedAnnotation,
             source === 'cornerstone-annotation-completed'
           )) {
+            if (source === 'cornerstone-annotation-completed') {
+              console.warn('[AR Measurements] completion waiting for measurement service', {
+                annotationId: id,
+                serviceEntryFound: !!measurement,
+                toolName: resolvedAnnotation?.metadata?.toolName || '',
+              });
+            }
             return false;
           }
 
@@ -1266,6 +1273,13 @@ function modeFactory({ modeConfiguration }) {
         const eventDetail = (event as CustomEvent)?.detail || {};
         const sourceAnnotation = eventDetail.annotation;
         const annotationId = String(sourceAnnotation?.annotationUID || '').trim();
+
+        if (quizMeasurementWorkflow) {
+          console.info('[AR Measurements] annotation completion received', {
+            annotationId,
+            toolName: sourceAnnotation?.metadata?.toolName || '',
+          });
+        }
 
         const handled = await handleCompletedViewerMeasurement({
           annotationId,
