@@ -1,4 +1,4 @@
-import { resolveViewerQuizCompositeResult } from './viewerQuizCompositeResults';
+import { isViewerQuizCompositeReviewCurrent, resolveViewerQuizCompositeResult } from './viewerQuizCompositeResults';
 
 describe('viewer quiz composite result evidence', () => {
   it('rejects missing required Simpson slots', () => {
@@ -34,5 +34,24 @@ describe('viewer quiz composite result evidence', () => {
     expect(resolveViewerQuizCompositeResult('lvSimpsonEF', [
       { uid: 'one', measurementKind: 'length', value: 60 },
     ])).toBeNull();
+  });
+});
+
+
+describe('LV EF progress versus quiz capture precision', () => {
+  it('accepts a capture when both values round to the same reviewed hundredth', () => {
+    expect(isViewerQuizCompositeReviewCurrent(53.234, 53.232)).toBe(true);
+    expect(isViewerQuizCompositeReviewCurrent(53.2, 53.2)).toBe(true);
+  });
+
+  it('requires another review when the EF changes by a visible hundredth', () => {
+    expect(isViewerQuizCompositeReviewCurrent(53.234, 53.237)).toBe(false);
+    expect(isViewerQuizCompositeReviewCurrent(53.2, 54.2)).toBe(false);
+  });
+
+  it('does not treat absent or nonfinite values as a reviewed EF', () => {
+    expect(isViewerQuizCompositeReviewCurrent(undefined, 53)).toBe(false);
+    expect(isViewerQuizCompositeReviewCurrent(NaN, 53)).toBe(false);
+    expect(isViewerQuizCompositeReviewCurrent(53, Infinity)).toBe(false);
   });
 });
