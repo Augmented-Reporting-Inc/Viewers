@@ -1147,6 +1147,13 @@ function modeFactory({ modeConfiguration }) {
             resolvedAnnotation,
             source === 'cornerstone-annotation-completed'
           )) {
+            if (source === 'cornerstone-annotation-completed') {
+              console.warn('[AR Measurements] completion waiting for measurement service', {
+                annotationId: id,
+                serviceEntryFound: !!measurement,
+                toolName: resolvedAnnotation?.metadata?.toolName || '',
+              });
+            }
             return false;
           }
 
@@ -1267,6 +1274,13 @@ function modeFactory({ modeConfiguration }) {
         const sourceAnnotation = eventDetail.annotation;
         const annotationId = String(sourceAnnotation?.annotationUID || '').trim();
 
+        if (quizMeasurementWorkflow) {
+          console.info('[AR Measurements] annotation completion received', {
+            annotationId,
+            toolName: sourceAnnotation?.metadata?.toolName || '',
+          });
+        }
+
         const handled = await handleCompletedViewerMeasurement({
           annotationId,
           sourceAnnotation,
@@ -1362,7 +1376,7 @@ function modeFactory({ modeConfiguration }) {
           })
         );
 
-      // Init Default and SR ToolGroups
+      // The shared ToolGroupService installs spatial US Length preview for all modes.
       initToolGroups(extensionManager, toolGroupService, commandsManager);
 
       toolbarService.register(toolbarButtons);

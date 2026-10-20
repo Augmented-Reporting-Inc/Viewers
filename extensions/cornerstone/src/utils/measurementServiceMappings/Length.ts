@@ -3,7 +3,7 @@ import { getIsLocked } from './utils/getIsLocked';
 import { getIsVisible } from './utils/getIsVisible';
 import getSOPInstanceAttributes from './utils/getSOPInstanceAttributes';
 import { utils } from '@ohif/core';
-import { metaData } from '@cornerstonejs/core';
+import { getUSRegionLengthCalibrationForTarget } from '../correctUSRegionLength';
 
 const Length = {
   toAnnotation: measurement => {},
@@ -65,6 +65,20 @@ const Length = {
 
     const mappedAnnotations = getMappedAnnotations(annotation, displaySetService);
 
+    // The measurement record gets the calibrated value for panels, persistence
+    // and quiz capture. The live annotation's cachedStats are NOT modified:
+    // the native Length renderer owns them, and the on-image text is produced
+    // from the same calibration function (createCalibratedLengthTextLines).
+    // Always copy: MeasurementService keeps this object by reference and mode
+    // code (e.g. iUSCAN unit normalisation) mutates measurement.data, which
+    // must never reach the live annotation.
+    const calibratedData = Object.fromEntries(
+      mappedAnnotations.map(({ targetId, nativeStats, length, unit, calibrated }) => [
+        targetId,
+        calibrated ? { ...nativeStats, length, unit } : { ...nativeStats },
+      ])
+    );
+
     const displayText = getDisplayText(mappedAnnotations, displaySet);
     const getReport = () =>
       _getReport(mappedAnnotations, points, FrameOfReferenceUID, customizationService);
@@ -86,7 +100,7 @@ const Length = {
       displaySetInstanceUID: displaySet.displaySetInstanceUID,
       label: data.label,
       displayText: displayText,
-      data: data.cachedStats,
+      data: calibratedData,
       type: getValueTypeFromToolType(toolName),
       getReport,
     };
@@ -97,40 +111,39 @@ function getMappedAnnotations(annotation, displaySetService) {
   const { metadata, data } = annotation;
   const { cachedStats } = data;
   const { referencedImageId } = metadata;
-  const targets = Object.keys(cachedStats);
+  const targets = Object.keys(cachedStats || {});
 
   if (!targets.length) {
     return [];
   }
 
-  const annotations = [];
-  Object.keys(cachedStats).forEach(targetId => {
-    const targetStats = cachedStats[targetId];
+  const { SOPInstanceUID, SeriesInstanceUID, frameNumber } = getSOPInstanceAttributes(
+    referencedImageId,
+    displaySetService,
+    annotation
+  );
+  const displaySet = displaySetService.getDisplaySetsForSeries(SeriesInstanceUID)[0];
+  const { SeriesNumber } = displaySet;
 
-    const { SOPInstanceUID, SeriesInstanceUID, frameNumber } = getSOPInstanceAttributes(
-      referencedImageId,
-      displaySetService,
-      annotation
-    );
+  return targets.map(targetId => {
+    const nativeStats = cachedStats[targetId];
+    const { length: rawLength, unit: nativeUnit = 'mm' } = nativeStats || {};
+    // Spatial DICOM US region => calibrated mm. Anything else => the native
+    // Cornerstone value and unit, untouched (never relabelled as mm).
+    const calibration = getUSRegionLengthCalibrationForTarget(targetId, data, referencedImageId);
 
-    const displaySet = displaySetService.getDisplaySetsForSeries(SeriesInstanceUID)[0];
-
-    const { SeriesNumber } = displaySet;
-    const { length: rawLength, unit = 'mm' } = targetStats;
-    const length = _correctUSRegionLength(rawLength, referencedImageId, annotation);
-    targetStats.length = length; // write back so cachedStats stays consistent
-
-    annotations.push({
+    return {
+      targetId,
+      nativeStats,
+      calibrated: !!calibration,
       SeriesInstanceUID,
       SOPInstanceUID,
       SeriesNumber,
       frameNumber,
-      unit,
-      length,
-    });
+      unit: calibration ? calibration.unit : nativeUnit,
+      length: calibration ? calibration.lengthMm : rawLength,
+    };
   });
-
-  return annotations;
 }
 
 /*
@@ -204,51 +217,6 @@ function getDisplayText(mappedAnnotations, displaySet) {
   displayText.secondary.push(`S: ${SeriesNumber}${instanceText}${frameText}`);
 
   return displayText;
-}
-
-function _correctUSRegionLength(rawLength, referencedImageId, annotation) {
-  if (!referencedImageId) return rawLength;
-  try {
-    const calibration = metaData.get('calibrationModule', referencedImageId);
-    const regions = calibration?.sequenceOfUltrasoundRegions;
-    if (!regions?.length) return rawLength;
-
-    const SUPPORTED = [1, 2, 3, 4];
-    const handles = annotation?.data?.handles?.points;
-    if (!handles || handles.length < 2) return rawLength;
-
-    const imagePlane = metaData.get('imagePlaneModule', referencedImageId);
-    const colSpacing = imagePlane?.columnPixelSpacing ?? 1.0;
-    const rowSpacing = imagePlane?.rowPixelSpacing ?? 1.0;
-
-    const pixelHandles = handles.map(w => ({
-      x: w[0] / colSpacing,
-      y: w[1] / rowSpacing,
-    }));
-
-    const region = regions.find(
-      r =>
-        SUPPORTED.includes(r.regionDataType) &&
-        pixelHandles.every(
-          px =>
-            px.x >= r.regionLocationMinX0 &&
-            px.x <= r.regionLocationMaxX1 &&
-            px.y >= r.regionLocationMinY0 &&
-            px.y <= r.regionLocationMaxY1
-        )
-    );
-
-    if (!region) return rawLength;
-
-    const [p1, p2] = pixelHandles;
-    const dxPhys = (p1.x - p2.x) * Math.abs(region.physicalDeltaX);
-    const dyPhys = (p1.y - p2.y) * Math.abs(region.physicalDeltaY);
-    const corrected = Math.sqrt(dxPhys * dxPhys + dyPhys * dyPhys);
-    return corrected;
-  } catch (e) {
-    console.error('[Length] error:', e);
-    return rawLength;
-  }
 }
 
 export default Length;
