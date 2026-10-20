@@ -117,7 +117,7 @@ import {
   normalizeBowelMeasurementTargetSelection,
 } from '../../extension-ar-measurements/src/utils/bowelMeasurementTargets';
 import { calculateLVSimpson } from '../../extension-ar-measurements/src/utils/lvSimpson';
-import { resolveViewerQuizCompositeResult, isViewerQuizCompositeReviewCurrent } from '../../extension-ar-measurements/src/utils/viewerQuizCompositeResults';
+import { resolveViewerQuizCompositeResult, resolveViewerQuizLVSimpsonForStudy, isViewerQuizCompositeReviewCurrent } from '../../extension-ar-measurements/src/utils/viewerQuizCompositeResults';
 
 const { DefaultHistoryMemo } = csUtils.HistoryMemo;
 const toggleSyncFunctions = {
@@ -12190,6 +12190,21 @@ function commandsModule({
 
       return { domain, workflow, annotations };
     },
+    getViewerQuizLVSimpsonForActiveStudy: () => {
+      const activeViewportId = viewportGridService.getActiveViewportId();
+      const activeDisplaySet = getActiveViewportDisplaySet({
+        viewportGridService,
+        displaySetService,
+        viewportId: activeViewportId,
+      });
+      const studyInstanceId = String(
+        activeDisplaySet?.StudyInstanceUID || activeDisplaySet?.studyInstanceUID || ''
+      ).trim();
+      return resolveViewerQuizLVSimpsonForStudy(
+        studyInstanceId,
+        getCurrentViewerMeasurementSnapshot(measurementService)
+      );
+    },
     getViewerMeasurementSnapshotForPanel: () => {
       const saveTarget = getArViewerSaveTargetFromUrl();
       const writableWorkflow = getWritableReviewMeasurementWorkflow(saveTarget);
@@ -13370,7 +13385,9 @@ function commandsModule({
           const entryStudy = String(entry?.referenceStudyUID || entry?.StudyInstanceUID || '').trim();
           return selectedStudy && entryStudy === selectedStudy;
         });
-        const composite = resolveViewerQuizCompositeResult(requestedKind, studyMeasurements);
+        const composite = requestedKind === 'lvSimpsonEF'
+          ? resolveViewerQuizLVSimpsonForStudy(selectedStudy, quizMeasurements)?.composite
+          : resolveViewerQuizCompositeResult(requestedKind, studyMeasurements);
         if (!composite) {
           return {
             ok: false,
@@ -13838,6 +13855,9 @@ function commandsModule({
     },
     getViewerMeasurementSnapshotForPanel: {
       commandFn: actions.getViewerMeasurementSnapshotForPanel,
+    },
+    getViewerQuizLVSimpsonForActiveStudy: {
+      commandFn: actions.getViewerQuizLVSimpsonForActiveStudy,
     },
     saveViewerMeasurementsForActiveStudy: {
       commandFn: async ({
