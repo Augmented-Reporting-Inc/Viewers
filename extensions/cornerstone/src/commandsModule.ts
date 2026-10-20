@@ -117,7 +117,7 @@ import {
   normalizeBowelMeasurementTargetSelection,
 } from '../../extension-ar-measurements/src/utils/bowelMeasurementTargets';
 import { calculateLVSimpson } from '../../extension-ar-measurements/src/utils/lvSimpson';
-import { resolveViewerQuizCompositeResult } from '../../extension-ar-measurements/src/utils/viewerQuizCompositeResults';
+import { resolveViewerQuizCompositeResult, isViewerQuizCompositeReviewCurrent } from '../../extension-ar-measurements/src/utils/viewerQuizCompositeResults';
 
 const { DefaultHistoryMemo } = csUtils.HistoryMemo;
 const toggleSyncFunctions = {
@@ -5528,8 +5528,10 @@ function getNextMissingLVSimpsonSlot(slotCandidates: Map<string, any[]>) {
 
 const LV_SIMPSON_PROGRESS_PANEL_ID = 'ar-lv-simpson-progress-panel';
 const AR_LV_SIMPSON_GOLD_CAPTURED_EVENT = 'ar-measurements:lv-simpson-gold-captured';
+let reviewedLVSimpsonEF: { studyInstanceId: string; value: number } | null = null;
 
 function hideLVSimpsonWorkflowPanel() {
+  reviewedLVSimpsonEF = null;
   document.getElementById(LV_SIMPSON_PROGRESS_PANEL_ID)?.remove();
 }
 
@@ -8628,6 +8630,7 @@ function commandsModule({
         Number.isFinite(Number(goldComposite.value))
       ) {
         const ejectionFraction = roundQuizMeasurementValue(goldComposite.value, 2).toFixed(2);
+        reviewedLVSimpsonEF = { studyInstanceId: currentStudyId, value: goldComposite.value };
 
         const reviewMessages = Array.from(
           new Set(
@@ -8637,11 +8640,24 @@ function commandsModule({
           )
         );
 
-        const goldCaptureListener = () => {
+        const goldCaptureListener = (event: Event) => {
           if (!document.getElementById(LV_SIMPSON_PROGRESS_PANEL_ID)) return;
+          const captureDetail = (event as CustomEvent)?.detail || {};
+          const capturedValue = Number(captureDetail.value);
+          const captureStudyInstanceId = String(captureDetail.studyInstanceId || '').trim();
+          if (
+            !Number.isFinite(capturedValue) ||
+            (captureStudyInstanceId && captureStudyInstanceId !== currentStudyId)
+          ) {
+            return;
+          }
+
+          // Never retain the originally displayed EF after the quiz has captured
+          // a newer result. Show the exact confirmed gold value.
+          const displayedCapturedValue = roundQuizMeasurementValue(capturedValue, 2).toFixed(2);
           renderLVSimpsonWorkflowPanel({
             measurements: currentLVSimpsonMeasurements,
-            resultText: `Calculated LVEF: ${ejectionFraction}%`,
+            resultText: `Calculated LVEF: ${displayedCapturedValue}%`,
             warnings: reviewMessages,
             instruction: 'Gold answer captured. Save the quiz draft to persist it.',
             onCancel: hideLVSimpsonWorkflowPanel,
@@ -13362,6 +13378,34 @@ function commandsModule({
             selectedMeasurementId,
           };
         }
+
+        // The persistent EF workflow panel is a clinical review checkpoint.
+        // If the active contours have changed since its final displayed value,
+        // refresh the panel and require an explicit second capture, so the quiz
+        // never silently records an EF the educator did not review.
+        if (
+          requestedKind === 'lvSimpsonEF' &&
+          typeof document !== 'undefined' &&
+          document.getElementById(LV_SIMPSON_PROGRESS_PANEL_ID) &&
+          reviewedLVSimpsonEF?.studyInstanceId === selectedStudy &&
+          !isViewerQuizCompositeReviewCurrent(reviewedLVSimpsonEF.value, composite.value)
+        ) {
+          const previousValue = roundQuizMeasurementValue(reviewedLVSimpsonEF.value, 2).toFixed(2);
+          const currentValue = roundQuizMeasurementValue(composite.value, 2).toFixed(2);
+          reviewedLVSimpsonEF = { studyInstanceId: selectedStudy, value: composite.value };
+          renderLVSimpsonWorkflowPanel({
+            measurements: studyMeasurements,
+            resultText: `Calculated LVEF: ${currentValue}%`,
+            warnings: [`EF changed since the earlier review (${previousValue}% → ${currentValue}%).`],
+            instruction: 'Review this recalculated EF, then capture it again in Case Questions.',
+            onCancel: hideLVSimpsonWorkflowPanel,
+          });
+          return {
+            ok: false,
+            reason: 'EF changed since the progress panel was reviewed. The updated EF is displayed; review it and capture again.',
+          };
+        }
+
         // Capture the calculated composite result, not any particular contour.
         // Selection is optional; every source remains anchored to the active study.
         const componentIds = new Set(composite.components.map(component => component.annotationId));
