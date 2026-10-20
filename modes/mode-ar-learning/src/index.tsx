@@ -1376,36 +1376,8 @@ function modeFactory({ modeConfiguration }) {
           })
         );
 
-      // Init Default and SR ToolGroups. Keep Cornerstone's native Length class
-      // and completion callbacks; only customize its displayed text in quiz mode.
+      // The shared ToolGroupService installs spatial US Length preview for all modes.
       initToolGroups(extensionManager, toolGroupService, commandsManager);
-
-      if (quizMeasurementWorkflow) {
-        const cornerstoneTools = extensionManager.getModuleEntry(
-          '@ohif/extension-cornerstone.utilityModule.tools'
-        )?.exports;
-        const lengthConfig = toolGroupService.getToolConfiguration('default', 'Length');
-        const nativeGetTextLines = lengthConfig?.getTextLines;
-
-        if (
-          typeof nativeGetTextLines === 'function' &&
-          typeof cornerstoneTools?.createCalibratedLengthTextLines === 'function'
-        ) {
-          toolGroupService.setToolConfiguration('default', 'Length', {
-            ...lengthConfig,
-            getTextLines: cornerstoneTools.createCalibratedLengthTextLines(nativeGetTextLines),
-          });
-          console.info('[AR Length] calibrated preview installed for quiz', {
-            toolGroupId: 'default',
-            scoringMode: getLearningUrlParam('arEducationScoringMode') || '',
-          });
-        } else {
-          console.warn('[AR Length] calibrated preview not installed', {
-            hasNativeFormatter: typeof nativeGetTextLines === 'function',
-            hasFormatterFactory: typeof cornerstoneTools?.createCalibratedLengthTextLines === 'function',
-          });
-        }
-      }
 
       toolbarService.register(toolbarButtons);
 
