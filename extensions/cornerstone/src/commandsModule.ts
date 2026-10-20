@@ -118,6 +118,7 @@ import {
 } from '../../extension-ar-measurements/src/utils/bowelMeasurementTargets';
 import { calculateLVSimpson } from '../../extension-ar-measurements/src/utils/lvSimpson';
 import { resolveViewerQuizCompositeResult, resolveViewerQuizLVSimpsonForStudy, isViewerQuizCompositeReviewCurrent } from '../../extension-ar-measurements/src/utils/viewerQuizCompositeResults';
+import { createGuidedMouseToolOwnership } from './utils/guidedMouseToolOwnership';
 
 const { DefaultHistoryMemo } = csUtils.HistoryMemo;
 const toggleSyncFunctions = {
@@ -5329,7 +5330,7 @@ function installSpectralDopplerTextOverrideForViewport({ viewport, viewportId = 
   toolInstance.__arSpectralDopplerTextOverrideInstalled = true;
 }
 
-function captureLVSimpsonDrag({ viewport, onPreview, isCancelled, setCancelHandler, toolGroup }) {
+function captureLVSimpsonDrag({ viewport, onPreview, isCancelled, setCancelHandler, toolGroup, restorePreviousTool = true }) {
   const element = viewport?.element;
 
   if (!element) {
@@ -5353,7 +5354,7 @@ function captureLVSimpsonDrag({ viewport, onPreview, isCancelled, setCancelHandl
       }
 
       done = true;
-      if (previousToolName && toolGroup?.hasTool?.(previousToolName)) {
+      if (restorePreviousTool && previousToolName && toolGroup?.hasTool?.(previousToolName)) {
         toolGroup.setToolActive(previousToolName, {
           bindings: [{ mouseButton: Enums.MouseBindings.Primary }],
         });
@@ -7293,6 +7294,13 @@ function commandsModule({
     displaySetService,
   } = servicesManager.services as AppTypes.Services;
 
+  // The guided EF workflow captures drags directly, without a native EF tool
+  // binding. Keep Length passive until EF finishes or is cancelled; otherwise
+  // both the quiz and AR Measurements panels can steal the mouse between steps.
+  const lvSimpsonMouseTools = createGuidedMouseToolOwnership([
+    { mouseButton: Enums.MouseBindings.Primary },
+  ]);
+
   // Length's label-dialog cancellation only runs after the second click.
   // While its drawing is still in progress, delegate Escape to Cornerstone's
   // native LengthTool.cancel rather than completing/labeling the annotation.
@@ -7575,6 +7583,7 @@ function commandsModule({
 
     activeLVSimpsonWorkflowSessionId = '';
     cancelActiveLVSimpsonCapture();
+    lvSimpsonMouseTools.restore();
     hideLVSimpsonWorkflowPanel();
     return true;
   }
@@ -7598,6 +7607,7 @@ function commandsModule({
       laVolumeSessionMeasurementsByUid.clear();
       clearCineCommentSessionMeasurements();
       cancelActiveLVSimpsonCapture();
+      lvSimpsonMouseTools.restore();
       cancelActiveLAVolumeCapture();
       activeLVSimpsonWorkflowSessionId = '';
       activeLAVolumeWorkflowSessionId = '';
@@ -8166,6 +8176,7 @@ function commandsModule({
 
       if (!requestedSessionId) {
         cancelActiveLVSimpsonCapture();
+        lvSimpsonMouseTools.restore();
         activeLVSimpsonWorkflowSessionId = workflowSessionId;
       }
 
@@ -8223,8 +8234,20 @@ function commandsModule({
       }
 
       if (!slotSelection) {
+        clearLVSimpsonWorkflowIfCurrent(workflowSessionId);
         return null;
       }
+
+      // Suspend the previously active mouse tool once for the full four-slot
+      // workflow. A later Continue may switch to a different viewport/group.
+      if (!lvSimpsonMouseTools.isActive()) {
+        lvSimpsonMouseTools.start();
+      }
+      const efToolGroupReference = toolGroupService.getToolGroupForViewport(activeViewportId);
+      const efToolGroup = typeof efToolGroupReference === 'string'
+        ? toolGroupService.getToolGroup(efToolGroupReference)
+        : efToolGroupReference;
+      lvSimpsonMouseTools.suspend(efToolGroup);
 
       const { label, slotInfo } = slotSelection;
       const slotDisplayName = getLVSimpsonSlotDisplayName(slotInfo.slot);
@@ -8285,12 +8308,8 @@ function commandsModule({
 
       const hinge = await captureLVSimpsonDrag({
         viewport,
-        toolGroup: (() => {
-          const reference = toolGroupService.getToolGroupForViewport(activeViewportId);
-          return typeof reference === 'string'
-            ? toolGroupService.getToolGroup(reference)
-            : reference;
-        })(),
+        toolGroup: efToolGroup,
+        restorePreviousTool: false,
         isCancelled: isWorkflowCancelled,
         setCancelHandler: cancel => {
           if (activeLVSimpsonWorkflowSessionId === workflowSessionId) {
@@ -8331,12 +8350,8 @@ function commandsModule({
 
       const apexDrag = await captureLVSimpsonDrag({
         viewport,
-        toolGroup: (() => {
-          const reference = toolGroupService.getToolGroupForViewport(activeViewportId);
-          return typeof reference === 'string'
-            ? toolGroupService.getToolGroup(reference)
-            : reference;
-        })(),
+        toolGroup: efToolGroup,
+        restorePreviousTool: false,
         isCancelled: isWorkflowCancelled,
         setCancelHandler: cancel => {
           if (activeLVSimpsonWorkflowSessionId === workflowSessionId) {
@@ -8618,6 +8633,7 @@ function commandsModule({
       // educator captures a gold answer or the user explicitly closes it.
       activeLVSimpsonWorkflowSessionId = '';
       cancelActiveLVSimpsonCapture();
+      lvSimpsonMouseTools.restore();
 
       const resultGuidance = Array.isArray(lvSimpsonResult?.guidance)
         ? lvSimpsonResult.guidance
@@ -10703,6 +10719,9 @@ function commandsModule({
       };
     },
     setToolActive: ({ toolName, toolGroupId = null }) => {
+      if (lvSimpsonMouseTools.shouldDeferLengthActivation(toolName)) {
+        return;
+      }
       const { viewports } = viewportGridService.getState();
 
       if (!viewports.size) {
@@ -10769,6 +10788,17 @@ function commandsModule({
           reason: 'tool-not-found',
           toolName,
           toolGroupId,
+        };
+      }
+
+      if (lvSimpsonMouseTools.shouldDeferLengthActivation(toolName)) {
+        return {
+          ok: true,
+          deferred: true,
+          reason: 'lv-simpson-owns-primary-mouse',
+          toolName,
+          toolGroupId,
+          activeViewportId,
         };
       }
 
