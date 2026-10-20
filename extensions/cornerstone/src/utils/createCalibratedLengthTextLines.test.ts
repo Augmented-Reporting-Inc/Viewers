@@ -61,7 +61,7 @@ const usRegion = (overrides = {}) => ({
   ...overrides,
 });
 
-function useImage({ regions, imagePlane }) {
+function withImage({ regions, imagePlane }) {
   getMetadata.mockImplementation(type => {
     if (type === 'calibrationModule') {
       return regions ? { sequenceOfUltrasoundRegions: regions } : undefined;
@@ -129,7 +129,7 @@ describe('Shared native Length US calibration — live vs completed', () => {
   beforeEach(() => getMetadata.mockReset());
 
   it('Mohawk case: live text and completed record are both 74.99 mm, native was ~2.45 cm', () => {
-    useImage({ regions: [usRegion()], imagePlane: singleRegionPlane });
+    withImage({ regions: [usRegion()], imagePlane: singleRegionPlane });
     const annotation = mohawkLikeAnnotation();
 
     // Native preview is the double-calibrated value that users reported.
@@ -153,7 +153,7 @@ describe('Shared native Length US calibration — live vs completed', () => {
 
   it('iUSCAN-like small caliper: live and completed agree to the same rounding', () => {
     // High-frequency linear probe, multiple regions => no PixelSpacing (world = px).
-    useImage({
+    withImage({
       regions: [
         usRegion({ regionLocationMaxX1: 399, physicalDeltaX: 0.0065, physicalDeltaY: 0.0065 }),
         usRegion({ regionLocationMinX0: 400, physicalDeltaX: 0.012, physicalDeltaY: 0.012 }),
@@ -179,7 +179,7 @@ describe('Shared native Length US calibration — live vs completed', () => {
   });
 
   it('never mutates the live annotation (frozen input still maps)', () => {
-    useImage({ regions: [usRegion()], imagePlane: singleRegionPlane });
+    withImage({ regions: [usRegion()], imagePlane: singleRegionPlane });
     const annotation = deepFreeze(mohawkLikeAnnotation());
     const before = JSON.stringify(annotation);
 
@@ -192,7 +192,7 @@ describe('Shared native Length US calibration — live vs completed', () => {
   });
 
   it('is stable across repeated completion/modification mappings (no double calibration)', () => {
-    useImage({ regions: [usRegion()], imagePlane: singleRegionPlane });
+    withImage({ regions: [usRegion()], imagePlane: singleRegionPlane });
     const annotation = mohawkLikeAnnotation();
     const first = toMeasurement(annotation).data[targetId].length;
     const second = toMeasurement(annotation).data[targetId].length;
@@ -202,7 +202,10 @@ describe('Shared native Length US calibration — live vs completed', () => {
   });
 
   it('ordinary (non-US) Length: native text and native mm value pass through untouched', () => {
-    useImage({ regions: undefined, imagePlane: { rowPixelSpacing: 0.7, columnPixelSpacing: 0.7 } });
+    withImage({
+      regions: undefined,
+      imagePlane: { rowPixelSpacing: 0.7, columnPixelSpacing: 0.7 },
+    });
     const annotation = mohawkLikeAnnotation();
     annotation.data.cachedStats[targetId] = { length: 42.123, unit: 'mm' };
 
@@ -211,12 +214,29 @@ describe('Shared native Length US calibration — live vs completed', () => {
     expect(createCalibratedLengthTextLines(native)(annotation.data, targetId)).toBe(nativeLines);
 
     const measurement = toMeasurement(annotation);
-    expect(measurement.data[targetId]).toBe(annotation.data.cachedStats[targetId]);
+    expect(measurement.data[targetId]).toEqual({ length: 42.123, unit: 'mm' });
     expect(measurement.displayText.primary).toEqual(['42.1 mm']);
   });
 
+  it('record stats are copies: mutating measurement.data (as iUSCAN does) never reaches the live annotation', () => {
+    // Covers both the calibrated (US) and pass-through (non-US) branches.
+    for (const regions of [[usRegion()], undefined]) {
+      withImage({ regions, imagePlane: singleRegionPlane });
+      const annotation = mohawkLikeAnnotation();
+      const liveStats = annotation.data.cachedStats[targetId];
+      const snapshot = { ...liveStats };
+
+      const measurement = toMeasurement(annotation);
+      expect(measurement.data[targetId]).not.toBe(liveStats);
+
+      Object.assign(measurement.data[targetId], { length: -1, unit: 'mm', lengthUnit: 'mm' });
+      expect(annotation.data.cachedStats[targetId]).toBe(liveStats);
+      expect(liveStats).toEqual(snapshot);
+    }
+  });
+
   it('unsupported US units keep the native value AND native unit (no mm relabelling)', () => {
-    useImage({
+    withImage({
       regions: [usRegion({ physicalUnitsXDirection: 4, physicalUnitsYDirection: 7 })],
       imagePlane: singleRegionPlane,
     });
@@ -231,7 +251,7 @@ describe('Shared native Length US calibration — live vs completed', () => {
   });
 
   it('never changes text for volume targets', () => {
-    useImage({ regions: [usRegion()], imagePlane: singleRegionPlane });
+    withImage({ regions: [usRegion()], imagePlane: singleRegionPlane });
     const data = {
       ...mohawkLikeAnnotation().data,
       cachedStats: { 'volumeId:v': { length: 3, unit: 'mm' } },
@@ -244,7 +264,7 @@ describe('Shared native Length US calibration — live vs completed', () => {
   });
 
   it('shows nothing extra before Cornerstone has computed stats', () => {
-    useImage({ regions: [usRegion()], imagePlane: singleRegionPlane });
+    withImage({ regions: [usRegion()], imagePlane: singleRegionPlane });
     const data = { ...mohawkLikeAnnotation().data, cachedStats: {} };
     const native = jest.fn(() => undefined);
     expect(createCalibratedLengthTextLines(native)(data, targetId)).toBeUndefined();
@@ -259,7 +279,7 @@ describe('Shared native Length US calibration — live vs completed', () => {
     const twice = createCalibratedLengthTextLines(once);
     expect(twice).toBe(once);
 
-    useImage({ regions: undefined, imagePlane: undefined });
+    withImage({ regions: undefined, imagePlane: undefined });
     const data = {
       cachedStats: { [targetId]: { length: 1, unit: 'mm' } },
       handles: { points: [] },

@@ -69,10 +69,13 @@ const Length = {
     // and quiz capture. The live annotation's cachedStats are NOT modified:
     // the native Length renderer owns them, and the on-image text is produced
     // from the same calibration function (createCalibratedLengthTextLines).
+    // Always copy: MeasurementService keeps this object by reference and mode
+    // code (e.g. iUSCAN unit normalisation) mutates measurement.data, which
+    // must never reach the live annotation.
     const calibratedData = Object.fromEntries(
       mappedAnnotations.map(({ targetId, nativeStats, length, unit, calibrated }) => [
         targetId,
-        calibrated ? { ...nativeStats, length, unit } : nativeStats,
+        calibrated ? { ...nativeStats, length, unit } : { ...nativeStats },
       ])
     );
 
