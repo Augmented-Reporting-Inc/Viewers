@@ -3,7 +3,7 @@ import { getIsLocked } from './utils/getIsLocked';
 import { getIsVisible } from './utils/getIsVisible';
 import getSOPInstanceAttributes from './utils/getSOPInstanceAttributes';
 import { utils } from '@ohif/core';
-import { correctUSRegionLength } from '../correctUSRegionLength';
+import { getUSRegionLengthCalibration } from '../correctUSRegionLength';
 
 const Length = {
   toAnnotation: measurement => {},
@@ -65,6 +65,19 @@ const Length = {
 
     const mappedAnnotations = getMappedAnnotations(annotation, displaySetService);
 
+    // The measurement record needs calibrated data for panels, persistence and
+    // quiz capture. Do not rewrite the live annotation's cachedStats, because
+    // the native Length renderer also reads those same stats while drawing.
+    const calibratedData = Object.fromEntries(
+      Object.entries(data.cachedStats || {}).map(([targetId, stats], index) => {
+        const mapped = mappedAnnotations[index];
+        return [
+          targetId,
+          mapped ? { ...stats, length: mapped.length, unit: mapped.unit } : stats,
+        ];
+      })
+    );
+
     const displayText = getDisplayText(mappedAnnotations, displaySet);
     const getReport = () =>
       _getReport(mappedAnnotations, points, FrameOfReferenceUID, customizationService);
@@ -86,7 +99,7 @@ const Length = {
       displaySetInstanceUID: displaySet.displaySetInstanceUID,
       label: data.label,
       displayText: displayText,
-      data: data.cachedStats,
+      data: calibratedData,
       type: getValueTypeFromToolType(toolName),
       getReport,
     };
@@ -116,9 +129,10 @@ function getMappedAnnotations(annotation, displaySetService) {
     const displaySet = displaySetService.getDisplaySetsForSeries(SeriesInstanceUID)[0];
 
     const { SeriesNumber } = displaySet;
-    const { length: rawLength, unit = 'mm' } = targetStats;
-    const length = correctUSRegionLength(rawLength, referencedImageId, annotation);
-    targetStats.length = length; // write back so cachedStats stays consistent
+    const { length: rawLength, unit: nativeUnit = 'mm' } = targetStats;
+    const calibration = getUSRegionLengthCalibration(referencedImageId, annotation);
+    const length = calibration?.lengthCm ?? rawLength;
+    const unit = calibration?.unit ?? nativeUnit;
 
     annotations.push({
       SeriesInstanceUID,
