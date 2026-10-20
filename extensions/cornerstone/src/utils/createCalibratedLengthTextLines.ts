@@ -1,30 +1,47 @@
 import { utilities as csUtilities } from '@cornerstonejs/core';
-import { getUSRegionLengthCalibration } from './correctUSRegionLength';
+import { getUSRegionLengthCalibrationForTarget } from './correctUSRegionLength';
+
+const WRAPPED = Symbol.for('ar.calibratedLengthTextLines');
 
 /**
- * Wrap the ORIGINAL Cornerstone Length text formatter. Never modify native
- * cachedStats or annotation interaction/completion state. For calibrated
- * spatial US regions the DICOM deltas are centimetres, while the UI displays mm.
- * On non-US, unsupported, or off-region measurements return native text.
+ * Wrap the Length tool's existing getTextLines. Only the displayed text
+ * changes: cachedStats, handles, interaction and completion stay owned by the
+ * native Cornerstone LengthTool.
+ *
+ * When both handles lie in a spatial (cm) DICOM ultrasound region the text is
+ * the region-calibrated length in mm — the same value the MeasurementService
+ * mapping records on completion. Otherwise the original text is returned
+ * untouched (non-US images, volumes, unsupported units, off-region calipers).
  */
 export function createCalibratedLengthTextLines(nativeGetTextLines) {
-  return (data, targetId) => {
-    const originalLines = nativeGetTextLines(data, targetId);
-    if (typeof targetId !== 'string' || !targetId.startsWith('imageId:')) {
-      return originalLines;
-    }
+  if (typeof nativeGetTextLines !== 'function') {
+    return nativeGetTextLines;
+  }
+  if (nativeGetTextLines[WRAPPED]) {
+    return nativeGetTextLines;
+  }
 
+  function calibratedLengthTextLines(data, targetId) {
+    const originalLines = nativeGetTextLines.call(this, data, targetId);
+
+    // Same guard as native: no text until Cornerstone has computed stats.
     if (data?.cachedStats?.[targetId]?.length == null) {
       return originalLines;
     }
 
-    const referencedImageId = targetId.slice('imageId:'.length);
-    const calibration = getUSRegionLengthCalibration(referencedImageId, { data });
-    if (!calibration) return originalLines;
+    const calibration = getUSRegionLengthCalibrationForTarget(targetId, data);
+    if (!calibration) {
+      return originalLines;
+    }
 
-    const lengthMm = calibration.lengthCm * 10;
-    return Number.isFinite(lengthMm)
-      ? [`${csUtilities.roundNumber(lengthMm, 2)} mm`]
-      : originalLines;
-  };
+    return [formatCalibratedLength(calibration.lengthMm)];
+  }
+
+  calibratedLengthTextLines[WRAPPED] = true;
+  return calibratedLengthTextLines;
+}
+
+/** Same rounding OHIF uses for Length displayText (utils.roundNumber, 2). */
+export function formatCalibratedLength(lengthMm: number) {
+  return `${csUtilities.roundNumber(lengthMm, 2)} mm`;
 }

@@ -283,9 +283,11 @@ export default class ToolGroupService {
         }
 
         // All modes (including learning and iUSCAN) use the native Length tool.
-        // Change only its displayed text when the actual DICOM image contains a
-        // matching spatial ultrasound region. The original tool remains the
-        // owner of drawing, completion, and persisted annotation state.
+        // Only its displayed text changes, and only when both handles lie in a
+        // spatial (cm) DICOM ultrasound region; the value then matches the
+        // completed MeasurementService record exactly. The native tool still
+        // owns drawing, cachedStats, completion events and annotation state.
+        // The wrapper is idempotent, so re-adding the tool cannot stack it.
         if (toolName === 'Length') {
           const tool = toolGroup.getToolInstance('Length');
           const nativeGetTextLines = tool?.configuration?.getTextLines;

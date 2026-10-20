@@ -3,7 +3,7 @@ import { getIsLocked } from './utils/getIsLocked';
 import { getIsVisible } from './utils/getIsVisible';
 import getSOPInstanceAttributes from './utils/getSOPInstanceAttributes';
 import { utils } from '@ohif/core';
-import { getUSRegionLengthCalibration } from '../correctUSRegionLength';
+import { getUSRegionLengthCalibrationForTarget } from '../correctUSRegionLength';
 
 const Length = {
   toAnnotation: measurement => {},
@@ -65,17 +65,15 @@ const Length = {
 
     const mappedAnnotations = getMappedAnnotations(annotation, displaySetService);
 
-    // The measurement record needs calibrated data for panels, persistence and
-    // quiz capture. Do not rewrite the live annotation's cachedStats, because
-    // the native Length renderer also reads those same stats while drawing.
+    // The measurement record gets the calibrated value for panels, persistence
+    // and quiz capture. The live annotation's cachedStats are NOT modified:
+    // the native Length renderer owns them, and the on-image text is produced
+    // from the same calibration function (createCalibratedLengthTextLines).
     const calibratedData = Object.fromEntries(
-      Object.entries(data.cachedStats || {}).map(([targetId, stats], index) => {
-        const mapped = mappedAnnotations[index];
-        return [
-          targetId,
-          mapped ? { ...stats, length: mapped.length, unit: mapped.unit } : stats,
-        ];
-      })
+      mappedAnnotations.map(({ targetId, nativeStats, length, unit, calibrated }) => [
+        targetId,
+        calibrated ? { ...nativeStats, length, unit } : nativeStats,
+      ])
     );
 
     const displayText = getDisplayText(mappedAnnotations, displaySet);
@@ -110,41 +108,39 @@ function getMappedAnnotations(annotation, displaySetService) {
   const { metadata, data } = annotation;
   const { cachedStats } = data;
   const { referencedImageId } = metadata;
-  const targets = Object.keys(cachedStats);
+  const targets = Object.keys(cachedStats || {});
 
   if (!targets.length) {
     return [];
   }
 
-  const annotations = [];
-  Object.keys(cachedStats).forEach(targetId => {
-    const targetStats = cachedStats[targetId];
+  const { SOPInstanceUID, SeriesInstanceUID, frameNumber } = getSOPInstanceAttributes(
+    referencedImageId,
+    displaySetService,
+    annotation
+  );
+  const displaySet = displaySetService.getDisplaySetsForSeries(SeriesInstanceUID)[0];
+  const { SeriesNumber } = displaySet;
 
-    const { SOPInstanceUID, SeriesInstanceUID, frameNumber } = getSOPInstanceAttributes(
-      referencedImageId,
-      displaySetService,
-      annotation
-    );
+  return targets.map(targetId => {
+    const nativeStats = cachedStats[targetId];
+    const { length: rawLength, unit: nativeUnit = 'mm' } = nativeStats || {};
+    // Spatial DICOM US region => calibrated mm. Anything else => the native
+    // Cornerstone value and unit, untouched (never relabelled as mm).
+    const calibration = getUSRegionLengthCalibrationForTarget(targetId, data, referencedImageId);
 
-    const displaySet = displaySetService.getDisplaySetsForSeries(SeriesInstanceUID)[0];
-
-    const { SeriesNumber } = displaySet;
-    const { length: rawLength, unit: nativeUnit = 'mm' } = targetStats;
-    const calibration = getUSRegionLengthCalibration(referencedImageId, annotation);
-    const length = calibration?.lengthCm ?? rawLength;
-    const unit = calibration?.unit ?? nativeUnit;
-
-    annotations.push({
+    return {
+      targetId,
+      nativeStats,
+      calibrated: !!calibration,
       SeriesInstanceUID,
       SOPInstanceUID,
       SeriesNumber,
       frameNumber,
-      unit,
-      length,
-    });
+      unit: calibration ? calibration.unit : nativeUnit,
+      length: calibration ? calibration.lengthMm : rawLength,
+    };
   });
-
-  return annotations;
 }
 
 /*
@@ -219,6 +215,5 @@ function getDisplayText(mappedAnnotations, displaySet) {
 
   return displayText;
 }
-
 
 export default Length;
