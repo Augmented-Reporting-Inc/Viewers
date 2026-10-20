@@ -1425,6 +1425,7 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
   const isReviewWorkflowReadOnly = isReviewWorkflow && !getWritableMeasurementWorkflow(saveTarget);
   const isClinicalReportSaveTarget = isClinicalReportMeasurementsTarget(saveTarget);
   const [measurements, setMeasurements] = useState([]);
+  const [captureReadyLVSimpson, setCaptureReadyLVSimpson] = useState(null);
   const [pendingDeletedMeasurementIds, setPendingDeletedMeasurementIds] = useState<string[]>([]);
   const [savingAction, setSavingAction] = useState('');
   const [isAddingCineComment, setIsAddingCineComment] = useState(false);
@@ -1458,6 +1459,19 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
   );
   const isMeasurementScoringDisabled = isViewerMeasurementScoringDisabledFromUrl();
   const refreshLiveMeasurements = useCallback(async () => {
+    try {
+      // Reuse the active-study calculation and contour evidence used by
+      // educator gold capture and learner quiz capture, not a separately merged
+      // saved/live list that can show an outdated Simpson EF.
+      const captureReady = await Promise.resolve(
+        commandsManager.runCommand('getViewerQuizLVSimpsonForActiveStudy')
+      );
+      setCaptureReadyLVSimpson(captureReady?.result?.status === 'complete' ? captureReady : null);
+    } catch (error) {
+      setCaptureReadyLVSimpson(null);
+      console.warn('[ARMeasurementsPanel] quiz EF snapshot refresh failed:', error);
+    }
+
     try {
       const snapshot = await Promise.resolve(
         commandsManager.runCommand('getViewerMeasurementSnapshotForPanel')
@@ -1775,8 +1789,11 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
       return null;
     }
 
-    return calculateLVSimpson(visibleMeasurements);
-  }, [domain, visibleMeasurements]);
+    // A valid EF quiz capture must be drawn from these same study-scoped
+    // contours, independent of learner/educator role. Otherwise preserve
+    // existing summary behaviour for incomplete or non-quiz measurements.
+    return captureReadyLVSimpson?.result || calculateLVSimpson(visibleMeasurements);
+  }, [domain, visibleMeasurements, captureReadyLVSimpson]);
 
   const laVolumeResult = useMemo(() => {
     if (domain !== 'echo') {
