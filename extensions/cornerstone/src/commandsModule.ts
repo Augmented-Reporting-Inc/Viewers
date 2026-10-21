@@ -7317,6 +7317,11 @@ function commandsModule({
   const lvSimpsonMouseTools = createGuidedMouseToolOwnership([
     { mouseButton: Enums.MouseBindings.Primary },
   ]);
+  // LA Volume uses the same direct-drag interaction, but has its own
+  // independent session and must not activate Length between the two slots.
+  const laVolumeMouseTools = createGuidedMouseToolOwnership([
+    { mouseButton: Enums.MouseBindings.Primary },
+  ]);
 
   // Length's label-dialog cancellation only runs after the second click.
   // While its drawing is still in progress, delegate Escape to Cornerstone's
@@ -7612,6 +7617,7 @@ function commandsModule({
 
     activeLAVolumeWorkflowSessionId = '';
     cancelActiveLAVolumeCapture();
+    laVolumeMouseTools.restore();
     return true;
   }
 
@@ -7626,6 +7632,7 @@ function commandsModule({
       cancelActiveLVSimpsonCapture();
       lvSimpsonMouseTools.restore();
       cancelActiveLAVolumeCapture();
+      laVolumeMouseTools.restore();
       activeLVSimpsonWorkflowSessionId = '';
       activeLAVolumeWorkflowSessionId = '';
       hideLVSimpsonWorkflowPanel();
@@ -8736,6 +8743,7 @@ function commandsModule({
 
       if (!requestedSessionId) {
         cancelActiveLAVolumeCapture();
+        laVolumeMouseTools.restore();
         activeLAVolumeWorkflowSessionId = workflowSessionId;
       }
 
@@ -8796,6 +8804,12 @@ function commandsModule({
       const { label, slotInfo } = slotSelection;
       const slotDisplayName = getLAVolumeSlotDisplayName(slotInfo.slot);
       const stepNumber = getLAVolumeStepNumber(slotInfo.slot);
+      if (!laVolumeMouseTools.isActive()) laVolumeMouseTools.start();
+      const laToolGroupReference = toolGroupService.getToolGroupForViewport(activeViewportId);
+      const laToolGroup = typeof laToolGroupReference === 'string'
+        ? toolGroupService.getToolGroup(laToolGroupReference)
+        : laToolGroupReference;
+      laVolumeMouseTools.suspend(laToolGroup);
       const existingSlotMeasurements = slotCandidates.get(slotInfo.slot) || [];
       const existingSlotMeasurementIds = getLAVolumeExistingMeasurementIds(
         existingSlotMeasurements
@@ -8811,6 +8825,8 @@ function commandsModule({
 
       const annulus = await captureLVSimpsonDrag({
         viewport,
+        toolGroup: laToolGroup,
+        restorePreviousTool: false,
         isCancelled: isWorkflowCancelled,
         setCancelHandler: cancel => {
           if (activeLAVolumeWorkflowSessionId === workflowSessionId) {
@@ -8850,6 +8866,8 @@ function commandsModule({
 
       const superiorDrag = await captureLVSimpsonDrag({
         viewport,
+        toolGroup: laToolGroup,
+        restorePreviousTool: false,
         isCancelled: isWorkflowCancelled,
         setCancelHandler: cancel => {
           if (activeLAVolumeWorkflowSessionId === workflowSessionId) {
@@ -10738,7 +10756,10 @@ function commandsModule({
       };
     },
     setToolActive: ({ toolName, toolGroupId = null }) => {
-      if (lvSimpsonMouseTools.shouldDeferLengthActivation(toolName)) {
+      if (
+        lvSimpsonMouseTools.shouldDeferLengthActivation(toolName) ||
+        laVolumeMouseTools.shouldDeferLengthActivation(toolName)
+      ) {
         return;
       }
       const { viewports } = viewportGridService.getState();
@@ -10810,7 +10831,10 @@ function commandsModule({
         };
       }
 
-      if (lvSimpsonMouseTools.shouldDeferLengthActivation(toolName)) {
+      if (
+        lvSimpsonMouseTools.shouldDeferLengthActivation(toolName) ||
+        laVolumeMouseTools.shouldDeferLengthActivation(toolName)
+      ) {
         return {
           ok: true,
           deferred: true,
@@ -10851,9 +10875,10 @@ function commandsModule({
           clearLAVolumeWorkflowIfCurrent(activeLAVolumeWorkflowSessionId);
         }
         if (activeLVSimpsonWorkflowSessionId) {
-          return { ok: true, measurementKind, alreadyActive: true };
+          clearLVSimpsonWorkflowIfCurrent(activeLVSimpsonWorkflowSessionId);
         }
-        // Guided EF owns two drags per slot; it is not a native mouse tool.
+        // Each new quiz question starts its own guided capture; duplicate
+        // focus/click events are suppressed by Case Questions.
         void actions.startLVSimpsonEFWorkflow().catch(error =>
           console.warn('[Viewer quiz] EF activation failed:', error)
         );
@@ -10864,7 +10889,7 @@ function commandsModule({
           clearLVSimpsonWorkflowIfCurrent(activeLVSimpsonWorkflowSessionId);
         }
         if (activeLAVolumeWorkflowSessionId) {
-          return { ok: true, measurementKind, alreadyActive: true };
+          clearLAVolumeWorkflowIfCurrent(activeLAVolumeWorkflowSessionId);
         }
         void actions.startLAVolumeWorkflow().catch(error =>
           console.warn('[Viewer quiz] LA Volume activation failed:', error)
