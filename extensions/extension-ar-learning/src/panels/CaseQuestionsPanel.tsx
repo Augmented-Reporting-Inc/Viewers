@@ -21,6 +21,7 @@ import {
 } from '../utils/viewerQuizSessionState';
 
 const AR_QUIZ_MEASUREMENT_ADDED_EVENT = 'ar-learning:quiz-measurement-added';
+const AR_LV_SIMPSON_CAPTURE_REQUESTED_EVENT = 'ar-measurements:lv-simpson-capture-requested';
 const AR_VIEWER_QUIZ_AUTHORING_SAVED_EVENT = 'ar:viewer-quiz-authoring-saved';
 
 type CaseQuestionsPanelProps = {
@@ -1728,6 +1729,10 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
   const [activeQuestionKey, setActiveQuestionKey] = useState(
     () => initialSessionState?.activeQuestionKey || ''
   );
+  // A card click can also focus its nested input, so guard guided-tool startup
+  // synchronously rather than relying on a pending React state update.
+  const lastActivatedQuestionRef = useRef('');
+  const efCaptureInFlightRef = useRef(false);
   const [capturingMeasurementKey, setCapturingMeasurementKey] = useState('');
   const [capturingFrameKey, setCapturingFrameKey] = useState('');
   const [capturingPointKey, setCapturingPointKey] = useState('');
@@ -2093,6 +2098,8 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     } = {}
   ) {
     const nextActiveQuestionKey = `${quiz.quizKey}:${question.questionKey}`;
+    const isNewQuestion = lastActivatedQuestionRef.current !== nextActiveQuestionKey;
+    lastActivatedQuestionRef.current = nextActiveQuestionKey;
     // Change the target before awaiting tool setup: a measurement event may arrive
     // while the tool command or prior gold-annotation display is pending.
     setActiveQuestionKey(nextActiveQuestionKey);
@@ -2110,20 +2117,23 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
 
       dispatchQuizMeasurementDomain(quizMeasurementDomain);
 
-      const activationResult = await runViewerCommand(
-        commandsManager,
-        'activateViewerQuizMeasurementTool',
-        {
-          toolName: 'Length',
-          questionKey: question.questionKey,
-        }
-      );
+      const measurementKind = cleanString(plainObject(question.answerConfig).measurementKind);
+      const isGuidedComposite = measurementKind === 'lvSimpsonEF' || measurementKind === 'laVolumeBiplane';
+      // Starting either guided workflow twice can cancel an in-progress drag.
+      if (!isGuidedComposite || isNewQuestion) {
+        const activationResult = await runViewerCommand(
+          commandsManager,
+          'activateViewerQuizMeasurementTool',
+          { toolName: 'Length', measurementKind, questionKey: question.questionKey }
+        );
 
-      if (activationResult?.ok === false) {
-        console.warn('[CaseQuestionsPanel] could not activate Length for measurement question', {
-          questionKey: question.questionKey,
-          result: activationResult,
-        });
+        if (activationResult?.ok === false) {
+          console.warn('[CaseQuestionsPanel] measurement question tool activation failed', {
+            questionKey: question.questionKey,
+            measurementKind,
+            result: activationResult,
+          });
+        }
       }
     } else {
       await runViewerCommand(commandsManager, 'releaseViewerQuizDrawingTool', {});
@@ -2503,6 +2513,96 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     };
   }, [activeQuestionKey, authoringMode, payload, answersByQuizKey]);
 
+  // Both the EF progress-panel button and fourth-contour completion reuse
+  // the normal quiz measurement capture command. Never synthesize an EF from
+  // event payloads: verify the current viewport study and calculated value.
+  useEffect(() => {
+    const handleCalculatedEFCapture = async (event: Event) => {
+      const detail = (event as CustomEvent)?.detail || {};
+      const mode = cleanString(detail.mode);
+      if (mode !== 'completed' && mode !== 'manual') return;
+      if (mode === 'completed' && authoringMode) return;
+      if (efCaptureInFlightRef.current) return;
+
+      const activeKey = activeQuestionKey;
+      if (!activeKey || lastActivatedQuestionRef.current !== activeKey) {
+        if (mode === 'manual') {
+          uiNotificationService.show({
+            title: 'LV EF',
+            message: 'Select the EF measurement question in Case Questions before capturing.',
+            type: 'info',
+            duration: 4000,
+          });
+        }
+        return;
+      }
+
+      const requestedStudy = cleanString(detail.studyInstanceId);
+      const requestedValue = Number(detail.value);
+      const isValidValue = Number.isFinite(requestedValue);
+      const [quizKey, questionKey] = activeKey.split(':');
+      const quiz = authoringMode ? null : payload?.quizzes?.find(item => item.quizKey === quizKey);
+      const question = authoringMode
+        ? authoringQuestionsRef.current.find(item => item.questionKey === questionKey)
+        : quiz?.questions?.find(item => item.questionKey === questionKey);
+      if (
+        !question ||
+        question.type !== 'measurementNumeric' ||
+        cleanString(plainObject(question.answerConfig).measurementKind) !== 'lvSimpsonEF' ||
+        !requestedStudy ||
+        !isValidValue ||
+        (authoringMode && (!isDraftDefinition(authoringDefinition) || authoringSaving))
+      ) {
+        if (mode === 'manual') {
+          uiNotificationService.show({
+            title: 'LV EF',
+            message: 'Select an editable EF measurement question before capturing.',
+            type: 'info',
+            duration: 4000,
+          });
+        }
+        return;
+      }
+
+      efCaptureInFlightRef.current = true;
+      try {
+        const snapshot = await runViewerCommand(commandsManager, 'getViewerQuizLVSimpsonForActiveStudy');
+        if (
+          snapshot?.studyInstanceId !== requestedStudy ||
+          snapshot?.composite?.measurementKind !== 'lvSimpsonEF' ||
+          !Number.isFinite(Number(snapshot?.composite?.value)) ||
+          Math.round(Number(snapshot.composite.value) * 100) !== Math.round(requestedValue * 100)
+        ) {
+          if (mode === 'manual') {
+            uiNotificationService.show({
+              title: 'LV EF',
+              message: 'The active study or calculated EF has changed. Review the contours and capture the current result.',
+              type: 'warning',
+              duration: 5500,
+            });
+          }
+          return;
+        }
+        // A user may switch questions while the viewer snapshot is loading.
+        if (lastActivatedQuestionRef.current !== activeKey) return;
+        if (authoringMode) {
+          await captureAuthoringMeasurement(question);
+        } else if (quiz) {
+          await captureSelectedMeasurementAnswer(quiz, question);
+        }
+      } catch (error) {
+        console.warn('[CaseQuestionsPanel] calculated EF capture failed:', error);
+      } finally {
+        efCaptureInFlightRef.current = false;
+      }
+    };
+
+    window.addEventListener(AR_LV_SIMPSON_CAPTURE_REQUESTED_EVENT, handleCalculatedEFCapture);
+    return () => window.removeEventListener(
+      AR_LV_SIMPSON_CAPTURE_REQUESTED_EVENT, handleCalculatedEFCapture
+    );
+  }, [activeQuestionKey, authoringMode, payload, authoringDefinition, authoringSaving]);
+
   // Case Questions owns this review. It must not depend on AR Measurements being mounted.
   const finishQuizMeasurementReview = (ok: boolean) => {
     setQuizMeasurementReview(null);
@@ -2749,19 +2849,20 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
 
         syncQuizAuthoringMeasurementDomainToUrl(authoringMeasurementDomain, { overwrite: true });
 
-        const activationResult = await runViewerCommand(
-          commandsManager,
-          'activateViewerQuizMeasurementTool',
-          {
-            toolName: 'Length',
-            questionKey: question.questionKey,
-          }
-        );
-
-        if (activationResult?.ok === false) {
-          throw new Error(
-            `Unable to activate Length: ${cleanString(activationResult?.reason) || 'unknown error'}`
+        // Capturing the target frame for a composite must not interrupt its
+        // guided EF/LA workflow or activate Length over the pending drag.
+        const measurementKind = cleanString(plainObject(question.answerConfig).measurementKind);
+        if (measurementKind !== 'lvSimpsonEF' && measurementKind !== 'laVolumeBiplane') {
+          const activationResult = await runViewerCommand(
+            commandsManager,
+            'activateViewerQuizMeasurementTool',
+            { toolName: 'Length', questionKey: question.questionKey }
           );
+          if (activationResult?.ok === false) {
+            throw new Error(
+              `Unable to activate Length: ${cleanString(activationResult?.reason) || 'unknown error'}`
+            );
+          }
         }
       }
 
@@ -3527,14 +3628,23 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               captureSelectedMeasurementAnswer(quiz, question);
             }}
           >
-            {captureInProgress ? 'Capturing…' : 'Recapture selected measurement'}
+            {captureInProgress
+              ? 'Capturing…'
+              : cleanString(plainObject(question.answerConfig).measurementKind) === 'lvSimpsonEF' ||
+                  cleanString(plainObject(question.answerConfig).measurementKind) === 'laVolumeBiplane'
+                ? 'Capture calculated measurement'
+                : 'Recapture selected measurement'}
           </button>
 
           {value?.value === null ||
           typeof value?.value === 'undefined' ||
           cleanString(value?.value) === '' ? (
             <div className="text-xs text-gray-400">
-              Draw or select a measurement annotation in the viewport, then use it as the answer.
+              {cleanString(plainObject(question.answerConfig).measurementKind) === 'lvSimpsonEF'
+                ? 'Complete four LV contours to capture EF automatically, or use the capture button.'
+                : cleanString(plainObject(question.answerConfig).measurementKind) === 'laVolumeBiplane'
+                  ? 'Complete both LA contours, then capture the calculated volume.'
+                  : 'Draw or select a measurement annotation in the viewport, then use it as the answer.'}
             </div>
           ) : null}
         </div>
