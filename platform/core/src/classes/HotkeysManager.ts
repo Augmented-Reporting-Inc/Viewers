@@ -4,6 +4,36 @@ import Hotkey from './Hotkey';
 import migrateOldHotkeyDefinitions from '../utils/hotkeys/migrateHotkeys';
 import pubSubServiceInterface from '../services/_shared/pubSubServiceInterface';
 
+
+const INTERACTIVE_HOTKEY_TARGET_SELECTOR = [
+  'a[href]',
+  'button',
+  'input',
+  'select',
+  'summary',
+  'textarea',
+  '[contenteditable="true"]',
+  '[role="button"]',
+  '[role="checkbox"]',
+  '[role="combobox"]',
+  '[role="link"]',
+  '[role="menuitem"]',
+  '[role="menuitemcheckbox"]',
+  '[role="menuitemradio"]',
+  '[role="option"]',
+  '[role="radio"]',
+  '[role="slider"]',
+  '[role="spinbutton"]',
+  '[role="switch"]',
+  '[role="tab"]',
+  '[role="textbox"]',
+].join(',');
+
+function isInteractiveHotkeyTarget(target: EventTarget | null): boolean {
+  const candidate = target as HTMLElement | null;
+  return Boolean(candidate?.closest?.(INTERACTIVE_HOTKEY_TARGET_SELECTOR));
+}
+
 /**
  *
  *
@@ -278,6 +308,13 @@ export class HotkeysManager {
     const combinedKeys = isKeyArray ? keys.join('+') : keys;
 
     mouseTrapAPI.bind(combinedKeys, evt => {
+      // Preserve the browser's native keyboard behavior for focused interactive
+      // controls. Without this guard, global viewer shortcuts such as
+      // Space=Reset and Enter=Accept Preview suppress button/link activation.
+      if (isInteractiveHotkeyTarget(evt.target)) {
+        return;
+      }
+
       evt.preventDefault();
       evt.stopPropagation();
       this._commandsManager.runCommand(commandName, { evt, ...commandOptions }, context);
