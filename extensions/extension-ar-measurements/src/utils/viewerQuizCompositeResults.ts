@@ -76,6 +76,23 @@ function collectComponents(measurements: Measurement[], kind: CompositeKind) {
 }
 
 /**
+ * Compare the value reviewed in the persistent EF progress panel with the
+ * freshly recalculated quiz-capture value at the quiz's two-decimal precision.
+ * A different value must be reviewed again, rather than silently captured.
+ */
+export function isViewerQuizCompositeReviewCurrent(
+  reviewedValue: unknown,
+  captureValue: unknown
+): boolean {
+  const reviewed = Number(reviewedValue);
+  const captured = Number(captureValue);
+
+  return Number.isFinite(reviewed) &&
+    Number.isFinite(captured) &&
+    Math.round(reviewed * 100) === Math.round(captured * 100);
+}
+
+/**
  * Read-only resolver for complete viewer-generated composite measurement results.
  *
  * This supplies a viewer-calculated numeric result and source references for
@@ -112,4 +129,28 @@ export function resolveViewerQuizCompositeResult(
     unit: kind === 'lvSimpsonEF' ? '%' : 'mL',
     components,
   };
+}
+
+/**
+ * Resolve the exact active-study evidence used for both the viewer EF summary
+ * and the quiz's numeric EF capture. Never blend saved annotations or contours
+ * from unrelated studies into an authoring/learner quiz gold answer.
+ */
+export function resolveViewerQuizLVSimpsonForStudy(
+  studyInstanceId: string,
+  measurements: Measurement[] = []
+) {
+  const studyId = clean(studyInstanceId);
+  if (!studyId || !Array.isArray(measurements)) return null;
+
+  const studyMeasurements = measurements.filter(measurement =>
+    clean(measurement?.referenceStudyUID || measurement?.StudyInstanceUID) === studyId
+  );
+  const composite = resolveViewerQuizCompositeResult('lvSimpsonEF', studyMeasurements);
+  if (!composite) return null;
+
+  const result = calculateLVSimpson(studyMeasurements);
+  if (result?.status !== 'complete' || !result.values) return null;
+
+  return { studyInstanceId: studyId, composite, result };
 }

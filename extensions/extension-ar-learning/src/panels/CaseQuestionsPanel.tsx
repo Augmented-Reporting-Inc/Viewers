@@ -3158,7 +3158,11 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       if (configuredKind === 'lvSimpsonEF') {
         window.dispatchEvent(
           new CustomEvent('ar-measurements:lv-simpson-gold-captured', {
-            detail: { questionKey: question.questionKey },
+            detail: {
+              questionKey: question.questionKey,
+              value: answer.value,
+              studyInstanceId: answer.sourceRefs?.studyInstanceUID || '',
+            },
           })
         );
       }
