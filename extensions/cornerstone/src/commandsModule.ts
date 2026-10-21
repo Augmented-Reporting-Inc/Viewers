@@ -5529,6 +5529,20 @@ function getNextMissingLVSimpsonSlot(slotCandidates: Map<string, any[]>) {
 
 const LV_SIMPSON_PROGRESS_PANEL_ID = 'ar-lv-simpson-progress-panel';
 const AR_LV_SIMPSON_GOLD_CAPTURED_EVENT = 'ar-measurements:lv-simpson-gold-captured';
+const AR_LV_SIMPSON_CAPTURE_REQUESTED_EVENT = 'ar-measurements:lv-simpson-capture-requested';
+
+function requestLVSimpsonQuizCapture({ studyInstanceId, value, mode }: {
+  studyInstanceId: string;
+  value: number;
+  mode: 'completed' | 'manual';
+}) {
+  if (typeof window !== 'undefined' && studyInstanceId && Number.isFinite(value)) {
+    window.dispatchEvent(new CustomEvent(AR_LV_SIMPSON_CAPTURE_REQUESTED_EVENT, {
+      detail: { studyInstanceId, value, mode },
+    }));
+  }
+}
+
 let reviewedLVSimpsonEF: { studyInstanceId: string; value: number } | null = null;
 
 function hideLVSimpsonWorkflowPanel() {
@@ -5544,6 +5558,7 @@ function renderLVSimpsonWorkflowPanel({
   continueLabel = '',
   onContinue = null,
   onCancel = null,
+  onCapture = null,
   resultText = '',
   warnings = [],
 }: {
@@ -5552,6 +5567,7 @@ function renderLVSimpsonWorkflowPanel({
   continueLabel?: string;
   onContinue?: null | (() => void);
   onCancel?: null | (() => void);
+  onCapture?: null | (() => void);
   resultText?: string;
   warnings?: string[];
 } = {}) {
@@ -5610,7 +5626,7 @@ function renderLVSimpsonWorkflowPanel({
   }
   const controls = document.createElement('div');
   Object.assign(controls.style, { display: 'flex', gap: '8px', marginTop: '10px' });
-  const button = (label: string, callback: () => void) => {
+  const button = (label: string, callback: () => void, once = true) => {
     const item = document.createElement('button');
     item.type = 'button';
     item.textContent = label;
@@ -5622,10 +5638,11 @@ function renderLVSimpsonWorkflowPanel({
       color: '#ffffff',
       cursor: 'pointer',
     });
-    item.addEventListener('click', callback, { once: true });
+    item.addEventListener('click', callback, { once });
     controls.appendChild(item);
   };
   if (onContinue) button(continueLabel || 'Continue', onContinue);
+  if (onCapture) button('Capture calculated measurement', onCapture, false);
   if (onCancel) button(resultText ? 'Close panel' : 'Cancel EF', onCancel);
   panel.appendChild(controls);
 }
@@ -8673,7 +8690,8 @@ function commandsModule({
             measurements: currentLVSimpsonMeasurements,
             resultText: `Calculated LVEF: ${displayedCapturedValue}%`,
             warnings: reviewMessages,
-            instruction: 'Gold answer captured. Save the quiz draft to persist it.',
+            instruction: 'Gold answer captured. Save the quiz draft to persist it, or recapture after further edits.',
+             onCapture: () => requestLVSimpsonQuizCapture({ studyInstanceId: currentStudyId, value: goldComposite.value, mode: 'manual' }),
             onCancel: hideLVSimpsonWorkflowPanel,
           });
         };
@@ -8684,10 +8702,13 @@ function commandsModule({
           measurements: currentLVSimpsonMeasurements,
           resultText: `Calculated LVEF: ${ejectionFraction}%`,
           warnings: reviewMessages,
-          instruction: 'Review the result, then capture it as the gold answer in the quiz panel. Close when finished.',
+          instruction: 'Learner EF is added to the active quiz question automatically. Educators can capture it as the gold answer. Review contours before recapturing after edits.',
+           onCapture: () => requestLVSimpsonQuizCapture({ studyInstanceId: currentStudyId, value: goldComposite.value, mode: 'manual' }),
           onCancel: hideLVSimpsonWorkflowPanel,
         });
 
+        // Only the fourth complete contour emits an automatic capture request.
+        requestLVSimpsonQuizCapture({ studyInstanceId: currentStudyId, value: goldComposite.value, mode: 'completed' });
         return measurement;
       }
 
@@ -10824,12 +10845,47 @@ function commandsModule({
         cineStopped: stopCine,
       };
     },
-    activateViewerQuizMeasurementTool: ({ toolName = 'Length' } = {}) =>
-      actions.activateViewerMeasurementTool({
-        toolName,
-        stopCine: true,
-      }),
+    activateViewerQuizMeasurementTool: ({ toolName = 'Length', measurementKind = '' } = {}) => {
+      if (measurementKind === 'lvSimpsonEF') {
+        if (activeLAVolumeWorkflowSessionId) {
+          clearLAVolumeWorkflowIfCurrent(activeLAVolumeWorkflowSessionId);
+        }
+        if (activeLVSimpsonWorkflowSessionId) {
+          return { ok: true, measurementKind, alreadyActive: true };
+        }
+        // Guided EF owns two drags per slot; it is not a native mouse tool.
+        void actions.startLVSimpsonEFWorkflow().catch(error =>
+          console.warn('[Viewer quiz] EF activation failed:', error)
+        );
+        return { ok: true, measurementKind, workflowStarted: true };
+      }
+      if (measurementKind === 'laVolumeBiplane') {
+        if (activeLVSimpsonWorkflowSessionId) {
+          clearLVSimpsonWorkflowIfCurrent(activeLVSimpsonWorkflowSessionId);
+        }
+        if (activeLAVolumeWorkflowSessionId) {
+          return { ok: true, measurementKind, alreadyActive: true };
+        }
+        void actions.startLAVolumeWorkflow().catch(error =>
+          console.warn('[Viewer quiz] LA Volume activation failed:', error)
+        );
+        return { ok: true, measurementKind, workflowStarted: true };
+      }
+      if (activeLVSimpsonWorkflowSessionId) {
+        clearLVSimpsonWorkflowIfCurrent(activeLVSimpsonWorkflowSessionId);
+      }
+      if (activeLAVolumeWorkflowSessionId) {
+        clearLAVolumeWorkflowIfCurrent(activeLAVolumeWorkflowSessionId);
+      }
+      return actions.activateViewerMeasurementTool({ toolName, stopCine: true });
+    },
     releaseViewerQuizDrawingTool: () => {
+      if (activeLVSimpsonWorkflowSessionId) {
+        clearLVSimpsonWorkflowIfCurrent(activeLVSimpsonWorkflowSessionId);
+      }
+      if (activeLAVolumeWorkflowSessionId) {
+        clearLAVolumeWorkflowIfCurrent(activeLAVolumeWorkflowSessionId);
+      }
       const activeViewportId = viewportGridService.getActiveViewportId();
       const toolGroupReference = toolGroupService.getToolGroupForViewport(activeViewportId);
 
@@ -13442,7 +13498,8 @@ function commandsModule({
             measurements: studyMeasurements,
             resultText: `Calculated LVEF: ${currentValue}%`,
             warnings: [`EF changed since the earlier review (${previousValue}% → ${currentValue}%).`],
-            instruction: 'Review this recalculated EF, then capture it again in Case Questions.',
+            instruction: 'Review this recalculated EF, then capture it again using the button below.',
+            onCapture: () => requestLVSimpsonQuizCapture({ studyInstanceId: selectedStudy, value: composite.value, mode: 'manual' }),
             onCancel: hideLVSimpsonWorkflowPanel,
           });
           return {
