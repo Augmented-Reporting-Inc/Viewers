@@ -137,25 +137,79 @@ export function buildEchoVolumeContourFromBaseAxis({
   };
 }
 
+// The LV template is deliberately independent of the LA starting contour.
+// A rounded, slightly bulbous LV cavity is a more useful initial trace than
+// the generic tapered wedge, and fewer handles mean less point-by-point editing.
+const DEFAULT_LV_POINT_COUNT_PER_SIDE = 7;
+
+function lvRoundedWidthRatio(t: number) {
+  // Elliptical apical rounding with a gentle basal/mid-cavity shoulder.
+  // At t=0 the trace touches both mitral hinges; at t=1 it meets the apex.
+  return Math.sqrt(Math.max(0, 1 - t * t)) * (1 + 0.18 * Math.sin(Math.PI * t));
+}
+
+/**
+ * Landmark-assisted LV trace, not automatic boundary detection.
+ *
+ * The generated 15-handle spline is only an editable starting contour.
+ * Preserve the true mitral hinge endpoints and the chosen apex as handles,
+ * so LV volume calculation can use the same axis after manual reshaping.
+ * Existing saved contours and the separate LA generator are not modified.
+ */
 export function buildLVSimpsonContourFromHingeApex({
   baseLeftPoint,
   baseRightPoint,
   apexPoint,
-  pointCountPerSide = DEFAULT_POINT_COUNT_PER_SIDE,
+  pointCountPerSide = DEFAULT_LV_POINT_COUNT_PER_SIDE,
 }) {
-  const geometry = buildEchoVolumeContourFromBaseAxis({
-    baseLeftPoint,
-    baseRightPoint,
-    axisPoint: apexPoint,
-    pointCountPerSide,
-  });
+  const baseLeft = getPoint(baseLeftPoint);
+  const baseRight = getPoint(baseRightPoint);
+  const apex = getPoint(apexPoint);
 
-  if (!geometry) {
+  if (!baseLeft || !baseRight || !apex) {
     return null;
   }
 
+  const baseMidpoint = midpoint(baseLeft, baseRight);
+  const longAxisLengthMM = distance(baseMidpoint, apex);
+  const baseHalfWidth = distance(baseLeft, baseRight) / 2;
+
+  if (
+    !Number.isInteger(pointCountPerSide) ||
+    pointCountPerSide < 2 ||
+    !Number.isFinite(longAxisLengthMM) ||
+    longAxisLengthMM <= 0 ||
+    !Number.isFinite(baseHalfWidth) ||
+    baseHalfWidth <= 0
+  ) {
+    return null;
+  }
+
+  const halfBaseVector = scale(subtract(baseRight, baseLeft), 0.5);
+  const leftSide = [];
+  const rightSide = [];
+
+  for (let index = 0; index <= pointCountPerSide; index += 1) {
+    const t = index / pointCountPerSide;
+    const center = interpolate(baseMidpoint, apex, t);
+    const widthOffset = scale(halfBaseVector, lvRoundedWidthRatio(t));
+
+    leftSide.push(subtract(center, widthOffset));
+    rightSide.push(add(center, widthOffset));
+  }
+
+  // Visit the true apex once, between the two editable sides. Closing the
+  // spline connects the right hinge back to the left across the mitral plane.
+  const points = [...leftSide, ...rightSide.reverse().slice(1)];
+
   return {
-    ...geometry,
-    apexPoint: geometry.axisPoint,
+    points,
+    baseLeftPoint: baseLeft,
+    baseRightPoint: baseRight,
+    axisPoint: apex,
+    apexPoint: apex,
+    axisPointIndex: leftSide.length - 1,
+    baseMidpoint,
+    longAxisLengthMM,
   };
 }
