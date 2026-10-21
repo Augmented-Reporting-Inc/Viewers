@@ -5,6 +5,7 @@ on:
     branches:
       - fix/ef-progress-quiz-capture-parity-20261020
       - fix/ef-sticky-tool-between-contours-20261020
+      - feat/lv-ef-rounded-contour-20261021
   pull_request:
     branches:
       - port/3.11-custom
@@ -13,6 +14,8 @@ on:
     paths:
       - 'extensions/extension-ar-learning/**'
       - 'extensions/cornerstone/src/commandsModule.ts'
+      - 'extensions/cornerstone/src/utils/lvSimpsonContour.ts'
+      - 'extensions/cornerstone/src/utils/lvSimpsonContour.test.ts'
       - 'extensions/cornerstone/src/utils/measurementAnnotationHydration.ts'
       - 'extensions/cornerstone/src/utils/measurementServiceMappings/PlanarFreehandROI.ts'
       - 'modes/mode-ar-learning/**'
@@ -49,6 +52,8 @@ jobs:
         run: npx jest --config extensions/extension-ar-measurements/jest.config.js --runInBand --runTestsByPath extensions/extension-ar-measurements/src/utils/viewerQuizCompositeResults.test.ts
       - name: Validate guided EF mouse ownership and tool restoration
         run: npx jest --config extensions/cornerstone/jest.config.js --runInBand --runTestsByPath extensions/cornerstone/src/utils/guidedMouseToolOwnership.test.ts
+      - name: Validate LV EF initial contour landmarks and calculator compatibility
+        run: npx jest --config extensions/cornerstone/jest.config.js --runInBand --runTestsByPath extensions/cornerstone/src/utils/lvSimpsonContour.test.ts
       - name: Compile AR learning extension
         # Standalone workspace bundles lack react-dom peer resolution on this
         # push-only candidate path; the complete production Docker build below
