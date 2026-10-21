@@ -19,6 +19,10 @@ import {
   readViewerQuizSessionState,
   writeViewerQuizSessionState,
 } from '../utils/viewerQuizSessionState';
+import {
+  isGuidedQuizCompositeKind,
+  isMatchingQuizEFCompletion,
+} from '../utils/quizCompositeCaptureIntent';
 
 const AR_QUIZ_MEASUREMENT_ADDED_EVENT = 'ar-learning:quiz-measurement-added';
 const AR_LV_SIMPSON_CAPTURE_REQUESTED_EVENT = 'ar-measurements:lv-simpson-capture-requested';
@@ -2118,7 +2122,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       dispatchQuizMeasurementDomain(quizMeasurementDomain);
 
       const measurementKind = cleanString(plainObject(question.answerConfig).measurementKind);
-      const isGuidedComposite = measurementKind === 'lvSimpsonEF' || measurementKind === 'laVolumeBiplane';
+      const isGuidedComposite = isGuidedQuizCompositeKind(measurementKind);
       // Starting either guided workflow twice can cancel an in-progress drag.
       if (!isGuidedComposite || isNewQuestion) {
         const activationResult = await runViewerCommand(
@@ -2567,16 +2571,28 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       efCaptureInFlightRef.current = true;
       try {
         const snapshot = await runViewerCommand(commandsManager, 'getViewerQuizLVSimpsonForActiveStudy');
-        if (
-          snapshot?.studyInstanceId !== requestedStudy ||
-          snapshot?.composite?.measurementKind !== 'lvSimpsonEF' ||
-          !Number.isFinite(Number(snapshot?.composite?.value)) ||
-          Math.round(Number(snapshot.composite.value) * 100) !== Math.round(requestedValue * 100)
-        ) {
+        const eventMatchesCalculatedEF = isMatchingQuizEFCompletion({
+          mode,
+          authoringMode,
+          questionKind: cleanString(plainObject(question.answerConfig).measurementKind),
+          eventStudy: requestedStudy,
+          activeStudy: cleanString(snapshot?.studyInstanceId),
+          eventValue: requestedValue,
+          currentValue: snapshot?.composite?.value,
+        });
+        // A manual button press after spline edits must reach the existing
+        // viewer re-review checkpoint, which redraws the EF panel and requires
+        // the second click. Do not silently record the stale event value.
+        const needsExplicitReReview = mode === 'manual' &&
+          snapshot?.studyInstanceId === requestedStudy &&
+          snapshot?.composite?.measurementKind === 'lvSimpsonEF' &&
+          Number.isFinite(Number(snapshot?.composite?.value)) &&
+          !eventMatchesCalculatedEF;
+        if (!eventMatchesCalculatedEF && !needsExplicitReReview) {
           if (mode === 'manual') {
             uiNotificationService.show({
               title: 'LV EF',
-              message: 'The active study or calculated EF has changed. Review the contours and capture the current result.',
+              message: 'The active study or calculated EF is unavailable. Review the contours before capturing.',
               type: 'warning',
               duration: 5500,
             });
@@ -2852,7 +2868,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         // Capturing the target frame for a composite must not interrupt its
         // guided EF/LA workflow or activate Length over the pending drag.
         const measurementKind = cleanString(plainObject(question.answerConfig).measurementKind);
-        if (measurementKind !== 'lvSimpsonEF' && measurementKind !== 'laVolumeBiplane') {
+        if (!isGuidedQuizCompositeKind(measurementKind)) {
           const activationResult = await runViewerCommand(
             commandsManager,
             'activateViewerQuizMeasurementTool',
