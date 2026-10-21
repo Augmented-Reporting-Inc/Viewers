@@ -5529,6 +5529,20 @@ function getNextMissingLVSimpsonSlot(slotCandidates: Map<string, any[]>) {
 
 const LV_SIMPSON_PROGRESS_PANEL_ID = 'ar-lv-simpson-progress-panel';
 const AR_LV_SIMPSON_GOLD_CAPTURED_EVENT = 'ar-measurements:lv-simpson-gold-captured';
+const AR_LV_SIMPSON_CAPTURE_REQUESTED_EVENT = 'ar-measurements:lv-simpson-capture-requested';
+
+function requestLVSimpsonQuizCapture({ studyInstanceId, value, mode }: {
+  studyInstanceId: string;
+  value: number;
+  mode: 'completed' | 'manual';
+}) {
+  if (typeof window !== 'undefined' && studyInstanceId && Number.isFinite(value)) {
+    window.dispatchEvent(new CustomEvent(AR_LV_SIMPSON_CAPTURE_REQUESTED_EVENT, {
+      detail: { studyInstanceId, value, mode },
+    }));
+  }
+}
+
 let reviewedLVSimpsonEF: { studyInstanceId: string; value: number } | null = null;
 
 function hideLVSimpsonWorkflowPanel() {
@@ -5544,6 +5558,7 @@ function renderLVSimpsonWorkflowPanel({
   continueLabel = '',
   onContinue = null,
   onCancel = null,
+  onCapture = null,
   resultText = '',
   warnings = [],
 }: {
@@ -5552,6 +5567,7 @@ function renderLVSimpsonWorkflowPanel({
   continueLabel?: string;
   onContinue?: null | (() => void);
   onCancel?: null | (() => void);
+  onCapture?: null | (() => void);
   resultText?: string;
   warnings?: string[];
 } = {}) {
@@ -5610,7 +5626,7 @@ function renderLVSimpsonWorkflowPanel({
   }
   const controls = document.createElement('div');
   Object.assign(controls.style, { display: 'flex', gap: '8px', marginTop: '10px' });
-  const button = (label: string, callback: () => void) => {
+  const button = (label: string, callback: () => void, once = true) => {
     const item = document.createElement('button');
     item.type = 'button';
     item.textContent = label;
@@ -5622,10 +5638,11 @@ function renderLVSimpsonWorkflowPanel({
       color: '#ffffff',
       cursor: 'pointer',
     });
-    item.addEventListener('click', callback, { once: true });
+    item.addEventListener('click', callback, { once });
     controls.appendChild(item);
   };
   if (onContinue) button(continueLabel || 'Continue', onContinue);
+  if (onCapture) button('Capture calculated measurement', onCapture, false);
   if (onCancel) button(resultText ? 'Close panel' : 'Cancel EF', onCancel);
   panel.appendChild(controls);
 }
@@ -7300,6 +7317,11 @@ function commandsModule({
   const lvSimpsonMouseTools = createGuidedMouseToolOwnership([
     { mouseButton: Enums.MouseBindings.Primary },
   ]);
+  // LA Volume uses the same direct-drag interaction, but has its own
+  // independent session and must not activate Length between the two slots.
+  const laVolumeMouseTools = createGuidedMouseToolOwnership([
+    { mouseButton: Enums.MouseBindings.Primary },
+  ]);
 
   // Length's label-dialog cancellation only runs after the second click.
   // While its drawing is still in progress, delegate Escape to Cornerstone's
@@ -7595,6 +7617,7 @@ function commandsModule({
 
     activeLAVolumeWorkflowSessionId = '';
     cancelActiveLAVolumeCapture();
+    laVolumeMouseTools.restore();
     return true;
   }
 
@@ -7609,6 +7632,7 @@ function commandsModule({
       cancelActiveLVSimpsonCapture();
       lvSimpsonMouseTools.restore();
       cancelActiveLAVolumeCapture();
+      laVolumeMouseTools.restore();
       activeLVSimpsonWorkflowSessionId = '';
       activeLAVolumeWorkflowSessionId = '';
       hideLVSimpsonWorkflowPanel();
@@ -8673,7 +8697,8 @@ function commandsModule({
             measurements: currentLVSimpsonMeasurements,
             resultText: `Calculated LVEF: ${displayedCapturedValue}%`,
             warnings: reviewMessages,
-            instruction: 'Gold answer captured. Save the quiz draft to persist it.',
+            instruction: 'Gold answer captured. Save the quiz draft to persist it, or recapture after further edits.',
+             onCapture: () => requestLVSimpsonQuizCapture({ studyInstanceId: currentStudyId, value: goldComposite.value, mode: 'manual' }),
             onCancel: hideLVSimpsonWorkflowPanel,
           });
         };
@@ -8684,10 +8709,13 @@ function commandsModule({
           measurements: currentLVSimpsonMeasurements,
           resultText: `Calculated LVEF: ${ejectionFraction}%`,
           warnings: reviewMessages,
-          instruction: 'Review the result, then capture it as the gold answer in the quiz panel. Close when finished.',
+          instruction: 'Learner EF is added to the active quiz question automatically. Educators can capture it as the gold answer. Review contours before recapturing after edits.',
+           onCapture: () => requestLVSimpsonQuizCapture({ studyInstanceId: currentStudyId, value: goldComposite.value, mode: 'manual' }),
           onCancel: hideLVSimpsonWorkflowPanel,
         });
 
+        // Only the fourth complete contour emits an automatic capture request.
+        requestLVSimpsonQuizCapture({ studyInstanceId: currentStudyId, value: goldComposite.value, mode: 'completed' });
         return measurement;
       }
 
@@ -8715,6 +8743,7 @@ function commandsModule({
 
       if (!requestedSessionId) {
         cancelActiveLAVolumeCapture();
+        laVolumeMouseTools.restore();
         activeLAVolumeWorkflowSessionId = workflowSessionId;
       }
 
@@ -8775,6 +8804,12 @@ function commandsModule({
       const { label, slotInfo } = slotSelection;
       const slotDisplayName = getLAVolumeSlotDisplayName(slotInfo.slot);
       const stepNumber = getLAVolumeStepNumber(slotInfo.slot);
+      if (!laVolumeMouseTools.isActive()) laVolumeMouseTools.start();
+      const laToolGroupReference = toolGroupService.getToolGroupForViewport(activeViewportId);
+      const laToolGroup = typeof laToolGroupReference === 'string'
+        ? toolGroupService.getToolGroup(laToolGroupReference)
+        : laToolGroupReference;
+      laVolumeMouseTools.suspend(laToolGroup);
       const existingSlotMeasurements = slotCandidates.get(slotInfo.slot) || [];
       const existingSlotMeasurementIds = getLAVolumeExistingMeasurementIds(
         existingSlotMeasurements
@@ -8790,6 +8825,8 @@ function commandsModule({
 
       const annulus = await captureLVSimpsonDrag({
         viewport,
+        toolGroup: laToolGroup,
+        restorePreviousTool: false,
         isCancelled: isWorkflowCancelled,
         setCancelHandler: cancel => {
           if (activeLAVolumeWorkflowSessionId === workflowSessionId) {
@@ -8829,6 +8866,8 @@ function commandsModule({
 
       const superiorDrag = await captureLVSimpsonDrag({
         viewport,
+        toolGroup: laToolGroup,
+        restorePreviousTool: false,
         isCancelled: isWorkflowCancelled,
         setCancelHandler: cancel => {
           if (activeLAVolumeWorkflowSessionId === workflowSessionId) {
@@ -10717,7 +10756,10 @@ function commandsModule({
       };
     },
     setToolActive: ({ toolName, toolGroupId = null }) => {
-      if (lvSimpsonMouseTools.shouldDeferLengthActivation(toolName)) {
+      if (
+        lvSimpsonMouseTools.shouldDeferLengthActivation(toolName) ||
+        laVolumeMouseTools.shouldDeferLengthActivation(toolName)
+      ) {
         return;
       }
       const { viewports } = viewportGridService.getState();
@@ -10789,7 +10831,10 @@ function commandsModule({
         };
       }
 
-      if (lvSimpsonMouseTools.shouldDeferLengthActivation(toolName)) {
+      if (
+        lvSimpsonMouseTools.shouldDeferLengthActivation(toolName) ||
+        laVolumeMouseTools.shouldDeferLengthActivation(toolName)
+      ) {
         return {
           ok: true,
           deferred: true,
@@ -10824,12 +10869,48 @@ function commandsModule({
         cineStopped: stopCine,
       };
     },
-    activateViewerQuizMeasurementTool: ({ toolName = 'Length' } = {}) =>
-      actions.activateViewerMeasurementTool({
-        toolName,
-        stopCine: true,
-      }),
+    activateViewerQuizMeasurementTool: ({ toolName = 'Length', measurementKind = '' } = {}) => {
+      if (measurementKind === 'lvSimpsonEF') {
+        if (activeLAVolumeWorkflowSessionId) {
+          clearLAVolumeWorkflowIfCurrent(activeLAVolumeWorkflowSessionId);
+        }
+        if (activeLVSimpsonWorkflowSessionId) {
+          clearLVSimpsonWorkflowIfCurrent(activeLVSimpsonWorkflowSessionId);
+        }
+        // Each new quiz question starts its own guided capture; duplicate
+        // focus/click events are suppressed by Case Questions.
+        void actions.startLVSimpsonEFWorkflow().catch(error =>
+          console.warn('[Viewer quiz] EF activation failed:', error)
+        );
+        return { ok: true, measurementKind, workflowStarted: true };
+      }
+      if (measurementKind === 'laVolumeBiplane') {
+        if (activeLVSimpsonWorkflowSessionId) {
+          clearLVSimpsonWorkflowIfCurrent(activeLVSimpsonWorkflowSessionId);
+        }
+        if (activeLAVolumeWorkflowSessionId) {
+          clearLAVolumeWorkflowIfCurrent(activeLAVolumeWorkflowSessionId);
+        }
+        void actions.startLAVolumeWorkflow().catch(error =>
+          console.warn('[Viewer quiz] LA Volume activation failed:', error)
+        );
+        return { ok: true, measurementKind, workflowStarted: true };
+      }
+      if (activeLVSimpsonWorkflowSessionId) {
+        clearLVSimpsonWorkflowIfCurrent(activeLVSimpsonWorkflowSessionId);
+      }
+      if (activeLAVolumeWorkflowSessionId) {
+        clearLAVolumeWorkflowIfCurrent(activeLAVolumeWorkflowSessionId);
+      }
+      return actions.activateViewerMeasurementTool({ toolName, stopCine: true });
+    },
     releaseViewerQuizDrawingTool: () => {
+      if (activeLVSimpsonWorkflowSessionId) {
+        clearLVSimpsonWorkflowIfCurrent(activeLVSimpsonWorkflowSessionId);
+      }
+      if (activeLAVolumeWorkflowSessionId) {
+        clearLAVolumeWorkflowIfCurrent(activeLAVolumeWorkflowSessionId);
+      }
       const activeViewportId = viewportGridService.getActiveViewportId();
       const toolGroupReference = toolGroupService.getToolGroupForViewport(activeViewportId);
 
@@ -13442,7 +13523,8 @@ function commandsModule({
             measurements: studyMeasurements,
             resultText: `Calculated LVEF: ${currentValue}%`,
             warnings: [`EF changed since the earlier review (${previousValue}% → ${currentValue}%).`],
-            instruction: 'Review this recalculated EF, then capture it again in Case Questions.',
+            instruction: 'Review this recalculated EF, then capture it again using the button below.',
+            onCapture: () => requestLVSimpsonQuizCapture({ studyInstanceId: selectedStudy, value: composite.value, mode: 'manual' }),
             onCancel: hideLVSimpsonWorkflowPanel,
           });
           return {

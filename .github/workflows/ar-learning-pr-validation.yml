@@ -6,9 +6,11 @@ on:
       - fix/ef-progress-quiz-capture-parity-20261020
       - fix/ef-sticky-tool-between-contours-20261020
       - feat/lv-ef-rounded-contour-20261021
+      - feat/quiz-ef-la-auto-activate-capture-20261021
   pull_request:
     branches:
       - fix/ef-sticky-tool-between-contours-20261020
+      - feat/lv-ef-rounded-contour-20261021
       - port/3.11-custom
       - integration/ef-progress-current
       - integration/quiz-wcag-length-20261013
@@ -55,23 +57,25 @@ jobs:
         run: npx jest --config extensions/cornerstone/jest.config.js --runInBand --runTestsByPath extensions/cornerstone/src/utils/guidedMouseToolOwnership.test.ts
       - name: Validate LV EF initial contour landmarks and calculator compatibility
         run: npx jest --config extensions/cornerstone/jest.config.js --runInBand --runTestsByPath extensions/cornerstone/src/utils/lvSimpsonContour.test.ts
+      - name: Validate quiz composite activation and study-scoped capture intent
+        run: npx jest --config extensions/extension-ar-learning/jest.config.js --runInBand --runTestsByPath extensions/extension-ar-learning/src/utils/quizCompositeCaptureIntent.test.ts
       - name: Compile AR learning extension
         # Standalone workspace bundles lack react-dom peer resolution on this
         # EF candidate path; the complete production Docker build below
         # validates all bundled code. Retain historical PR checks unchanged.
-        if: github.event_name == 'pull_request' && github.head_ref != 'feat/lv-ef-rounded-contour-20261021'
+        if: github.event_name == 'pull_request' && github.head_ref != 'feat/lv-ef-rounded-contour-20261021' && github.head_ref != 'feat/quiz-ef-la-auto-activate-capture-20261021'
         run: yarn workspace extension-ar-learning build
       - name: Compile AR learning mode
         # Standalone workspace bundles lack react-dom peer resolution on this
         # EF candidate path; the complete production Docker build below
         # validates all bundled code. Retain historical PR checks unchanged.
-        if: github.event_name == 'pull_request' && github.head_ref != 'feat/lv-ef-rounded-contour-20261021'
+        if: github.event_name == 'pull_request' && github.head_ref != 'feat/lv-ef-rounded-contour-20261021' && github.head_ref != 'feat/quiz-ef-la-auto-activate-capture-20261021'
         run: yarn workspace mode-ar-learning build
       - name: Compile Cornerstone extension for Length Escape changes
         # Standalone workspace bundles lack react-dom peer resolution on this
         # EF candidate path; the complete production Docker build below
         # validates all bundled code. Retain historical PR checks unchanged.
-        if: github.event_name == 'pull_request' && github.head_ref != 'feat/lv-ef-rounded-contour-20261021'
+        if: github.event_name == 'pull_request' && github.head_ref != 'feat/lv-ef-rounded-contour-20261021' && github.head_ref != 'feat/quiz-ef-la-auto-activate-capture-20261021'
         run: yarn workspace @ohif/extension-cornerstone build
 
   validate-rviewer-image-assets:
