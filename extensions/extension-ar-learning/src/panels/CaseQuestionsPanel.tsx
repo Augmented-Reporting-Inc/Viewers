@@ -2104,9 +2104,26 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     const nextActiveQuestionKey = `${quiz.quizKey}:${question.questionKey}`;
     const isNewQuestion = lastActivatedQuestionRef.current !== nextActiveQuestionKey;
     lastActivatedQuestionRef.current = nextActiveQuestionKey;
-    // Change the target before awaiting tool setup: a measurement event may arrive
-    // while the tool command or prior gold-annotation display is pending.
+    // Change the question binding synchronously, but start guided EF/LA
+    // only after navigation has reached the question's image/viewport.
     setActiveQuestionKey(nextActiveQuestionKey);
+    const measurementKind = question.type === 'measurementNumeric'
+      ? cleanString(plainObject(question.answerConfig).measurementKind)
+      : '';
+    const deferGuidedActivation = isNewQuestion && isGuidedQuizCompositeKind(measurementKind);
+    const activateGuidedAfterNavigation = async () => {
+      if (!deferGuidedActivation || lastActivatedQuestionRef.current !== nextActiveQuestionKey) return;
+      const result = await runViewerCommand(commandsManager, 'activateViewerQuizMeasurementTool', {
+        toolName: 'Length',
+        measurementKind,
+        questionKey: question.questionKey,
+      });
+      if (result?.ok === false) {
+        console.warn('[CaseQuestionsPanel] guided measurement activation failed', {
+          questionKey: question.questionKey, measurementKind, result,
+        });
+      }
+    };
 
     try {
       await runViewerCommand(commandsManager, 'clearViewerQuizMeasurementComparison', {});
@@ -2121,10 +2138,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
 
       dispatchQuizMeasurementDomain(quizMeasurementDomain);
 
-      const measurementKind = cleanString(plainObject(question.answerConfig).measurementKind);
-      const isGuidedComposite = isGuidedQuizCompositeKind(measurementKind);
-      // Starting either guided workflow twice can cancel an in-progress drag.
-      if (!isGuidedComposite || isNewQuestion) {
+      // Length still activates immediately. Guided workflows are deferred
+      // until the saved question target has been navigated into view.
+      if (!isGuidedQuizCompositeKind(measurementKind)) {
         const activationResult = await runViewerCommand(
           commandsManager,
           'activateViewerQuizMeasurementTool',
@@ -2143,6 +2159,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       await runViewerCommand(commandsManager, 'releaseViewerQuizDrawingTool', {});
     }
 
+    try {
     if (authoringMode && question.type === 'measurementNumeric') {
       setActiveQuestionKey(nextActiveQuestionKey);
 
@@ -2284,6 +2301,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       }
     } catch (error) {
       console.warn('[CaseQuestionsPanel] viewer quiz navigation failed:', error);
+    }
+    } finally {
+      await activateGuidedAfterNavigation();
     }
   }
 
