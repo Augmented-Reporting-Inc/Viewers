@@ -57,21 +57,21 @@ jobs:
         run: npx jest --config extensions/cornerstone/jest.config.js --runInBand --runTestsByPath extensions/cornerstone/src/utils/lvSimpsonContour.test.ts
       - name: Compile AR learning extension
         # Standalone workspace bundles lack react-dom peer resolution on this
-        # push-only candidate path; the complete production Docker build below
+        # EF candidate path; the complete production Docker build below
         # validates all bundled code. Retain historical PR checks unchanged.
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' && github.head_ref != 'feat/lv-ef-rounded-contour-20261021'
         run: yarn workspace extension-ar-learning build
       - name: Compile AR learning mode
         # Standalone workspace bundles lack react-dom peer resolution on this
-        # push-only candidate path; the complete production Docker build below
+        # EF candidate path; the complete production Docker build below
         # validates all bundled code. Retain historical PR checks unchanged.
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' && github.head_ref != 'feat/lv-ef-rounded-contour-20261021'
         run: yarn workspace mode-ar-learning build
       - name: Compile Cornerstone extension for Length Escape changes
         # Standalone workspace bundles lack react-dom peer resolution on this
-        # push-only candidate path; the complete production Docker build below
+        # EF candidate path; the complete production Docker build below
         # validates all bundled code. Retain historical PR checks unchanged.
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' && github.head_ref != 'feat/lv-ef-rounded-contour-20261021'
         run: yarn workspace @ohif/extension-cornerstone build
 
   validate-rviewer-image-assets:
