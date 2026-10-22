@@ -1,11 +1,7 @@
 name: Viewer Accessibility Build One-Time
 
 on:
-  push:
-    branches:
-      - ops/pr52-wcag-keyboard-validation-20261022
-    paths:
-      - ".github/workflows/viewer-accessibility-build-once.yml"
+  workflow_dispatch:
 
 permissions:
   contents: read
