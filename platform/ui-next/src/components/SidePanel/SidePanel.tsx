@@ -1,5 +1,5 @@
 import classnames from 'classnames';
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Icons } from '../Icons';
 import { TooltipTrigger, TooltipContent, Tooltip } from '../Tooltip';
 import { Separator } from '../Separator';
@@ -195,6 +195,7 @@ const SidePanel = ({
   collapsedOutsideBorderSize = 4,
 }: SidePanelProps) => {
   const [panelOpen, setPanelOpen] = useState(isExpanded);
+  const panelOpenRef = useRef(isExpanded);
   const [activeTabIndex, setActiveTabIndex] = useState(activeTabIndexProp ?? 0);
 
   const [styleMap, setStyleMap] = useState(
@@ -219,17 +220,24 @@ const SidePanel = ({
 
   const updatePanelOpen = useCallback(
     (isOpen: boolean) => {
+      const wasOpen = panelOpenRef.current;
+      panelOpenRef.current = isOpen;
       setPanelOpen(isOpen);
-      if (isOpen !== panelOpen) {
-        // only fire events for changes
-        if (isOpen && onOpen) {
-          onOpen();
-        } else if (onClose && !isOpen) {
-          onClose();
-        }
+
+      if (isOpen === wasOpen) {
+        return;
+      }
+
+      // Only fire events for actual state changes. Keep this callback stable
+      // across local panelOpen updates so the isExpanded synchronization effect
+      // cannot immediately undo a keyboard/pointer close action.
+      if (isOpen) {
+        onOpen?.();
+      } else {
+        onClose?.();
       }
     },
-    [panelOpen, onOpen, onClose]
+    [onOpen, onClose]
   );
 
   const updateActiveTabIndex = useCallback(
