@@ -1,11 +1,7 @@
 name: Viewer Accessibility Side Panel Build One-Time
 
 on:
-  push:
-    branches:
-      - ops/a11y-side-panel-build-once-20261022
-    paths:
-      - ".github/workflows/viewer-accessibility-side-panel-build-once.yml"
+  workflow_dispatch:
 
 permissions:
   contents: read
