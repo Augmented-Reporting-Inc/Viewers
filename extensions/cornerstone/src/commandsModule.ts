@@ -531,6 +531,21 @@ function synchronizeViewerMeasurementSessionFallbacks(liveMeasurements: any[] = 
       lvSimpsonFallback &&
       isViewerMeasurementSessionFallbackReplacementReady(liveMeasurement, lvSimpsonFallback)
     ) {
+      // Diagnostics deliberately exclude study/patient identifiers and coordinates.
+      // The first EF is calculated from a session contour; a later snapshot can
+      // switch to a remapped MeasurementService contour of different geometry.
+      // Record only slot and point counts to locate that transition safely.
+      const sessionGeometry = lvSimpsonFallback?.lvSimpson || lvSimpsonFallback?.measurements?.lvSimpson || {};
+      const liveGeometry = liveMeasurement?.lvSimpson || liveMeasurement?.measurements?.lvSimpson || {};
+      const sessionPointCount = getViewerMeasurementSnapshotPoints(lvSimpsonFallback, sessionGeometry).length;
+      const livePointCount = getViewerMeasurementSnapshotPoints(liveMeasurement, liveGeometry).length;
+      if (sessionPointCount !== livePointCount) {
+        console.warn('[LV EF] session-to-live contour point-count mismatch', {
+          slot: getLVSimpsonSlotFromMeasurement(liveMeasurement),
+          sessionPointCount,
+          livePointCount,
+        });
+      }
       // This function runs while the panel is resolving its live snapshot.
       // Updating the fallback map is sufficient. Re-dispatching the LV session
       // event here feeds directly back into another panel snapshot and creates
@@ -13518,6 +13533,14 @@ function commandsModule({
         ) {
           const previousValue = roundQuizMeasurementValue(reviewedLVSimpsonEF.value, 2).toFixed(2);
           const currentValue = roundQuizMeasurementValue(composite.value, 2).toFixed(2);
+          console.warn('[LV EF] reviewed and capture snapshot values diverged', {
+            reviewedEF: previousValue,
+            captureEF: currentValue,
+            slots: composite.components.map(component => ({
+              slot: component.slot,
+              pointCount: component.points.length,
+            })),
+          });
           reviewedLVSimpsonEF = { studyInstanceId: selectedStudy, value: composite.value };
           renderLVSimpsonWorkflowPanel({
             measurements: studyMeasurements,
