@@ -3653,6 +3653,11 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               {value?.unit || question?.answerConfig?.unit || ''}
             </div>
           </div>
+          {cleanString(plainObject(value?.reviewPayload).label || value?.measurementType || value?.label) ? (
+            <div className="text-xs text-blue-200" data-testid="quiz-captured-measurement-label">
+              Measurement label: {cleanString(plainObject(value?.reviewPayload).label || value?.measurementType || value?.label)}
+            </div>
+          ) : null}
 
           <button
             type="button"
@@ -4271,10 +4276,10 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               </div>
             ) : null}
 
-            {cleanString(answerConfig.measurementKind) !== 'lvSimpsonEF' && cleanString(answerConfig.measurementKind) !== 'laVolumeBiplane' ? (
+            {cleanString(answerConfig.measurementKind) !== 'laVolumeBiplane' ? (
               <>
             <label className="mt-3 block text-xs font-semibold text-gray-200">
-              Position radius tolerance
+              {cleanString(answerConfig.measurementKind) === 'lvSimpsonEF' ? 'Optional contour-centre position radius (mm)' : 'Position radius tolerance'}
             </label>
             <input
               className="mt-1 w-36 rounded border border-gray-700 bg-black px-2 py-1 text-sm text-white"
@@ -4295,8 +4300,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
             />
 
             <div className="mt-1 text-[11px] text-gray-400">
-              The learner measurement must be within both the allowed length difference and this
-              radius from the center of the correct measurement.
+              {cleanString(answerConfig.measurementKind) === 'lvSimpsonEF'
+                ? 'Optional for EF: each of the four contour centres must be within this radius (mm) of the corresponding gold contour on the same image and frame. Leave blank to disable position scoring.'
+                : 'The learner measurement must be within both the allowed length difference and this radius from the center of the correct measurement.'}
             </div>
               </>
             ) : (
