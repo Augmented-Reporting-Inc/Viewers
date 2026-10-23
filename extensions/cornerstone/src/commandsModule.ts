@@ -8268,6 +8268,9 @@ function commandsModule({
       const workflowSessionId = requestedSessionId || `${csUtils.uuidv4()}`;
 
       if (!requestedSessionId) {
+        // A new contour workflow invalidates any previous explicit EF.
+        explicitLVSimpsonResult = null;
+        reviewedLVSimpsonEF = null;
         cancelActiveLVSimpsonCapture();
         lvSimpsonMouseTools.restore();
         activeLVSimpsonWorkflowSessionId = workflowSessionId;
