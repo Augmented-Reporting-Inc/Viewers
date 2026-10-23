@@ -5605,6 +5605,42 @@ let explicitLVSimpsonResult: { studyInstanceId: string; composite: any; result: 
 function getExplicitLVSimpsonResult(studyInstanceId: string) {
   return explicitLVSimpsonResult?.studyInstanceId === studyInstanceId ? explicitLVSimpsonResult : null;
 }
+// Direct edits and deletions after Calculate EF invalidate the only quiz result.
+// This also fails closed if Cornerstone emits a late normalization change.
+function invalidateExplicitLVSimpsonAfterAnnotationChange(event: Event) {
+  const result = explicitLVSimpsonResult;
+  if (!result) return;
+  const detail = (event as CustomEvent)?.detail || {};
+  const annotationId = String(
+    detail.annotation?.annotationUID || detail.annotation?.uid ||
+    detail.annotationUID || ''
+  );
+  if (!annotationId) return;
+  if (!result.composite?.components?.some((component: any) =>
+    String(component.annotationId) === annotationId
+  )) return;
+  explicitLVSimpsonResult = null;
+  reviewedLVSimpsonEF = null;
+  if (typeof document !== 'undefined' &&
+      document.getElementById(LV_SIMPSON_PROGRESS_PANEL_ID)) {
+    renderLVSimpsonWorkflowPanel({
+      resultText: 'EF needs recalculation',
+      warnings: ['A source contour changed or was removed after EF calculation.'],
+      instruction: 'Review the four contours, then run the EF workflow again.',
+      onCancel: hideLVSimpsonWorkflowPanel,
+    });
+  }
+}
+
+eventTarget.addEventListener(
+  Enums.Events.ANNOTATION_MODIFIED,
+  invalidateExplicitLVSimpsonAfterAnnotationChange
+);
+eventTarget.addEventListener(
+  Enums.Events.ANNOTATION_REMOVED,
+  invalidateExplicitLVSimpsonAfterAnnotationChange
+);
+
 let reviewedLVSimpsonEF: { studyInstanceId: string; value: number } | null = null;
 
 function hideLVSimpsonWorkflowPanel() {
