@@ -8790,8 +8790,8 @@ function commandsModule({
         reviewedLVSimpsonEF = { studyInstanceId: currentStudyId, value: resolved.composite.value };
         renderLVSimpsonWorkflowPanel({
           measurements: measurementsForCalculation,
-          resultText: `Calculated LVEF: ${roundQuizMeasurementValue(resolved.composite.value, 2).toFixed(2)}%`,
-          instruction: 'Use Capture calculated measurement to populate the active EF question.',
+          resultText: `LVEF: ${roundQuizMeasurementValue(resolved.composite.value, 2).toFixed(2)}% | EDV: ${Number(resolved.result.values.edvML).toFixed(2)} mL | ESV: ${Number(resolved.result.values.esvML).toFixed(2)} mL`,
+          instruction: 'Cross-check EF = (EDV - ESV) / EDV × 100, then capture this result in the active EF question.',
           onCapture: () => requestLVSimpsonQuizCapture({
             studyInstanceId: currentStudyId, value: resolved.composite.value, mode: 'manual',
           }),
