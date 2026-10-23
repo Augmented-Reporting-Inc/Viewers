@@ -5659,6 +5659,7 @@ function renderLVSimpsonWorkflowPanel({
   onCapture = null,
   onCalculate = null,
   resultText = '',
+  resultDetails = [],
   warnings = [],
 }: {
   measurements?: any[];
@@ -5669,6 +5670,7 @@ function renderLVSimpsonWorkflowPanel({
   onCapture?: null | (() => void);
   onCalculate?: null | (() => void);
   resultText?: string;
+  resultDetails?: string[];
   warnings?: string[];
 } = {}) {
   if (typeof document === 'undefined') return;
@@ -5717,6 +5719,9 @@ function renderLVSimpsonWorkflowPanel({
     });
   }
   if (resultText) addText(resultText, { fontWeight: '700', fontSize: '18px', marginTop: '9px' });
+  for (const detail of resultDetails) {
+    addText(detail, { fontSize: '13px', paddingTop: '3px', color: '#e2e8f0' });
+  }
   for (const warning of warnings) {
     addText(warning, { color: '#fcd34d', paddingTop: '5px' });
   }
@@ -8790,7 +8795,11 @@ function commandsModule({
         reviewedLVSimpsonEF = { studyInstanceId: currentStudyId, value: resolved.composite.value };
         renderLVSimpsonWorkflowPanel({
           measurements: measurementsForCalculation,
-          resultText: `LVEF: ${roundQuizMeasurementValue(resolved.composite.value, 2).toFixed(2)}% | EDV: ${Number(resolved.result.values.edvML).toFixed(2)} mL | ESV: ${Number(resolved.result.values.esvML).toFixed(2)} mL`,
+          resultText: `Calculated LVEF: ${roundQuizMeasurementValue(resolved.composite.value, 2).toFixed(2)}%`,
+          resultDetails: [
+            `End-diastolic volume (EDV): ${Number(resolved.result.values.edvML).toFixed(2)} mL`,
+            `End-systolic volume (ESV): ${Number(resolved.result.values.esvML).toFixed(2)} mL`,
+          ],
           instruction: 'Cross-check EF = (EDV - ESV) / EDV × 100, then capture this result in the active EF question.',
           onCapture: () => requestLVSimpsonQuizCapture({
             studyInstanceId: currentStudyId, value: resolved.composite.value, mode: 'manual',
