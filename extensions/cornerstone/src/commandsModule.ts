@@ -5543,6 +5543,63 @@ function requestLVSimpsonQuizCapture({ studyInstanceId, value, mode }: {
   }
 }
 
+// Keep the completed result stable across MeasurementService normalization and
+// quiz/panel reads. An actual user edit to Cornerstone contour geometry invalidates it.
+let completedLVSimpsonResult: {
+  studyInstanceId: string;
+  composite: any;
+  result: any;
+  contourRevisions: Map<string, string>;
+} | null = null;
+
+function getLVSimpsonAnnotationRevision(annotationId: string): string | null {
+  const annotation = cornerstoneTools.annotation.state.getAnnotation?.(annotationId);
+  if (!annotation) return null;
+  const points = annotation.data?.contour?.polyline || annotation.data?.handles?.points;
+  if (!Array.isArray(points) || points.length < 3) return null;
+  // The revision is internal only; never log identifiers or coordinates.
+  return JSON.stringify(points);
+}
+
+function getCompletedLVSimpsonResult(studyInstanceId: string) {
+  const saved = completedLVSimpsonResult;
+  if (!saved || saved.studyInstanceId !== studyInstanceId) return null;
+  for (const [annotationId, revision] of saved.contourRevisions) {
+    if (getLVSimpsonAnnotationRevision(annotationId) !== revision) {
+      completedLVSimpsonResult = null;
+      return null;
+    }
+  }
+  return {
+    studyInstanceId: saved.studyInstanceId,
+    composite: saved.composite,
+    result: saved.result,
+  };
+}
+
+function retainCompletedLVSimpsonResult(studyInstanceId: string, composite: any, result: any) {
+  const contours = new Map<string, string>();
+  for (const component of composite?.components || []) {
+    const annotationId = String(component.annotationId || '');
+    const revision = getLVSimpsonAnnotationRevision(annotationId);
+    if (!annotationId || !revision || contours.has(annotationId)) {
+      completedLVSimpsonResult = null;
+      return;
+    }
+    contours.set(annotationId, revision);
+  }
+  if (contours.size !== 4 || result?.status !== 'complete') {
+    completedLVSimpsonResult = null;
+    return;
+  }
+  completedLVSimpsonResult = {
+    studyInstanceId,
+    composite: structuredClone(composite),
+    result: structuredClone(result),
+    contourRevisions: contours,
+  };
+}
+
 let reviewedLVSimpsonEF: { studyInstanceId: string; value: number } | null = null;
 
 function hideLVSimpsonWorkflowPanel() {
@@ -8668,6 +8725,7 @@ function commandsModule({
         Number.isFinite(Number(goldComposite.value))
       ) {
         const ejectionFraction = roundQuizMeasurementValue(goldComposite.value, 2).toFixed(2);
+        retainCompletedLVSimpsonResult(currentStudyId, goldComposite, lvSimpsonResult);
         reviewedLVSimpsonEF = { studyInstanceId: currentStudyId, value: goldComposite.value };
 
         const reviewMessages = Array.from(
@@ -12309,10 +12367,11 @@ function commandsModule({
       const studyInstanceId = String(
         activeDisplaySet?.StudyInstanceUID || activeDisplaySet?.studyInstanceUID || ''
       ).trim();
-      return resolveViewerQuizLVSimpsonForStudy(
-        studyInstanceId,
-        getCurrentViewerMeasurementSnapshot(measurementService)
-      );
+      return getCompletedLVSimpsonResult(studyInstanceId) ||
+        resolveViewerQuizLVSimpsonForStudy(
+          studyInstanceId,
+          getCurrentViewerMeasurementSnapshot(measurementService)
+        );
     },
     getViewerMeasurementSnapshotForPanel: () => {
       const saveTarget = getArViewerSaveTargetFromUrl();
@@ -13495,7 +13554,8 @@ function commandsModule({
           return selectedStudy && entryStudy === selectedStudy;
         });
         const composite = requestedKind === 'lvSimpsonEF'
-          ? resolveViewerQuizLVSimpsonForStudy(selectedStudy, quizMeasurements)?.composite
+          ? (getCompletedLVSimpsonResult(selectedStudy)?.composite ||
+            resolveViewerQuizLVSimpsonForStudy(selectedStudy, quizMeasurements)?.composite)
           : resolveViewerQuizCompositeResult(requestedKind, studyMeasurements);
         if (!composite) {
           return {
