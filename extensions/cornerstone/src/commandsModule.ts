@@ -5584,13 +5584,13 @@ function retainCompletedLVSimpsonResult(studyInstanceId: string, composite: any,
     const revision = getLVSimpsonAnnotationRevision(annotationId);
     if (!annotationId || !revision || contours.has(annotationId)) {
       completedLVSimpsonResult = null;
-      return;
+      return false;
     }
     contours.set(annotationId, revision);
   }
   if (contours.size !== 4 || result?.status !== 'complete') {
     completedLVSimpsonResult = null;
-    return;
+    return false;
   }
   completedLVSimpsonResult = {
     studyInstanceId,
@@ -5598,6 +5598,7 @@ function retainCompletedLVSimpsonResult(studyInstanceId: string, composite: any,
     result: structuredClone(result),
     contourRevisions: contours,
   };
+  return true;
 }
 
 let reviewedLVSimpsonEF: { studyInstanceId: string; value: number } | null = null;
@@ -8725,7 +8726,25 @@ function commandsModule({
         Number.isFinite(Number(goldComposite.value))
       ) {
         const ejectionFraction = roundQuizMeasurementValue(goldComposite.value, 2).toFixed(2);
-        retainCompletedLVSimpsonResult(currentStudyId, goldComposite, lvSimpsonResult);
+        const authoritativeResultReady = retainCompletedLVSimpsonResult(
+          currentStudyId,
+          goldComposite,
+          lvSimpsonResult
+        );
+        if (!authoritativeResultReady) {
+          // Never auto-capture a different EF from a later snapshot.
+          // Annotation normalization can populate Cornerstone state after the
+          // four-contour completion callback. Require explicit retry/review.
+          reviewedLVSimpsonEF = null;
+          renderLVSimpsonWorkflowPanel({
+            measurements: currentLVSimpsonMeasurements,
+            resultText: 'EF capture is not ready.',
+            warnings: ['The four contour revisions could not be verified. No EF was captured.'],
+            instruction: 'Review the contours and retry the EF measurement workflow.',
+            onCancel: hideLVSimpsonWorkflowPanel,
+          });
+          return measurement;
+        }
         reviewedLVSimpsonEF = { studyInstanceId: currentStudyId, value: goldComposite.value };
 
         const reviewMessages = Array.from(
@@ -13553,9 +13572,33 @@ function commandsModule({
           const entryStudy = String(entry?.referenceStudyUID || entry?.StudyInstanceUID || '').trim();
           return selectedStudy && entryStudy === selectedStudy;
         });
+        const reviewedEFIsActive =
+          requestedKind === 'lvSimpsonEF' &&
+          reviewedLVSimpsonEF?.studyInstanceId === selectedStudy &&
+          typeof document !== 'undefined' &&
+          Boolean(document.getElementById(LV_SIMPSON_PROGRESS_PANEL_ID));
+        const authoritativeEF = requestedKind === 'lvSimpsonEF'
+          ? getCompletedLVSimpsonResult(selectedStudy)
+          : null;
+        if (reviewedEFIsActive && !authoritativeEF) {
+          // A real edit, deletion, or unavailable contour revision invalidates
+          // the review. Never replace an already-reviewed EF behind the user's
+          // back by recalculating during capture.
+          reviewedLVSimpsonEF = null;
+          renderLVSimpsonWorkflowPanel({
+            measurements: studyMeasurements,
+            resultText: 'EF review expired.',
+            warnings: ['Contour geometry changed or is no longer verifiable.'],
+            instruction: 'Review the four contours and repeat the EF workflow before capturing.',
+            onCancel: hideLVSimpsonWorkflowPanel,
+          });
+          return { ok: false, reason: 'ef-review-invalidated' };
+        }
         const composite = requestedKind === 'lvSimpsonEF'
-          ? (getCompletedLVSimpsonResult(selectedStudy)?.composite ||
-            resolveViewerQuizLVSimpsonForStudy(selectedStudy, quizMeasurements)?.composite)
+          ? (authoritativeEF?.composite ||
+            (!reviewedEFIsActive
+              ? resolveViewerQuizLVSimpsonForStudy(selectedStudy, quizMeasurements)?.composite
+              : null))
           : resolveViewerQuizCompositeResult(requestedKind, studyMeasurements);
         if (!composite) {
           return {
