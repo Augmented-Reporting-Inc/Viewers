@@ -5601,6 +5601,46 @@ function retainCompletedLVSimpsonResult(studyInstanceId: string, composite: any,
   return true;
 }
 
+let explicitLVSimpsonResult: { studyInstanceId: string; composite: any; result: any } | null = null;
+function getExplicitLVSimpsonResult(studyInstanceId: string) {
+  return explicitLVSimpsonResult?.studyInstanceId === studyInstanceId ? explicitLVSimpsonResult : null;
+}
+// Direct edits and deletions after Calculate EF invalidate the only quiz result.
+// This also fails closed if Cornerstone emits a late normalization change.
+function invalidateExplicitLVSimpsonAfterAnnotationChange(event: Event) {
+  const result = explicitLVSimpsonResult;
+  if (!result) return;
+  const detail = (event as CustomEvent)?.detail || {};
+  const annotationId = String(
+    detail.annotation?.annotationUID || detail.annotation?.uid ||
+    detail.annotationUID || ''
+  );
+  if (!annotationId) return;
+  if (!result.composite?.components?.some((component: any) =>
+    String(component.annotationId) === annotationId
+  )) return;
+  explicitLVSimpsonResult = null;
+  reviewedLVSimpsonEF = null;
+  if (typeof document !== 'undefined' &&
+      document.getElementById(LV_SIMPSON_PROGRESS_PANEL_ID)) {
+    renderLVSimpsonWorkflowPanel({
+      resultText: 'EF needs recalculation',
+      warnings: ['A source contour changed or was removed after EF calculation.'],
+      instruction: 'Review the four contours, then run the EF workflow again.',
+      onCancel: hideLVSimpsonWorkflowPanel,
+    });
+  }
+}
+
+eventTarget.addEventListener(
+  Enums.Events.ANNOTATION_MODIFIED,
+  invalidateExplicitLVSimpsonAfterAnnotationChange
+);
+eventTarget.addEventListener(
+  Enums.Events.ANNOTATION_REMOVED,
+  invalidateExplicitLVSimpsonAfterAnnotationChange
+);
+
 let reviewedLVSimpsonEF: { studyInstanceId: string; value: number } | null = null;
 
 function hideLVSimpsonWorkflowPanel() {
@@ -5617,7 +5657,9 @@ function renderLVSimpsonWorkflowPanel({
   onContinue = null,
   onCancel = null,
   onCapture = null,
+  onCalculate = null,
   resultText = '',
+  resultDetails = [],
   warnings = [],
 }: {
   measurements?: any[];
@@ -5626,7 +5668,9 @@ function renderLVSimpsonWorkflowPanel({
   onContinue?: null | (() => void);
   onCancel?: null | (() => void);
   onCapture?: null | (() => void);
+  onCalculate?: null | (() => void);
   resultText?: string;
+  resultDetails?: string[];
   warnings?: string[];
 } = {}) {
   if (typeof document === 'undefined') return;
@@ -5666,11 +5710,18 @@ function renderLVSimpsonWorkflowPanel({
   addText('LV Simpson Biplane EF', { fontWeight: '700', fontSize: '15px' });
   addText(`${completeCount} of 4 contours complete`, { marginBottom: '8px', color: '#cbd5e1' });
   for (const slot of LV_TRACE_REQUIRED_SLOTS) {
-    addText(`${slots.get(slot)?.length ? '✓' : '○'}  ${getLVSimpsonSlotDisplayName(slot)}`, {
+    const measurement = slots.get(slot)?.[0];
+    const geometry = measurement?.lvSimpson || measurement?.measurements?.lvSimpson || {};
+    const axis = Number(geometry.longAxisLengthMM);
+    const detail = measurement && Number.isFinite(axis) && axis > 0 ? ` — long axis ${axis.toFixed(1)} mm` : '';
+    addText(`${measurement ? '✓' : '○'}  ${getLVSimpsonSlotDisplayName(slot)}${detail}`, {
       padding: '3px 0',
     });
   }
   if (resultText) addText(resultText, { fontWeight: '700', fontSize: '18px', marginTop: '9px' });
+  for (const detail of resultDetails) {
+    addText(detail, { fontSize: '13px', paddingTop: '3px', color: '#e2e8f0' });
+  }
   for (const warning of warnings) {
     addText(warning, { color: '#fcd34d', paddingTop: '5px' });
   }
@@ -5700,6 +5751,7 @@ function renderLVSimpsonWorkflowPanel({
     controls.appendChild(item);
   };
   if (onContinue) button(continueLabel || 'Continue', onContinue);
+  if (onCalculate) button('Calculate EF', onCalculate);
   if (onCapture) button('Capture calculated measurement', onCapture, false);
   if (onCancel) button(resultText ? 'Close panel' : 'Cancel EF', onCancel);
   panel.appendChild(controls);
@@ -8257,6 +8309,9 @@ function commandsModule({
       const workflowSessionId = requestedSessionId || `${csUtils.uuidv4()}`;
 
       if (!requestedSessionId) {
+        // A new contour workflow invalidates any previous explicit EF.
+        explicitLVSimpsonResult = null;
+        reviewedLVSimpsonEF = null;
         cancelActiveLVSimpsonCapture();
         lvSimpsonMouseTools.restore();
         activeLVSimpsonWorkflowSessionId = workflowSessionId;
@@ -8636,8 +8691,7 @@ function commandsModule({
       const studyMeasurements = snapshotMeasurements.filter(entry =>
         String(entry?.referenceStudyUID || entry?.StudyInstanceUID || '').trim() === currentStudyId
       );
-      const lvSimpsonResult = calculateLVSimpson(studyMeasurements);
-      const goldComposite = resolveViewerQuizCompositeResult('lvSimpsonEF', studyMeasurements);
+      // EF is deliberately not calculated at contour completion.
 
       if (nextSlot && !singleSlot && !isWorkflowCancelled()) {
         const nextDisplayName = getLVSimpsonSlotDisplayName(nextSlot);
@@ -8715,97 +8769,48 @@ function commandsModule({
       cancelActiveLVSimpsonCapture();
       lvSimpsonMouseTools.restore();
 
-      const resultGuidance = Array.isArray(lvSimpsonResult?.guidance)
-        ? lvSimpsonResult.guidance
-            .map(value => String(value || '').trim())
-            .filter(Boolean)
-        : [];
-
-      if (
-        goldComposite &&
-        Number.isFinite(Number(goldComposite.value))
-      ) {
-        const ejectionFraction = roundQuizMeasurementValue(goldComposite.value, 2).toFixed(2);
-        const authoritativeResultReady = retainCompletedLVSimpsonResult(
-          currentStudyId,
-          goldComposite,
-          lvSimpsonResult
-        );
-        if (!authoritativeResultReady) {
-          // Never auto-capture a different EF from a later snapshot.
-          // Annotation normalization can populate Cornerstone state after the
-          // four-contour completion callback. Require explicit retry/review.
-          reviewedLVSimpsonEF = null;
+      // The four contour measurements are displayed for review first.
+      // Only a deliberate Calculate EF click creates a quiz-authoritative EF.
+      explicitLVSimpsonResult = null;
+      reviewedLVSimpsonEF = null;
+      const calculateEF = () => {
+        const measurementsForCalculation = getCurrentViewerMeasurementSnapshot(measurementService)
+          .filter(entry => String(entry?.referenceStudyUID || entry?.StudyInstanceUID || '').trim() === currentStudyId);
+        const resolved = resolveViewerQuizLVSimpsonForStudy(currentStudyId, measurementsForCalculation);
+        if (!resolved || !Number.isFinite(Number(resolved.composite?.value))) {
           renderLVSimpsonWorkflowPanel({
-            measurements: currentLVSimpsonMeasurements,
-            resultText: 'EF capture is not ready.',
-            warnings: ['The four contour revisions could not be verified. No EF was captured.'],
-            instruction: 'Review the contours and retry the EF measurement workflow.',
+            measurements: measurementsForCalculation,
+            resultText: 'EF calculation unavailable',
+            instruction: 'Verify contour geometry and calibration, then retry.',
+            onCalculate: calculateEF,
             onCancel: hideLVSimpsonWorkflowPanel,
           });
-          return measurement;
+          return;
         }
-        reviewedLVSimpsonEF = { studyInstanceId: currentStudyId, value: goldComposite.value };
-
-        const reviewMessages = Array.from(
-          new Set(
-            [axisWarning, ...resultGuidance]
-              .map(value => String(value || '').trim())
-              .filter(Boolean)
-          )
-        );
-
-        const goldCaptureListener = (event: Event) => {
-          if (!document.getElementById(LV_SIMPSON_PROGRESS_PANEL_ID)) return;
-          const captureDetail = (event as CustomEvent)?.detail || {};
-          const capturedValue = Number(captureDetail.value);
-          const captureStudyInstanceId = String(captureDetail.studyInstanceId || '').trim();
-          if (
-            !Number.isFinite(capturedValue) ||
-            (captureStudyInstanceId && captureStudyInstanceId !== currentStudyId)
-          ) {
-            return;
-          }
-
-          // Never retain the originally displayed EF after the quiz has captured
-          // a newer result. Show the exact confirmed gold value.
-          const displayedCapturedValue = roundQuizMeasurementValue(capturedValue, 2).toFixed(2);
-          renderLVSimpsonWorkflowPanel({
-            measurements: currentLVSimpsonMeasurements,
-            resultText: `Calculated LVEF: ${displayedCapturedValue}%`,
-            warnings: reviewMessages,
-            instruction: 'Gold answer captured. Save the quiz draft to persist it, or recapture after further edits.',
-             onCapture: () => requestLVSimpsonQuizCapture({ studyInstanceId: currentStudyId, value: goldComposite.value, mode: 'manual' }),
-            onCancel: hideLVSimpsonWorkflowPanel,
-          });
+        explicitLVSimpsonResult = {
+          studyInstanceId: currentStudyId,
+          composite: structuredClone(resolved.composite),
+          result: structuredClone(resolved.result),
         };
-        window.addEventListener(AR_LV_SIMPSON_GOLD_CAPTURED_EVENT, goldCaptureListener, {
-          once: true,
-        });
+        reviewedLVSimpsonEF = { studyInstanceId: currentStudyId, value: resolved.composite.value };
         renderLVSimpsonWorkflowPanel({
-          measurements: currentLVSimpsonMeasurements,
-          resultText: `Calculated LVEF: ${ejectionFraction}%`,
-          warnings: reviewMessages,
-          instruction: 'Learner EF is added to the active quiz question automatically. Educators can capture it as the gold answer. Review contours before recapturing after edits.',
-           onCapture: () => requestLVSimpsonQuizCapture({ studyInstanceId: currentStudyId, value: goldComposite.value, mode: 'manual' }),
+          measurements: measurementsForCalculation,
+          resultText: `Calculated LVEF: ${roundQuizMeasurementValue(resolved.composite.value, 2).toFixed(2)}%`,
+          resultDetails: [
+            `End-diastolic volume (EDV): ${Number(resolved.result.values.edvML).toFixed(2)} mL`,
+            `End-systolic volume (ESV): ${Number(resolved.result.values.esvML).toFixed(2)} mL`,
+          ],
+          instruction: 'Cross-check EF = (EDV - ESV) / EDV × 100, then capture this result in the active EF question.',
+          onCapture: () => requestLVSimpsonQuizCapture({
+            studyInstanceId: currentStudyId, value: resolved.composite.value, mode: 'manual',
+          }),
           onCancel: hideLVSimpsonWorkflowPanel,
         });
-
-        // Only the fourth complete contour emits an automatic capture request.
-        requestLVSimpsonQuizCapture({ studyInstanceId: currentStudyId, value: goldComposite.value, mode: 'completed' });
-        return measurement;
-      }
-
+      };
       renderLVSimpsonWorkflowPanel({
         measurements: currentLVSimpsonMeasurements,
-        resultText: 'LVEF not calculated',
-        warnings: [
-          `Calculation status: ${lvSimpsonResult?.status || 'invalid'}`,
-          ...(resultGuidance.length
-            ? resultGuidance
-            : ['Recheck the A4C/A2C ED/ES frames, mitral hinge placement, true LV apex, and contour coverage.']),
-        ],
-        instruction: 'Review and correct the contours before capturing a gold answer. The quiz will not accept an incomplete composite.',
+        instruction: 'Review the four contours and their long-axis measurements, then select Calculate EF.',
+        onCalculate: calculateEF,
         onCancel: hideLVSimpsonWorkflowPanel,
       });
 
@@ -12386,11 +12391,7 @@ function commandsModule({
       const studyInstanceId = String(
         activeDisplaySet?.StudyInstanceUID || activeDisplaySet?.studyInstanceUID || ''
       ).trim();
-      return getCompletedLVSimpsonResult(studyInstanceId) ||
-        resolveViewerQuizLVSimpsonForStudy(
-          studyInstanceId,
-          getCurrentViewerMeasurementSnapshot(measurementService)
-        );
+      return getExplicitLVSimpsonResult(studyInstanceId);
     },
     getViewerMeasurementSnapshotForPanel: () => {
       const saveTarget = getArViewerSaveTargetFromUrl();
@@ -13578,7 +13579,7 @@ function commandsModule({
           typeof document !== 'undefined' &&
           Boolean(document.getElementById(LV_SIMPSON_PROGRESS_PANEL_ID));
         const authoritativeEF = requestedKind === 'lvSimpsonEF'
-          ? getCompletedLVSimpsonResult(selectedStudy)
+          ? getExplicitLVSimpsonResult(selectedStudy)
           : null;
         if (reviewedEFIsActive && !authoritativeEF) {
           // A real edit, deletion, or unavailable contour revision invalidates
@@ -13595,10 +13596,7 @@ function commandsModule({
           return { ok: false, reason: 'ef-review-invalidated' };
         }
         const composite = requestedKind === 'lvSimpsonEF'
-          ? (authoritativeEF?.composite ||
-            (!reviewedEFIsActive
-              ? resolveViewerQuizLVSimpsonForStudy(selectedStudy, quizMeasurements)?.composite
-              : null))
+          ? authoritativeEF?.composite
           : resolveViewerQuizCompositeResult(requestedKind, studyMeasurements);
         if (!composite) {
           return {
