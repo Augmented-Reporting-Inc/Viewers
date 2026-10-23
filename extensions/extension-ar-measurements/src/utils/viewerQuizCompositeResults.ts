@@ -100,7 +100,8 @@ export function isViewerQuizCompositeReviewCurrent(
  */
 export function resolveViewerQuizCompositeResult(
   kind: CompositeKind,
-  measurements: Measurement[] = []
+  measurements: Measurement[] = [],
+  calculatedResult?: ReturnType<typeof calculateLVSimpson> | ReturnType<typeof calculateLAVolume>
 ) {
   if (kind !== 'lvSimpsonEF' && kind !== 'laVolumeBiplane') return null;
   if (!Array.isArray(measurements)) return null;
@@ -108,10 +109,10 @@ export function resolveViewerQuizCompositeResult(
   const components = collectComponents(measurements, kind);
   if (!components) return null;
 
-  const result =
-    kind === 'lvSimpsonEF'
+  const result = calculatedResult ??
+    (kind === 'lvSimpsonEF'
       ? calculateLVSimpson(measurements)
-      : calculateLAVolume(measurements);
+      : calculateLAVolume(measurements));
 
   const value =
     kind === 'lvSimpsonEF'
@@ -146,11 +147,13 @@ export function resolveViewerQuizLVSimpsonForStudy(
   const studyMeasurements = measurements.filter(measurement =>
     clean(measurement?.referenceStudyUID || measurement?.StudyInstanceUID) === studyId
   );
-  const composite = resolveViewerQuizCompositeResult('lvSimpsonEF', studyMeasurements);
-  if (!composite) return null;
-
+  // Calculate EF once from this exact study snapshot. Build the scored
+  // composite and clinical volume result from the same calculation.
   const result = calculateLVSimpson(studyMeasurements);
   if (result?.status !== 'complete' || !result.values) return null;
+
+  const composite = resolveViewerQuizCompositeResult('lvSimpsonEF', studyMeasurements, result);
+  if (!composite) return null;
 
   return { studyInstanceId: studyId, composite, result };
 }
