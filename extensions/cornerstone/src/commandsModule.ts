@@ -401,6 +401,45 @@ function getViewerMeasurementSnapshotPoints(measurement: any = {}, geometry: any
   return geometryPoints;
 }
 
+// Local diagnostic fingerprint only: no points, patient, study, or annotation IDs logged.
+// Fingerprints are deterministic within an image build; they are not clinical evidence.
+function getLVSimpsonDiagnosticFingerprint(measurement: any) {
+  const geometry = measurement?.lvSimpson || measurement?.measurements?.lvSimpson || {};
+  const points = getViewerMeasurementSnapshotPoints(measurement, geometry);
+  let hash = 2166136261;
+  for (const point of points) {
+    const values = Array.isArray(point)
+      ? point.slice(0, 3)
+      : [point?.x, point?.y, point?.z];
+    for (const item of values) {
+      const numeric = Number(item);
+      const token = Number.isFinite(numeric) ? numeric.toPrecision(12) : 'missing';
+      for (let index = 0; index < token.length; index += 1) {
+        hash = Math.imul(hash ^ token.charCodeAt(index), 16777619);
+      }
+    }
+  }
+  return {
+    slot: getLVSimpsonSlotFromMeasurement(measurement),
+    pointCount: points.length,
+    fingerprint: (hash >>> 0).toString(16).padStart(8, '0'),
+  };
+}
+
+function logLVSimpsonDiagnosticSnapshot(stage: string, measurements: any[]) {
+  const evidence = (Array.isArray(measurements) ? measurements : [])
+    .filter(isLVSimpsonMeasurement);
+  const result = calculateLVSimpson(evidence);
+  console.info('[LV EF diagnostic] calculation snapshot', {
+    stage,
+    status: result?.status || 'missing',
+    edvML: result?.values?.edvML ?? null,
+    esvML: result?.values?.esvML ?? null,
+    ef: result?.values?.ejectionFraction ?? null,
+    contours: evidence.map(getLVSimpsonDiagnosticFingerprint),
+  });
+}
+
 function compactViewerVolumeFallbackPoints(points: any[] = [], maxPoints = 400) {
   if (!Array.isArray(points) || points.length === 0) {
     return [];
@@ -539,11 +578,14 @@ function synchronizeViewerMeasurementSessionFallbacks(liveMeasurements: any[] = 
       const liveGeometry = liveMeasurement?.lvSimpson || liveMeasurement?.measurements?.lvSimpson || {};
       const sessionPointCount = getViewerMeasurementSnapshotPoints(lvSimpsonFallback, sessionGeometry).length;
       const livePointCount = getViewerMeasurementSnapshotPoints(liveMeasurement, liveGeometry).length;
-      if (sessionPointCount !== livePointCount) {
-        console.warn('[LV EF] session-to-live contour point-count mismatch', {
-          slot: getLVSimpsonSlotFromMeasurement(liveMeasurement),
-          sessionPointCount,
-          livePointCount,
+      const sessionSignature = getLVSimpsonDiagnosticFingerprint(lvSimpsonFallback);
+      const liveSignature = getLVSimpsonDiagnosticFingerprint(liveMeasurement);
+      if (sessionSignature.fingerprint !== liveSignature.fingerprint ||
+          sessionPointCount !== livePointCount) {
+        console.warn('[LV EF diagnostic] session-to-live contour geometry changed', {
+          slot: liveSignature.slot,
+          session: sessionSignature,
+          live: liveSignature,
         });
       }
       // This function runs while the panel is resolving its live snapshot.
@@ -8595,6 +8637,7 @@ function commandsModule({
       );
       const lvSimpsonResult = calculateLVSimpson(studyMeasurements);
       const goldComposite = resolveViewerQuizCompositeResult('lvSimpsonEF', studyMeasurements);
+      logLVSimpsonDiagnosticSnapshot('fourth-contour-complete', studyMeasurements);
 
       if (nextSlot && !singleSlot && !isWorkflowCancelled()) {
         const nextDisplayName = getLVSimpsonSlotDisplayName(nextSlot);
@@ -13512,6 +13555,9 @@ function commandsModule({
         const composite = requestedKind === 'lvSimpsonEF'
           ? resolveViewerQuizLVSimpsonForStudy(selectedStudy, quizMeasurements)?.composite
           : resolveViewerQuizCompositeResult(requestedKind, studyMeasurements);
+        if (requestedKind === 'lvSimpsonEF') {
+          logLVSimpsonDiagnosticSnapshot('quiz-capture', studyMeasurements);
+        }
         if (!composite) {
           return {
             ok: false,
