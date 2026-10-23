@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - fix/ef-progress-quiz-capture-parity-20261020
+      - fix/ef-stable-panel-refresh-20261022
       - fix/ef-sticky-tool-between-contours-20261020
       - feat/lv-ef-rounded-contour-20261021
       - feat/quiz-ef-la-auto-activate-capture-20261021

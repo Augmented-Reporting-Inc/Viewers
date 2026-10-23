@@ -3672,12 +3672,30 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                 : 'Recapture selected measurement'}
           </button>
 
+          {cleanString(
+            plainObject(value?.reviewPayload).label ||
+            value?.measurementLabel ||
+            value?.label
+          ) ? (
+            <div className="truncate text-xs text-gray-300" title={cleanString(
+              plainObject(value?.reviewPayload).label ||
+              value?.measurementLabel ||
+              value?.label
+            )}>
+              Measurement label: {cleanString(
+                plainObject(value?.reviewPayload).label ||
+                value?.measurementLabel ||
+                value?.label
+              )}
+            </div>
+          ) : null}
+
           {value?.value === null ||
           typeof value?.value === 'undefined' ||
           cleanString(value?.value) === '' ? (
             <div className="text-xs text-gray-400">
               {cleanString(plainObject(question.answerConfig).measurementKind) === 'lvSimpsonEF'
-                ? 'Complete four LV contours to capture EF automatically, or use the capture button.'
+                ? 'Complete four LV contours, select Calculate EF in the EF panel, then capture the calculated result.'
                 : cleanString(plainObject(question.answerConfig).measurementKind) === 'laVolumeBiplane'
                   ? 'Complete both LA contours, then capture the calculated volume.'
                   : 'Draw or select a measurement annotation in the viewport, then use it as the answer.'}

@@ -1458,7 +1458,11 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
     isLearnerViewerMeasurementWorkflowFromUrl
   );
   const isMeasurementScoringDisabled = isViewerMeasurementScoringDisabledFromUrl();
+  // Ignore refresh results superseded by newer viewer/annotation events.
+  const measurementRefreshRevisionRef = useRef(0);
   const refreshLiveMeasurements = useCallback(async () => {
+    const refreshRevision = ++measurementRefreshRevisionRef.current;
+    const isCurrentRefresh = () => refreshRevision === measurementRefreshRevisionRef.current;
     try {
       // Reuse the active-study calculation and contour evidence used by
       // educator gold capture and learner quiz capture, not a separately merged
@@ -1466,8 +1470,10 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
       const captureReady = await Promise.resolve(
         commandsManager.runCommand('getViewerQuizLVSimpsonForActiveStudy')
       );
+      if (!isCurrentRefresh()) return;
       setCaptureReadyLVSimpson(captureReady?.result?.status === 'complete' ? captureReady : null);
     } catch (error) {
+      if (!isCurrentRefresh()) return;
       setCaptureReadyLVSimpson(null);
       console.warn('[ARMeasurementsPanel] quiz EF snapshot refresh failed:', error);
     }
@@ -1477,14 +1483,17 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
         commandsManager.runCommand('getViewerMeasurementSnapshotForPanel')
       );
 
+      if (!isCurrentRefresh()) return;
       if (Array.isArray(snapshot)) {
         setMeasurements([...snapshot]);
         return;
       }
     } catch (error) {
+      if (!isCurrentRefresh()) return;
       console.warn('[ARMeasurementsPanel] AR measurement snapshot refresh failed:', error);
     }
 
+    if (!isCurrentRefresh()) return;
     setMeasurements(
       [...(measurementService.getMeasurements?.() || [])].filter(
         measurement => !isUltrasoundDirectionalMeasurement(measurement)
