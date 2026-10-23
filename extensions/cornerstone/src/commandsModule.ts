@@ -12386,11 +12386,20 @@ function commandsModule({
       const studyInstanceId = String(
         activeDisplaySet?.StudyInstanceUID || activeDisplaySet?.studyInstanceUID || ''
       ).trim();
-      return getCompletedLVSimpsonResult(studyInstanceId) ||
-        resolveViewerQuizLVSimpsonForStudy(
-          studyInstanceId,
-          getCurrentViewerMeasurementSnapshot(measurementService)
-        );
+      const retained = getCompletedLVSimpsonResult(studyInstanceId);
+      if (retained) return retained;
+      // An active workflow review must never obtain a different EF from an
+      // independently refreshed quiz snapshot. Missing/changed contour
+      // evidence is a review failure, not permission to silently recalculate.
+      if (reviewedLVSimpsonEF?.studyInstanceId === studyInstanceId) {
+        return null;
+      }
+      // Read-only use outside the current drawing/review workflow (e.g. a
+      // previously saved study) still resolves from the current study snapshot.
+      return resolveViewerQuizLVSimpsonForStudy(
+        studyInstanceId,
+        getCurrentViewerMeasurementSnapshot(measurementService)
+      );
     },
     getViewerMeasurementSnapshotForPanel: () => {
       const saveTarget = getArViewerSaveTargetFromUrl();
