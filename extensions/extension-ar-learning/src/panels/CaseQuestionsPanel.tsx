@@ -22,6 +22,7 @@ import {
 import {
   isGuidedQuizCompositeKind,
   isMatchingQuizEFCompletion,
+  getInitialGuidedEFQuestionTarget,
 } from '../utils/quizCompositeCaptureIntent';
 
 const AR_QUIZ_MEASUREMENT_ADDED_EVENT = 'ar-learning:quiz-measurement-added';
@@ -2133,6 +2134,11 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
   ) {
     const nextActiveQuestionKey = `${quiz.quizKey}:${question.questionKey}`;
     const isNewQuestion = lastActivatedQuestionRef.current !== nextActiveQuestionKey;
+    // Question cards emit both focus and click. Suppress the second call while
+    // React has not committed the new active key, or it can race the initial jump.
+    if (!options.force && !isNewQuestion && activeQuestionKey !== nextActiveQuestionKey) {
+      return;
+    }
     lastActivatedQuestionRef.current = nextActiveQuestionKey;
     // Change the question binding synchronously, but start guided EF/LA
     // only after navigation has reached the question's image/viewport.
@@ -2227,6 +2233,10 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
           )
         : {};
     const hasViewerTargetOverride = Object.prototype.hasOwnProperty.call(options, 'viewerTarget');
+    const guidedEFFrameTargets = !authoringMode && measurementKind === 'lvSimpsonEF'
+      ? getCompleteEFContourFrameTargets(question.answerConfig)
+      : null;
+    const openingGuidedEF = !!guidedEFFrameTargets && !hasViewerTargetOverride;
     const learnerFrameTarget =
       question.type === 'frameSelection'
         ? getNestedViewerTarget(reviewQuestionAnswer) ||
@@ -2252,6 +2262,15 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
             getQuestionViewerTarget(question)
           : getReviewAnswerTarget(question, questionAnswer) || getQuestionViewerTarget(question));
     }
+    // Saved/scored EF responses may hold the last recorded contour frame.
+    // Always open the first authored frame for a guided EF question.
+    resolvedViewerTarget = getInitialGuidedEFQuestionTarget({
+      questionType: question.type,
+      measurementKind,
+      authoredFirstFrame: guidedEFFrameTargets?.A4C_ED,
+      existingTarget: resolvedViewerTarget,
+      hasTargetOverride: hasViewerTargetOverride,
+    });
     const viewerTarget = getQuestionSelectionViewerTarget(
       question,
       resolvedViewerTarget,
@@ -2265,7 +2284,8 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
 
     if (
       question.type === 'measurementNumeric' &&
-      hasMeasurementComparisonReference(learnerMeasurement)
+      hasMeasurementComparisonReference(learnerMeasurement) &&
+      !openingGuidedEF
     ) {
       try {
         const measurementResult = await runViewerCommand(
