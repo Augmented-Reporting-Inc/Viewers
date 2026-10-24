@@ -1,6 +1,7 @@
 import {
   isMatchingQuizEFCompletion,
   isGuidedQuizCompositeKind,
+  getInitialGuidedEFQuestionTarget,
 } from './quizCompositeCaptureIntent';
 
 const matching = {
@@ -44,5 +45,42 @@ describe('fourth-contour EF capture', () => {
     expect(isMatchingQuizEFCompletion({ ...matching, eventValue: NaN })).toBe(false);
     expect(isMatchingQuizEFCompletion({ ...matching, currentValue: Infinity })).toBe(false);
     expect(isMatchingQuizEFCompletion({ ...matching, currentValue: 53.237 })).toBe(false);
+  });
+});
+
+describe('initial guided EF question navigation', () => {
+  const first = { sopInstanceUID: '1.2.3.101', instanceNumber: 101, frameNumber: 4 };
+  const last = { sopInstanceUID: '1.2.3.119', instanceNumber: 119, frameNumber: 19 };
+
+  it('opens A4C_ED instead of the saved final EF answer frame', () => {
+    expect(getInitialGuidedEFQuestionTarget({
+      questionType: 'measurementNumeric',
+      measurementKind: 'lvSimpsonEF',
+      authoredFirstFrame: first,
+      existingTarget: last,
+    })).toEqual(first);
+  });
+
+  it('preserves explicit navigation overrides, including review actions', () => {
+    expect(getInitialGuidedEFQuestionTarget({
+      questionType: 'measurementNumeric',
+      measurementKind: 'lvSimpsonEF',
+      authoredFirstFrame: first,
+      existingTarget: last,
+      hasTargetOverride: true,
+    })).toEqual(last);
+  });
+
+  it('preserves the previous behavior for manual EF and other measurements', () => {
+    for (const [questionType, measurementKind, authoredFirstFrame] of [
+      ['measurementNumeric', 'lvSimpsonEF', null],
+      ['measurementNumeric', 'laVolumeBiplane', first],
+      ['frameSelection', 'lvSimpsonEF', first],
+      ['measurementNumeric', 'length', first],
+    ] as const) {
+      expect(getInitialGuidedEFQuestionTarget({
+        questionType, measurementKind, authoredFirstFrame, existingTarget: last,
+      })).toEqual(last);
+    }
   });
 });

@@ -8,6 +8,7 @@ on:
       - fix/ef-sticky-tool-between-contours-20261020
       - feat/lv-ef-rounded-contour-20261021
       - feat/quiz-ef-la-auto-activate-capture-20261021
+      - feature/ef-authored-contour-frame-navigation-20261024
   pull_request:
     branches:
       - fix/ef-sticky-tool-between-contours-20261020
@@ -15,6 +16,7 @@ on:
       - port/3.11-custom
       - integration/ef-progress-current
       - integration/quiz-wcag-length-20261013
+      - feature/ef-explicit-calculate-20261023
     paths:
       - 'extensions/extension-ar-learning/**'
       - 'extensions/cornerstone/src/commandsModule.ts'

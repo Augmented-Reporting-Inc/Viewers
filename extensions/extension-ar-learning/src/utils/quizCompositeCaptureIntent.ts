@@ -34,3 +34,33 @@ export function isMatchingQuizEFCompletion({
 export function isGuidedQuizCompositeKind(value: unknown): boolean {
   return value === 'lvSimpsonEF' || value === 'laVolumeBiplane';
 }
+
+/**
+ * A learner opening an educator-guided EF question must start at A4C_ED.
+ * A previously saved answer (or scored composite) may refer to A2C_ES,
+ * because it was recorded on the final contour. It must not override
+ * the authored first frame. Explicit navigation overrides still win.
+ */
+export function getInitialGuidedEFQuestionTarget({
+  questionType,
+  measurementKind,
+  authoredFirstFrame,
+  existingTarget,
+  hasTargetOverride = false,
+}: {
+  questionType: string;
+  measurementKind: string;
+  authoredFirstFrame?: any;
+  existingTarget: any;
+  hasTargetOverride?: boolean;
+}): any {
+  if (
+    !hasTargetOverride &&
+    questionType === 'measurementNumeric' &&
+    measurementKind === 'lvSimpsonEF' &&
+    authoredFirstFrame
+  ) {
+    return authoredFirstFrame;
+  }
+  return existingTarget;
+}
