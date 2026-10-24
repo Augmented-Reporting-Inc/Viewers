@@ -4519,6 +4519,27 @@ function normalizeViewerQuizTarget(target = {}) {
   };
 }
 
+function getEFContourFrameTarget(targets: any, slot: string) {
+  if (!targets || typeof targets !== 'object' || Array.isArray(targets) ||
+      !LV_TRACE_REQUIRED_SLOTS.includes(slot)) {
+    return null;
+  }
+  const target = targets[slot];
+  if (!target || typeof target !== 'object' || Array.isArray(target)) return null;
+  const normalized = normalizeViewerQuizTarget(target);
+  if (!normalized.referencedImageId || !normalized.sopInstanceId ||
+      !Number.isInteger(normalized.frameNumber) || normalized.frameNumber < 1) return null;
+  return target;
+}
+
+// An EF contour's authored frame is an exact target, not merely an instance.
+// Never allow the generic quiz navigator's SOP or image-index fallbacks to
+// silently put an EF contour on the wrong cine frame.
+function didNavigateToExactEFContourFrame(result: any) {
+  return result?.ok === true &&
+    (result.source === 'referencedImageId' || result.source === 'sop-frame');
+}
+
 function hasViewerQuizTargetIdentity(target = {}) {
   return !!(
     target.displaySetInstanceId ||
@@ -8304,6 +8325,9 @@ function commandsModule({
       slot: requestedSlot = '',
       sessionId: requestedSessionId = '',
       singleSlot = false,
+      efContourTargets = null,
+      questionKey = '',
+      viewportId: requestedViewportId = '',
     } = {}) => {
       clearUltrasoundDirectionalWorkflowListeners();
       const workflowSessionId = requestedSessionId || `${csUtils.uuidv4()}`;
@@ -8318,8 +8342,11 @@ function commandsModule({
       }
 
       const isWorkflowCancelled = () => activeLVSimpsonWorkflowSessionId !== workflowSessionId;
-      const { viewport } = _getActiveViewportEnabledElement() || {};
-      const activeViewportId = viewportGridService.getActiveViewportId();
+      let { viewport } = _getActiveViewportEnabledElement() || {};
+      let activeViewportId = requestedViewportId || viewportGridService.getActiveViewportId();
+      if (requestedViewportId) {
+        viewport = cornerstoneViewportService.getCornerstoneViewport(requestedViewportId) || viewport;
+      }
 
       if (!viewport?.element || !activeViewportId) {
         uiNotificationService.show({
@@ -8373,6 +8400,35 @@ function commandsModule({
         return null;
       }
 
+      // Selecting a guided EF question opens its first authored frame. A later
+      // Continue performs its own jump before invoking this next slot.
+      const initialTarget = !requestedSessionId
+        ? getEFContourFrameTarget(efContourTargets, slotSelection.slotInfo.slot)
+        : null;
+      if (initialTarget && !isWorkflowCancelled()) {
+        const currentImageId = String(viewport?.getCurrentImageId?.() || '');
+        if (normalizeImageIdForCompare(currentImageId) !==
+            normalizeImageIdForCompare(initialTarget.referencedImageId)) {
+          const navigation = await actions.jumpToViewerQuizTarget({
+            viewerTarget: initialTarget,
+            questionKey,
+          });
+          if (isWorkflowCancelled()) return null;
+          if (!didNavigateToExactEFContourFrame(navigation)) {
+            uiNotificationService.show({
+              title: 'LV EF',
+              message: 'The authored contour instance/frame could not be opened. EF capture was not started.',
+              type: 'warning',
+              duration: 6000,
+            });
+            clearLVSimpsonWorkflowIfCurrent(workflowSessionId);
+            return null;
+          }
+          activeViewportId = navigation.viewportId || activeViewportId;
+          viewport = cornerstoneViewportService.getCornerstoneViewport(activeViewportId) || viewport;
+        }
+      }
+
       // Suspend the previously active mouse tool once for the full four-slot
       // workflow. A later Continue may switch to a different viewport/group.
       if (!lvSimpsonMouseTools.isActive()) {
@@ -8417,6 +8473,9 @@ function commandsModule({
             slot: slotInfo.slot,
             sessionId: workflowSessionId,
             singleSlot,
+            efContourTargets,
+            questionKey,
+            viewportId: activeViewportId,
           });
         };
 
@@ -8695,49 +8754,57 @@ function commandsModule({
 
       if (nextSlot && !singleSlot && !isWorkflowCancelled()) {
         const nextDisplayName = getLVSimpsonSlotDisplayName(nextSlot);
-
-        if (axisWarning) {
-          let continued = false;
-
-          const continueToNextSlot = () => {
-            if (
-              continued ||
-              activeLVSimpsonWorkflowSessionId !== workflowSessionId
-            ) {
+        const nextTarget = getEFContourFrameTarget(efContourTargets, nextSlot);
+        const normalInstruction = nextTarget
+          ? `${slotDisplayName} recorded. Select Continue to open the educator-assigned ${nextDisplayName} instance/frame.`
+          : `${slotDisplayName} recorded. Navigate to the correct ${nextDisplayName} image/frame, then continue.`;
+        let advancing = false;
+        const continueToNextSlot = async () => {
+          if (advancing || isWorkflowCancelled()) return;
+          advancing = true;
+          let nextViewportId = activeViewportId;
+          if (nextTarget) {
+            let navigation: any = null;
+            try {
+              navigation = await actions.jumpToViewerQuizTarget({
+                viewerTarget: nextTarget,
+                questionKey,
+              });
+            } catch (error) {
+              console.warn('[LV EF] authored contour frame navigation failed:', error);
+            }
+            if (isWorkflowCancelled()) return;
+            if (!didNavigateToExactEFContourFrame(navigation)) {
+              advancing = false;
+              renderLVSimpsonWorkflowPanel({
+                measurements: currentLVSimpsonMeasurements,
+                instruction: `Could not open the saved ${nextDisplayName} instance/frame. Check that the assigned DICOM image is available, then retry Continue.`,
+                continueLabel: 'Retry Continue',
+                onContinue: continueToNextSlot,
+                onCancel: () => clearLVSimpsonWorkflowIfCurrent(workflowSessionId),
+                warnings: axisWarning ? [axisWarning] : [],
+              });
               return;
             }
-
-            continued = true;
-
-            actions.startLVSimpsonEFWorkflow({
-              slot: nextSlot,
-              sessionId: workflowSessionId,
-              singleSlot,
-            });
-          };
-
-          renderLVSimpsonWorkflowPanel({
-            measurements: currentLVSimpsonMeasurements,
-            instruction: `${axisWarning} Select the correct frame for ${nextDisplayName}, then continue.`,
-            continueLabel: 'Continue to next contour',
-            onContinue: continueToNextSlot,
-            onCancel: () => clearLVSimpsonWorkflowIfCurrent(workflowSessionId),
-          });
-
-          return measurement;
-        }
-
-        const continueToNextSlot = () => {
-          if (activeLVSimpsonWorkflowSessionId !== workflowSessionId) return;
-          actions.startLVSimpsonEFWorkflow({
+            nextViewportId = navigation.viewportId || nextViewportId;
+          }
+          if (isWorkflowCancelled()) return;
+          void actions.startLVSimpsonEFWorkflow({
             slot: nextSlot,
             sessionId: workflowSessionId,
             singleSlot,
+            efContourTargets,
+            questionKey,
+            viewportId: nextViewportId,
+          }).catch(error => {
+            console.warn('[LV EF] next contour workflow failed:', error);
+            clearLVSimpsonWorkflowIfCurrent(workflowSessionId);
           });
         };
         renderLVSimpsonWorkflowPanel({
           measurements: currentLVSimpsonMeasurements,
-          instruction: `${slotDisplayName} recorded. Navigate to the correct ${nextDisplayName} image/frame, then continue.`,
+          instruction: normalInstruction,
+          warnings: axisWarning ? [axisWarning] : [],
           continueLabel: 'Continue to next contour',
           onContinue: continueToNextSlot,
           onCancel: () => clearLVSimpsonWorkflowIfCurrent(workflowSessionId),
@@ -10951,7 +11018,12 @@ function commandsModule({
         cineStopped: stopCine,
       };
     },
-    activateViewerQuizMeasurementTool: ({ toolName = 'Length', measurementKind = '' } = {}) => {
+    activateViewerQuizMeasurementTool: ({
+      toolName = 'Length',
+      measurementKind = '',
+      efContourTargets = null,
+      questionKey = '',
+    } = {}) => {
       if (measurementKind === 'lvSimpsonEF') {
         if (activeLAVolumeWorkflowSessionId) {
           clearLAVolumeWorkflowIfCurrent(activeLAVolumeWorkflowSessionId);
@@ -10961,7 +11033,7 @@ function commandsModule({
         }
         // Each new quiz question starts its own guided capture; duplicate
         // focus/click events are suppressed by Case Questions.
-        void actions.startLVSimpsonEFWorkflow().catch(error =>
+        void actions.startLVSimpsonEFWorkflow({ efContourTargets, questionKey }).catch(error =>
           console.warn('[Viewer quiz] EF activation failed:', error)
         );
         return { ok: true, measurementKind, workflowStarted: true };
