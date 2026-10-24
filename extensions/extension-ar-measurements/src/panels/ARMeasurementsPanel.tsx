@@ -780,7 +780,7 @@ function LVSimpsonSummary({ result }) {
           </div>
           <div className="rounded bg-black p-2">
             <div className="text-xs text-gray-400">EF</div>
-            <div className="font-semibold">{formatSimpsonValue(values.ejectionFraction, 0)}%</div>
+            <div className="font-semibold">{formatSimpsonValue(values.ejectionFraction, 2)}%</div>
           </div>
         </div>
       ) : null}
@@ -859,6 +859,7 @@ function getArViewerSaveTargetFromUrl() {
       baseSeriesId: String(qs.get('arBaseSeriesId') || '').trim(),
       seriesId: String(qs.get('arSeriesId') || '').trim(),
       learnerSeriesId: String(qs.get('arLearnerSeriesId') || '').trim(),
+      attemptOwner: String(qs.get('arAttemptOwner') || '').trim(),
       launchSource: String(qs.get('arLaunchSource') || '').trim(),
       measurementWorkflowRole: String(qs.get('arMeasurementWorkflowRole') || '').trim(),
       reviewWorkflowType: String(qs.get('arReviewWorkflowType') || '').trim(),
@@ -871,6 +872,7 @@ function getArViewerSaveTargetFromUrl() {
       baseSeriesId: '',
       seriesId: '',
       learnerSeriesId: '',
+      attemptOwner: '',
       launchSource: '',
       measurementWorkflowRole: '',
       reviewWorkflowType: '',
@@ -949,11 +951,14 @@ const VIEWER_MEASUREMENTS_WORKFLOW = 'viewerMeasurements';
 const REVIEWER_MEASUREMENTS_WORKFLOW = 'reviewerMeasurements';
 
 function isClinicalReportMeasurementsTarget(saveTarget: any = {}) {
-  return (
-    saveTarget.mode === CLINICAL_REPORT_MEASUREMENTS_SAVE_TARGET &&
+  const clinical = saveTarget.mode === CLINICAL_REPORT_MEASUREMENTS_SAVE_TARGET &&
     !!saveTarget.seriesId &&
-    String(saveTarget.launchSource || '').trim().toLowerCase() === 'report'
-  );
+    String(saveTarget.launchSource || '').trim().toLowerCase() === 'report';
+  const reportOwnedLearner = saveTarget.mode === 'learnerCopyOnSave' &&
+    saveTarget.attemptOwner === 'report' && !!saveTarget.learnerSeriesId &&
+    String(saveTarget.measurementWorkflowRole || '').toLowerCase() === 'learner' &&
+    String(saveTarget.launchSource || '').toLowerCase() === 'library';
+  return clinical || reportOwnedLearner;
 }
 
 const CLINICAL_REPORT_REVIEW_PREFERENCE_KEY =
@@ -1031,7 +1036,7 @@ function formatClinicalReportValue(value) {
   return String(value);
 }
 
-function buildClinicalReportReviewRows(preview: any = {}) {
+export function buildClinicalReportReviewRows(preview: any = {}) {
   const hasAuthoritativeServerItems = Array.isArray(preview?.items);
   const serverItems = hasAuthoritativeServerItems
     ? preview.items
@@ -1133,7 +1138,7 @@ function hasClinicalReportDerivedConsequences(review: any = {}) {
   );
 }
 
-function ClinicalReportMeasurementReviewModal({
+export function ClinicalReportMeasurementReviewModal({
   review,
   selectedRowKeys = [],
   showReviewBeforeSave,
@@ -1420,6 +1425,7 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
   const isReviewWorkflowReadOnly = isReviewWorkflow && !getWritableMeasurementWorkflow(saveTarget);
   const isClinicalReportSaveTarget = isClinicalReportMeasurementsTarget(saveTarget);
   const [measurements, setMeasurements] = useState([]);
+  const [captureReadyLVSimpson, setCaptureReadyLVSimpson] = useState(null);
   const [pendingDeletedMeasurementIds, setPendingDeletedMeasurementIds] = useState<string[]>([]);
   const [savingAction, setSavingAction] = useState('');
   const [isAddingCineComment, setIsAddingCineComment] = useState(false);
@@ -1435,6 +1441,15 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
   const [sessionLVSimpsonMeasurements, setSessionLVSimpsonMeasurements] = useState([]);
   const [sessionLAVolumeMeasurements, setSessionLAVolumeMeasurements] = useState([]);
   const saveInFlightRef = useRef(false);
+  const quizSaveRequestRef = useRef<string | null>(null);
+  const finishQuizMeasurementSave = (ok: boolean) => {
+    const requestId = quizSaveRequestRef.current;
+    if (!requestId) return;
+    quizSaveRequestRef.current = null;
+    window.dispatchEvent(new CustomEvent('ar:quiz-measurements-save-result', {
+      detail: { requestId, ok },
+    }));
+  };
   const autoDisplayPeerMeasurementStateRef = useRef({
     key: '',
     status: 'idle',
@@ -1443,20 +1458,42 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
     isLearnerViewerMeasurementWorkflowFromUrl
   );
   const isMeasurementScoringDisabled = isViewerMeasurementScoringDisabledFromUrl();
+  // Ignore refresh results superseded by newer viewer/annotation events.
+  const measurementRefreshRevisionRef = useRef(0);
   const refreshLiveMeasurements = useCallback(async () => {
+    const refreshRevision = ++measurementRefreshRevisionRef.current;
+    const isCurrentRefresh = () => refreshRevision === measurementRefreshRevisionRef.current;
+    try {
+      // Reuse the active-study calculation and contour evidence used by
+      // educator gold capture and learner quiz capture, not a separately merged
+      // saved/live list that can show an outdated Simpson EF.
+      const captureReady = await Promise.resolve(
+        commandsManager.runCommand('getViewerQuizLVSimpsonForActiveStudy')
+      );
+      if (!isCurrentRefresh()) return;
+      setCaptureReadyLVSimpson(captureReady?.result?.status === 'complete' ? captureReady : null);
+    } catch (error) {
+      if (!isCurrentRefresh()) return;
+      setCaptureReadyLVSimpson(null);
+      console.warn('[ARMeasurementsPanel] quiz EF snapshot refresh failed:', error);
+    }
+
     try {
       const snapshot = await Promise.resolve(
         commandsManager.runCommand('getViewerMeasurementSnapshotForPanel')
       );
 
+      if (!isCurrentRefresh()) return;
       if (Array.isArray(snapshot)) {
         setMeasurements([...snapshot]);
         return;
       }
     } catch (error) {
+      if (!isCurrentRefresh()) return;
       console.warn('[ARMeasurementsPanel] AR measurement snapshot refresh failed:', error);
     }
 
+    if (!isCurrentRefresh()) return;
     setMeasurements(
       [...(measurementService.getMeasurements?.() || [])].filter(
         measurement => !isUltrasoundDirectionalMeasurement(measurement)
@@ -1761,8 +1798,11 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
       return null;
     }
 
-    return calculateLVSimpson(visibleMeasurements);
-  }, [domain, visibleMeasurements]);
+    // A valid EF quiz capture must be drawn from these same study-scoped
+    // contours, independent of learner/educator role. Otherwise preserve
+    // existing summary behaviour for incomplete or non-quiz measurements.
+    return captureReadyLVSimpson?.result || calculateLVSimpson(visibleMeasurements);
+  }, [domain, visibleMeasurements, captureReadyLVSimpson]);
 
   const laVolumeResult = useMemo(() => {
     if (domain !== 'echo') {
@@ -1957,7 +1997,8 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
     setClinicalReportReview(null);
     setSelectedClinicalReportRowKeys([]);
 
-    await executeMeasurementSave(scoreNow, { reportFieldNames });
+    const result = await executeMeasurementSave(scoreNow, { reportFieldNames });
+    finishQuizMeasurementSave(!!result);
   };
 
   const handleSave = async (scoreNow = false) => {
@@ -1975,13 +2016,14 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
       return;
     }
 
-    if (isClinicalReportSaveTarget && showClinicalReportReviewBeforeSave) {
+    if (isClinicalReportSaveTarget && (showClinicalReportReviewBeforeSave || !!quizSaveRequestRef.current)) {
       setIsPreparingClinicalReportReview(true);
 
       try {
         const preview = await runMeasurementSave(scoreNow, { previewOnly: true });
 
         if (!preview) {
+          finishQuizMeasurementSave(false);
           return;
         }
 
@@ -1994,6 +2036,7 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
             type: 'info',
             duration: 3000,
           });
+          finishQuizMeasurementSave(true);
           return;
         }
 
@@ -2008,6 +2051,7 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
         }
       } catch (error) {
         console.error('[ARMeasurementsPanel] measurement review failed:', error);
+        finishQuizMeasurementSave(false);
         uiNotificationService.show({
           title: 'AR Measurements & Annotations',
           message: `Unable to review report values: ${error?.message || error}`,
@@ -2020,7 +2064,8 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
       }
     }
 
-    await executeMeasurementSave(scoreNow);
+    const result = await executeMeasurementSave(scoreNow);
+    finishQuizMeasurementSave(!!result);
   };
 
   const handleAddCineComment = useCallback(async () => {
@@ -2560,6 +2605,7 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
         onCancel={() => {
           setClinicalReportReview(null);
           setSelectedClinicalReportRowKeys([]);
+          finishQuizMeasurementSave(false);
         }}
         onApply={handleClinicalReportReviewApply}
       />

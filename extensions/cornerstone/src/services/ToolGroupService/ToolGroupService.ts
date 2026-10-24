@@ -3,6 +3,7 @@ import { eventTarget } from '@cornerstonejs/core';
 
 import { Types as OhifTypes, pubSubServiceInterface } from '@ohif/core';
 import getActiveViewportEnabledElement from '../../utils/getActiveViewportEnabledElement';
+import { createCalibratedLengthTextLines } from '../../utils/createCalibratedLengthTextLines';
 
 const EVENTS = {
   VIEWPORT_ADDED: 'event::cornerstone::toolgroupservice:viewportadded',
@@ -279,6 +280,20 @@ export default class ToolGroupService {
           });
         } else {
           toolGroup.addTool(toolName, { ...configuration });
+        }
+
+        // All modes (including learning and iUSCAN) use the native Length tool.
+        // Only its displayed text changes, and only when both handles lie in a
+        // spatial (cm) DICOM ultrasound region; the value then matches the
+        // completed MeasurementService record exactly. The native tool still
+        // owns drawing, cachedStats, completion events and annotation state.
+        // The wrapper is idempotent, so re-adding the tool cannot stack it.
+        if (toolName === 'Length') {
+          const tool = toolGroup.getToolInstance('Length');
+          const nativeGetTextLines = tool?.configuration?.getTextLines;
+          if (typeof nativeGetTextLines === 'function') {
+            tool.configuration.getTextLines = createCalibratedLengthTextLines(nativeGetTextLines);
+          }
         }
       });
     };

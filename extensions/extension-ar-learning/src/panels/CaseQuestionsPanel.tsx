@@ -8,15 +8,35 @@ import {
   isViewerQuizAuthoringMode,
   saveViewerQuizAuthoringDraft,
   saveViewerQuizResponseForActiveStudy,
+  ensureViewerQuizSaveSeriesDoc,
   submitAndRefreshViewerQuizScoreForActiveStudy,
 } from '../utils/viewerQuizApi';
+import {
+  buildClinicalReportReviewRows,
+  ClinicalReportMeasurementReviewModal,
+} from '../../../extension-ar-measurements/src/panels/ARMeasurementsPanel';
 import {
   readViewerQuizSessionState,
   writeViewerQuizSessionState,
 } from '../utils/viewerQuizSessionState';
+import {
+  isGuidedQuizCompositeKind,
+  isMatchingQuizEFCompletion,
+  getInitialGuidedEFQuestionTarget,
+} from '../utils/quizCompositeCaptureIntent';
 
 const AR_QUIZ_MEASUREMENT_ADDED_EVENT = 'ar-learning:quiz-measurement-added';
+const AR_LV_SIMPSON_CAPTURE_REQUESTED_EVENT = 'ar-measurements:lv-simpson-capture-requested';
 const AR_VIEWER_QUIZ_AUTHORING_SAVED_EVENT = 'ar:viewer-quiz-authoring-saved';
+
+// EF uses one guided measurement question, but each of its four contours can
+// optionally have a different authored DICOM instance/frame.
+const EF_CONTOUR_FRAME_SLOTS = [
+  { slot: 'A4C_ED', label: 'A4C end-diastole' },
+  { slot: 'A4C_ES', label: 'A4C end-systole' },
+  { slot: 'A2C_ED', label: 'A2C end-diastole' },
+  { slot: 'A2C_ES', label: 'A2C end-systole' },
+];
 
 type CaseQuestionsPanelProps = {
   commandsManager: any;
@@ -420,8 +440,29 @@ function targetHasNavigationIdentity(target: any) {
   );
 }
 
+function getCompleteEFContourFrameTargets(answerConfig: any) {
+  const config = plainObject(answerConfig);
+  if (config.measurementKind !== 'lvSimpsonEF' ||
+      config.efContourFrameGuidanceEnabled !== true) {
+    return null;
+  }
+
+  const targets = plainObject(config.efContourTargets);
+  const valid = EF_CONTOUR_FRAME_SLOTS.every(({ slot }) => {
+    const target = plainObject(targets[slot]);
+    return cleanString(target.referencedImageId) &&
+      cleanString(target.sopInstanceUID || target.SOPInstanceUID) &&
+      Number.isInteger(Number(target.frameNumber)) && Number(target.frameNumber) > 0;
+  });
+  return valid ? targets : null;
+}
+
 function getQuestionViewerTarget(question: QuizQuestion) {
   const answerConfig = plainObject(question?.answerConfig);
+  const efContourTargets = getCompleteEFContourFrameTargets(answerConfig);
+  if (efContourTargets) {
+    return efContourTargets.A4C_ED;
+  }
   const candidates = [
     question?.viewerTarget,
     answerConfig.viewerTarget,
@@ -1698,11 +1739,20 @@ function getOverlayMarkerOptionsForQuestion(
 function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsPanelProps) {
   const { uiNotificationService } = servicesManager.services;
   const authoringMode = isViewerQuizAuthoringMode();
+  // The backend authorizes the launch and supplies this scoring mode. Combined
+  // report assessments collect answers here but release scores in the report.
+  const deferredReportScoring = !authoringMode &&
+    new URLSearchParams(window.location.search)
+      .get('arEducationScoringMode')?.trim().toLowerCase() === 'reportcombined';
   const [sessionStateKey] = useState(() => getViewerQuizSessionKeyFromUrl());
   const [initialSessionState] = useState(() => readViewerQuizSessionState(sessionStateKey));
 
   const [loading, setLoading] = useState(true);
   const [savingQuizKey, setSavingQuizKey] = useState('');
+  const [quizMeasurementReview, setQuizMeasurementReview] = useState<any>(null);
+  const [quizMeasurementSelectedRows, setQuizMeasurementSelectedRows] = useState<string[]>([]);
+  const [quizMeasurementApplying, setQuizMeasurementApplying] = useState(false);
+  const quizMeasurementResolveRef = useRef<((ok: boolean) => void) | null>(null);
   const [scoringQuizKey, setScoringQuizKey] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [payload, setPayload] = useState<any>(null);
@@ -1714,6 +1764,10 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
   const [activeQuestionKey, setActiveQuestionKey] = useState(
     () => initialSessionState?.activeQuestionKey || ''
   );
+  // A card click can also focus its nested input, so guard guided-tool startup
+  // synchronously rather than relying on a pending React state update.
+  const lastActivatedQuestionRef = useRef('');
+  const efCaptureInFlightRef = useRef(false);
   const [capturingMeasurementKey, setCapturingMeasurementKey] = useState('');
   const [capturingFrameKey, setCapturingFrameKey] = useState('');
   const [capturingPointKey, setCapturingPointKey] = useState('');
@@ -1739,10 +1793,17 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     return Array.isArray(payload?.responses) ? payload.responses : [];
   }, [payload]);
 
-  const viewerQuizScore = useMemo(() => getViewerQuizScore(scoringPayload), [scoringPayload]);
+  const viewerQuizScore = useMemo(
+    () => deferredReportScoring ? null : getViewerQuizScore(scoringPayload),
+    [scoringPayload, deferredReportScoring]
+  );
 
   async function refreshScoringPayload() {
     try {
+      if (deferredReportScoring) {
+        setScoringPayload(null);
+        return null;
+      }
       const nextScoringPayload = await getViewerQuizScoreForActiveStudy();
       setScoringPayload(nextScoringPayload);
       return nextScoringPayload;
@@ -2072,9 +2133,34 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     } = {}
   ) {
     const nextActiveQuestionKey = `${quiz.quizKey}:${question.questionKey}`;
-    // Change the target before awaiting tool setup: a measurement event may arrive
-    // while the tool command or prior gold-annotation display is pending.
+    const isNewQuestion = lastActivatedQuestionRef.current !== nextActiveQuestionKey;
+    // Question cards emit both focus and click. Suppress the second call while
+    // React has not committed the new active key, or it can race the initial jump.
+    if (!options.force && !isNewQuestion && activeQuestionKey !== nextActiveQuestionKey) {
+      return;
+    }
+    lastActivatedQuestionRef.current = nextActiveQuestionKey;
+    // Change the question binding synchronously, but start guided EF/LA
+    // only after navigation has reached the question's image/viewport.
     setActiveQuestionKey(nextActiveQuestionKey);
+    const measurementKind = question.type === 'measurementNumeric'
+      ? cleanString(plainObject(question.answerConfig).measurementKind)
+      : '';
+    const deferGuidedActivation = isNewQuestion && isGuidedQuizCompositeKind(measurementKind);
+    const activateGuidedAfterNavigation = async () => {
+      if (!deferGuidedActivation || lastActivatedQuestionRef.current !== nextActiveQuestionKey) return;
+      const result = await runViewerCommand(commandsManager, 'activateViewerQuizMeasurementTool', {
+        toolName: 'Length',
+        measurementKind,
+        questionKey: question.questionKey,
+        efContourTargets: getCompleteEFContourFrameTargets(question.answerConfig),
+      });
+      if (result?.ok === false) {
+        console.warn('[CaseQuestionsPanel] guided measurement activation failed', {
+          questionKey: question.questionKey, measurementKind, result,
+        });
+      }
+    };
 
     try {
       await runViewerCommand(commandsManager, 'clearViewerQuizMeasurementComparison', {});
@@ -2089,25 +2175,28 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
 
       dispatchQuizMeasurementDomain(quizMeasurementDomain);
 
-      const activationResult = await runViewerCommand(
-        commandsManager,
-        'activateViewerQuizMeasurementTool',
-        {
-          toolName: 'Length',
-          questionKey: question.questionKey,
-        }
-      );
+      // Length still activates immediately. Guided workflows are deferred
+      // until the saved question target has been navigated into view.
+      if (!isGuidedQuizCompositeKind(measurementKind)) {
+        const activationResult = await runViewerCommand(
+          commandsManager,
+          'activateViewerQuizMeasurementTool',
+          { toolName: 'Length', measurementKind, questionKey: question.questionKey }
+        );
 
-      if (activationResult?.ok === false) {
-        console.warn('[CaseQuestionsPanel] could not activate Length for measurement question', {
-          questionKey: question.questionKey,
-          result: activationResult,
-        });
+        if (activationResult?.ok === false) {
+          console.warn('[CaseQuestionsPanel] measurement question tool activation failed', {
+            questionKey: question.questionKey,
+            measurementKind,
+            result: activationResult,
+          });
+        }
       }
     } else {
       await runViewerCommand(commandsManager, 'releaseViewerQuizDrawingTool', {});
     }
 
+    try {
     if (authoringMode && question.type === 'measurementNumeric') {
       setActiveQuestionKey(nextActiveQuestionKey);
 
@@ -2122,7 +2211,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       }
     }
 
-    if (!options.force && activeQuestionKey === nextActiveQuestionKey) {
+    // Session storage may restore an active-looking question on remount.
+    // Its first real selection still needs navigation and tool activation.
+    if (!options.force && !isNewQuestion && activeQuestionKey === nextActiveQuestionKey) {
       return;
     }
 
@@ -2144,6 +2235,10 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
           )
         : {};
     const hasViewerTargetOverride = Object.prototype.hasOwnProperty.call(options, 'viewerTarget');
+    const guidedEFFrameTargets = !authoringMode && measurementKind === 'lvSimpsonEF'
+      ? getCompleteEFContourFrameTargets(question.answerConfig)
+      : null;
+    const openingGuidedEF = !!guidedEFFrameTargets && !hasViewerTargetOverride;
     const learnerFrameTarget =
       question.type === 'frameSelection'
         ? getNestedViewerTarget(reviewQuestionAnswer) ||
@@ -2169,6 +2264,15 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
             getQuestionViewerTarget(question)
           : getReviewAnswerTarget(question, questionAnswer) || getQuestionViewerTarget(question));
     }
+    // Saved/scored EF responses may hold the last recorded contour frame.
+    // Always open the first authored frame for a guided EF question.
+    resolvedViewerTarget = getInitialGuidedEFQuestionTarget({
+      questionType: question.type,
+      measurementKind,
+      authoredFirstFrame: guidedEFFrameTargets?.A4C_ED,
+      existingTarget: resolvedViewerTarget,
+      hasTargetOverride: hasViewerTargetOverride,
+    });
     const viewerTarget = getQuestionSelectionViewerTarget(
       question,
       resolvedViewerTarget,
@@ -2182,7 +2286,8 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
 
     if (
       question.type === 'measurementNumeric' &&
-      hasMeasurementComparisonReference(learnerMeasurement)
+      hasMeasurementComparisonReference(learnerMeasurement) &&
+      !openingGuidedEF
     ) {
       try {
         const measurementResult = await runViewerCommand(
@@ -2249,6 +2354,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       }
     } catch (error) {
       console.warn('[CaseQuestionsPanel] viewer quiz navigation failed:', error);
+    }
+    } finally {
+      await activateGuidedAfterNavigation();
     }
   }
 
@@ -2482,6 +2590,176 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     };
   }, [activeQuestionKey, authoringMode, payload, answersByQuizKey]);
 
+  // Both the EF progress-panel button and fourth-contour completion reuse
+  // the normal quiz measurement capture command. Never synthesize an EF from
+  // event payloads: verify the current viewport study and calculated value.
+  useEffect(() => {
+    const handleCalculatedEFCapture = async (event: Event) => {
+      const detail = (event as CustomEvent)?.detail || {};
+      const mode = cleanString(detail.mode);
+      if (mode !== 'completed' && mode !== 'manual') return;
+      if (mode === 'completed' && authoringMode) return;
+      if (efCaptureInFlightRef.current) return;
+
+      const activeKey = activeQuestionKey;
+      if (!activeKey || lastActivatedQuestionRef.current !== activeKey) {
+        if (mode === 'manual') {
+          uiNotificationService.show({
+            title: 'LV EF',
+            message: 'Select the EF measurement question in Case Questions before capturing.',
+            type: 'info',
+            duration: 4000,
+          });
+        }
+        return;
+      }
+
+      const requestedStudy = cleanString(detail.studyInstanceId);
+      const requestedValue = Number(detail.value);
+      const isValidValue = Number.isFinite(requestedValue);
+      const [quizKey, questionKey] = activeKey.split(':');
+      const quiz = authoringMode ? null : payload?.quizzes?.find(item => item.quizKey === quizKey);
+      const question = authoringMode
+        ? authoringQuestionsRef.current.find(item => item.questionKey === questionKey)
+        : quiz?.questions?.find(item => item.questionKey === questionKey);
+      if (
+        !question ||
+        question.type !== 'measurementNumeric' ||
+        cleanString(plainObject(question.answerConfig).measurementKind) !== 'lvSimpsonEF' ||
+        !requestedStudy ||
+        !isValidValue ||
+        (authoringMode && (!isDraftDefinition(authoringDefinition) || authoringSaving))
+      ) {
+        if (mode === 'manual') {
+          uiNotificationService.show({
+            title: 'LV EF',
+            message: 'Select an editable EF measurement question before capturing.',
+            type: 'info',
+            duration: 4000,
+          });
+        }
+        return;
+      }
+
+      efCaptureInFlightRef.current = true;
+      try {
+        const snapshot = await runViewerCommand(commandsManager, 'getViewerQuizLVSimpsonForActiveStudy');
+        const eventMatchesCalculatedEF = isMatchingQuizEFCompletion({
+          mode,
+          authoringMode,
+          questionKind: cleanString(plainObject(question.answerConfig).measurementKind),
+          eventStudy: requestedStudy,
+          activeStudy: cleanString(snapshot?.studyInstanceId),
+          eventValue: requestedValue,
+          currentValue: snapshot?.composite?.value,
+        });
+        // A manual button press after spline edits must reach the existing
+        // viewer re-review checkpoint, which redraws the EF panel and requires
+        // the second click. Do not silently record the stale event value.
+        const needsExplicitReReview = mode === 'manual' &&
+          snapshot?.studyInstanceId === requestedStudy &&
+          snapshot?.composite?.measurementKind === 'lvSimpsonEF' &&
+          Number.isFinite(Number(snapshot?.composite?.value)) &&
+          !eventMatchesCalculatedEF;
+        if (!eventMatchesCalculatedEF && !needsExplicitReReview) {
+          if (mode === 'manual') {
+            uiNotificationService.show({
+              title: 'LV EF',
+              message: 'The active study or calculated EF is unavailable. Review the contours before capturing.',
+              type: 'warning',
+              duration: 5500,
+            });
+          }
+          return;
+        }
+        // A user may switch questions while the viewer snapshot is loading.
+        if (lastActivatedQuestionRef.current !== activeKey) return;
+        if (authoringMode) {
+          await captureAuthoringMeasurement(question);
+        } else if (quiz) {
+          await captureSelectedMeasurementAnswer(quiz, question);
+        }
+      } catch (error) {
+        console.warn('[CaseQuestionsPanel] calculated EF capture failed:', error);
+      } finally {
+        efCaptureInFlightRef.current = false;
+      }
+    };
+
+    window.addEventListener(AR_LV_SIMPSON_CAPTURE_REQUESTED_EVENT, handleCalculatedEFCapture);
+    return () => window.removeEventListener(
+      AR_LV_SIMPSON_CAPTURE_REQUESTED_EVENT, handleCalculatedEFCapture
+    );
+  }, [activeQuestionKey, authoringMode, payload, authoringDefinition, authoringSaving]);
+
+  // Case Questions owns this review. It must not depend on AR Measurements being mounted.
+  const finishQuizMeasurementReview = (ok: boolean) => {
+    setQuizMeasurementReview(null);
+    setQuizMeasurementSelectedRows([]);
+    const resolve = quizMeasurementResolveRef.current;
+    quizMeasurementResolveRef.current = null;
+    resolve?.(ok);
+  };
+
+  const applyQuizMeasurementReview = async () => {
+    if (!quizMeasurementReview || quizMeasurementApplying) return;
+    const fields = Array.from(new Set(
+      quizMeasurementReview.rows
+        .filter(row => quizMeasurementSelectedRows.includes(row.key))
+        .flatMap(row => row.fieldNames)
+    ));
+    setQuizMeasurementApplying(true);
+    try {
+      const result = await Promise.resolve(commandsManager.runCommand(
+        'saveViewerMeasurementsForActiveStudy',
+        { domain: 'echo', scoringIntent: 'draft', educationAttemptIntent: 'draft', reportFieldNames: fields }
+      ));
+      if (!result || result?.ok === false) throw new Error('Measurement save did not succeed.');
+      finishQuizMeasurementReview(true);
+    } catch (error) {
+      console.error('[CaseQuestionsPanel] measurement save failed:', error);
+      uiNotificationService.show({
+        title: 'Case Questions',
+        message: `Measurement save failed: ${error?.message || error}`,
+        type: 'error',
+        duration: 5000,
+      });
+      finishQuizMeasurementReview(false);
+    } finally {
+      setQuizMeasurementApplying(false);
+    }
+  };
+
+  async function confirmReportOwnedMeasurementSave(): Promise<void> {
+    await ensureViewerQuizSaveSeriesDoc();
+    const preview = await Promise.resolve(commandsManager.runCommand(
+      'saveViewerMeasurementsForActiveStudy',
+      { domain: 'echo', scoringIntent: 'draft', educationAttemptIntent: 'draft', previewOnly: true }
+    ));
+    if (!preview?.previewOnly || preview?.isClinicalReportSave !== true) {
+      throw new Error('Measurement review is unavailable for this learner report. Answers were not saved.');
+    }
+    const rows = buildClinicalReportReviewRows(preview);
+    if (!rows.length && preview?.measurementAnnotationsChanged === false) return;
+    // If annotations changed without mapped report fields, save annotations explicitly.
+    if (!rows.length) {
+      const result = await Promise.resolve(commandsManager.runCommand(
+        'saveViewerMeasurementsForActiveStudy',
+        { domain: 'echo', scoringIntent: 'draft', educationAttemptIntent: 'draft', reportFieldNames: [] }
+      ));
+      if (!result || result?.ok === false) {
+        throw new Error('Viewer annotations could not be saved.');
+      }
+      return;
+    }
+    setQuizMeasurementSelectedRows(rows.filter(row => row.changed).map(row => row.key));
+    setQuizMeasurementReview({ rows, derivedConsequences: preview?.derivedConsequences });
+    const approved = await new Promise<boolean>(resolve => {
+      quizMeasurementResolveRef.current = resolve;
+    });
+    if (!approved) throw new Error('Measurement review was cancelled or failed. Answers were not saved.');
+  }
+
   async function saveQuiz(quiz: QuizDefinition, status: 'draft' | 'submitted') {
     const quizAnswers = answersByQuizKey[quiz.quizKey] || {};
 
@@ -2501,6 +2779,11 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     }
 
     try {
+      // Combined report assessment: measurement review and persistence precede quiz answer save.
+      // Ordinary imaging quizzes retain their existing independent save/score workflow.
+      if (deferredReportScoring && quiz.questions.some(q => q.type === 'measurementNumeric')) {
+        await confirmReportOwnedMeasurementSave();
+      }
       const result = await saveViewerQuizResponseForActiveStudy({
         quizKey: quiz.quizKey,
         quizVersion: Number(quiz.quizVersion) || 1,
@@ -2510,7 +2793,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
 
       let scoredPayload: any = null;
 
-      if (status === 'submitted') {
+      if (status === 'submitted' && !deferredReportScoring) {
         scoredPayload = await submitAndRefreshViewerQuizScoreForActiveStudy();
         setScoringPayload(scoredPayload);
       }
@@ -2521,7 +2804,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       uiNotificationService.show({
         title: 'Case Questions',
         message:
-          status === 'submitted'
+          status === 'submitted' && deferredReportScoring
+            ? 'Viewer answers submitted. Return to the report to submit for scoring.'
+            : status === 'submitted'
             ? scoredQuiz
               ? `Quiz submitted and scored: ${Number(scoredQuiz.total || 0)} / ${Number(scoredQuiz.max || 0)}`
               : 'Quiz submitted and scored.'
@@ -2566,6 +2851,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     setErrorMessage('');
 
     try {
+      if (deferredReportScoring) {
+        throw new Error('Scoring is available from the reporting assessment only.');
+      }
       const scoredPayload = await submitAndRefreshViewerQuizScoreForActiveStudy();
       setScoringPayload(scoredPayload);
 
@@ -2650,19 +2938,20 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
 
         syncQuizAuthoringMeasurementDomainToUrl(authoringMeasurementDomain, { overwrite: true });
 
-        const activationResult = await runViewerCommand(
-          commandsManager,
-          'activateViewerQuizMeasurementTool',
-          {
-            toolName: 'Length',
-            questionKey: question.questionKey,
-          }
-        );
-
-        if (activationResult?.ok === false) {
-          throw new Error(
-            `Unable to activate Length: ${cleanString(activationResult?.reason) || 'unknown error'}`
+        // Capturing the target frame for a composite must not interrupt its
+        // guided EF/LA workflow or activate Length over the pending drag.
+        const measurementKind = cleanString(plainObject(question.answerConfig).measurementKind);
+        if (!isGuidedQuizCompositeKind(measurementKind)) {
+          const activationResult = await runViewerCommand(
+            commandsManager,
+            'activateViewerQuizMeasurementTool',
+            { toolName: 'Length', questionKey: question.questionKey }
           );
+          if (activationResult?.ok === false) {
+            throw new Error(
+              `Unable to activate Length: ${cleanString(activationResult?.reason) || 'unknown error'}`
+            );
+          }
         }
       }
 
@@ -2698,6 +2987,51 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       uiNotificationService.show({
         title: 'Quiz Authoring',
         message: `Frame capture failed: ${error?.message || error}`,
+        type: 'error',
+        duration: 6000,
+      });
+    } finally {
+      setCapturingAuthoringKey('');
+    }
+  }
+
+  async function captureAuthoringEFContourFrame(question: QuizQuestion, slot: string) {
+    if (cleanString(plainObject(question.answerConfig).measurementKind) !== 'lvSimpsonEF' ||
+        !EF_CONTOUR_FRAME_SLOTS.some(entry => entry.slot === slot)) {
+      return;
+    }
+    setCapturingAuthoringKey(`authoring-ef-frame:${question.questionKey}`);
+    try {
+      const result = await runViewerCommand(commandsManager, 'getCurrentViewerQuizFrameAnswer', {});
+      const target = plainObject(result?.answer?.selectedTarget);
+      if (!result?.ok || !cleanString(target.referencedImageId) ||
+          !cleanString(target.sopInstanceUID || target.SOPInstanceUID) ||
+          !Number.isInteger(Number(target.frameNumber)) || Number(target.frameNumber) < 1) {
+        throw new Error('Select a DICOM image with a valid instance and frame before capture.');
+      }
+      updateAuthoringQuestion(question.questionKey, current => {
+        const answerConfig = plainObject(current.answerConfig);
+        return {
+          ...current,
+          answerConfig: {
+            ...answerConfig,
+            efContourTargets: {
+              ...plainObject(answerConfig.efContourTargets),
+              [slot]: target,
+            },
+          },
+        };
+      });
+      uiNotificationService.show({
+        title: 'Quiz Authoring',
+        message: `${slot} frame captured: ${getViewerTargetSummary(target)}`,
+        type: 'success',
+        duration: 2500,
+      });
+    } catch (error) {
+      uiNotificationService.show({
+        title: 'Quiz Authoring',
+        message: `EF frame capture failed: ${error?.message || error}`,
         type: 'error',
         duration: 6000,
       });
@@ -3056,6 +3390,18 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
 
       updateAuthoringQuestion(question.questionKey, () => nextQuestion);
 
+      if (configuredKind === 'lvSimpsonEF') {
+        window.dispatchEvent(
+          new CustomEvent('ar-measurements:lv-simpson-gold-captured', {
+            detail: {
+              questionKey: question.questionKey,
+              value: answer.value,
+              studyInstanceId: answer.sourceRefs?.studyInstanceUID || '',
+            },
+          })
+        );
+      }
+
       try {
         const displayResult = await showAuthoringGoldMeasurement(nextQuestion);
 
@@ -3110,6 +3456,16 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
 
       if (hasMeasurementQuestions && !authoringMeasurementDomain) {
         throw new Error('Choose Echo or Bowel as the study type before saving measurement questions.');
+      }
+      const incompleteEF = questionsToSave.find(question => {
+        const config = plainObject(question.answerConfig);
+        return question.type === 'measurementNumeric' &&
+          config.measurementKind === 'lvSimpsonEF' &&
+          config.efContourFrameGuidanceEnabled === true &&
+          !getCompleteEFContourFrameTargets(config);
+      });
+      if (incompleteEF) {
+        throw new Error('Capture all four EF contour instance/frame targets before saving guided EF navigation.');
       }
 
       const result = await saveViewerQuizAuthoringDraft({
@@ -3416,14 +3772,41 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               captureSelectedMeasurementAnswer(quiz, question);
             }}
           >
-            {captureInProgress ? 'Capturing…' : 'Recapture selected measurement'}
+            {captureInProgress
+              ? 'Capturing…'
+              : cleanString(plainObject(question.answerConfig).measurementKind) === 'lvSimpsonEF' ||
+                  cleanString(plainObject(question.answerConfig).measurementKind) === 'laVolumeBiplane'
+                ? 'Capture calculated measurement'
+                : 'Recapture selected measurement'}
           </button>
+
+          {cleanString(
+            plainObject(value?.reviewPayload).label ||
+            value?.measurementLabel ||
+            value?.label
+          ) ? (
+            <div className="truncate text-xs text-gray-300" title={cleanString(
+              plainObject(value?.reviewPayload).label ||
+              value?.measurementLabel ||
+              value?.label
+            )}>
+              Measurement label: {cleanString(
+                plainObject(value?.reviewPayload).label ||
+                value?.measurementLabel ||
+                value?.label
+              )}
+            </div>
+          ) : null}
 
           {value?.value === null ||
           typeof value?.value === 'undefined' ||
           cleanString(value?.value) === '' ? (
             <div className="text-xs text-gray-400">
-              Draw or select a measurement annotation in the viewport, then use it as the answer.
+              {cleanString(plainObject(question.answerConfig).measurementKind) === 'lvSimpsonEF'
+                ? 'Complete four LV contours, select Calculate EF in the EF panel, then capture the calculated result.'
+                : cleanString(plainObject(question.answerConfig).measurementKind) === 'laVolumeBiplane'
+                  ? 'Complete both LA contours, then capture the calculated volume.'
+                  : 'Draw or select a measurement annotation in the viewport, then use it as the answer.'}
             </div>
           ) : null}
         </div>
@@ -3753,6 +4136,10 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     const markerOptions = normalizeMarkerOptions(answerConfig.markerOptions);
     const correctMarkerIds = getCorrectMarkerIdsFromAnswerConfig(answerConfig);
     const viewerTarget = getQuestionViewerTarget(question);
+    const hasGuidedEFFrames = question.type === 'measurementNumeric' &&
+      cleanString(answerConfig.measurementKind) === 'lvSimpsonEF';
+    const authoredEFFrames = plainObject(answerConfig.efContourTargets);
+    const guidedEFFramesComplete = !!getCompleteEFContourFrameTargets(answerConfig);
     const targetSummary = getViewerTargetSummary(viewerTarget);
     const isCapturing = capturingAuthoringKey.endsWith(`:${question.questionKey}`);
     const isActiveAuthoringQuestion = activeQuestionKey === `authoring:${question.questionKey}`;
@@ -3887,6 +4274,80 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
             <div className="mt-1 text-[11px] text-gray-400">
               Set how many frames on either side of the captured frame should be accepted.
             </div>
+          </div>
+        ) : null}
+
+        {hasGuidedEFFrames ? (
+          <div className="mt-2 rounded border border-slate-600 bg-slate-900/60 p-2">
+            <label className="flex items-center gap-2 text-xs font-semibold text-gray-100">
+              <input
+                type="checkbox"
+                checked={answerConfig.efContourFrameGuidanceEnabled === true}
+                disabled={isCapturing || authoringSaving || !isDraftDefinition(authoringDefinition)}
+                onChange={event => patchAuthoringAnswerConfig(question, {
+                  efContourFrameGuidanceEnabled: event.target.checked,
+                })}
+                onClick={event => event.stopPropagation()}
+              />
+              Guide each EF contour to an educator-selected instance/frame
+            </label>
+            {answerConfig.efContourFrameGuidanceEnabled === true ? (
+              <div className="mt-2 space-y-2">
+                <p className="text-[11px] text-gray-300">
+                  Select the correct image and frame in the viewer, then capture it for each contour.
+                  The EF panel Continue button will navigate to each saved target before drawing.
+                </p>
+                {EF_CONTOUR_FRAME_SLOTS.map(({ slot, label }) => {
+                  const target = plainObject(authoredEFFrames[slot]);
+                  const captured = targetHasNavigationIdentity(target);
+                  return (
+                    <div key={slot} className="flex flex-wrap items-center gap-2 border-t border-gray-700 pt-2 text-xs">
+                      <span className="min-w-28 font-medium text-gray-100">{label}</span>
+                      <span className={captured ? 'text-green-200' : 'text-amber-200'}>
+                        {captured ? getViewerTargetSummary(target) : 'Not captured'}
+                      </span>
+                      <button
+                        type="button"
+                        className="rounded border border-blue-500 px-2 py-1 text-blue-100 disabled:opacity-50"
+                        disabled={isCapturing || authoringSaving || !isDraftDefinition(authoringDefinition)}
+                        onClick={event => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          void captureAuthoringEFContourFrame(question, slot);
+                        }}
+                      >
+                        {captured ? 'Replace frame' : 'Capture current frame'}
+                      </button>
+                      {captured ? (
+                        <button
+                          type="button"
+                          className="rounded border border-slate-500 px-2 py-1 text-gray-100"
+                          onClick={event => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            void runViewerCommand(commandsManager, 'jumpToViewerQuizTarget', {
+                              viewerTarget: target,
+                              questionKey: question.questionKey,
+                            });
+                          }}
+                        >
+                          Jump to frame
+                        </button>
+                      ) : null}
+                    </div>
+                  );
+                })}
+                <div className={guidedEFFramesComplete ? 'text-green-200 text-[11px]' : 'text-amber-200 text-[11px]'}>
+                  {guidedEFFramesComplete
+                    ? 'All four frames configured. Save the draft to retain the guided sequence.'
+                    : 'All four frames must be captured before saving guided EF navigation.'}
+                </div>
+              </div>
+            ) : (
+              <p className="mt-1 text-[11px] text-gray-400">
+                Off: preserve manual EF frame navigation and the existing Continue behavior.
+              </p>
+            )}
           </div>
         ) : null}
 
@@ -4326,7 +4787,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         const submitted = cleanString(response?.status).toLowerCase() === 'submitted';
         const quizScore = viewerQuizScore ? getQuizScoreItem(viewerQuizScore, quiz) : null;
 
-        return !submitted || !quizScore;
+        return !submitted || (!quizScore && !deferredReportScoring);
       })
     : [];
 
@@ -4499,7 +4960,11 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                     </div>
                   ) : null}
 
-                  {submitted && !quizScore ? (
+                  {submitted && deferredReportScoring ? (
+                    <div className="text-xs text-green-200">
+                      Answers submitted. Return to the report and select Submit for Scoring.
+                    </div>
+                  ) : submitted && !quizScore ? (
                     <div className="space-y-2">
                       <div className="text-xs text-green-200">
                         Submitted, but no score is available yet.
@@ -4530,7 +4995,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                         disabled={quizSaving || submitting}
                         onClick={() => saveQuiz(quiz, 'submitted')}
                       >
-                        {quizSaving ? 'Submitting…' : 'Submit Quiz'}
+                        {quizSaving ? 'Submitting…' : deferredReportScoring ? 'Submit answers' : 'Submit Quiz'}
                       </button>
                     </div>
                   )}
@@ -4540,6 +5005,17 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
           </div>
         </div>
       ) : null}
+      <ClinicalReportMeasurementReviewModal
+        review={quizMeasurementReview}
+        selectedRowKeys={quizMeasurementSelectedRows}
+        showReviewBeforeSave={true}
+        isSaving={quizMeasurementApplying}
+        onToggleRow={key => setQuizMeasurementSelectedRows(current => current.includes(key) ? current.filter(item => item !== key) : [...current, key])}
+        onToggleAll={selectAll => setQuizMeasurementSelectedRows(selectAll ? quizMeasurementReview?.rows.map(row => row.key) || [] : [])}
+        onPreferenceChange={() => {}}
+        onCancel={() => finishQuizMeasurementReview(false)}
+        onApply={applyQuizMeasurementReview}
+      />
     </div>
   );
 }

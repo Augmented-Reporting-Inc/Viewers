@@ -153,6 +153,10 @@ function ViewerLayout({
     <div>
       <a
         href="#viewer-main-content"
+        onClick={event => {
+          event.preventDefault();
+          document.getElementById('viewer-main-content')?.focus();
+        }}
         className="absolute left-2 -top-20 z-[100] rounded bg-white px-3 py-2 font-semibold text-black focus:top-2 focus:outline focus:outline-2 focus:outline-offset-2 focus:outline-primary"
       >
         Skip to viewer content

@@ -76,6 +76,23 @@ function collectComponents(measurements: Measurement[], kind: CompositeKind) {
 }
 
 /**
+ * Compare the value reviewed in the persistent EF progress panel with the
+ * freshly recalculated quiz-capture value at the quiz's two-decimal precision.
+ * A different value must be reviewed again, rather than silently captured.
+ */
+export function isViewerQuizCompositeReviewCurrent(
+  reviewedValue: unknown,
+  captureValue: unknown
+): boolean {
+  const reviewed = Number(reviewedValue);
+  const captured = Number(captureValue);
+
+  return Number.isFinite(reviewed) &&
+    Number.isFinite(captured) &&
+    Math.round(reviewed * 100) === Math.round(captured * 100);
+}
+
+/**
  * Read-only resolver for complete viewer-generated composite measurement results.
  *
  * This supplies a viewer-calculated numeric result and source references for
@@ -83,7 +100,8 @@ function collectComponents(measurements: Measurement[], kind: CompositeKind) {
  */
 export function resolveViewerQuizCompositeResult(
   kind: CompositeKind,
-  measurements: Measurement[] = []
+  measurements: Measurement[] = [],
+  calculatedResult?: ReturnType<typeof calculateLVSimpson> | ReturnType<typeof calculateLAVolume>
 ) {
   if (kind !== 'lvSimpsonEF' && kind !== 'laVolumeBiplane') return null;
   if (!Array.isArray(measurements)) return null;
@@ -91,10 +109,10 @@ export function resolveViewerQuizCompositeResult(
   const components = collectComponents(measurements, kind);
   if (!components) return null;
 
-  const result =
-    kind === 'lvSimpsonEF'
+  const result = calculatedResult ??
+    (kind === 'lvSimpsonEF'
       ? calculateLVSimpson(measurements)
-      : calculateLAVolume(measurements);
+      : calculateLAVolume(measurements));
 
   const value =
     kind === 'lvSimpsonEF'
@@ -112,4 +130,30 @@ export function resolveViewerQuizCompositeResult(
     unit: kind === 'lvSimpsonEF' ? '%' : 'mL',
     components,
   };
+}
+
+/**
+ * Resolve the exact active-study evidence used for both the viewer EF summary
+ * and the quiz's numeric EF capture. Never blend saved annotations or contours
+ * from unrelated studies into an authoring/learner quiz gold answer.
+ */
+export function resolveViewerQuizLVSimpsonForStudy(
+  studyInstanceId: string,
+  measurements: Measurement[] = []
+) {
+  const studyId = clean(studyInstanceId);
+  if (!studyId || !Array.isArray(measurements)) return null;
+
+  const studyMeasurements = measurements.filter(measurement =>
+    clean(measurement?.referenceStudyUID || measurement?.StudyInstanceUID) === studyId
+  );
+  // Calculate EF once from this exact study snapshot. Build the scored
+  // composite and clinical volume result from the same calculation.
+  const result = calculateLVSimpson(studyMeasurements);
+  if (result?.status !== 'complete' || !result.values) return null;
+
+  const composite = resolveViewerQuizCompositeResult('lvSimpsonEF', studyMeasurements, result);
+  if (!composite) return null;
+
+  return { studyInstanceId: studyId, composite, result };
 }
