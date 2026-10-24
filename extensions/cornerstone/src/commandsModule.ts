@@ -4535,9 +4535,20 @@ function getEFContourFrameTarget(targets: any, slot: string) {
 // An EF contour's authored frame is an exact target, not merely an instance.
 // Never allow the generic quiz navigator's SOP or image-index fallbacks to
 // silently put an EF contour on the wrong cine frame.
-function didNavigateToExactEFContourFrame(result: any) {
-  return result?.ok === true &&
-    (result.source === 'referencedImageId' || result.source === 'sop-frame');
+function didNavigateToExactEFContourFrame(result: any, target: any) {
+  if (result?.ok !== true || !result.imageId) return false;
+  const expected = normalizeViewerQuizTarget(target);
+  const actualImageId = normalizeImageIdForCompare(result.imageId);
+  const expectedImageId = normalizeImageIdForCompare(expected.referencedImageId);
+  if (result.source === 'referencedImageId' && expectedImageId &&
+      (actualImageId === expectedImageId || actualImageId.endsWith(expectedImageId))) {
+    return true;
+  }
+  // The generic navigator's /frames/N substring match can also match
+  // /frames/N0. Confirm the actual DICOM frame and instance ourselves.
+  return result.source === 'sop-frame' &&
+    getSopInstanceIdFromImageId(result.imageId) === expected.sopInstanceId &&
+    getFrameNumberFromReferencedImageId(result.imageId) === expected.frameNumber;
 }
 
 function hasViewerQuizTargetIdentity(target = {}) {
@@ -8414,7 +8425,7 @@ function commandsModule({
             questionKey,
           });
           if (isWorkflowCancelled()) return null;
-          if (!didNavigateToExactEFContourFrame(navigation)) {
+          if (!didNavigateToExactEFContourFrame(navigation, initialTarget)) {
             uiNotificationService.show({
               title: 'LV EF',
               message: 'The authored contour instance/frame could not be opened. EF capture was not started.',
@@ -8774,7 +8785,7 @@ function commandsModule({
               console.warn('[LV EF] authored contour frame navigation failed:', error);
             }
             if (isWorkflowCancelled()) return;
-            if (!didNavigateToExactEFContourFrame(navigation)) {
+            if (!didNavigateToExactEFContourFrame(navigation, nextTarget)) {
               advancing = false;
               renderLVSimpsonWorkflowPanel({
                 measurements: currentLVSimpsonMeasurements,
