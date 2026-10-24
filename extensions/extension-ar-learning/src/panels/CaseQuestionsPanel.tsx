@@ -28,6 +28,15 @@ const AR_QUIZ_MEASUREMENT_ADDED_EVENT = 'ar-learning:quiz-measurement-added';
 const AR_LV_SIMPSON_CAPTURE_REQUESTED_EVENT = 'ar-measurements:lv-simpson-capture-requested';
 const AR_VIEWER_QUIZ_AUTHORING_SAVED_EVENT = 'ar:viewer-quiz-authoring-saved';
 
+// EF uses one guided measurement question, but each of its four contours can
+// optionally have a different authored DICOM instance/frame.
+const EF_CONTOUR_FRAME_SLOTS = [
+  { slot: 'A4C_ED', label: 'A4C end-diastole' },
+  { slot: 'A4C_ES', label: 'A4C end-systole' },
+  { slot: 'A2C_ED', label: 'A2C end-diastole' },
+  { slot: 'A2C_ES', label: 'A2C end-systole' },
+];
+
 type CaseQuestionsPanelProps = {
   commandsManager: any;
   servicesManager: any;
@@ -430,8 +439,29 @@ function targetHasNavigationIdentity(target: any) {
   );
 }
 
+function getCompleteEFContourFrameTargets(answerConfig: any) {
+  const config = plainObject(answerConfig);
+  if (config.measurementKind !== 'lvSimpsonEF' ||
+      config.efContourFrameGuidanceEnabled !== true) {
+    return null;
+  }
+
+  const targets = plainObject(config.efContourTargets);
+  const valid = EF_CONTOUR_FRAME_SLOTS.every(({ slot }) => {
+    const target = plainObject(targets[slot]);
+    return cleanString(target.referencedImageId) &&
+      cleanString(target.sopInstanceUID || target.SOPInstanceUID) &&
+      Number.isInteger(Number(target.frameNumber)) && Number(target.frameNumber) > 0;
+  });
+  return valid ? targets : null;
+}
+
 function getQuestionViewerTarget(question: QuizQuestion) {
   const answerConfig = plainObject(question?.answerConfig);
+  const efContourTargets = getCompleteEFContourFrameTargets(answerConfig);
+  if (efContourTargets) {
+    return efContourTargets.A4C_ED;
+  }
   const candidates = [
     question?.viewerTarget,
     answerConfig.viewerTarget,
@@ -2117,6 +2147,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         toolName: 'Length',
         measurementKind,
         questionKey: question.questionKey,
+        efContourTargets: getCompleteEFContourFrameTargets(question.answerConfig),
       });
       if (result?.ok === false) {
         console.warn('[CaseQuestionsPanel] guided measurement activation failed', {
@@ -2942,6 +2973,51 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     }
   }
 
+  async function captureAuthoringEFContourFrame(question: QuizQuestion, slot: string) {
+    if (cleanString(plainObject(question.answerConfig).measurementKind) !== 'lvSimpsonEF' ||
+        !EF_CONTOUR_FRAME_SLOTS.some(entry => entry.slot === slot)) {
+      return;
+    }
+    setCapturingAuthoringKey(`authoring-ef-frame:${question.questionKey}`);
+    try {
+      const result = await runViewerCommand(commandsManager, 'getCurrentViewerQuizFrameAnswer', {});
+      const target = plainObject(result?.answer?.selectedTarget);
+      if (!result?.ok || !cleanString(target.referencedImageId) ||
+          !cleanString(target.sopInstanceUID || target.SOPInstanceUID) ||
+          !Number.isInteger(Number(target.frameNumber)) || Number(target.frameNumber) < 1) {
+        throw new Error('Select a DICOM image with a valid instance and frame before capture.');
+      }
+      updateAuthoringQuestion(question.questionKey, current => {
+        const answerConfig = plainObject(current.answerConfig);
+        return {
+          ...current,
+          answerConfig: {
+            ...answerConfig,
+            efContourTargets: {
+              ...plainObject(answerConfig.efContourTargets),
+              [slot]: target,
+            },
+          },
+        };
+      });
+      uiNotificationService.show({
+        title: 'Quiz Authoring',
+        message: `${slot} frame captured: ${getViewerTargetSummary(target)}`,
+        type: 'success',
+        duration: 2500,
+      });
+    } catch (error) {
+      uiNotificationService.show({
+        title: 'Quiz Authoring',
+        message: `EF frame capture failed: ${error?.message || error}`,
+        type: 'error',
+        duration: 6000,
+      });
+    } finally {
+      setCapturingAuthoringKey('');
+    }
+  }
+
   async function captureAuthoringGoldPoint(question: QuizQuestion) {
     const captureKey = `authoring-point:${question.questionKey}`;
     setCapturingAuthoringKey(captureKey);
@@ -3358,6 +3434,16 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
 
       if (hasMeasurementQuestions && !authoringMeasurementDomain) {
         throw new Error('Choose Echo or Bowel as the study type before saving measurement questions.');
+      }
+      const incompleteEF = questionsToSave.find(question => {
+        const config = plainObject(question.answerConfig);
+        return question.type === 'measurementNumeric' &&
+          config.measurementKind === 'lvSimpsonEF' &&
+          config.efContourFrameGuidanceEnabled === true &&
+          !getCompleteEFContourFrameTargets(config);
+      });
+      if (incompleteEF) {
+        throw new Error('Capture all four EF contour instance/frame targets before saving guided EF navigation.');
       }
 
       const result = await saveViewerQuizAuthoringDraft({
@@ -4028,6 +4114,10 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     const markerOptions = normalizeMarkerOptions(answerConfig.markerOptions);
     const correctMarkerIds = getCorrectMarkerIdsFromAnswerConfig(answerConfig);
     const viewerTarget = getQuestionViewerTarget(question);
+    const hasGuidedEFFrames = question.type === 'measurementNumeric' &&
+      cleanString(answerConfig.measurementKind) === 'lvSimpsonEF';
+    const authoredEFFrames = plainObject(answerConfig.efContourTargets);
+    const guidedEFFramesComplete = !!getCompleteEFContourFrameTargets(answerConfig);
     const targetSummary = getViewerTargetSummary(viewerTarget);
     const isCapturing = capturingAuthoringKey.endsWith(`:${question.questionKey}`);
     const isActiveAuthoringQuestion = activeQuestionKey === `authoring:${question.questionKey}`;
@@ -4162,6 +4252,80 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
             <div className="mt-1 text-[11px] text-gray-400">
               Set how many frames on either side of the captured frame should be accepted.
             </div>
+          </div>
+        ) : null}
+
+        {hasGuidedEFFrames ? (
+          <div className="mt-2 rounded border border-slate-600 bg-slate-900/60 p-2">
+            <label className="flex items-center gap-2 text-xs font-semibold text-gray-100">
+              <input
+                type="checkbox"
+                checked={answerConfig.efContourFrameGuidanceEnabled === true}
+                disabled={isCapturing || authoringSaving || !isDraftDefinition(authoringDefinition)}
+                onChange={event => patchAuthoringAnswerConfig(question, {
+                  efContourFrameGuidanceEnabled: event.target.checked,
+                })}
+                onClick={event => event.stopPropagation()}
+              />
+              Guide each EF contour to an educator-selected instance/frame
+            </label>
+            {answerConfig.efContourFrameGuidanceEnabled === true ? (
+              <div className="mt-2 space-y-2">
+                <p className="text-[11px] text-gray-300">
+                  Select the correct image and frame in the viewer, then capture it for each contour.
+                  The EF panel Continue button will navigate to each saved target before drawing.
+                </p>
+                {EF_CONTOUR_FRAME_SLOTS.map(({ slot, label }) => {
+                  const target = plainObject(authoredEFFrames[slot]);
+                  const captured = targetHasNavigationIdentity(target);
+                  return (
+                    <div key={slot} className="flex flex-wrap items-center gap-2 border-t border-gray-700 pt-2 text-xs">
+                      <span className="min-w-28 font-medium text-gray-100">{label}</span>
+                      <span className={captured ? 'text-green-200' : 'text-amber-200'}>
+                        {captured ? getViewerTargetSummary(target) : 'Not captured'}
+                      </span>
+                      <button
+                        type="button"
+                        className="rounded border border-blue-500 px-2 py-1 text-blue-100 disabled:opacity-50"
+                        disabled={isCapturing || authoringSaving || !isDraftDefinition(authoringDefinition)}
+                        onClick={event => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          void captureAuthoringEFContourFrame(question, slot);
+                        }}
+                      >
+                        {captured ? 'Replace frame' : 'Capture current frame'}
+                      </button>
+                      {captured ? (
+                        <button
+                          type="button"
+                          className="rounded border border-slate-500 px-2 py-1 text-gray-100"
+                          onClick={event => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            void runViewerCommand(commandsManager, 'jumpToViewerQuizTarget', {
+                              viewerTarget: target,
+                              questionKey: question.questionKey,
+                            });
+                          }}
+                        >
+                          Jump to frame
+                        </button>
+                      ) : null}
+                    </div>
+                  );
+                })}
+                <div className={guidedEFFramesComplete ? 'text-green-200 text-[11px]' : 'text-amber-200 text-[11px]'}>
+                  {guidedEFFramesComplete
+                    ? 'All four frames configured. Save the draft to retain the guided sequence.'
+                    : 'All four frames must be captured before saving guided EF navigation.'}
+                </div>
+              </div>
+            ) : (
+              <p className="mt-1 text-[11px] text-gray-400">
+                Off: preserve manual EF frame navigation and the existing Continue behavior.
+              </p>
+            )}
           </div>
         ) : null}
 
