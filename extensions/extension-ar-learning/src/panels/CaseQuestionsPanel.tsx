@@ -2211,7 +2211,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       }
     }
 
-    if (!options.force && activeQuestionKey === nextActiveQuestionKey) {
+    // Session storage may restore an active-looking question on remount.
+    // Its first real selection still needs navigation and tool activation.
+    if (!options.force && !isNewQuestion && activeQuestionKey === nextActiveQuestionKey) {
       return;
     }
 
