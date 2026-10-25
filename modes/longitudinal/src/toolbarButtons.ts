@@ -605,7 +605,7 @@ const toolbarButtons: Button[] = [
       tooltip:
         'Start guided biplane LV EF. The tool stays active through A4C ED, A4C ES, A2C ED, and A2C ES. Press Esc to cancel.',
       commands: 'startLVSimpsonEFWorkflow',
-      evaluate: 'evaluate.action',
+      evaluate: 'evaluate.arGuidedLVSimpson',
     },
   },
   {
