@@ -8,6 +8,7 @@ import {
 } from '../utils/laVolume';
 import { getViewerMeasurementDomainFromPath } from '../utils/measurementLabelConfig';
 import { BOWEL_CURVED_LENGTH_MEASUREMENT_KIND } from '../utils/bowelMeasurementTargets';
+import { createTimedViewerAutosave } from '../utils/timedViewerAutosave';
 
 const ULTRASOUND_DIRECTIONAL_TOOL_NAME = 'UltrasoundDirectionalTool';
 const CLINICAL_REPORT_MEASUREMENTS_SAVE_TARGET = 'clinicalReportMeasurements';
@@ -2003,69 +2004,30 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
 
   useEffect(() => {
     if (!timedViewerAutosaveEnabled) return;
-    let cancelled = false;
-    let timer: number | null = null;
+    const autosave = createTimedViewerAutosave({
+      delayMs: 1800,
+      isBusy: () => saveInFlightRef.current,
+      saveDraft: () => timedAutosaveExecutorRef.current?.() || Promise.resolve(false),
+      onStatus: setAutosaveStatus,
+    });
+    timedAutosaveMarkDirtyRef.current = autosave.markDirty;
     const events = measurementService.EVENTS || {};
-    const clearTimer = () => {
-      if (timer !== null) window.clearTimeout(timer);
-      timer = null;
-    };
-    const schedule = () => {
-      clearTimer();
-      if (cancelled) return;
-      timer = window.setTimeout(async () => {
-        timer = null;
-        if (cancelled || timedAutosavedRevisionRef.current >= timedAutosaveRevisionRef.current) {
-          return;
-        }
-        if (saveInFlightRef.current) {
-          schedule();
-          return;
-        }
-        const revision = timedAutosaveRevisionRef.current;
-        setAutosaveStatus('saving');
-        const saved = await timedAutosaveExecutorRef.current?.();
-        if (cancelled) return;
-        if (!saved) {
-          // Do not retry expired/offline writes automatically. A subsequent
-          // edit or reconnection can attempt a new server-guarded draft save.
-          setAutosaveStatus('error');
-          return;
-        }
-        timedAutosavedRevisionRef.current = revision;
-        if (timedAutosaveRevisionRef.current > revision) {
-          setAutosaveStatus('pending');
-          schedule();
-        } else {
-          setAutosaveStatus('saved');
-        }
-      }, 1800);
-    };
-    const markDirty = () => {
-      if (cancelled) return;
-      timedAutosaveRevisionRef.current += 1;
-      setAutosaveStatus('pending');
-      schedule();
-    };
-    timedAutosaveMarkDirtyRef.current = markDirty;
     const subscriptions = [
       events.MEASUREMENT_ADDED,
       events.MEASUREMENT_UPDATED,
       events.MEASUREMENT_REMOVED,
       events.RAW_MEASUREMENT_ADDED,
-    ].filter(Boolean).map(eventName => measurementService.subscribe(eventName, markDirty));
-    const onOnline = () => {
-      if (timedAutosaveRevisionRef.current > timedAutosavedRevisionRef.current) schedule();
-    };
-    window.addEventListener(AR_LIVE_MEASUREMENTS_REFRESH_EVENT, markDirty);
-    window.addEventListener('online', onOnline);
+    ].filter(Boolean).map(eventName =>
+      measurementService.subscribe(eventName, autosave.markDirty)
+    );
+    window.addEventListener(AR_LIVE_MEASUREMENTS_REFRESH_EVENT, autosave.markDirty);
+    window.addEventListener('online', autosave.retryPending);
     return () => {
-      cancelled = true;
-      clearTimer();
+      autosave.stop();
       timedAutosaveMarkDirtyRef.current = null;
       subscriptions.forEach(subscription => subscription?.unsubscribe?.());
-      window.removeEventListener(AR_LIVE_MEASUREMENTS_REFRESH_EVENT, markDirty);
-      window.removeEventListener('online', onOnline);
+      window.removeEventListener(AR_LIVE_MEASUREMENTS_REFRESH_EVENT, autosave.markDirty);
+      window.removeEventListener('online', autosave.retryPending);
     };
   }, [measurementService, timedViewerAutosaveEnabled]);
 
