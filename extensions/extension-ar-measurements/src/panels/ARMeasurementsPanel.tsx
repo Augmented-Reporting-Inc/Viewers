@@ -1456,8 +1456,6 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
   const saveInFlightRef = useRef(false);
   const timedAutosaveExecutorRef = useRef<null | (() => Promise<boolean>)>(null);
   const timedAutosaveMarkDirtyRef = useRef<null | (() => void)>(null);
-  const timedAutosaveRevisionRef = useRef(0);
-  const timedAutosavedRevisionRef = useRef(0);
   const quizSaveRequestRef = useRef<string | null>(null);
   const finishQuizMeasurementSave = (ok: boolean) => {
     const requestId = quizSaveRequestRef.current;
