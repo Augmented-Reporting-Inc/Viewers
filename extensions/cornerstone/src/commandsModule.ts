@@ -8554,12 +8554,24 @@ function commandsModule({
           // Do not act on a stale EF panel after changing studies.
           return !!efStudyInstanceId && activeStudy === efStudyInstanceId;
         };
-        const getStudyMeasurements = () => getCurrentViewerMeasurementSnapshot(measurementService)
-          .filter(entry => {
+        const getStudyMeasurements = () => {
+          // Read existing sources without running a synchronization/recalculation
+          // pass during every UI render. In particular, panel refresh must not
+          // substitute live geometry into EF session records.
+          const byId = new Set<string>();
+          return [
+            ...(measurementService.getMeasurements?.() || []),
+            ...getLVSimpsonSessionMeasurements(),
+          ].filter(entry => {
             if (!getLVSimpsonSlotFromMeasurement(entry)) return false;
             const entryStudy = String(entry?.referenceStudyUID || entry?.StudyInstanceUID || '').trim();
-            return !efStudyInstanceId || !entryStudy || entryStudy === efStudyInstanceId;
+            if (efStudyInstanceId && entryStudy && entryStudy !== efStudyInstanceId) return false;
+            const id = getMeasurementAnnotationId(entry);
+            if (id && byId.has(id)) return false;
+            if (id) byId.add(id);
+            return true;
           });
+        };
         const cancelDrawingWithoutClosingPanel = () => {
           if (!activeLVSimpsonWorkflowSessionId) return;
           activeLVSimpsonWorkflowSessionId = '';
