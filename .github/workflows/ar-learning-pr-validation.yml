@@ -61,6 +61,8 @@ jobs:
         run: npx jest --config extensions/cornerstone/jest.config.js --runInBand --runTestsByPath extensions/cornerstone/src/utils/guidedMouseToolOwnership.test.ts
       - name: Validate LV EF initial contour landmarks and calculator compatibility
         run: npx jest --config extensions/cornerstone/jest.config.js --runInBand --runTestsByPath extensions/cornerstone/src/utils/lvSimpsonContour.test.ts
+      - name: Validate timed learner viewer attempt persistence identity
+        run: npx jest --config extensions/cornerstone/jest.config.js --runInBand --runTestsByPath extensions/cornerstone/src/utils/timedLearnerViewerTarget.test.ts
       - name: Validate quiz composite activation and study-scoped capture intent
         run: npx jest --config extensions/extension-ar-learning/jest.config.js --runInBand --runTestsByPath extensions/extension-ar-learning/src/utils/quizCompositeCaptureIntent.test.ts
       - name: Compile AR learning extension
