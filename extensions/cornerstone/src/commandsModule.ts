@@ -7508,6 +7508,7 @@ function commandsModule({
     uiNotificationService,
     measurementService,
     customizationService,
+    toolbarService,
     colorbarService,
     hangingProtocolService,
     syncGroupService,
@@ -7526,6 +7527,17 @@ function commandsModule({
   const laVolumeMouseTools = createGuidedMouseToolOwnership([
     { mouseButton: Enums.MouseBindings.Primary },
   ]);
+  const refreshLVSimpsonToolbarState = () => {
+    toolbarService?.refreshToolbarState?.({
+      viewportId: viewportGridService.getActiveViewportId(),
+    });
+  };
+  // EF owns direct pointer drags rather than a native primary mouse tool.
+  toolbarService?.registerEvaluateFunction?.('evaluate.arGuidedLVSimpson', () => ({
+    disabled: false,
+    isActive: lvSimpsonMouseTools.isActive(),
+  }));
+  let suppressLVSimpsonRecoveryEvents = 0;
 
   // Length's label-dialog cancellation only runs after the second click.
   // While its drawing is still in progress, delegate Escape to Cornerstone's
@@ -8516,6 +8528,103 @@ function commandsModule({
       const { label, slotInfo } = slotSelection;
       const slotDisplayName = getLVSimpsonSlotDisplayName(slotInfo.slot);
       const stepNumber = getLVSimpsonStepNumber(slotInfo.slot);
+
+      // The controller persists while the EF panel is open, including after
+      // the four-contour drawing session has finished. Reuse the same actions
+      // used by the Measurements panel rather than storing duplicate contours.
+      if (!requestedSessionId || !lvSimpsonPanelController) {
+        const activeDisplaySet = getActiveViewportDisplaySet({
+          viewportGridService, displaySetService, viewportId: activeViewportId,
+        });
+        const efStudyInstanceId = String(
+          activeDisplaySet?.StudyInstanceUID || activeDisplaySet?.studyInstanceUID || ''
+        ).trim();
+        const observedIds = new Set<string>();
+        const getStudyMeasurements = () => getCurrentViewerMeasurementSnapshot(measurementService)
+          .filter(entry => {
+            if (!getLVSimpsonSlotFromMeasurement(entry)) return false;
+            const entryStudy = String(entry?.referenceStudyUID || entry?.StudyInstanceUID || '').trim();
+            return !efStudyInstanceId || !entryStudy || entryStudy === efStudyInstanceId;
+          });
+        const cancelDrawingWithoutClosingPanel = () => {
+          if (!activeLVSimpsonWorkflowSessionId) return;
+          activeLVSimpsonWorkflowSessionId = '';
+          cancelActiveLVSimpsonCapture();
+          lvSimpsonMouseTools.restore();
+          refreshLVSimpsonToolbarState();
+        };
+        const showRecovery = (message: string) => {
+          const measurements = getStudyMeasurements();
+          const missingSlot = getNextMissingLVSimpsonSlot(getLVSimpsonSlotCandidates(measurements));
+          renderLVSimpsonWorkflowPanel({
+            measurements,
+            instruction: message,
+            onCalculate: missingSlot ? null : lvSimpsonPanelController?.onCalculate,
+            onCancel: () => {
+              if (activeLVSimpsonWorkflowSessionId) {
+                clearLVSimpsonWorkflowIfCurrent(activeLVSimpsonWorkflowSessionId);
+              } else {
+                hideLVSimpsonWorkflowPanel();
+              }
+            },
+          });
+        };
+        lvSimpsonPanelController = {
+          activeSlot: slotInfo.slot,
+          onCalculate: null,
+          getMeasurements: getStudyMeasurements,
+          setObservedIds(ids: string[]) {
+            observedIds.clear();
+            ids.forEach(id => observedIds.add(id));
+          },
+          onDrawSlot(slot: string) {
+            if (!LV_TRACE_REQUIRED_SLOTS.includes(slot)) return;
+            // Starting a new session preserves authored frame targets from the
+            // current EF question and reuses exact-frame navigation.
+            if (activeLVSimpsonWorkflowSessionId) {
+              clearLVSimpsonWorkflowIfCurrent(activeLVSimpsonWorkflowSessionId);
+            } else {
+              hideLVSimpsonWorkflowPanel();
+            }
+            void actions.startLVSimpsonEFWorkflow({
+              slot, efContourTargets, questionKey,
+              viewportId: viewportGridService.getActiveViewportId(),
+            }).catch(error => console.warn('[LV EF] selected contour redraw failed:', error));
+          },
+          onDeleteSlot(slot: string, ids: string[]) {
+            if (!LV_TRACE_REQUIRED_SLOTS.includes(slot) || !ids.length) return;
+            const currentIds = getStudyMeasurements()
+              .filter(item => getLVSimpsonSlotFromMeasurement(item) === slot)
+              .map(getMeasurementAnnotationId).filter(Boolean);
+            const targets = ids.filter(id => currentIds.includes(id));
+            if (!targets.length) return;
+            if (!window.confirm(`Delete ${getLVSimpsonSlotDisplayName(slot)}? The other EF contours will be kept.`)) return;
+            cancelDrawingWithoutClosingPanel();
+            this.onCalculate = null;
+            this.activeSlot = '';
+            explicitLVSimpsonResult = null;
+            reviewedLVSimpsonEF = null;
+            actions.removeMeasurement({ uid: targets });
+            showRecovery(`${getLVSimpsonSlotDisplayName(slot)} deleted. Select Draw to replace it, or choose another contour.`);
+          },
+          onAnnotationRemoved(annotationId: string) {
+            if (suppressLVSimpsonRecoveryEvents || !observedIds.has(annotationId)) return;
+            cancelDrawingWithoutClosingPanel();
+            this.onCalculate = null;
+            this.activeSlot = '';
+            // A direct Cornerstone deletion can leave a live service record.
+            // Clear both through the same established removal command.
+            if (measurementService.getMeasurement?.(annotationId) ||
+                lvSimpsonSessionMeasurementsByUid.has(annotationId)) {
+              actions.removeMeasurement({ uid: annotationId });
+            }
+            showRecovery('A contour was deleted. Select its row to draw it again; completed contours are preserved.');
+          },
+        };
+      } else {
+        lvSimpsonPanelController.activeSlot = slotInfo.slot;
+      }
+
       const existingSlotMeasurements = slotCandidates.get(slotInfo.slot) || [];
       const existingSlotMeasurementIds =
         getLVSimpsonExistingMeasurementIds(existingSlotMeasurements);
@@ -8806,6 +8915,9 @@ function commandsModule({
         viewport.render?.();
       } catch {}
 
+      if (lvSimpsonPanelController) {
+        lvSimpsonPanelController.activeSlot = '';
+      }
       const currentLVSimpsonMeasurements = [
         ...measurementService.getMeasurements?.(),
         ...getLVSimpsonSessionMeasurements(),
@@ -8947,6 +9059,9 @@ function commandsModule({
           onCancel: hideLVSimpsonWorkflowPanel,
         });
       };
+      if (lvSimpsonPanelController) {
+        lvSimpsonPanelController.onCalculate = calculateEF;
+      }
       renderLVSimpsonWorkflowPanel({
         measurements: currentLVSimpsonMeasurements,
         instruction: 'Review the four contours and their long-axis measurements, then select Calculate EF.',
