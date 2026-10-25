@@ -7822,6 +7822,7 @@ function commandsModule({
     activeLVSimpsonWorkflowSessionId = '';
     cancelActiveLVSimpsonCapture();
     lvSimpsonMouseTools.restore();
+    refreshLVSimpsonToolbarState();
     hideLVSimpsonWorkflowPanel();
     return true;
   }
@@ -7847,6 +7848,7 @@ function commandsModule({
       clearCineCommentSessionMeasurements();
       cancelActiveLVSimpsonCapture();
       lvSimpsonMouseTools.restore();
+      refreshLVSimpsonToolbarState();
       cancelActiveLAVolumeCapture();
       laVolumeMouseTools.restore();
       activeLVSimpsonWorkflowSessionId = '';
@@ -8524,6 +8526,7 @@ function commandsModule({
         ? toolGroupService.getToolGroup(efToolGroupReference)
         : efToolGroupReference;
       lvSimpsonMouseTools.suspend(efToolGroup);
+      refreshLVSimpsonToolbarState();
 
       const { label, slotInfo } = slotSelection;
       const slotDisplayName = getLVSimpsonSlotDisplayName(slotInfo.slot);
@@ -8784,8 +8787,15 @@ function commandsModule({
       // They are shown with the next-step/final-result notification instead
       // of being immediately replaced by another toast.
 
-      for (const existingMeasurementId of existingSlotMeasurementIds) {
-        actions.removeMeasurement({ uid: existingMeasurementId });
+      // Replacing a selected slot is not an accidental deletion and must not
+      // cancel the new drawing session while clearing old spline annotations.
+      suppressLVSimpsonRecoveryEvents += 1;
+      try {
+        for (const existingMeasurementId of existingSlotMeasurementIds) {
+          actions.removeMeasurement({ uid: existingMeasurementId });
+        }
+      } finally {
+        suppressLVSimpsonRecoveryEvents -= 1;
       }
 
       dispatchLiveMeasurementsRefresh({
@@ -9020,6 +9030,7 @@ function commandsModule({
       activeLVSimpsonWorkflowSessionId = '';
       cancelActiveLVSimpsonCapture();
       lvSimpsonMouseTools.restore();
+      refreshLVSimpsonToolbarState();
 
       // The four contour measurements are displayed for review first.
       // Only a deliberate Calculate EF click creates a quiz-authoritative EF.
@@ -11051,6 +11062,9 @@ function commandsModule({
     setToolActiveToolbar: ({ value, itemId, toolName, toolGroupIds = [] }) => {
       // Sometimes it is passed as value (tools with options), sometimes as itemId (toolbar buttons)
       toolName = toolName || itemId || value;
+      if (lvSimpsonMouseTools.isActive() && activeLVSimpsonWorkflowSessionId) {
+        clearLVSimpsonWorkflowIfCurrent(activeLVSimpsonWorkflowSessionId);
+      }
 
       if (
         toolName === ULTRASOUND_DIRECTIONAL_TOOL_NAME &&
@@ -11080,6 +11094,11 @@ function commandsModule({
       labelMode = VIEWER_LENGTH_LABEL_MODE_PROMPT,
       toolGroupIds = [],
     } = {}) => {
+      // Unlike automatic quiz Length activation, a deliberate toolbar click
+      // requests a different tool and should leave the guided EF workflow.
+      if (lvSimpsonMouseTools.isActive() && activeLVSimpsonWorkflowSessionId) {
+        clearLVSimpsonWorkflowIfCurrent(activeLVSimpsonWorkflowSessionId);
+      }
       viewerLengthLabelMode = normalizeViewerLengthLabelMode(labelMode);
       actions.setToolActiveToolbar({
         toolName: 'Length',
