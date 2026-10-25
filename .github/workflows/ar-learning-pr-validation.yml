@@ -3,6 +3,7 @@ name: AR Learning Extension Validation
 on:
   push:
     branches:
+      - feature/timed-learner-viewer-persistence-20261025
       - fix/ef-progress-quiz-capture-parity-20261020
       - fix/ef-stable-panel-refresh-20261022
       - fix/ef-sticky-tool-between-contours-20261020
