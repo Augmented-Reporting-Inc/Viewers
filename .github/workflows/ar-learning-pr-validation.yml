@@ -9,6 +9,7 @@ on:
       - feat/lv-ef-rounded-contour-20261021
       - feat/quiz-ef-la-auto-activate-capture-20261021
       - feature/ef-authored-contour-frame-navigation-20261024
+      - fix/ef-panel-contour-actions-20261025
   pull_request:
     branches:
       - fix/ef-sticky-tool-between-contours-20261020
