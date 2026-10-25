@@ -859,6 +859,7 @@ function getArViewerSaveTargetFromUrl() {
       baseSeriesId: String(qs.get('arBaseSeriesId') || '').trim(),
       seriesId: String(qs.get('arSeriesId') || '').trim(),
       learnerSeriesId: String(qs.get('arLearnerSeriesId') || '').trim(),
+      timedAssessment: String(qs.get('arTimedAssessment') || '').trim(),
       attemptOwner: String(qs.get('arAttemptOwner') || '').trim(),
       launchSource: String(qs.get('arLaunchSource') || '').trim(),
       measurementWorkflowRole: String(qs.get('arMeasurementWorkflowRole') || '').trim(),
@@ -872,6 +873,7 @@ function getArViewerSaveTargetFromUrl() {
       baseSeriesId: '',
       seriesId: '',
       learnerSeriesId: '',
+      timedAssessment: '',
       attemptOwner: '',
       launchSource: '',
       measurementWorkflowRole: '',
@@ -1424,6 +1426,16 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
 
   const isReviewWorkflowReadOnly = isReviewWorkflow && !getWritableMeasurementWorkflow(saveTarget);
   const isClinicalReportSaveTarget = isClinicalReportMeasurementsTarget(saveTarget);
+  // Timed autosave is confined to learner-owned viewer-first drafts. Report-owned
+  // review/field approval and every legacy measurement workflow stay unchanged.
+  const timedViewerAutosaveEnabled =
+    saveTarget.timedAssessment === '1' &&
+    saveTarget.mode === 'learnerCopyOnSave' &&
+    String(saveTarget.measurementWorkflowRole || '').toLowerCase() === 'learner' &&
+    !!saveTarget.learnerSeriesId &&
+    !isClinicalReportSaveTarget &&
+    !isReviewWorkflow;
+  const [autosaveStatus, setAutosaveStatus] = useState('idle');
   const [measurements, setMeasurements] = useState([]);
   const [captureReadyLVSimpson, setCaptureReadyLVSimpson] = useState(null);
   const [pendingDeletedMeasurementIds, setPendingDeletedMeasurementIds] = useState<string[]>([]);
@@ -1441,6 +1453,10 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
   const [sessionLVSimpsonMeasurements, setSessionLVSimpsonMeasurements] = useState([]);
   const [sessionLAVolumeMeasurements, setSessionLAVolumeMeasurements] = useState([]);
   const saveInFlightRef = useRef(false);
+  const timedAutosaveExecutorRef = useRef<null | (() => Promise<boolean>)>(null);
+  const timedAutosaveMarkDirtyRef = useRef<null | (() => void)>(null);
+  const timedAutosaveRevisionRef = useRef(0);
+  const timedAutosavedRevisionRef = useRef(0);
   const quizSaveRequestRef = useRef<string | null>(null);
   const finishQuizMeasurementSave = (ok: boolean) => {
     const requestId = quizSaveRequestRef.current;
@@ -1918,6 +1934,7 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
   };
 
   const saveCurrentMeasurements = async (scoreNow = false, options: any = {}) => {
+    const savedDeletionIds = new Set(pendingDeletedMeasurementIds);
     const result = await runMeasurementSave(scoreNow, options);
 
     if (!result?.previewOnly && result?.annotations) {
@@ -1928,7 +1945,11 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
         saveTarget,
         domain,
       });
-      setPendingDeletedMeasurementIds([]);
+      setPendingDeletedMeasurementIds(current =>
+        timedViewerAutosaveEnabled
+          ? current.filter(id => !savedDeletionIds.has(id))
+          : []
+      );
     }
 
     return result;
@@ -1958,6 +1979,101 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
       setSavingAction('');
     }
   };
+
+  // Reuse the same draft-saving command and in-flight lock as the Save Draft
+  // button. Never queue score/sign requests, and never keep a second store.
+  timedAutosaveExecutorRef.current = async () => {
+    if (saveInFlightRef.current) return false;
+    saveInFlightRef.current = true;
+    setSavingAction('draft');
+    try {
+      const result = await saveCurrentMeasurements(false, { suppressSuccessNotification: true });
+      if (String(result?.seriesDoc?._id || '') !== saveTarget.learnerSeriesId) {
+        throw new Error('Timed autosave was not acknowledged by the learner attempt.');
+      }
+      return true;
+    } catch (error) {
+      console.error('[ARMeasurementsPanel] timed viewer autosave failed:', error);
+      return false;
+    } finally {
+      saveInFlightRef.current = false;
+      setSavingAction('');
+    }
+  };
+
+  useEffect(() => {
+    if (!timedViewerAutosaveEnabled) return;
+    let cancelled = false;
+    let timer: number | null = null;
+    const events = measurementService.EVENTS || {};
+    const clearTimer = () => {
+      if (timer !== null) window.clearTimeout(timer);
+      timer = null;
+    };
+    const schedule = () => {
+      clearTimer();
+      if (cancelled) return;
+      timer = window.setTimeout(async () => {
+        timer = null;
+        if (cancelled || timedAutosavedRevisionRef.current >= timedAutosaveRevisionRef.current) {
+          return;
+        }
+        if (saveInFlightRef.current) {
+          schedule();
+          return;
+        }
+        const revision = timedAutosaveRevisionRef.current;
+        setAutosaveStatus('saving');
+        const saved = await timedAutosaveExecutorRef.current?.();
+        if (cancelled) return;
+        if (!saved) {
+          // Do not retry expired/offline writes automatically. A subsequent
+          // edit or reconnection can attempt a new server-guarded draft save.
+          setAutosaveStatus('error');
+          return;
+        }
+        timedAutosavedRevisionRef.current = revision;
+        if (timedAutosaveRevisionRef.current > revision) {
+          setAutosaveStatus('pending');
+          schedule();
+        } else {
+          setAutosaveStatus('saved');
+        }
+      }, 1800);
+    };
+    const markDirty = () => {
+      if (cancelled) return;
+      timedAutosaveRevisionRef.current += 1;
+      setAutosaveStatus('pending');
+      schedule();
+    };
+    timedAutosaveMarkDirtyRef.current = markDirty;
+    const subscriptions = [
+      events.MEASUREMENT_ADDED,
+      events.MEASUREMENT_UPDATED,
+      events.MEASUREMENT_REMOVED,
+      events.RAW_MEASUREMENT_ADDED,
+    ].filter(Boolean).map(eventName => measurementService.subscribe(eventName, markDirty));
+    const onOnline = () => {
+      if (timedAutosaveRevisionRef.current > timedAutosavedRevisionRef.current) schedule();
+    };
+    window.addEventListener(AR_LIVE_MEASUREMENTS_REFRESH_EVENT, markDirty);
+    window.addEventListener('online', onOnline);
+    return () => {
+      cancelled = true;
+      clearTimer();
+      timedAutosaveMarkDirtyRef.current = null;
+      subscriptions.forEach(subscription => subscription?.unsubscribe?.());
+      window.removeEventListener(AR_LIVE_MEASUREMENTS_REFRESH_EVENT, markDirty);
+      window.removeEventListener('online', onOnline);
+    };
+  }, [measurementService, timedViewerAutosaveEnabled]);
+
+  useEffect(() => {
+    if (timedViewerAutosaveEnabled && pendingDeletedMeasurementIds.length > 0) {
+      timedAutosaveMarkDirtyRef.current?.();
+    }
+  }, [timedViewerAutosaveEnabled, pendingDeletedMeasurementIds]);
 
   const handleClinicalReportReviewPreferenceChange = value => {
     const nextValue = !!value;
@@ -2389,6 +2505,15 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
               }${isReviewWorkflowReadOnly ? ' • read-only' : ''}`
             : `Domain: ${domain}`}
         </div>
+        {timedViewerAutosaveEnabled ? (
+          <div role="status" aria-live="polite" className="mt-1 text-xs text-gray-300">
+            {autosaveStatus === 'saving' ? 'Saving assessment measurements…'
+              : autosaveStatus === 'pending' ? 'Unsaved measurement changes…'
+              : autosaveStatus === 'saved' ? 'Assessment measurements autosaved.'
+              : autosaveStatus === 'error' ? 'Autosave failed. Use Save Draft before the deadline.'
+              : 'Measurements save automatically during this assessment.'}
+          </div>
+        ) : null}
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto p-3">
