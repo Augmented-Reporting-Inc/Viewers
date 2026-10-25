@@ -8543,6 +8543,17 @@ function commandsModule({
           activeDisplaySet?.StudyInstanceUID || activeDisplaySet?.studyInstanceUID || ''
         ).trim();
         const observedIds = new Set<string>();
+        const isActiveStudy = () => {
+          const viewportId = viewportGridService.getActiveViewportId();
+          const displaySet = getActiveViewportDisplaySet({
+            viewportGridService, displaySetService, viewportId,
+          });
+          const activeStudy = String(
+            displaySet?.StudyInstanceUID || displaySet?.studyInstanceUID || ''
+          ).trim();
+          // Do not act on a stale EF panel after changing studies.
+          return !!efStudyInstanceId && activeStudy === efStudyInstanceId;
+        };
         const getStudyMeasurements = () => getCurrentViewerMeasurementSnapshot(measurementService)
           .filter(entry => {
             if (!getLVSimpsonSlotFromMeasurement(entry)) return false;
@@ -8581,7 +8592,7 @@ function commandsModule({
             ids.forEach(id => observedIds.add(id));
           },
           onDrawSlot(slot: string) {
-            if (!LV_TRACE_REQUIRED_SLOTS.includes(slot)) return;
+            if (!LV_TRACE_REQUIRED_SLOTS.includes(slot) || !isActiveStudy()) return;
             // Starting a new session preserves authored frame targets from the
             // current EF question and reuses exact-frame navigation.
             if (activeLVSimpsonWorkflowSessionId) {
@@ -8595,10 +8606,15 @@ function commandsModule({
             }).catch(error => console.warn('[LV EF] selected contour redraw failed:', error));
           },
           onDeleteSlot(slot: string, ids: string[]) {
-            if (!LV_TRACE_REQUIRED_SLOTS.includes(slot) || !ids.length) return;
-            const currentIds = getStudyMeasurements()
-              .filter(item => getLVSimpsonSlotFromMeasurement(item) === slot)
-              .map(getMeasurementAnnotationId).filter(Boolean);
+            if (!LV_TRACE_REQUIRED_SLOTS.includes(slot) || !ids.length || !isActiveStudy()) return;
+            const currentItems = getStudyMeasurements()
+              .filter(item => getLVSimpsonSlotFromMeasurement(item) === slot);
+            if (currentItems.some(item => {
+              const id = getMeasurementAnnotationId(item);
+              const source = id && cornerstoneTools.annotation.state.getAnnotation?.(id);
+              return item?.isLocked || source?.isLocked || source?.data?.arMeasurementReadOnly;
+            })) return;
+            const currentIds = currentItems.map(getMeasurementAnnotationId).filter(Boolean);
             const targets = ids.filter(id => currentIds.includes(id));
             if (!targets.length) return;
             if (!window.confirm(`Delete ${getLVSimpsonSlotDisplayName(slot)}? The other EF contours will be kept.`)) return;
@@ -8612,6 +8628,9 @@ function commandsModule({
           },
           onAnnotationRemoved(annotationId: string) {
             if (suppressLVSimpsonRecoveryEvents || !observedIds.has(annotationId)) return;
+            // Disarm this ID before invoking removeMeasurement: the service
+            // and Cornerstone can each emit a removal event for the same ID.
+            observedIds.delete(annotationId);
             cancelDrawingWithoutClosingPanel();
             this.onCalculate = null;
             this.activeSlot = '';
