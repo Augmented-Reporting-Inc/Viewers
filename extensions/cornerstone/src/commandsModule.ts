@@ -5560,6 +5560,8 @@ function getNextMissingLVSimpsonSlot(slotCandidates: Map<string, any[]>) {
 }
 
 const LV_SIMPSON_PROGRESS_PANEL_ID = 'ar-lv-simpson-progress-panel';
+// The current viewer provides study-scoped actions and authoritative progress.
+let lvSimpsonPanelController: any = null;
 const AR_LV_SIMPSON_GOLD_CAPTURED_EVENT = 'ar-measurements:lv-simpson-gold-captured';
 const AR_LV_SIMPSON_CAPTURE_REQUESTED_EVENT = 'ar-measurements:lv-simpson-capture-requested';
 
@@ -5640,27 +5642,40 @@ function getExplicitLVSimpsonResult(studyInstanceId: string) {
 // Direct edits and deletions after Calculate EF invalidate the only quiz result.
 // This also fails closed if Cornerstone emits a late normalization change.
 function invalidateExplicitLVSimpsonAfterAnnotationChange(event: Event) {
-  const result = explicitLVSimpsonResult;
-  if (!result) return;
   const detail = (event as CustomEvent)?.detail || {};
   const annotationId = String(
     detail.annotation?.annotationUID || detail.annotation?.uid ||
     detail.annotationUID || ''
   );
   if (!annotationId) return;
-  if (!result.composite?.components?.some((component: any) =>
+
+  const result = explicitLVSimpsonResult;
+  if (result?.composite?.components?.some((component: any) =>
     String(component.annotationId) === annotationId
-  )) return;
-  explicitLVSimpsonResult = null;
-  reviewedLVSimpsonEF = null;
-  if (typeof document !== 'undefined' &&
-      document.getElementById(LV_SIMPSON_PROGRESS_PANEL_ID)) {
-    renderLVSimpsonWorkflowPanel({
-      resultText: 'EF needs recalculation',
-      warnings: ['A source contour changed or was removed after EF calculation.'],
-      instruction: 'Review the four contours, then run the EF workflow again.',
-      onCancel: hideLVSimpsonWorkflowPanel,
-    });
+  )) {
+    // A changed or removed source contour must never leave a capturable EF.
+    explicitLVSimpsonResult = null;
+    reviewedLVSimpsonEF = null;
+    if (typeof document !== 'undefined' &&
+        document.getElementById(LV_SIMPSON_PROGRESS_PANEL_ID)) {
+      const currentMeasurements = lvSimpsonPanelController?.getMeasurements?.() || [];
+      const missingSlot = getNextMissingLVSimpsonSlot(getLVSimpsonSlotCandidates(currentMeasurements));
+      renderLVSimpsonWorkflowPanel({
+        measurements: currentMeasurements,
+        resultText: 'EF needs recalculation',
+        warnings: ['A source contour changed or was removed after EF calculation.'],
+        instruction: missingSlot
+          ? 'Choose the missing contour below to redraw it; other contours are preserved.'
+          : 'Review the contours, then select Calculate EF again.',
+        onCalculate: missingSlot ? null : lvSimpsonPanelController?.onCalculate,
+        onCancel: hideLVSimpsonWorkflowPanel,
+      });
+    }
+  }
+  // A deletion from the image or Measurements panel uses the same refresh
+  // path as a deletion from the EF panel.
+  if (event.type === Enums.Events.ANNOTATION_REMOVED) {
+    lvSimpsonPanelController?.onAnnotationRemoved?.(annotationId);
   }
 }
 
@@ -5677,6 +5692,7 @@ let reviewedLVSimpsonEF: { studyInstanceId: string; value: number } | null = nul
 
 function hideLVSimpsonWorkflowPanel() {
   reviewedLVSimpsonEF = null;
+  lvSimpsonPanelController = null;
   document.getElementById(LV_SIMPSON_PROGRESS_PANEL_ID)?.remove();
 }
 
@@ -5730,7 +5746,12 @@ function renderLVSimpsonWorkflowPanel({
     document.body.appendChild(panel);
   }
   panel.replaceChildren();
-  const slots = getLVSimpsonSlotCandidates(measurements);
+  // Deleted contours must never reappear from a stale render argument.
+  const currentMeasurements = lvSimpsonPanelController?.getMeasurements?.() || measurements;
+  const slots = getLVSimpsonSlotCandidates(currentMeasurements);
+  lvSimpsonPanelController?.setObservedIds?.(
+    currentMeasurements.map(getMeasurementAnnotationId).filter(Boolean)
+  );
   const completeCount = LV_TRACE_REQUIRED_SLOTS.filter(slot => slots.get(slot)?.length).length;
   const addText = (text, style: any = {}) => {
     const node = document.createElement('div');
@@ -5742,13 +5763,54 @@ function renderLVSimpsonWorkflowPanel({
   addText('LV Simpson Biplane EF', { fontWeight: '700', fontSize: '15px' });
   addText(`${completeCount} of 4 contours complete`, { marginBottom: '8px', color: '#cbd5e1' });
   for (const slot of LV_TRACE_REQUIRED_SLOTS) {
-    const measurement = slots.get(slot)?.[0];
+    const matching = slots.get(slot) || [];
+    const measurement = matching[0];
     const geometry = measurement?.lvSimpson || measurement?.measurements?.lvSimpson || {};
     const axis = Number(geometry.longAxisLengthMM);
     const detail = measurement && Number.isFinite(axis) && axis > 0 ? ` — long axis ${axis.toFixed(1)} mm` : '';
-    addText(`${measurement ? '✓' : '○'}  ${getLVSimpsonSlotDisplayName(slot)}${detail}`, {
-      padding: '3px 0',
+    const displayName = getLVSimpsonSlotDisplayName(slot);
+    const row = document.createElement('div');
+    Object.assign(row.style, {
+      display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '6px',
+      padding: '6px 0', borderTop: '1px solid #334155',
     });
+    const rowLabel = document.createElement('span');
+    rowLabel.textContent = `${measurement ? '✓' : '○'}  ${displayName}${detail}`;
+    rowLabel.style.flex = '1 1 100%';
+    if (lvSimpsonPanelController?.activeSlot === slot) {
+      rowLabel.style.fontWeight = '700';
+      rowLabel.textContent = `Current: ${rowLabel.textContent}`;
+    }
+    row.appendChild(rowLabel);
+    const ids = matching.map(getMeasurementAnnotationId).filter(Boolean);
+    const readOnly = matching.some(item => {
+      const id = getMeasurementAnnotationId(item);
+      const source = id && cornerstoneTools.annotation.state.getAnnotation?.(id);
+      return item?.isLocked || source?.isLocked || source?.data?.arMeasurementReadOnly;
+    });
+    const rowButton = (label: string, title: string, action: () => void) => {
+      const control = document.createElement('button');
+      control.type = 'button';
+      control.textContent = label;
+      control.setAttribute('aria-label', title);
+      control.disabled = !!readOnly;
+      Object.assign(control.style, {
+        border: '1px solid #94a3b8', borderRadius: '6px', padding: '4px 8px',
+        background: '#334155', color: '#ffffff',
+        cursor: readOnly ? 'not-allowed' : 'pointer', opacity: readOnly ? '0.5' : '1',
+      });
+      control.addEventListener('click', action);
+      row.appendChild(control);
+    };
+    if (lvSimpsonPanelController?.onDrawSlot) {
+      rowButton(measurement ? 'Redraw' : 'Draw', `${measurement ? 'Redraw' : 'Draw'} ${displayName}`,
+        () => lvSimpsonPanelController?.onDrawSlot?.(slot));
+    }
+    if (ids.length && lvSimpsonPanelController?.onDeleteSlot) {
+      rowButton('Delete', `Delete ${displayName} contour`,
+        () => lvSimpsonPanelController?.onDeleteSlot?.(slot, ids));
+    }
+    panel.appendChild(row);
   }
   if (resultText) addText(resultText, { fontWeight: '700', fontSize: '18px', marginTop: '9px' });
   for (const detail of resultDetails) {
