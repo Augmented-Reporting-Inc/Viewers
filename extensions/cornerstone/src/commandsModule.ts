@@ -7474,9 +7474,10 @@ async function resolveViewerSaveSeriesDoc({ servicesManager, currentSeriesDoc })
         String(saveTarget.measurementWorkflowRole || '').toLowerCase() !== 'learner') {
       throw new Error('Timed measurements require an authenticated learner-copy workflow.');
     }
-    const seriesDoc = String(currentSeriesDoc?._id || '') === timedTarget.learnerSeriesId
-      ? currentSeriesDoc
-      : await fetchSeriesDocById(timedTarget.learnerSeriesId);
+    // Verify active DICOM identity, authenticated learner ownership and
+    // the still-active server deadline before preparing a timed save.
+    // The later FormAPI PUT independently guards expiration atomically.
+    const seriesDoc = await ensureSeriesDocForActiveStudy(servicesManager);
     assertTimedLearnerViewerDocument(seriesDoc, timedTarget);
     if (seriesDoc?.educationAttempt?.timing?.enabled !== true) {
       throw new Error('Timed viewer cannot save to an attempt without a server deadline.');
