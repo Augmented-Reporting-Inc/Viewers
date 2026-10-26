@@ -105,6 +105,22 @@ describe('timed viewer autosave draft coordinator', () => {
     autosave.stop();
   });
 
+  it('does not report a rejected deadline write as saved', async () => {
+    const statuses: string[] = [];
+    const saveDraft = jest.fn().mockRejectedValue(new Error('assessment_time_expired'));
+    const autosave = createTimedViewerAutosave({
+      delayMs: 100, saveDraft, onStatus: status => statuses.push(status),
+    });
+    autosave.markDirty();
+    jest.advanceTimersByTime(100);
+    await flush();
+    expect(statuses[statuses.length - 1]).toBe('error');
+    jest.advanceTimersByTime(1000);
+    expect(saveDraft).toHaveBeenCalledTimes(1);
+    expect(statuses).not.toContain('saved');
+    autosave.stop();
+  });
+
   it('cancels a pending save on viewer unmount', () => {
     const saveDraft = jest.fn().mockResolvedValue(true);
     const autosave = createTimedViewerAutosave({ delayMs: 100, saveDraft });
