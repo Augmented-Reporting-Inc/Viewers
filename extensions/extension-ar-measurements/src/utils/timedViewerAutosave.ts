@@ -3,6 +3,23 @@
  * changes scoring/timeout policy; FormAPI is authoritative for both.
  * All mutable state belongs to this viewer instance and is cancelled on unmount.
  */
+export function isTimedViewerAutosaveCandidate(
+  saveTarget: any = {},
+  {
+    isClinicalReportSaveTarget = false,
+    isReviewWorkflow = false,
+  }: { isClinicalReportSaveTarget?: boolean; isReviewWorkflow?: boolean } = {}
+) {
+  const learnerSeriesId = String(saveTarget.learnerSeriesId || '').trim();
+  const baseSeriesId = String(saveTarget.baseSeriesId || '').trim();
+  return saveTarget.timedAssessment === '1' &&
+    saveTarget.mode === 'learnerCopyOnSave' &&
+    String(saveTarget.launchSource || '').toLowerCase() === 'library' &&
+    String(saveTarget.measurementWorkflowRole || '').toLowerCase() === 'learner' &&
+    !!learnerSeriesId && !!baseSeriesId && learnerSeriesId !== baseSeriesId &&
+    !isClinicalReportSaveTarget && !isReviewWorkflow;
+}
+
 export type TimedViewerAutosaveStatus = 'idle' | 'pending' | 'saving' | 'saved' | 'error';
 
 export function createTimedViewerAutosave({

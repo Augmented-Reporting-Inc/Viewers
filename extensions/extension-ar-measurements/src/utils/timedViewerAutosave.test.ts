@@ -1,4 +1,4 @@
-import { createTimedViewerAutosave } from './timedViewerAutosave';
+import { createTimedViewerAutosave, isTimedViewerAutosaveCandidate } from './timedViewerAutosave';
 
 describe('timed viewer autosave draft coordinator', () => {
   beforeEach(() => jest.useFakeTimers());
@@ -11,6 +11,24 @@ describe('timed viewer autosave draft coordinator', () => {
     await Promise.resolve();
     await Promise.resolve();
   }
+
+  it('enables autosave only for explicit timed learner viewer-first assessment copies', () => {
+    const target = {
+      timedAssessment: '1', mode: 'learnerCopyOnSave',
+      launchSource: 'library', measurementWorkflowRole: 'learner',
+      learnerSeriesId: '507f1f77bcf86cd799439011',
+      baseSeriesId: '507f1f77bcf86cd799439012',
+    };
+    expect(isTimedViewerAutosaveCandidate(target)).toBe(true);
+    expect(isTimedViewerAutosaveCandidate({ ...target, timedAssessment: '' })).toBe(false);
+    expect(isTimedViewerAutosaveCandidate({ ...target, mode: 'clinicalReportMeasurements' })).toBe(false);
+    expect(isTimedViewerAutosaveCandidate({ ...target, launchSource: 'report' })).toBe(false);
+    expect(isTimedViewerAutosaveCandidate({ ...target, measurementWorkflowRole: 'educator' })).toBe(false);
+    expect(isTimedViewerAutosaveCandidate({ ...target, baseSeriesId: target.learnerSeriesId })).toBe(false);
+    expect(isTimedViewerAutosaveCandidate({ ...target, learnerSeriesId: '' })).toBe(false);
+    expect(isTimedViewerAutosaveCandidate(target, { isClinicalReportSaveTarget: true })).toBe(false);
+    expect(isTimedViewerAutosaveCandidate(target, { isReviewWorkflow: true })).toBe(false);
+  });
 
   it('debounces repeated measurement changes into one draft save', async () => {
     const saveDraft = jest.fn().mockResolvedValue(true);

@@ -8,7 +8,7 @@ import {
 } from '../utils/laVolume';
 import { getViewerMeasurementDomainFromPath } from '../utils/measurementLabelConfig';
 import { BOWEL_CURVED_LENGTH_MEASUREMENT_KIND } from '../utils/bowelMeasurementTargets';
-import { createTimedViewerAutosave } from '../utils/timedViewerAutosave';
+import { createTimedViewerAutosave, isTimedViewerAutosaveCandidate } from '../utils/timedViewerAutosave';
 
 const ULTRASOUND_DIRECTIONAL_TOOL_NAME = 'UltrasoundDirectionalTool';
 const CLINICAL_REPORT_MEASUREMENTS_SAVE_TARGET = 'clinicalReportMeasurements';
@@ -1429,13 +1429,10 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
   const isClinicalReportSaveTarget = isClinicalReportMeasurementsTarget(saveTarget);
   // Timed autosave is confined to learner-owned viewer-first drafts. Report-owned
   // review/field approval and every legacy measurement workflow stay unchanged.
-  const timedViewerAutosaveEnabled =
-    saveTarget.timedAssessment === '1' &&
-    saveTarget.mode === 'learnerCopyOnSave' &&
-    String(saveTarget.measurementWorkflowRole || '').toLowerCase() === 'learner' &&
-    !!saveTarget.learnerSeriesId &&
-    !isClinicalReportSaveTarget &&
-    !isReviewWorkflow;
+  const timedViewerAutosaveEnabled = isTimedViewerAutosaveCandidate(saveTarget, {
+    isClinicalReportSaveTarget,
+    isReviewWorkflow,
+  });
   const [autosaveStatus, setAutosaveStatus] = useState('idle');
   const [measurements, setMeasurements] = useState([]);
   const [captureReadyLVSimpson, setCaptureReadyLVSimpson] = useState(null);
