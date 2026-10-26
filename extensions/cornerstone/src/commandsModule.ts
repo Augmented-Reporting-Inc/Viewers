@@ -15139,12 +15139,16 @@ function commandsModule({
             error
           );
 
-          uiNotificationService.show({
-            title: 'AR Measurements & Annotations',
-            message: `Save failed: ${error?.message || error}`,
-            type: 'error',
-            duration: 5000,
-          });
+          // Timed draft autosave reports failure inline in the panel.
+          // Preserve the existing notification for explicit manual saves.
+          if (!suppressSuccessNotification) {
+            uiNotificationService.show({
+              title: 'AR Measurements & Annotations',
+              message: `Save failed: ${error?.message || error}`,
+              type: 'error',
+              duration: 5000,
+            });
+          }
 
           throw error;
         }
