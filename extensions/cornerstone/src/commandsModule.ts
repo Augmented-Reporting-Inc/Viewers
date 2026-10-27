@@ -5775,12 +5775,25 @@ function renderLVSimpsonWorkflowPanel({
       display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '6px',
       padding: '6px 0', borderTop: '1px solid #334155',
     });
-    const rowLabel = document.createElement('span');
+    const canNavigateSlot = !!lvSimpsonPanelController?.canNavigateSlot?.(slot);
+    const rowLabel = document.createElement(canNavigateSlot ? 'button' : 'span');
     rowLabel.textContent = `${measurement ? '✓' : '○'}  ${displayName}${detail}`;
     rowLabel.style.flex = '1 1 100%';
     if (lvSimpsonPanelController?.activeSlot === slot) {
       rowLabel.style.fontWeight = '700';
       rowLabel.textContent = `Current: ${rowLabel.textContent}`;
+    }
+    if (canNavigateSlot) {
+      (rowLabel as HTMLButtonElement).type = 'button';
+      rowLabel.setAttribute('aria-label', `Open educator-assigned image and frame for ${displayName}`);
+      Object.assign(rowLabel.style, {
+        textAlign: 'left', cursor: 'pointer', background: 'transparent',
+        color: '#f9fafb', border: '1px solid #64748b',
+        borderRadius: '4px', padding: '4px',
+      });
+      rowLabel.addEventListener('click', () => {
+        void lvSimpsonPanelController?.onNavigateSlot?.(slot);
+      });
     }
     row.appendChild(rowLabel);
     const ids = matching.map(getMeasurementAnnotationId).filter(Boolean);
@@ -8606,6 +8619,31 @@ function commandsModule({
           setObservedIds(ids: string[]) {
             observedIds.clear();
             ids.forEach(id => observedIds.add(id));
+          },
+          canNavigateSlot(slot: string) {
+            return isActiveStudy() && !!getEFContourFrameTarget(efContourTargets, slot);
+          },
+          async onNavigateSlot(slot: string) {
+            if (!isActiveStudy()) return;
+            const target = getEFContourFrameTarget(efContourTargets, slot);
+            if (!target) return;
+            cancelDrawingWithoutClosingPanel();
+            let navigation: any = null;
+            try {
+              navigation = await actions.jumpToViewerQuizTarget({
+                viewerTarget: target, questionKey,
+              });
+            } catch (error) {
+              console.warn('[LV EF] authored contour selection jump failed:', error);
+            }
+            if (!didNavigateToExactEFContourFrame(navigation, target)) {
+              uiNotificationService.show({
+                title: 'LV EF',
+                message: 'Could not open the educator-assigned instance and frame for this contour.',
+                type: 'warning',
+                duration: 6000,
+              });
+            }
           },
           onDrawSlot(slot: string, method: string = 'freehand') {
             if (!LV_TRACE_REQUIRED_SLOTS.includes(slot) || !isActiveStudy()) return;
