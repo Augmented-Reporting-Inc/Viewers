@@ -8763,6 +8763,9 @@ function commandsModule({
         const points = source?.data?.contour?.polyline || source?.data?.handles?.points || [];
         geometry = deriveLVSimpsonGeometryFromFreehand(points);
         if (!geometry) {
+          if (source.annotationUID) {
+            actions.removeMeasurement({ uid: source.annotationUID });
+          }
           uiNotificationService.show({
             title: 'LV EF', type: 'warning', duration: 6500,
             message: 'Cannot derive reliable hinges and apex. Start tracing at one mitral hinge and finish at the opposite hinge; or select Axis + Apex.',
