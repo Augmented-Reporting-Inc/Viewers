@@ -80,6 +80,7 @@ import {
 import {
   buildEchoVolumeContourFromBaseAxis,
   buildLVSimpsonContourFromHingeApex,
+  deriveLVSimpsonGeometryFromFreehand,
 } from './utils/lvSimpsonContour';
 import {
   SPECTRAL_DOPPLER_LABEL,
@@ -5803,8 +5804,10 @@ function renderLVSimpsonWorkflowPanel({
       row.appendChild(control);
     };
     if (lvSimpsonPanelController?.onDrawSlot) {
-      rowButton(measurement ? 'Redraw' : 'Draw', `${measurement ? 'Redraw' : 'Draw'} ${displayName}`,
-        () => lvSimpsonPanelController?.onDrawSlot?.(slot));
+      rowButton('Freehand', `Trace ${displayName} freehand`,
+        () => lvSimpsonPanelController?.onDrawSlot?.(slot, 'freehand'));
+      rowButton('Axis + Apex', `Draw ${displayName} with axis and apex`,
+        () => lvSimpsonPanelController?.onDrawSlot?.(slot, 'axisApex'));
     }
     if (ids.length && lvSimpsonPanelController?.onDeleteSlot) {
       rowButton('Delete', `Delete ${displayName} contour`,
@@ -8415,6 +8418,7 @@ function commandsModule({
       efContourTargets = null,
       questionKey = '',
       viewportId: requestedViewportId = '',
+      captureMethod = 'axisApex',
     } = {}) => {
       clearUltrasoundDirectionalWorkflowListeners();
       const workflowSessionId = requestedSessionId || `${csUtils.uuidv4()}`;
@@ -8603,7 +8607,7 @@ function commandsModule({
             observedIds.clear();
             ids.forEach(id => observedIds.add(id));
           },
-          onDrawSlot(slot: string) {
+          onDrawSlot(slot: string, method: string = 'freehand') {
             if (!LV_TRACE_REQUIRED_SLOTS.includes(slot) || !isActiveStudy()) return;
             // Starting a new session preserves authored frame targets from the
             // current EF question and reuses exact-frame navigation.
@@ -8613,7 +8617,7 @@ function commandsModule({
               hideLVSimpsonWorkflowPanel();
             }
             void actions.startLVSimpsonEFWorkflow({
-              slot, efContourTargets, questionKey,
+              slot, efContourTargets, questionKey, captureMethod: method,
               viewportId: viewportGridService.getActiveViewportId(),
             }).catch(error => console.warn('[LV EF] selected contour redraw failed:', error));
           },
@@ -8689,6 +8693,7 @@ function commandsModule({
             slot: slotInfo.slot,
             sessionId: workflowSessionId,
             singleSlot,
+            captureMethod,
             efContourTargets,
             questionKey,
             viewportId: activeViewportId,
@@ -8708,6 +8713,65 @@ function commandsModule({
 
         return null;
       };
+      let geometry: any = null;
+      let capturedFreehandAnnotationId = '';
+      if (captureMethod === 'freehand') {
+        renderLVSimpsonWorkflowPanel({
+          measurements: [...liveMeasurements, ...sessionLVSimpsonMeasurements],
+          instruction: `Step ${stepNumber}/4: Start at one mitral hinge, trace the LV border around the apex, and finish at the opposite hinge. Complete the ROI when finished.`,
+          onCancel: () => clearLVSimpsonWorkflowIfCurrent(workflowSessionId),
+        });
+        const freehandToolName = toolNames.PlanarFreehandROI || 'PlanarFreehandROI';
+        const source = await new Promise<any>(resolve => {
+          let done = false;
+          const finish = (annotation: any) => {
+            if (done) return;
+            done = true;
+            eventTarget.removeEventListener(Enums.Events.ANNOTATION_COMPLETED, onCompleted);
+            window.removeEventListener('keydown', onKeyDown);
+            activeLVSimpsonCaptureCancel = null;
+            resolve(annotation);
+          };
+          const onKeyDown = (event: KeyboardEvent) => {
+            if (event.key === 'Escape') finish(null);
+          };
+          const onCompleted = (event: Event) => {
+            if (isWorkflowCancelled()) return finish(null);
+            const candidate = (event as CustomEvent)?.detail?.annotation;
+            if (candidate?.metadata?.toolName !== freehandToolName) return;
+            const sourceImage = String(candidate.metadata?.referencedImageId || '');
+            const viewportImage = String(viewport.getCurrentImageId?.() || '');
+            if (sourceImage && viewportImage &&
+                normalizeImageIdForCompare(sourceImage) !== normalizeImageIdForCompare(viewportImage)) return;
+            finish(candidate);
+          };
+          activeLVSimpsonCaptureCancel = () => finish(null);
+          eventTarget.addEventListener(Enums.Events.ANNOTATION_COMPLETED, onCompleted);
+          window.addEventListener('keydown', onKeyDown);
+          try {
+            actions.setToolActive({ toolName: freehandToolName, toolGroupId: efToolGroupReference });
+          } catch (error) {
+            console.warn('[LV EF] freehand activation failed:', error);
+            finish(null);
+          }
+        });
+        lvSimpsonMouseTools.suspend(efToolGroup);
+        if (!source || isWorkflowCancelled()) {
+          clearLVSimpsonWorkflowIfCurrent(workflowSessionId);
+          return null;
+        }
+        const points = source?.data?.contour?.polyline || source?.data?.handles?.points || [];
+        geometry = deriveLVSimpsonGeometryFromFreehand(points);
+        if (!geometry) {
+          uiNotificationService.show({
+            title: 'LV EF', type: 'warning', duration: 6500,
+            message: 'Cannot derive reliable hinges and apex. Start tracing at one mitral hinge and finish at the opposite hinge; or select Axis + Apex.',
+          });
+          clearLVSimpsonWorkflowIfCurrent(workflowSessionId);
+          return null;
+        }
+        capturedFreehandAnnotationId = String(source.annotationUID || '');
+      } else {
       const overlay = createLVSimpsonPreviewOverlay(viewport.element);
 
       renderLVSimpsonWorkflowPanel({
@@ -8787,11 +8851,12 @@ function commandsModule({
         return null;
       }
 
-      const geometry = buildLVSimpsonContourFromHingeApex({
+      geometry = buildLVSimpsonContourFromHingeApex({
         baseLeftPoint: hinge.startWorld,
         baseRightPoint: hinge.endWorld,
         apexPoint: apexDrag.endWorld,
       });
+      }
       const axisLengthMM = Number(geometry?.longAxisLengthMM);
 
       if (!Number.isFinite(axisLengthMM) || axisLengthMM <= 0) {
@@ -8854,7 +8919,8 @@ function commandsModule({
         view: slotInfo.view,
         phase: slotInfo.phase,
         label,
-        contourSource: 'hingeApexGenerated',
+        contourSource: captureMethod === 'freehand' ? 'freehandDerived' : 'hingeApexGenerated',
+        axisPointIndex: geometry.axisPointIndex,
         baseLeftPoint: geometry.baseLeftPoint,
         baseRightPoint: geometry.baseRightPoint,
         baseMidpoint: geometry.baseMidpoint,
@@ -8938,6 +9004,9 @@ function commandsModule({
         console.warn('[LV EF] measurementService.update failed:', error);
       }
 
+      if (capturedFreehandAnnotationId && capturedFreehandAnnotationId !== annotationUID) {
+        actions.removeMeasurement({ uid: capturedFreehandAnnotationId });
+      }
       upsertLVSimpsonSessionMeasurement(measurement);
 
       dispatchLiveMeasurementsRefresh({
@@ -9019,6 +9088,7 @@ function commandsModule({
             slot: nextSlot,
             sessionId: workflowSessionId,
             singleSlot,
+            captureMethod,
             efContourTargets,
             questionKey,
             viewportId: nextViewportId,
