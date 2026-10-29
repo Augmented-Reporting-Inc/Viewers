@@ -270,3 +270,50 @@ export function getImageIdForLengthTarget(
   }
   return referencedImageId || null;
 }
+
+/**
+ * Convert a complete LV trace into a single, physically calibrated 2D plane.
+ * The caller supplies validated ultrasound regions with bounds in image pixel
+ * indices and row/column spacing expressed in mm per pixel. Never fall back
+ * to bare world-coordinate distances or a default pixel spacing.
+ */
+export function calibrateUSContourPoints({
+  points,
+  imagePlane,
+  regions,
+}: {
+  points: unknown;
+  imagePlane: ImagePlaneLike;
+  regions: Array<{
+    minX: number; minY: number; maxX: number; maxY: number;
+    column: number; row: number;
+  }>;
+}): number[][] | null {
+  if (!Array.isArray(points) || points.length < 6 || !Array.isArray(regions)) {
+    return null;
+  }
+  const indices = points.map(point => worldToImageIndex(imagePlane, point));
+  if (indices.some(index => !index)) return null;
+  const eligible = regions.filter(region =>
+    region && [region.minX, region.minY, region.maxX, region.maxY, region.column, region.row]
+      .every(value => Number.isFinite(Number(value))) &&
+    region.column > 0 && region.row > 0 &&
+    indices.every(([x, y]) =>
+      x >= region.minX && x <= region.maxX &&
+      y >= region.minY && y <= region.maxY
+    )
+  );
+  if (!eligible.length) return null;
+  const [region] = eligible;
+  // Overlapping ultrasound regions with disagreeing calibration are unsafe.
+  if (eligible.some(other =>
+    Math.abs(other.column - region.column) > 1e-8 ||
+    Math.abs(other.row - region.row) > 1e-8
+  )) return null;
+  const [originX, originY] = indices[0];
+  return indices.map(([x, y]) => [
+    (x - originX) * region.column,
+    (y - originY) * region.row,
+    0,
+  ]);
+}
