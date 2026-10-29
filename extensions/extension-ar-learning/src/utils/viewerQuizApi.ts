@@ -475,6 +475,9 @@ export async function saveViewerQuizResponseForActiveStudy({
     buildFormApiUrl(`series/${encodeURIComponent(seriesId)}/viewer-quiz-responses`),
     {
       method: 'PUT',
+      // FormAPI can acknowledge persistence without echoing large EF contours.
+      // A successful response still means the full answer was saved.
+      headers: { Prefer: 'return=minimal' },
       body: JSON.stringify({
         quizKey,
         quizVersion,
