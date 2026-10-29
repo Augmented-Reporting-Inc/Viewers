@@ -280,6 +280,24 @@ function buildSlotGeometry(measurement, slot) {
 
   const widths = sampleWidths(projectedPoints, longAxisLengthMM);
   const coverageRatio = widths.filter(width => width > 0).length / SAMPLE_COUNT;
+  const maxWidth = Math.max(...widths);
+  // A disk diameter larger than 1.5 times the full LV long axis indicates
+  // inconsistent contour/world geometry or calibration, not a plausible
+  // ventricular cross-section. Reject the result rather than presenting a
+  // misleading EF derived from enormous volumes.
+  if (geometry.contourSource === 'freehandDerived' &&
+      (!Number.isFinite(maxWidth) || maxWidth > longAxisLengthMM * 1.5)) {
+    return {
+      ...LV_SIMPSON_SLOT_INFO[slot],
+      complete: false,
+      longAxisLengthMM,
+      widths,
+      coverageRatio,
+      messages: [
+        `${display}: contour width/axis calibration inconsistent (maximum diameter ${formatMM(maxWidth)} mm vs long axis ${formatMM(longAxisLengthMM)} mm). Do not capture EF; verify image calibration and redraw.`,
+      ],
+    };
+  }
 
   if (coverageRatio < MIN_WIDTH_COVERAGE_RATIO) {
     return {
@@ -446,6 +464,27 @@ export function calculateLVSimpson(measurements = []) {
       values: null,
       messages,
       guidance: messages,
+    };
+  }
+
+  // An upper-bound safety check, not a substitute for calibrated contour
+  // geometry. Prevent obviously impossible volumes from being scored.
+  const containsFreehandContour = LV_SIMPSON_SLOT_ORDER.some(slot =>
+    getGeometry(measurements.find(measurement => getSlot(measurement) === slot))
+      .contourSource === 'freehandDerived'
+  );
+  if (containsFreehandContour &&
+      (!Number.isFinite(ed.volumeML) || !Number.isFinite(es.volumeML) ||
+       ed.volumeML > 1000 || es.volumeML > 1000)) {
+    const warning = 'EF volume calculation exceeds the 1000 mL safety limit or is non-finite. Verify contour coordinate calibration; do not capture this result.';
+    return {
+      status: 'invalid',
+      method: 'Biplane Simpson from explicit hinge, apex, and LV contour geometry.',
+      slots,
+      phases: { ED: ed, ES: es },
+      values: null,
+      messages: [...messages, warning],
+      guidance: [...messages, warning],
     };
   }
 
