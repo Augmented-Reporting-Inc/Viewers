@@ -222,9 +222,19 @@ function buildSlotGeometry(measurement, slot) {
   const liveBaseMidpoint =
     baseLeft && baseRight ? getBaseMidpoint(baseLeft, baseRight) : null;
   const liveAxisLength = liveBaseMidpoint && apex ? length(subtract(apex, liveBaseMidpoint)) : null;
-  const longAxisLengthMM = hasLiveContour
-    ? finiteNumber(liveAxisLength)
-    : finiteNumber(geometry.longAxisLengthMM);
+  // EF freehand's recorded/calibrated long-axis measurement is authoritative.
+  // SplineROI hydration may expose contour points in a different coordinate
+  // scale; treating their raw Euclidean distance as millimetres can produce
+  // a spurious A4C/A2C mismatch (while the panel displays the correct length).
+  // Keep the historical live-point behavior for other capture methods.
+  const calibratedFreehandAxis = geometry.contourSource === 'freehandDerived'
+    ? finiteNumber(geometry.longAxisLengthMM)
+    : null;
+  const longAxisLengthMM = calibratedFreehandAxis && calibratedFreehandAxis > 0
+    ? calibratedFreehandAxis
+    : hasLiveContour
+      ? finiteNumber(liveAxisLength)
+      : finiteNumber(geometry.longAxisLengthMM);
   const display = LV_SIMPSON_SLOT_INFO[slot].display;
   const messages = [];
 
