@@ -792,8 +792,10 @@ function buildAnswerPayload(quiz: QuizDefinition, quizAnswers = {}) {
       questionKey: question.questionKey,
       value,
       ...(viewerTarget ? { viewerTarget } : {}),
-      ...(Object.keys(sourceRefs).length ? { sourceRefs } : {}),
-      ...(Object.keys(reviewPayload).length ? { reviewPayload } : {}),
+      // Avoid serializing an EF contour snapshot twice: structured values
+      // already contain their nested source references and review evidence.
+      ...(Object.keys(sourceRefs).length && !structuredValue.sourceRefs ? { sourceRefs } : {}),
+      ...(Object.keys(reviewPayload).length && !structuredValue.reviewPayload ? { reviewPayload } : {}),
     };
   });
 }
