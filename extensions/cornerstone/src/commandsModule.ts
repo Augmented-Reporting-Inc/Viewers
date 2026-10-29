@@ -5363,6 +5363,116 @@ function installSpectralDopplerTextOverrideForViewport({ viewport, viewportId = 
   toolInstance.__arSpectralDopplerTextOverrideInstalled = true;
 }
 
+/**
+ * EF-only click-to-trace capture. Deliberately avoids the shared PlanarFreehandROI
+ * gesture handler: only the final world-space points enter the existing Simpson
+ * annotation/calculation path. No temporary Cornerstone annotation is persisted.
+ */
+function captureLVSimpsonClickTrace({ viewport, isCancelled, setCancelHandler }) {
+  const element = viewport?.element;
+  if (!element?.addEventListener || !viewport?.canvasToWorld || !viewport?.worldToCanvas) {
+    return Promise.resolve(null);
+  }
+
+  return new Promise(resolve => {
+    const overlay = createLVSimpsonPreviewOverlay(element);
+    const previousCursor = element.style.cursor;
+    const points = [];
+    let started = false;
+    let done = false;
+    let lastCanvasPoint = null;
+
+    function finish(result) {
+      if (done) return;
+      done = true;
+      element.removeEventListener('mousedown', onMouseDown, true);
+      element.removeEventListener('mouseup', stopMouseEvent, true);
+      element.removeEventListener('click', stopMouseEvent, true);
+      element.removeEventListener('mousemove', onMouseMove, true);
+      window.removeEventListener('keydown', onKeyDown, true);
+      setCancelHandler?.(null);
+      clearLVSimpsonPreviewOverlay(element);
+      restoreLVSimpsonViewportCursor(element, previousCursor);
+      resolve(result);
+    }
+
+    function stopMouseEvent(event) {
+      if (event.button !== 0) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    }
+
+    function drawPreview(cursorPoint) {
+      if (!overlay || !points.length) return;
+      const polylinePoints = cursorPoint ? [...points, cursorPoint] : points;
+      const polyline = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
+      polyline.setAttribute('points', polylinePoints
+        .map(point => viewport.worldToCanvas(point))
+        .map(point => `${point[0]},${point[1]}`).join(' '));
+      polyline.setAttribute('fill', 'none');
+      polyline.setAttribute('stroke', '#facc15');
+      polyline.setAttribute('stroke-width', '2');
+      polyline.setAttribute('stroke-linejoin', 'round');
+      polyline.setAttribute('stroke-linecap', 'round');
+      overlay.replaceChildren(polyline);
+    }
+
+    function onMouseDown(event) {
+      if (event.button !== 0) return;
+      stopMouseEvent(event);
+      if (isCancelled?.()) return finish(null);
+      const canvasPoint = getCanvasPointFromMouseEvent(event, element);
+      const worldPoint = getWorldPointFromMouseEvent(event, viewport);
+      if (!worldPoint || !canvasPoint) return;
+      if (!started) {
+        started = true;
+        points.push(worldPoint);
+        lastCanvasPoint = canvasPoint;
+        drawPreview();
+        return;
+      }
+      // A second click near the start of drawing must not commit a dot.
+      const startCanvas = viewport.worldToCanvas(points[0]);
+      const distanceFromStart = Math.hypot(
+        canvasPoint.x - startCanvas[0], canvasPoint.y - startCanvas[1]
+      );
+      if (points.length < 6 || distanceFromStart < 8) return;
+      points.push(worldPoint);
+      finish(points);
+    }
+
+    function onMouseMove(event) {
+      if (!started || done) return;
+      if (isCancelled?.()) return finish(null);
+      const canvasPoint = getCanvasPointFromMouseEvent(event, element);
+      const worldPoint = getWorldPointFromMouseEvent(event, viewport);
+      if (!canvasPoint || !worldPoint) return;
+      if (Math.hypot(
+        canvasPoint.x - lastCanvasPoint.x, canvasPoint.y - lastCanvasPoint.y
+      ) >= 2) {
+        points.push(worldPoint);
+        lastCanvasPoint = canvasPoint;
+      }
+      drawPreview(worldPoint);
+    }
+
+    function onKeyDown(event) {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      finish(null);
+    }
+
+    setCancelHandler?.(() => finish(null));
+    setLVSimpsonViewportCursor(element, 'crosshair');
+    element.addEventListener('mousedown', onMouseDown, true);
+    element.addEventListener('mouseup', stopMouseEvent, true);
+    element.addEventListener('click', stopMouseEvent, true);
+    element.addEventListener('mousemove', onMouseMove, true);
+    window.addEventListener('keydown', onKeyDown, true);
+  });
+}
+
 function captureLVSimpsonDrag({ viewport, onPreview, isCancelled, setCancelHandler, toolGroup, restorePreviousTool = true }) {
   const element = viewport?.element;
 
@@ -8756,54 +8866,24 @@ function commandsModule({
       if (captureMethod === 'freehand') {
         renderLVSimpsonWorkflowPanel({
           measurements: [...liveMeasurements, ...sessionLVSimpsonMeasurements],
-          instruction: `Step ${stepNumber}/4: Start at one mitral hinge, trace the LV border around the apex, and finish at the opposite hinge. Complete the ROI when finished.`,
+          instruction: `Step ${stepNumber}/4: Click at one mitral hinge to start, move around the apex without holding the mouse button, then click the opposite hinge to finish. Esc cancels.`,
           onCancel: () => clearLVSimpsonWorkflowIfCurrent(workflowSessionId),
         });
-        const freehandToolName = toolNames.PlanarFreehandROI || 'PlanarFreehandROI';
-        const source = await new Promise<any>(resolve => {
-          let done = false;
-          const finish = (annotation: any) => {
-            if (done) return;
-            done = true;
-            eventTarget.removeEventListener(Enums.Events.ANNOTATION_COMPLETED, onCompleted);
-            window.removeEventListener('keydown', onKeyDown);
-            activeLVSimpsonCaptureCancel = null;
-            resolve(annotation);
-          };
-          const onKeyDown = (event: KeyboardEvent) => {
-            if (event.key === 'Escape') finish(null);
-          };
-          const onCompleted = (event: Event) => {
-            if (isWorkflowCancelled()) return finish(null);
-            const candidate = (event as CustomEvent)?.detail?.annotation;
-            if (candidate?.metadata?.toolName !== freehandToolName) return;
-            const sourceImage = String(candidate.metadata?.referencedImageId || '');
-            const viewportImage = String(viewport.getCurrentImageId?.() || '');
-            if (sourceImage && viewportImage &&
-                normalizeImageIdForCompare(sourceImage) !== normalizeImageIdForCompare(viewportImage)) return;
-            finish(candidate);
-          };
-          activeLVSimpsonCaptureCancel = () => finish(null);
-          eventTarget.addEventListener(Enums.Events.ANNOTATION_COMPLETED, onCompleted);
-          window.addEventListener('keydown', onKeyDown);
-          try {
-            actions.setToolActive({ toolName: freehandToolName, toolGroupId: efToolGroupReference });
-          } catch (error) {
-            console.warn('[LV EF] freehand activation failed:', error);
-            finish(null);
-          }
+        const points = await captureLVSimpsonClickTrace({
+          viewport,
+          isCancelled: isWorkflowCancelled,
+          setCancelHandler: cancel => {
+            if (activeLVSimpsonWorkflowSessionId === workflowSessionId) {
+              activeLVSimpsonCaptureCancel = cancel;
+            }
+          },
         });
-        lvSimpsonMouseTools.suspend(efToolGroup);
-        if (!source || isWorkflowCancelled()) {
+        if (!points || isWorkflowCancelled()) {
           clearLVSimpsonWorkflowIfCurrent(workflowSessionId);
           return null;
         }
-        const points = source?.data?.contour?.polyline || source?.data?.handles?.points || [];
         geometry = deriveLVSimpsonGeometryFromFreehand(points);
         if (!geometry) {
-          if (source.annotationUID) {
-            actions.removeMeasurement({ uid: source.annotationUID });
-          }
           uiNotificationService.show({
             title: 'LV EF', type: 'warning', duration: 6500,
             message: 'Cannot derive reliable hinges and apex. Start tracing at one mitral hinge and finish at the opposite hinge; or select Axis + Apex.',
@@ -8811,7 +8891,6 @@ function commandsModule({
           clearLVSimpsonWorkflowIfCurrent(workflowSessionId);
           return null;
         }
-        capturedFreehandAnnotationId = String(source.annotationUID || '');
       } else {
       const overlay = createLVSimpsonPreviewOverlay(viewport.element);
 
