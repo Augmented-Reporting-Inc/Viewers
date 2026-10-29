@@ -9057,23 +9057,21 @@ function commandsModule({
         regions: getUltrasoundRegionsFromSource(sourceInstance)
           .map(normalizeUltrasoundRegion).filter(Boolean),
       });
-      const calibratedGeometry = calibratedContourPoints
-        ? deriveLVSimpsonGeometryFromFreehand(calibratedContourPoints)
-        : null;
-      // Axis+Apex contours can use the known apex handle index, whereas
-      // freehand contours use the inferred apical point.
+      // Preserve the exact apex handle selected by each capture method.
+      // Freehand has already inferred the index; Axis+Apex constructed it.
       const calibratedAxisIndex = geometry.axisPointIndex;
-      if (calibratedGeometry && Number.isInteger(calibratedAxisIndex) &&
-          calibratedAxisIndex > 0 && calibratedAxisIndex < calibratedContourPoints.length - 1) {
-        const axisPoint = calibratedContourPoints[calibratedAxisIndex];
-        const base = calibratedContourPoints[0];
-        const otherBase = calibratedContourPoints[calibratedContourPoints.length - 1];
-        const mid = base.map((value, i) => (value + otherBase[i]) / 2);
-        calibratedGeometry.axisPointIndex = calibratedAxisIndex;
-        calibratedGeometry.longAxisLengthMM = Math.hypot(
-          ...axisPoint.map((value, i) => value - mid[i])
-        );
-      }
+      const calibratedAxisPoint = calibratedContourPoints?.[calibratedAxisIndex];
+      const calibratedBaseLeft = calibratedContourPoints?.[0];
+      const calibratedBaseRight = calibratedContourPoints?.[calibratedContourPoints.length - 1];
+      const calibratedBaseMidpoint = calibratedBaseLeft?.map(
+        (value, index) => (value + calibratedBaseRight[index]) / 2
+      );
+      const calibratedAxisLengthMM =
+        calibratedAxisPoint && calibratedBaseMidpoint
+          ? Math.hypot(...calibratedAxisPoint.map(
+              (value, index) => value - calibratedBaseMidpoint[index]
+            ))
+          : null;
       const lvSimpson = {
         measurementKind: LV_SIMPSON_MEASUREMENT_KIND,
         slot: slotInfo.slot,
@@ -9089,7 +9087,8 @@ function commandsModule({
         contourPoints: geometry.points,
         calibratedContourPoints,
         originalContourPoints: calibratedContourPoints ? geometry.points.map(point => [...point]) : null,
-        longAxisLengthMM: calibratedGeometry?.longAxisLengthMM || geometry.longAxisLengthMM,
+        longAxisLengthMM: calibratedAxisLengthMM || geometry.longAxisLengthMM,
+        calibratedLongAxisLengthMM: calibratedAxisLengthMM,
         userConfirmed: true,
       };
 
