@@ -285,7 +285,8 @@ function buildSlotGeometry(measurement, slot) {
   // inconsistent contour/world geometry or calibration, not a plausible
   // ventricular cross-section. Reject the result rather than presenting a
   // misleading EF derived from enormous volumes.
-  if (!Number.isFinite(maxWidth) || maxWidth > longAxisLengthMM * 1.5) {
+  if (geometry.contourSource === 'freehandDerived' &&
+      (!Number.isFinite(maxWidth) || maxWidth > longAxisLengthMM * 1.5)) {
     return {
       ...LV_SIMPSON_SLOT_INFO[slot],
       complete: false,
@@ -468,8 +469,13 @@ export function calculateLVSimpson(measurements = []) {
 
   // An upper-bound safety check, not a substitute for calibrated contour
   // geometry. Prevent obviously impossible volumes from being scored.
-  if (!Number.isFinite(ed.volumeML) || !Number.isFinite(es.volumeML) ||
-      ed.volumeML > 1000 || es.volumeML > 1000) {
+  const containsFreehandContour = LV_SIMPSON_SLOT_ORDER.some(slot =>
+    getGeometry(measurements.find(measurement => getSlot(measurement) === slot))
+      .contourSource === 'freehandDerived'
+  );
+  if (containsFreehandContour &&
+      (!Number.isFinite(ed.volumeML) || !Number.isFinite(es.volumeML) ||
+       ed.volumeML > 1000 || es.volumeML > 1000)) {
     const warning = 'EF volume calculation exceeds the 1000 mL safety limit or is non-finite. Verify contour coordinate calibration; do not capture this result.';
     return {
       status: 'invalid',
