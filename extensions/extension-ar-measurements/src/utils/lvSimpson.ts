@@ -235,6 +235,10 @@ function buildSlotGeometry(measurement, slot) {
   const display = LV_SIMPSON_SLOT_INFO[slot].display;
   const messages = [];
 
+  if (geometry.calibrationError) {
+    messages.push(`${display}: EF calibration failure (${geometry.calibrationError}). Check the active DICOM instance and spatial ultrasound-region metadata.`);
+  }
+
   if (!contourUnchanged || !longAxisLengthMM ||
       !Number.isFinite(derivedLength) ||
       Math.abs(derivedLength - longAxisLengthMM) > Math.max(0.01, longAxisLengthMM * 0.001)) {
