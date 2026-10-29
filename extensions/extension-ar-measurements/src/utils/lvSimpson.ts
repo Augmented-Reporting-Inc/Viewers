@@ -78,11 +78,24 @@ function getSlot(measurement) {
 
 function getContourPoints(measurement) {
   const geometry = getGeometry(measurement);
-  const livePoints = Array.isArray(measurement?.points) ? measurement.points : [];
-  const storedPoints = geometry.contourPoints || geometry.points || [];
-  const points = livePoints.length >= 6 ? livePoints : storedPoints;
-
+  const points = geometry.calibratedContourPoints;
   return (Array.isArray(points) ? points : []).map(getPoint).filter(Boolean);
+}
+
+function hasUnchangedWorldContour(measurement) {
+  const geometry = getGeometry(measurement);
+  const original = geometry.originalContourPoints;
+  const current = Array.isArray(measurement?.points) && measurement.points.length >= 6
+    ? measurement.points : geometry.contourPoints;
+  if (!Array.isArray(original) || !Array.isArray(current) ||
+      original.length !== current.length) return false;
+  return original.every((point, index) => {
+    const first = getPoint(point);
+    const second = getPoint(current[index]);
+    return first && second && first.every((value, axis) =>
+      Math.abs(value - second[axis]) <= 1e-5
+    );
+  });
 }
 
 function getBaseMidpoint(baseLeft, baseRight) {
@@ -205,38 +218,30 @@ function sampleWidths(projectedPoints, longAxisLengthMM) {
 function buildSlotGeometry(measurement, slot) {
   const geometry = getGeometry(measurement);
   const contourPoints = getContourPoints(measurement);
-  const hasLiveContour = Array.isArray(measurement?.points) && measurement.points.length >= 6;
   const configuredAxisPointIndex = Number(geometry.axisPointIndex);
-  const fallbackAxisPointIndex = Math.floor((contourPoints.length - 1) / 2);
-  const axisPointIndex =
-    Number.isInteger(configuredAxisPointIndex) &&
+  const axisPointIndex = Number.isInteger(configuredAxisPointIndex) &&
     configuredAxisPointIndex > 0 &&
     configuredAxisPointIndex < contourPoints.length - 1
-      ? configuredAxisPointIndex
-      : fallbackAxisPointIndex;
-  const baseLeft = hasLiveContour ? contourPoints[0] : getPoint(geometry.baseLeftPoint);
-  const baseRight = hasLiveContour
-    ? contourPoints[contourPoints.length - 1]
-    : getPoint(geometry.baseRightPoint);
-  const apex = hasLiveContour ? contourPoints[axisPointIndex] : getPoint(geometry.apexPoint);
-  const liveBaseMidpoint =
-    baseLeft && baseRight ? getBaseMidpoint(baseLeft, baseRight) : null;
-  const liveAxisLength = liveBaseMidpoint && apex ? length(subtract(apex, liveBaseMidpoint)) : null;
-  // EF freehand's recorded/calibrated long-axis measurement is authoritative.
-  // SplineROI hydration may expose contour points in a different coordinate
-  // scale; treating their raw Euclidean distance as millimetres can produce
-  // a spurious A4C/A2C mismatch (while the panel displays the correct length).
-  // Keep the historical live-point behavior for other capture methods.
-  const calibratedFreehandAxis = geometry.contourSource === 'freehandDerived'
-    ? finiteNumber(geometry.longAxisLengthMM)
-    : null;
-  const longAxisLengthMM = calibratedFreehandAxis && calibratedFreehandAxis > 0
-    ? calibratedFreehandAxis
-    : hasLiveContour
-      ? finiteNumber(liveAxisLength)
-      : finiteNumber(geometry.longAxisLengthMM);
+      ? configuredAxisPointIndex : -1;
+  const baseLeft = contourPoints[0];
+  const baseRight = contourPoints[contourPoints.length - 1];
+  const apex = contourPoints[axisPointIndex];
+  const baseMidpoint = baseLeft && baseRight ? getBaseMidpoint(baseLeft, baseRight) : null;
+  const derivedLength = baseMidpoint && apex ? length(subtract(apex, baseMidpoint)) : null;
+  const calibratedAxisLength = finiteNumber(geometry.calibratedLongAxisLengthMM);
+  const longAxisLengthMM = calibratedAxisLength && calibratedAxisLength > 0
+    ? calibratedAxisLength : null;
+  const contourUnchanged = hasUnchangedWorldContour(measurement);
   const display = LV_SIMPSON_SLOT_INFO[slot].display;
   const messages = [];
+
+  if (!contourUnchanged || !longAxisLengthMM ||
+      !Number.isFinite(derivedLength) ||
+      Math.abs(derivedLength - longAxisLengthMM) > Math.max(0.01, longAxisLengthMM * 0.001)) {
+    messages.push(
+      `${display}: verified physical calibration is missing or the contour has been edited since calibration. Re-enter the EF contour on a calibrated DICOM ultrasound region.`
+    );
+  }
 
   if (contourPoints.length < 6) {
     messages.push(
