@@ -9043,20 +9043,31 @@ function commandsModule({
       // Build physical coordinates independently from world geometry.
       // The existing ultrasound-region lookup reads the matching DICOM
       // instance; all contour points must lie in one unambiguous region.
-      const sourceMeasurement = {
-        points: geometry.points,
-        referencedImageId: imageInfo.imageId,
-        SOPInstanceUID: sopInstanceId,
-      };
-      const sourceInstance = getInstanceForViewerMeasurement(
-        displaySetService, sourceMeasurement
-      );
+      const sourceInstances = getDisplaySetInstances(displaySet);
+      // Never silently substitute the first instance if the active SOP
+      // cannot be identified: cine frames can carry different region metadata.
+      const sourceInstance = sopInstanceId
+        ? sourceInstances.find(
+            instance => String(getSopInstanceIdFromSource(instance) || '') === String(sopInstanceId)
+          )
+        : sourceInstances.length === 1 ? sourceInstances[0] : null;
+      const sourceRegions = getUltrasoundRegionsFromSource(sourceInstance);
+      const normalizedRegions = sourceRegions.map(normalizeUltrasoundRegion).filter(Boolean);
+      const imagePlane = metaData.get?.('imagePlaneModule', imageInfo.imageId);
       const calibratedContourPoints = calibrateUSContourPoints({
         points: geometry.points,
-        imagePlane: metaData.get?.('imagePlaneModule', imageInfo.imageId),
-        regions: getUltrasoundRegionsFromSource(sourceInstance)
-          .map(normalizeUltrasoundRegion).filter(Boolean),
+        imagePlane,
+        regions: normalizedRegions,
       });
+      const calibrationError = !sourceInstance
+        ? 'source_instance_not_found'
+        : !sourceRegions.length
+          ? 'ultrasound_regions_missing'
+          : !normalizedRegions.length
+            ? 'ultrasound_regions_invalid'
+            : !calibratedContourPoints
+              ? 'contour_outside_region_or_conflicting_spacing'
+              : null;
       // Preserve the exact apex handle selected by each capture method.
       // Freehand has already inferred the index; Axis+Apex constructed it.
       const calibratedAxisIndex = geometry.axisPointIndex;
@@ -9086,6 +9097,7 @@ function commandsModule({
         apexPoint: geometry.apexPoint,
         contourPoints: geometry.points,
         calibratedContourPoints,
+        calibrationError,
         originalContourPoints: calibratedContourPoints ? geometry.points.map(point => [...point]) : null,
         longAxisLengthMM: calibratedAxisLengthMM || geometry.longAxisLengthMM,
         calibratedLongAxisLengthMM: calibratedAxisLengthMM,
