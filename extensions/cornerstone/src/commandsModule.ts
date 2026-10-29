@@ -9262,10 +9262,26 @@ function commandsModule({
           .filter(entry => String(entry?.referenceStudyUID || entry?.StudyInstanceUID || '').trim() === currentStudyId);
         const resolved = resolveViewerQuizLVSimpsonForStudy(currentStudyId, measurementsForCalculation);
         if (!resolved || !Number.isFinite(Number(resolved.composite?.value))) {
+          const clinicalResult = calculateLVSimpson(measurementsForCalculation);
+          const slotCounts = getLVSimpsonSlotCandidates(measurementsForCalculation);
+          const duplicateSlots = LV_TRACE_REQUIRED_SLOTS.filter(slot => (slotCounts.get(slot)?.length || 0) > 1);
+          const missingSlots = LV_TRACE_REQUIRED_SLOTS.filter(slot => !slotCounts.get(slot)?.length);
+          const geometryMessages = Array.isArray(clinicalResult?.messages)
+            ? clinicalResult.messages.filter(message => typeof message === 'string' && message.trim())
+            : [];
+          const warnings = [
+            ...missingSlots.map(slot => `Missing EF contour: ${getLVSimpsonSlotDisplayName(slot)}.`),
+            ...duplicateSlots.map(slot => `Multiple EF contours found for ${getLVSimpsonSlotDisplayName(slot)}; delete the extra contour.`),
+            ...geometryMessages,
+          ];
+          if (!warnings.length) {
+            warnings.push('The four EF contours could not be assembled into a valid calculation. Review the contour points and measurement registration.');
+          }
           renderLVSimpsonWorkflowPanel({
             measurements: measurementsForCalculation,
             resultText: 'EF calculation unavailable',
-            instruction: 'Verify contour geometry and calibration, then retry.',
+            warnings: [...new Set(warnings)].slice(0, 8),
+            instruction: 'Correct the indicated contour(s), then retry Calculate EF.',
             onCalculate: calculateEF,
             onCancel: hideLVSimpsonWorkflowPanel,
           });
