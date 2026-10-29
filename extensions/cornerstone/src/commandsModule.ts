@@ -5414,6 +5414,12 @@ function captureLVSimpsonClickTrace({ viewport, isCancelled, setCancelHandler })
       polyline.setAttribute('stroke-width', '2');
       polyline.setAttribute('stroke-linejoin', 'round');
       polyline.setAttribute('stroke-linecap', 'round');
+      // A viewport/tool initialization refresh can detach the preview overlay
+      // during the first EF trace. Reattach it before updating its geometry.
+      if (!overlay.isConnected || overlay.parentElement !== element) {
+        element.appendChild(overlay);
+      }
+      overlay.style.zIndex = '999';
       overlay.replaceChildren(polyline);
     }
 
