@@ -294,11 +294,12 @@ export function calibrateUSContourPoints({
   }
   const indices = points.map(point => worldToImageIndex(imagePlane, point));
   if (indices.some(index => !index)) return null;
+  const validIndices = indices as [number, number][];
   const eligible = regions.filter(region =>
     region && [region.minX, region.minY, region.maxX, region.maxY, region.column, region.row]
       .every(value => Number.isFinite(Number(value))) &&
     region.column > 0 && region.row > 0 &&
-    indices.every(([x, y]) =>
+    validIndices.every(([x, y]) =>
       x >= region.minX && x <= region.maxX &&
       y >= region.minY && y <= region.maxY
     )
@@ -310,8 +311,8 @@ export function calibrateUSContourPoints({
     Math.abs(other.column - region.column) > 1e-8 ||
     Math.abs(other.row - region.row) > 1e-8
   )) return null;
-  const [originX, originY] = indices[0];
-  return indices.map(([x, y]) => [
+  const [originX, originY] = validIndices[0];
+  return validIndices.map(([x, y]) => [
     (x - originX) * region.column,
     (y - originY) * region.row,
     0,
