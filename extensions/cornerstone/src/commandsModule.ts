@@ -120,6 +120,7 @@ import {
 import { calculateLVSimpson } from '../../extension-ar-measurements/src/utils/lvSimpson';
 import { resolveViewerQuizCompositeResult, resolveViewerQuizLVSimpsonForStudy, isViewerQuizCompositeReviewCurrent } from '../../extension-ar-measurements/src/utils/viewerQuizCompositeResults';
 import { createGuidedMouseToolOwnership } from './utils/guidedMouseToolOwnership';
+import { calibrateUSContourPoints } from './utils/usRegionLengthCalibration';
 
 const { DefaultHistoryMemo } = csUtils.HistoryMemo;
 const toggleSyncFunctions = {
@@ -9039,6 +9040,49 @@ function commandsModule({
         displaySet?.sopInstanceUID ||
         '';
 
+      // Build physical coordinates independently from world geometry.
+      // The existing ultrasound-region lookup reads the matching DICOM
+      // instance; all contour points must lie in one unambiguous region.
+      const sourceInstances = getDisplaySetInstances(displaySet);
+      // Never silently substitute the first instance if the active SOP
+      // cannot be identified: cine frames can carry different region metadata.
+      const sourceInstance = sopInstanceId
+        ? sourceInstances.find(
+            instance => String(getSopInstanceIdFromSource(instance) || '') === String(sopInstanceId)
+          )
+        : sourceInstances.length === 1 ? sourceInstances[0] : null;
+      const sourceRegions = getUltrasoundRegionsFromSource(sourceInstance);
+      const normalizedRegions = sourceRegions.map(normalizeUltrasoundRegion).filter(Boolean);
+      const imagePlane = metaData.get?.('imagePlaneModule', imageInfo.imageId);
+      const calibratedContourPoints = calibrateUSContourPoints({
+        points: geometry.points,
+        imagePlane,
+        regions: normalizedRegions,
+      });
+      const calibrationError = !sourceInstance
+        ? 'source_instance_not_found'
+        : !sourceRegions.length
+          ? 'ultrasound_regions_missing'
+          : !normalizedRegions.length
+            ? 'ultrasound_regions_invalid'
+            : !calibratedContourPoints
+              ? 'contour_outside_region_or_conflicting_spacing'
+              : null;
+      // Preserve the exact apex handle selected by each capture method.
+      // Freehand has already inferred the index; Axis+Apex constructed it.
+      const calibratedAxisIndex = geometry.axisPointIndex;
+      const calibratedAxisPoint = calibratedContourPoints?.[calibratedAxisIndex];
+      const calibratedBaseLeft = calibratedContourPoints?.[0];
+      const calibratedBaseRight = calibratedContourPoints?.[calibratedContourPoints.length - 1];
+      const calibratedBaseMidpoint = calibratedBaseLeft?.map(
+        (value, index) => (value + calibratedBaseRight[index]) / 2
+      );
+      const calibratedAxisLengthMM =
+        calibratedAxisPoint && calibratedBaseMidpoint
+          ? Math.hypot(...calibratedAxisPoint.map(
+              (value, index) => value - calibratedBaseMidpoint[index]
+            ))
+          : null;
       const lvSimpson = {
         measurementKind: LV_SIMPSON_MEASUREMENT_KIND,
         slot: slotInfo.slot,
@@ -9052,7 +9096,11 @@ function commandsModule({
         baseMidpoint: geometry.baseMidpoint,
         apexPoint: geometry.apexPoint,
         contourPoints: geometry.points,
-        longAxisLengthMM: geometry.longAxisLengthMM,
+        calibratedContourPoints,
+        calibrationError,
+        originalContourPoints: calibratedContourPoints ? geometry.points.map(point => [...point]) : null,
+        longAxisLengthMM: calibratedAxisLengthMM || geometry.longAxisLengthMM,
+        calibratedLongAxisLengthMM: calibratedAxisLengthMM,
         userConfirmed: true,
       };
 
