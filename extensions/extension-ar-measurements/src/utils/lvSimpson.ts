@@ -177,6 +177,20 @@ function describeFirstPolylineMismatch(source, target, tolerance) {
 function hasUnchangedWorldContour(measurement) {
   const geometry = getGeometry(measurement);
   const original = geometry.originalContourPoints;
+  const controlPoints = measurement?.lvSimpsonControlPoints;
+  // SplineROI's polyline is presentation geometry (21x resampling) and can
+  // overshoot near spline knots. Only compare the editable control handles
+  // when available, preserving the legacy fail-closed boundary check for
+  // measurements without them.
+  if (Array.isArray(controlPoints)) {
+    if (!Array.isArray(original) || controlPoints.length !== original.length ||
+        controlPoints.length < 6) return false;
+    return original.every((point, index) => {
+      const before = getPoint(point);
+      const after = getPoint(controlPoints[index]);
+      return Boolean(before && after && length(subtract(before, after)) <= 0.00001);
+    });
+  }
   const current = Array.isArray(measurement?.points) && measurement.points.length >= 6
     ? measurement.points : geometry.contourPoints;
   if (!Array.isArray(original) || !Array.isArray(current) ||
@@ -381,6 +395,9 @@ function buildSlotGeometry(measurement, slot) {
   // EF-only, temporary, aggregate diagnostics; no identifiers or coordinates.
   console.info('[LV EF slot validation]', {
     firstMismatch,
+    liveControlPointCount: measurement?.lvSimpsonControlPoints?.length ?? null,
+    liveControlPointsMatch: Array.isArray(measurement?.lvSimpsonControlPoints)
+      ? contourUnchanged : null,
     boundaryTolerance,
     measuredBoundary,
     slot,

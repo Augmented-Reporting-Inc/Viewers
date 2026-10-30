@@ -68,6 +68,12 @@ const SplineROI = {
       SOPInstanceUID,
       FrameOfReferenceUID,
       points: data.contour.polyline,
+      // EF-only: preserve the editable SplineROI handles separately from the
+      // renderer's resampled polyline. The EF calculator compares live handles
+      // with the captured source trace to detect actual post-calibration edits.
+      ...(data.lvSimpson?.measurementKind === 'lvSimpsonSlot' && Array.isArray(data.handles?.points)
+        ? { lvSimpsonControlPoints: data.handles.points.map(point => [...point]) }
+        : {}),
       textBox: data.handles.textBox,
       metadata,
       frameNumber,
