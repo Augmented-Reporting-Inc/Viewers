@@ -122,6 +122,31 @@ describe('LV EF calibrated geometry', () => {
     expect(result?.status).toBe('complete');
   });
 
+  test('accepts closed interpolated SplineROI loops with rotated starting points', () => {
+    const records = [
+      makeMeasurement('A4C_ED', 70, 190),
+      makeMeasurement('A2C_ED', 65, 190),
+      makeMeasurement('A4C_ES', 55, 170),
+      makeMeasurement('A2C_ES', 50, 170),
+    ];
+    for (const record of records) {
+      const original = record.points;
+      const dense = [];
+      for (let i = 0; i < original.length; i++) {
+        const next = original[(i + 1) % original.length];
+        for (let j = 0; j < 21; j++) {
+          const t = j / 21;
+          dense.push(original[i].map((value, axis) =>
+            value + (next[axis] - value) * t
+          ));
+        }
+      }
+      const rotated = [...dense.slice(13), ...dense.slice(0, 13)];
+      record.points = [...rotated, [...rotated[0]]];
+    }
+    expect(calculateLVSimpson(records)?.status).toBe('complete');
+  });
+
   test('rejects a materially moved spline boundary after calibration', () => {
     const records = [
       makeMeasurement('A4C_ED', 70, 190),
