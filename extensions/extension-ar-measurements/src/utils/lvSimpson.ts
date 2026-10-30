@@ -147,6 +147,33 @@ function describeBoundaryDistance(source, target, tolerance) {
   };
 }
 
+// Temporary diagnostic: report the first *actual* failing sample from the
+// exhaustive comparison. This is intentionally not a sampled estimate.
+function describeFirstPolylineMismatch(source, target, tolerance) {
+  for (let sourceIndex = 0; sourceIndex < source.length; sourceIndex += 1) {
+    const point = getPoint(source[sourceIndex]);
+    if (!point) return { reason: 'invalid_source_point', index: sourceIndex };
+    let nearest = Infinity;
+    for (let segment = 0; segment < target.length; segment += 1) {
+      const start = getPoint(target[segment]);
+      const end = getPoint(target[(segment + 1) % target.length]);
+      if (!start || !end) return { reason: 'invalid_target_point', index: segment };
+      nearest = Math.min(nearest, pointToSegmentDistance(point, start, end));
+      if (nearest <= tolerance) break;
+    }
+    if (nearest > tolerance) {
+      return {
+        reason: 'boundary_difference',
+        index: sourceIndex,
+        fractionThroughBoundary: source.length > 1 ? sourceIndex / (source.length - 1) : 0,
+        nearestDistanceLowerBound: nearest,
+        tolerance,
+      };
+    }
+  }
+  return null;
+}
+
 function hasUnchangedWorldContour(measurement) {
   const geometry = getGeometry(measurement);
   const original = geometry.originalContourPoints;
@@ -346,8 +373,14 @@ function buildSlotGeometry(measurement, slot) {
         originalToSpline: describeBoundaryDistance(originalBoundary, representedBoundary, boundaryTolerance),
         splineToOriginal: describeBoundaryDistance(representedBoundary, originalBoundary, boundaryTolerance),
       } : null;
+  const firstMismatch = !contourUnchanged && boundaryTolerance
+    ? {
+        originalToSpline: describeFirstPolylineMismatch(originalBoundary, representedBoundary, boundaryTolerance),
+        splineToOriginal: describeFirstPolylineMismatch(representedBoundary, originalBoundary, boundaryTolerance),
+      } : null;
   // EF-only, temporary, aggregate diagnostics; no identifiers or coordinates.
   console.info('[LV EF slot validation]', {
+    firstMismatch,
     boundaryTolerance,
     measuredBoundary,
     slot,
