@@ -9171,8 +9171,34 @@ function commandsModule({
         displayText: [`${slotInfo.slot.replace('_', ' ')} LV EF contour`],
       };
 
+      // Temporary EF-only diagnostic. Do not log DICOM identifiers, raw
+      // coordinates, or full measurement / annotation objects.
+      const summarizeEFCalibration = item => ({
+        present: Boolean(item),
+        calibrationError: item?.lvSimpson?.calibrationError || null,
+        calibratedPoints: item?.lvSimpson?.calibratedContourPoints?.length ?? 0,
+        originalPoints: item?.lvSimpson?.originalContourPoints?.length ?? 0,
+        axisMM: item?.lvSimpson?.calibratedLongAxisLengthMM ?? null,
+      });
+      console.info('[LV EF calibration] BEFORE update', {
+        slot: slotInfo.slot,
+        ...summarizeEFCalibration(measurement),
+        activeInstanceFound: Boolean(sourceInstance),
+        regionCount: sourceRegions.length,
+        spatialRegionCount: normalizedRegions.length,
+        imagePlaneFound: Boolean(imagePlane),
+      });
       try {
         measurementService.update(annotationUID, measurement, true);
+        const updatedMeasurement = measurementService
+          .getMeasurements?.()
+          ?.find(item => item.uid === annotationUID || item.annotationUID === annotationUID);
+        const updatedAnnotation = cornerstoneTools.annotation.state.getAnnotation?.(annotationUID);
+        console.info('[LV EF calibration] AFTER update', {
+          slot: slotInfo.slot,
+          measurement: summarizeEFCalibration(updatedMeasurement),
+          annotation: summarizeEFCalibration(updatedAnnotation?.data),
+        });
         actions.markViewerMeasurementCreatedInSession?.({ uid: annotationUID });
       } catch (error) {
         console.warn('[LV EF] measurementService.update failed:', error);
