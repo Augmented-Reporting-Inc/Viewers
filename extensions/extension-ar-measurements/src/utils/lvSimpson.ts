@@ -235,6 +235,37 @@ function buildSlotGeometry(measurement, slot) {
   const display = LV_SIMPSON_SLOT_INFO[slot].display;
   const messages = [];
 
+  const originalPoints = Array.isArray(geometry.originalContourPoints)
+    ? geometry.originalContourPoints : [];
+  const currentPoints = Array.isArray(measurement?.points) && measurement.points.length >= 6
+    ? measurement.points : Array.isArray(geometry.contourPoints) ? geometry.contourPoints : [];
+  let maximumPointDelta = null;
+  if (originalPoints.length === currentPoints.length && originalPoints.length > 0) {
+    const deltas = originalPoints.map((point, index) => {
+      const before = getPoint(point);
+      const after = getPoint(currentPoints[index]);
+      return before && after ? length(subtract(before, after)) : Number.NaN;
+    });
+    maximumPointDelta = deltas.every(Number.isFinite) ? Math.max(...deltas) : null;
+  }
+  const axisDifferenceMM = Number.isFinite(derivedLength) && longAxisLengthMM
+    ? Math.abs(derivedLength - longAxisLengthMM) : null;
+  // EF-only, temporary, aggregate diagnostics; no identifiers or coordinates.
+  console.info('[LV EF slot validation]', {
+    slot,
+    originalPointCount: originalPoints.length,
+    currentPointCount: currentPoints.length,
+    calibratedPointCount: contourPoints.length,
+    maximumPointDelta,
+    contourUnchanged,
+    calibrationError: geometry.calibrationError || null,
+    calibratedAxisPresent: Boolean(longAxisLengthMM),
+    derivedAxisValid: Number.isFinite(derivedLength),
+    axisDifferenceMM,
+    axisToleranceMM: longAxisLengthMM
+      ? Math.max(0.01, longAxisLengthMM * 0.001) : null,
+  });
+
   if (geometry.calibrationError) {
     messages.push(`${display}: EF calibration failure (${geometry.calibrationError}). Check the active DICOM instance and spatial ultrasound-region metadata.`);
   }
