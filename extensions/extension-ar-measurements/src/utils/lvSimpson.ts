@@ -131,8 +131,9 @@ function describeBoundaryDistance(source, target, tolerance) {
       const start = getPoint(target[segment]);
       const end = getPoint(target[(segment + 1) % target.length]);
       if (!start || !end) return null;
+      // Never stop at the first segment within tolerance: the smallest
+      // actual distance is needed to diagnose real spline deformation.
       nearest = Math.min(nearest, pointToSegmentDistance(point, start, end));
-      if (nearest <= tolerance) break;
     }
     distances.push(nearest);
   }
@@ -141,6 +142,7 @@ function describeBoundaryDistance(source, target, tolerance) {
     sampled: distances.length,
     maximum: Math.max(...distances),
     median: sorted[Math.floor(sorted.length / 2)] ?? null,
+    p95: sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.95))] ?? null,
     aboveTolerance: distances.filter(d => d > tolerance).length,
   };
 }
