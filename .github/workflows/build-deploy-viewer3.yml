@@ -1,0 +1,163 @@
+name: Build and deploy AR Viewer3
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: 'Viewers branch or commit to build'
+        required: true
+        default: master
+        type: string
+      deploy_to_production:
+        description: 'Deploy to production viewer3?'
+        required: true
+        default: false
+        type: boolean
+      confirmation:
+        description: 'For production deployment enter DEPLOY_VIEWER3'
+        required: false
+        type: string
+
+concurrency:
+  group: production-viewer3
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AWS_REGION: ca-central-1
+  ECR_REGISTRY: 804220655312.dkr.ecr.ca-central-1.amazonaws.com
+  ECR_REPOSITORY: s3orth
+  AWS_PRODUCTION_DEPLOY_ROLE_ARN: ${{ vars.AWS_PRODUCTION_DEPLOY_ROLE_ARN }}
+  PRODUCTION_INSTANCE_ID: ${{ vars.PRODUCTION_INSTANCE_ID }}
+
+jobs:
+  build-and-optionally-deploy:
+    name: Build image and optionally deploy viewer3
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    environment: production
+    steps:
+      - name: Validate request and environment
+        shell: bash
+        env:
+          DEPLOY: ${{ inputs.deploy_to_production }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+        run: |
+          set -euo pipefail
+          [[ -n "$AWS_PRODUCTION_DEPLOY_ROLE_ARN" ]] || { echo 'Missing deploy role ARN' >&2; exit 1; }
+          [[ "$PRODUCTION_INSTANCE_ID" =~ ^i-[A-Za-z0-9]+$ ]] || { echo 'Invalid EC2 instance ID' >&2; exit 1; }
+          if [[ "$DEPLOY" == true && "$CONFIRMATION" != DEPLOY_VIEWER3 ]]; then
+            echo 'Enter DEPLOY_VIEWER3 to approve production deployment' >&2
+            exit 1
+          fi
+
+      - name: Checkout requested viewer source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_ref }}
+          persist-credentials: false
+
+      - name: Checkout trusted deployment script from master
+        uses: actions/checkout@v4
+        with:
+          ref: master
+          path: .viewer-deployment
+          persist-credentials: false
+
+      - name: Stage deployment script outside Docker context
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n .viewer-deployment/scripts/operations/deploy-viewer3.sh
+          cp .viewer-deployment/scripts/operations/deploy-viewer3.sh "$RUNNER_TEMP/deploy-viewer3.sh"
+          rm -rf .viewer-deployment
+
+      - name: Configure AWS OIDC credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AWS_PRODUCTION_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: github-viewer3-${{ github.run_id }}
+
+      - name: Verify AWS identity
+        run: aws sts get-caller-identity
+
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Determine immutable image tag
+        id: image
+        shell: bash
+        run: |
+          set -euo pipefail
+          SOURCE_SHA="$(git rev-parse HEAD)"
+          TAG="ohifar311-gha-${SOURCE_SHA:0:12}-${GITHUB_RUN_ID}"
+          IMAGE="$ECR_REGISTRY/$ECR_REPOSITORY:$TAG"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+          echo "source_sha=$SOURCE_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Build and publish image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: ${{ steps.image.outputs.image }}
+          build-args: |
+            APP_CONFIG=config/default.js
+            PUBLIC_URL=/rviewer/
+            BUILD_COMMIT=${{ steps.image.outputs.source_sha }}
+            BUILD_DATE=${{ github.run_id }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Verify ECR digest
+        id: pinned
+        shell: bash
+        env:
+          TAG: ${{ steps.image.outputs.tag }}
+          IMAGE: ${{ steps.image.outputs.image }}
+        run: |
+          set -euo pipefail
+          DIGEST="$(aws ecr describe-images --region "$AWS_REGION" --repository-name "$ECR_REPOSITORY" --image-ids "imageTag=$TAG" --query 'imageDetails[0].imageDigest' --output text)"
+          [[ "$DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]] || { echo 'Missing or invalid image digest' >&2; exit 1; }
+          echo "pinned_image=$IMAGE@$DIGEST" >> "$GITHUB_OUTPUT"
+          echo "### Viewer3" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Commit: ${{ steps.image.outputs.source_sha }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Image: $IMAGE@$DIGEST" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Deploy only viewer3 through AWS SSM
+        if: ${{ inputs.deploy_to_production }}
+        shell: bash
+        env:
+          IMAGE: ${{ steps.pinned.outputs.pinned_image }}
+        run: |
+          set -euo pipefail
+          SCRIPT_B64="$(base64 -w0 "$RUNNER_TEMP/deploy-viewer3.sh")"
+          COMMAND_JSON="$(jq -nc --arg script "$SCRIPT_B64" --arg image "$IMAGE" '{commands:[
+            "set -eu",
+            ("printf %s " + ($script|@sh) + " | base64 -d > /tmp/ar-deploy-viewer3.sh"),
+            "chmod 700 /tmp/ar-deploy-viewer3.sh",
+            ("bash /tmp/ar-deploy-viewer3.sh " + ($image|@sh)),
+            "rm -f /tmp/ar-deploy-viewer3.sh"
+          ]}')"
+          COMMAND_ID="$(aws ssm send-command --instance-ids "$PRODUCTION_INSTANCE_ID" --document-name AWS-RunShellScript --comment "AR viewer3 ${GITHUB_RUN_ID}" --timeout-seconds 900 --max-errors 0 --parameters "$COMMAND_JSON" --query 'Command.CommandId' --output text)"
+          echo "SSM command: $COMMAND_ID"
+          RESULT=TimedOut
+          for attempt in $(seq 1 120); do
+            RESULT="$(aws ssm get-command-invocation --command-id "$COMMAND_ID" --instance-id "$PRODUCTION_INSTANCE_ID" --query Status --output text 2>/dev/null || true)"
+            case "$RESULT" in
+              Success|Failed|Cancelled|TimedOut|Cancelling) break ;;
+            esac
+            sleep 5
+          done
+          aws ssm get-command-invocation --command-id "$COMMAND_ID" --instance-id "$PRODUCTION_INSTANCE_ID" --query '{Status:Status,ResponseCode:ResponseCode,Output:StandardOutputContent,Error:StandardErrorContent}' --output json
+          [[ "$RESULT" == Success ]] || { echo "Viewer3 SSM deploy failed: $RESULT" >&2; exit 1; }
+          echo 'Production deployment successful' >> "$GITHUB_STEP_SUMMARY"
