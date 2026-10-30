@@ -147,6 +147,39 @@ describe('LV EF calibrated geometry', () => {
     expect(calculateLVSimpson(records)?.status).toBe('complete');
   });
 
+  test('accepts unmodified control points despite rendering-only spline overshoot', () => {
+    const records = [
+      makeMeasurement('A4C_ED', 70, 190),
+      makeMeasurement('A2C_ED', 65, 190),
+      makeMeasurement('A4C_ES', 55, 170),
+      makeMeasurement('A2C_ES', 50, 170),
+    ];
+    for (const record of records) {
+      const original = record.points.map(point => [...point]);
+      record.lvSimpsonControlPoints = original.map(point => [...point]);
+      const dense = [];
+      for (let i = 0; i < original.length; i++) {
+        const next = original[(i + 1) % original.length];
+        for (let j = 0; j < 21; j++) {
+          const fraction = j / 21;
+          dense.push(original[i].map((value, axis) =>
+            value + (next[axis] - value) * fraction
+          ));
+        }
+      }
+      // Simulate SplineROI's rendering-only extrapolation near start:
+      // the editable handles have not moved.
+      dense[2][0] += 5;
+      record.points = [...dense, [...dense[0]]];
+    }
+    expect(calculateLVSimpson(records)?.status).toBe('complete');
+
+    // A true edit of an editable spline handle must invalidate the
+    // original DICOM calibration even if its rendered polyline is stale.
+    records[0].lvSimpsonControlPoints[2][0] += 2;
+    expect(calculateLVSimpson(records)?.status).not.toBe('complete');
+  });
+
   test('rejects a materially moved spline boundary after calibration', () => {
     const records = [
       makeMeasurement('A4C_ED', 70, 190),
