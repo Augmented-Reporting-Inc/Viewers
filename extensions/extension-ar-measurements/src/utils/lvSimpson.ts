@@ -82,20 +82,66 @@ function getContourPoints(measurement) {
   return (Array.isArray(points) ? points : []).map(getPoint).filter(Boolean);
 }
 
+// SplineROI densely samples the same border: a different point count alone
+// does not imply an edit. Check the two polylines geometrically, in both
+// directions, while requiring the original mitral hinge endpoints to agree.
+function pointToSegmentDistance(point, start, end) {
+  const edge = subtract(end, start);
+  const denom = dot(edge, edge);
+  const t = denom > 0
+    ? Math.max(0, Math.min(1, dot(subtract(point, start), edge) / denom))
+    : 0;
+  return length(subtract(point, [
+    start[0] + edge[0] * t,
+    start[1] + edge[1] * t,
+    start[2] + edge[2] * t,
+  ]));
+}
+
+function withinPolylineDistance(source, target, tolerance) {
+  for (const point of source) {
+    let nearest = Infinity;
+    for (let index = 1; index < target.length; index += 1) {
+      nearest = Math.min(nearest, pointToSegmentDistance(
+        point, target[index - 1], target[index]
+      ));
+      if (nearest <= tolerance) break;
+    }
+    if (nearest > tolerance) return false;
+  }
+  return true;
+}
+
 function hasUnchangedWorldContour(measurement) {
   const geometry = getGeometry(measurement);
   const original = geometry.originalContourPoints;
   const current = Array.isArray(measurement?.points) && measurement.points.length >= 6
     ? measurement.points : geometry.contourPoints;
   if (!Array.isArray(original) || !Array.isArray(current) ||
-      original.length !== current.length) return false;
-  return original.every((point, index) => {
-    const first = getPoint(point);
-    const second = getPoint(current[index]);
-    return first && second && first.every((value, axis) =>
-      Math.abs(value - second[axis]) <= 1e-5
-    );
-  });
+      original.length < 6 || current.length < 6) return false;
+  const originalPoints = original.map(getPoint);
+  const currentPoints = current.map(getPoint);
+  if (originalPoints.some(point => !point) ||
+      currentPoints.some(point => !point)) return false;
+
+  // Use scale of the original contour (not the post-edit curve) so that
+  // stretching the contour cannot inflate its own permitted deviation.
+  const baseLeft = originalPoints[0];
+  const baseRight = originalPoints[originalPoints.length - 1];
+  const axis = originalPoints[Number(geometry.axisPointIndex)];
+  if (!axis) return false;
+  const midpoint = getBaseMidpoint(baseLeft, baseRight);
+  const axisLength = length(subtract(axis, midpoint));
+  if (!Number.isFinite(axisLength) || axisLength <= 0) return false;
+  // Strict relative geometry tolerance to accommodate spline interpolation.
+  // Does not relax the independent physical calibration or axis checks.
+  const tolerance = axisLength * 0.015;
+  if (length(subtract(baseLeft, currentPoints[0])) > tolerance ||
+      length(subtract(baseRight, currentPoints[currentPoints.length - 1])) > tolerance) {
+    return false;
+  }
+  return withinPolylineDistance(originalPoints, currentPoints, tolerance) &&
+    withinPolylineDistance(currentPoints, originalPoints, tolerance);
 }
 
 function getBaseMidpoint(baseLeft, baseRight) {
