@@ -83,7 +83,7 @@ RUNNING_IMAGE="$(docker inspect viewer3 --format '{{.Config.Image}}')"
 ready=false
 for attempt in $(seq 1 25); do
   if docker inspect viewer3 --format '{{.State.Running}}' | grep -qx true &&
-     docker exec viewer3 sh -c 'wget -q -O /dev/null http://127.0.0.1:8080/' 2>/dev/null; then
+     docker exec viewer3 sh -c 'port="${PORT:-80}"; wget -q -O /dev/null "http://127.0.0.1:${port}/"' 2>/dev/null; then
     ready=true
     break
   fi
