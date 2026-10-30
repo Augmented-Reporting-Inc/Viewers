@@ -3,6 +3,7 @@ name: AR Learning Extension Validation
 on:
   push:
     branches:
+      - feature/timed-learner-viewer-persistence-20261025
       - fix/ef-progress-quiz-capture-parity-20261020
       - fix/ef-stable-panel-refresh-20261022
       - fix/ef-sticky-tool-between-contours-20261020
@@ -21,6 +22,7 @@ on:
     paths:
       - 'extensions/extension-ar-learning/**'
       - 'extensions/cornerstone/src/commandsModule.ts'
+      - 'extensions/extension-ar-measurements/**'
       - 'extensions/cornerstone/src/utils/lvSimpsonContour.ts'
       - 'extensions/cornerstone/src/utils/lvSimpsonContour.test.ts'
       - 'extensions/cornerstone/src/utils/measurementAnnotationHydration.ts'
@@ -57,10 +59,14 @@ jobs:
         run: node --test modes/mode-ar-learning/tests/toolbar-visibility.test.cjs
       - name: Validate EF panel and quiz capture parity
         run: npx jest --config extensions/extension-ar-measurements/jest.config.js --runInBand --runTestsByPath extensions/extension-ar-measurements/src/utils/viewerQuizCompositeResults.test.ts
+      - name: Validate timed viewer autosave debounce, retry and save serialization
+        run: npx jest --config extensions/extension-ar-measurements/jest.config.js --runInBand --runTestsByPath extensions/extension-ar-measurements/src/utils/timedViewerAutosave.test.ts
       - name: Validate guided EF mouse ownership and tool restoration
         run: npx jest --config extensions/cornerstone/jest.config.js --runInBand --runTestsByPath extensions/cornerstone/src/utils/guidedMouseToolOwnership.test.ts
       - name: Validate LV EF initial contour landmarks and calculator compatibility
         run: npx jest --config extensions/cornerstone/jest.config.js --runInBand --runTestsByPath extensions/cornerstone/src/utils/lvSimpsonContour.test.ts
+      - name: Validate timed learner viewer attempt persistence identity
+        run: npx jest --config extensions/cornerstone/jest.config.js --runInBand --runTestsByPath extensions/cornerstone/src/utils/timedLearnerViewerTarget.test.ts
       - name: Validate quiz composite activation and study-scoped capture intent
         run: npx jest --config extensions/extension-ar-learning/jest.config.js --runInBand --runTestsByPath extensions/extension-ar-learning/src/utils/quizCompositeCaptureIntent.test.ts
       - name: Compile AR learning extension
