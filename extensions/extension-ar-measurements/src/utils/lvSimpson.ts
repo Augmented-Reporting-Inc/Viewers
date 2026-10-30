@@ -99,11 +99,15 @@ function pointToSegmentDistance(point, start, end) {
 }
 
 function withinPolylineDistance(source, target, tolerance) {
+  // Both shapes describe closed cavity boundaries. The stored user trace
+  // leaves the mitral hinge closure implicit, while SplineROI explicitly
+  // samples that closing segment and can start at any position in the loop.
   for (const point of source) {
     let nearest = Infinity;
-    for (let index = 1; index < target.length; index += 1) {
+    for (let index = 0; index < target.length; index += 1) {
+      const next = (index + 1) % target.length;
       nearest = Math.min(nearest, pointToSegmentDistance(
-        point, target[index - 1], target[index]
+        point, target[index], target[next]
       ));
       if (nearest <= tolerance) break;
     }
@@ -136,10 +140,8 @@ function hasUnchangedWorldContour(measurement) {
   // Strict relative geometry tolerance to accommodate spline interpolation.
   // Does not relax the independent physical calibration or axis checks.
   const tolerance = axisLength * 0.015;
-  if (length(subtract(baseLeft, currentPoints[0])) > tolerance ||
-      length(subtract(baseRight, currentPoints[currentPoints.length - 1])) > tolerance) {
-    return false;
-  }
+  // Match anatomical hinges to the curve, not to its first/last sample:
+  // a closed SplineROI's final sample is often beside its first sample.
   return withinPolylineDistance(originalPoints, currentPoints, tolerance) &&
     withinPolylineDistance(currentPoints, originalPoints, tolerance);
 }
