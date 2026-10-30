@@ -48,6 +48,80 @@ function makeMeasurement(slot, halfWidth, height, calibrated = true) {
 }
 
 describe('LV EF calibrated geometry', () => {
+  // Independent analytic reference: a half-ellipsoid of length L and
+  // transverse radii r4 and r2 has volume 2*pi*r4*r2*L/3.
+  // Generated from geometry, not from the implementation's disk widths.
+  test('biplane 20-disk volumes agree with analytic half-ellipsoid reference', () => {
+    const makeHalfEllipsoid = (slot, radius, longAxisLengthMM) => {
+      const samples = 100;
+      const left = [];
+      const right = [];
+      for (let index = 0; index <= samples; index += 1) {
+        const axisPosition = longAxisLengthMM * index / samples;
+        const width = radius * Math.sqrt(Math.max(0, 1 -
+          (axisPosition / longAxisLengthMM) ** 2));
+        left.push([-width, axisPosition, 0]);
+      }
+      for (let index = samples - 1; index >= 0; index -= 1) {
+        const axisPosition = longAxisLengthMM * index / samples;
+        const width = radius * Math.sqrt(Math.max(0, 1 -
+          (axisPosition / longAxisLengthMM) ** 2));
+        right.push([width, axisPosition, 0]);
+      }
+      const points = [...left, ...right];
+      return {
+        measurementKind: 'lvSimpsonSlot',
+        slot,
+        points,
+        lvSimpsonControlPoints: points.map(p => [...p]),
+        lvSimpson: {
+          measurementKind: 'lvSimpsonSlot',
+          slot,
+          contourSource: 'freehandDerived',
+          axisPointIndex: samples,
+          originalContourPoints: points.map(p => [...p]),
+          contourPoints: points.map(p => [...p]),
+          calibratedContourPoints: points.map(p => [...p]),
+          calibratedLongAxisLengthMM: longAxisLengthMM,
+          longAxisLengthMM,
+        },
+      };
+    };
+    const edAxis = 90, esAxis = 70;
+    const records = [
+      makeHalfEllipsoid('A4C_ED', 30, edAxis),
+      makeHalfEllipsoid('A2C_ED', 25, edAxis),
+      makeHalfEllipsoid('A4C_ES', 20, esAxis),
+      makeHalfEllipsoid('A2C_ES', 18, esAxis),
+    ];
+    const expectedEDV = (2 * Math.PI * 30 * 25 * edAxis / 3) / 1000;
+    const expectedESV = (2 * Math.PI * 20 * 18 * esAxis / 3) / 1000;
+    const result = calculateLVSimpson(records);
+    expect(result?.status).toBe('complete');
+    expect(result?.values?.edvML).toBeCloseTo(expectedEDV, 0);
+    expect(result?.values?.esvML).toBeCloseTo(expectedESV, 0);
+    expect(result?.values?.ejectionFraction).toBeCloseTo(
+      (expectedEDV - expectedESV) / expectedEDV * 100, 0
+    );
+  });
+
+  test('live handle edits invalidate calibrated snapshots even if rendered points are stale', () => {
+    const measurements = [
+      makeMeasurement('A4C_ED', 70, 190),
+      makeMeasurement('A2C_ED', 65, 190),
+      makeMeasurement('A4C_ES', 55, 170),
+      makeMeasurement('A2C_ES', 50, 170),
+    ];
+    for (const measurement of measurements) {
+      measurement.lvSimpsonControlPoints = measurement.points.map(p => [...p]);
+    }
+    expect(calculateLVSimpson(measurements)?.status).toBe('complete');
+    measurements[0].lvSimpsonControlPoints[3][0] += 3;
+    expect(calculateLVSimpson(measurements)?.status).not.toBe('complete');
+    measurements[0].lvSimpsonControlPoints = [];
+    expect(calculateLVSimpson(measurements)?.status).not.toBe('complete');
+  });
+
   test('transforms pixel-world coordinates to mm including anisotropic spacing', () => {
     const points = [[100, 100, 0], [105, 100, 0], [110, 100, 0],
       [110, 105, 0], [110, 110, 0], [100, 110, 0]];
