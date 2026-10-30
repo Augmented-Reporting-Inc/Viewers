@@ -116,6 +116,35 @@ function withinPolylineDistance(source, target, tolerance) {
   return true;
 }
 
+// Temporary diagnostic only: sample the symmetric boundary distance so that
+// a real spline discrepancy is distinguishable from a point-count mismatch.
+// Never print identifiers or the actual coordinate arrays.
+function describeBoundaryDistance(source, target, tolerance) {
+  const maxSamples = 64;
+  const stride = Math.max(1, Math.ceil(source.length / maxSamples));
+  const distances = [];
+  for (let index = 0; index < source.length; index += stride) {
+    const point = getPoint(source[index]);
+    if (!point) return null;
+    let nearest = Infinity;
+    for (let segment = 0; segment < target.length; segment += 1) {
+      const start = getPoint(target[segment]);
+      const end = getPoint(target[(segment + 1) % target.length]);
+      if (!start || !end) return null;
+      nearest = Math.min(nearest, pointToSegmentDistance(point, start, end));
+      if (nearest <= tolerance) break;
+    }
+    distances.push(nearest);
+  }
+  const sorted = [...distances].sort((a, b) => a - b);
+  return {
+    sampled: distances.length,
+    maximum: Math.max(...distances),
+    median: sorted[Math.floor(sorted.length / 2)] ?? null,
+    aboveTolerance: distances.filter(d => d > tolerance).length,
+  };
+}
+
 function hasUnchangedWorldContour(measurement) {
   const geometry = getGeometry(measurement);
   const original = geometry.originalContourPoints;
@@ -298,8 +327,27 @@ function buildSlotGeometry(measurement, slot) {
   }
   const axisDifferenceMM = Number.isFinite(derivedLength) && longAxisLengthMM
     ? Math.abs(derivedLength - longAxisLengthMM) : null;
+  const originalBoundary = Array.isArray(geometry.originalContourPoints)
+    ? geometry.originalContourPoints : [];
+  const representedBoundary = currentPoints;
+  const baseLeftPoint = getPoint(originalBoundary[0]);
+  const baseRightPoint = getPoint(originalBoundary[originalBoundary.length - 1]);
+  const originalAxisWorldLength = baseLeftPoint && baseRightPoint &&
+    getPoint(originalBoundary[Number(geometry.axisPointIndex)])
+    ? length(subtract(getPoint(originalBoundary[Number(geometry.axisPointIndex)]),
+        getBaseMidpoint(baseLeftPoint, baseRightPoint)))
+    : null;
+  const boundaryTolerance = originalAxisWorldLength && originalAxisWorldLength > 0
+    ? originalAxisWorldLength * 0.015 : null;
+  const measuredBoundary = boundaryTolerance && representedBoundary.length >= 6
+    ? {
+        originalToSpline: describeBoundaryDistance(originalBoundary, representedBoundary, boundaryTolerance),
+        splineToOriginal: describeBoundaryDistance(representedBoundary, originalBoundary, boundaryTolerance),
+      } : null;
   // EF-only, temporary, aggregate diagnostics; no identifiers or coordinates.
   console.info('[LV EF slot validation]', {
+    boundaryTolerance,
+    measuredBoundary,
     slot,
     originalPointCount: originalPoints.length,
     currentPointCount: currentPoints.length,
