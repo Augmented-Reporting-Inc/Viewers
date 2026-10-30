@@ -9338,8 +9338,27 @@ function commandsModule({
       explicitLVSimpsonResult = null;
       reviewedLVSimpsonEF = null;
       const calculateEF = () => {
+        // EF-only live geometry gate. Session fallbacks may retain the original
+        // capture points after Cornerstone edits its annotation; reconcile with
+        // the actual editable handles immediately before calculation.
         const measurementsForCalculation = getCurrentViewerMeasurementSnapshot(measurementService)
-          .filter(entry => String(entry?.referenceStudyUID || entry?.StudyInstanceUID || '').trim() === currentStudyId);
+          .filter(entry => String(entry?.referenceStudyUID || entry?.StudyInstanceUID || '').trim() === currentStudyId)
+          .map(entry => {
+            if (!isLVSimpsonMeasurement(entry)) return entry;
+            const measurementId = getMeasurementAnnotationId(entry);
+            const annotation = measurementId
+              ? cornerstoneTools.annotation.state.getAnnotation?.(measurementId)
+              : null;
+            const handles = annotation?.data?.handles?.points;
+            // An absent annotation must not silently inherit an unedited
+            // session snapshot when computing clinically meaningful EF.
+            return {
+              ...entry,
+              lvSimpsonControlPoints: Array.isArray(handles)
+                ? handles.map(point => Array.isArray(point) ? [...point] : point)
+                : [],
+            };
+          });
         const resolved = resolveViewerQuizLVSimpsonForStudy(currentStudyId, measurementsForCalculation);
         if (!resolved || !Number.isFinite(Number(resolved.composite?.value))) {
           const clinicalResult = calculateLVSimpson(measurementsForCalculation);
