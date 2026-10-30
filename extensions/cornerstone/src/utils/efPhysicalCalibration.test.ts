@@ -97,4 +97,42 @@ describe('LV EF calibrated geometry', () => {
     contours[0].points[3][0] += 2;
     expect(calculateLVSimpson(contours)?.status).not.toBe('complete');
   });
+  test('accepts a densely resampled unchanged contour', () => {
+    const records = [
+      makeMeasurement('A4C_ED', 70, 190),
+      makeMeasurement('A2C_ED', 65, 190),
+      makeMeasurement('A4C_ES', 55, 170),
+      makeMeasurement('A2C_ES', 50, 170),
+    ];
+    for (const record of records) {
+      const original = record.points;
+      const dense = [];
+      for (let i = 0; i < original.length - 1; i++) {
+        for (let j = 0; j < 21; j++) {
+          const t = j / 21;
+          dense.push(original[i].map((value, axis) =>
+            value + (original[i + 1][axis] - value) * t
+          ));
+        }
+      }
+      dense.push(original[original.length - 1]);
+      record.points = dense;
+    }
+    const result = calculateLVSimpson(records);
+    expect(result?.status).toBe('complete');
+  });
+
+  test('rejects a materially moved spline boundary after calibration', () => {
+    const records = [
+      makeMeasurement('A4C_ED', 70, 190),
+      makeMeasurement('A2C_ED', 65, 190),
+      makeMeasurement('A4C_ES', 55, 170),
+      makeMeasurement('A2C_ES', 50, 170),
+    ];
+    const moved = records[0].points.map(p => [...p]);
+    moved[3][0] += 50;
+    records[0].points = moved;
+    expect(calculateLVSimpson(records)?.status).not.toBe('complete');
+  });
+
 });
