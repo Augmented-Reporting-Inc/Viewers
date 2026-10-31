@@ -8704,11 +8704,21 @@ function commandsModule({
       ]);
       const explicitSlot = normalizeLVSimpsonSlot(requestedSlot);
       const nextMissingSlot = getNextMissingLVSimpsonSlot(slotCandidates);
+      // When every restored slot already exists, opening the EF quiz question
+      // is a review action, not permission to overwrite A4C ED or restart
+      // the 4-step guided drawing workflow.
+      const reviewExistingContours = !requestedSessionId && !explicitSlot && !nextMissingSlot;
 
       let slotSelection = explicitSlot ? buildLVSimpsonSlotSelection(explicitSlot) : null;
 
       if (!slotSelection && nextMissingSlot) {
         slotSelection = buildLVSimpsonSlotSelection(nextMissingSlot);
+      }
+
+      if (!slotSelection && reviewExistingContours) {
+        // Needed only to initialize the shared EF panel controller. No
+        // drawing is started and the choice does not identify a Current slot.
+        slotSelection = buildLVSimpsonSlotSelection('A4C_ED');
       }
 
       if (!slotSelection) {
@@ -8734,7 +8744,7 @@ function commandsModule({
 
       // Selecting a guided EF question opens its first authored frame. A later
       // Continue performs its own jump before invoking this next slot.
-      const initialTarget = !requestedSessionId
+      const initialTarget = !requestedSessionId && !reviewExistingContours
         ? getEFContourFrameTarget(efContourTargets, slotSelection.slotInfo.slot)
         : null;
       if (initialTarget && !isWorkflowCancelled()) {
@@ -8841,7 +8851,7 @@ function commandsModule({
           });
         };
         lvSimpsonPanelController = {
-          activeSlot: slotInfo.slot,
+          activeSlot: reviewExistingContours ? '' : slotInfo.slot,
           onCalculate: null,
           getMeasurements: getStudyMeasurements,
           setObservedIds(ids: string[]) {
@@ -8875,7 +8885,7 @@ function commandsModule({
             }
             // Only mark the slot current after the requested frame is actually
             // displayed. Keep instructions/results intact and avoid a rerender.
-            if (!isActiveStudy() || isWorkflowCancelled()) return;
+            if (!isActiveStudy() || lvSimpsonPanelController !== this) return;
             this.activeSlot = slot;
             updateLVSimpsonCurrentSlotLabel(slot);
           },
@@ -8933,6 +8943,116 @@ function commandsModule({
         };
       } else {
         lvSimpsonPanelController.activeSlot = slotInfo.slot;
+      }
+
+      const currentStudyDisplaySet = getActiveViewportDisplaySet({
+        viewportGridService, displaySetService, viewportId: activeViewportId,
+      });
+      const currentStudyId = String(
+        currentStudyDisplaySet?.StudyInstanceUID || currentStudyDisplaySet?.studyInstanceUID || ''
+      ).trim();
+
+      const calculateEF = () => {
+        // EF-only live geometry gate. Session fallbacks may retain the original
+        // capture points after Cornerstone edits its annotation; reconcile with
+        // the actual editable handles immediately before calculation.
+        const measurementsForCalculation = getCurrentViewerMeasurementSnapshot(measurementService)
+          .filter(entry => String(entry?.referenceStudyUID || entry?.StudyInstanceUID || '').trim() === currentStudyId)
+          .map(entry => {
+            if (!isLVSimpsonMeasurement(entry)) return entry;
+            const measurementId = getMeasurementAnnotationId(entry);
+            const annotation = measurementId
+              ? cornerstoneTools.annotation.state.getAnnotation?.(measurementId)
+              : null;
+            const handles = annotation?.data?.handles?.points;
+            // An absent annotation must not silently inherit an unedited
+            // session snapshot when computing clinically meaningful EF.
+            return {
+              ...entry,
+              lvSimpsonControlPoints: Array.isArray(handles)
+                ? handles.map(point => Array.isArray(point) ? [...point] : point)
+                : [],
+            };
+          });
+        const resolved = resolveViewerQuizLVSimpsonForStudy(currentStudyId, measurementsForCalculation);
+        if (!resolved || !Number.isFinite(Number(resolved.composite?.value))) {
+          const clinicalResult = calculateLVSimpson(measurementsForCalculation);
+          const slotCounts = getLVSimpsonSlotCandidates(measurementsForCalculation);
+          const duplicateSlots = LV_TRACE_REQUIRED_SLOTS.filter(slot => (slotCounts.get(slot)?.length || 0) > 1);
+          const missingSlots = LV_TRACE_REQUIRED_SLOTS.filter(slot => !slotCounts.get(slot)?.length);
+          const geometryMessages = Array.isArray(clinicalResult?.messages)
+            ? clinicalResult.messages.filter(message => typeof message === 'string' && message.trim())
+            : [];
+          const warnings = [
+            ...missingSlots.map(slot => `Missing EF contour: ${getLVSimpsonSlotDisplayName(slot)}.`),
+            ...duplicateSlots.map(slot => `Multiple EF contours found for ${getLVSimpsonSlotDisplayName(slot)}; delete the extra contour.`),
+            ...geometryMessages,
+          ];
+          if (!warnings.length) {
+            warnings.push('The four EF contours could not be assembled into a valid calculation. Review the contour points and measurement registration.');
+          }
+          renderLVSimpsonWorkflowPanel({
+            measurements: measurementsForCalculation,
+            resultText: 'EF calculation unavailable',
+            warnings: [...new Set(warnings)].slice(0, 8),
+            instruction: 'Correct the indicated contour(s), then retry Calculate EF.',
+            onCalculate: calculateEF,
+            onCancel: hideLVSimpsonWorkflowPanel,
+          });
+          return;
+        }
+        const contourRevisions = new Map<string, string>();
+        for (const component of resolved.composite?.components || []) {
+          const annotationId = String(component.annotationId || '');
+          const revision = annotationId && getLVSimpsonAnnotationRevision(annotationId);
+          if (revision) contourRevisions.set(annotationId, revision);
+        }
+        if (contourRevisions.size !== 4) {
+          renderLVSimpsonWorkflowPanel({
+            measurements: measurementsForCalculation,
+            resultText: 'EF calculation unavailable',
+            warnings: ['The live source contours could not be verified. Reopen the EF workflow and recalculate.'],
+            onCalculate: calculateEF,
+            onCancel: hideLVSimpsonWorkflowPanel,
+          });
+          return;
+        }
+        explicitLVSimpsonResult = {
+          studyInstanceId: currentStudyId,
+          composite: structuredClone(resolved.composite),
+          result: structuredClone(resolved.result),
+          contourRevisions,
+        };
+        reviewedLVSimpsonEF = { studyInstanceId: currentStudyId, value: resolved.composite.value };
+        renderLVSimpsonWorkflowPanel({
+          measurements: measurementsForCalculation,
+          resultText: `Calculated LVEF: ${roundQuizMeasurementValue(resolved.composite.value, 2).toFixed(2)}%`,
+          resultDetails: [
+            `End-diastolic volume (EDV): ${Number(resolved.result.values.edvML).toFixed(2)} mL`,
+            `End-systolic volume (ESV): ${Number(resolved.result.values.esvML).toFixed(2)} mL`,
+          ],
+          instruction: 'Cross-check EF = (EDV - ESV) / EDV × 100, then capture this result in the active EF question.',
+          onCapture: () => requestLVSimpsonQuizCapture({
+            studyInstanceId: currentStudyId, value: resolved.composite.value, mode: 'manual',
+          }),
+          onCancel: hideLVSimpsonWorkflowPanel,
+        });
+      };
+      if (reviewExistingContours) {
+        // There is nothing left to draw. Do not hold the mouse-capture
+        // workflow open or show Step 1/4 on a completed saved assessment.
+        activeLVSimpsonWorkflowSessionId = '';
+        cancelActiveLVSimpsonCapture();
+        lvSimpsonMouseTools.restore();
+        refreshLVSimpsonToolbarState();
+        if (lvSimpsonPanelController) {
+          lvSimpsonPanelController.activeSlot = '';
+          lvSimpsonPanelController.onCalculate = calculateEF;
+        }
+        // Revalidate restored live geometry before displaying calculated
+        // volumes. This never writes/overwrites the saved quiz EF answer.
+        calculateEF();
+        return null;
       }
 
       const existingSlotMeasurements = slotCandidates.get(slotInfo.slot) || [];
@@ -9356,9 +9476,7 @@ function commandsModule({
       // Match the quiz capture path: live and session measurements are reconciled
       // before calculating the composite gold-answer value.
       const snapshotMeasurements = getCurrentViewerMeasurementSnapshot(measurementService);
-      const currentStudyId = String(
-        displaySet?.StudyInstanceUID || displaySet?.studyInstanceUID || ''
-      ).trim();
+
       const studyMeasurements = snapshotMeasurements.filter(entry =>
         String(entry?.referenceStudyUID || entry?.StudyInstanceUID || '').trim() === currentStudyId
       );
@@ -9454,92 +9572,6 @@ function commandsModule({
       // Only a deliberate Calculate EF click creates a quiz-authoritative EF.
       explicitLVSimpsonResult = null;
       reviewedLVSimpsonEF = null;
-      const calculateEF = () => {
-        // EF-only live geometry gate. Session fallbacks may retain the original
-        // capture points after Cornerstone edits its annotation; reconcile with
-        // the actual editable handles immediately before calculation.
-        const measurementsForCalculation = getCurrentViewerMeasurementSnapshot(measurementService)
-          .filter(entry => String(entry?.referenceStudyUID || entry?.StudyInstanceUID || '').trim() === currentStudyId)
-          .map(entry => {
-            if (!isLVSimpsonMeasurement(entry)) return entry;
-            const measurementId = getMeasurementAnnotationId(entry);
-            const annotation = measurementId
-              ? cornerstoneTools.annotation.state.getAnnotation?.(measurementId)
-              : null;
-            const handles = annotation?.data?.handles?.points;
-            // An absent annotation must not silently inherit an unedited
-            // session snapshot when computing clinically meaningful EF.
-            return {
-              ...entry,
-              lvSimpsonControlPoints: Array.isArray(handles)
-                ? handles.map(point => Array.isArray(point) ? [...point] : point)
-                : [],
-            };
-          });
-        const resolved = resolveViewerQuizLVSimpsonForStudy(currentStudyId, measurementsForCalculation);
-        if (!resolved || !Number.isFinite(Number(resolved.composite?.value))) {
-          const clinicalResult = calculateLVSimpson(measurementsForCalculation);
-          const slotCounts = getLVSimpsonSlotCandidates(measurementsForCalculation);
-          const duplicateSlots = LV_TRACE_REQUIRED_SLOTS.filter(slot => (slotCounts.get(slot)?.length || 0) > 1);
-          const missingSlots = LV_TRACE_REQUIRED_SLOTS.filter(slot => !slotCounts.get(slot)?.length);
-          const geometryMessages = Array.isArray(clinicalResult?.messages)
-            ? clinicalResult.messages.filter(message => typeof message === 'string' && message.trim())
-            : [];
-          const warnings = [
-            ...missingSlots.map(slot => `Missing EF contour: ${getLVSimpsonSlotDisplayName(slot)}.`),
-            ...duplicateSlots.map(slot => `Multiple EF contours found for ${getLVSimpsonSlotDisplayName(slot)}; delete the extra contour.`),
-            ...geometryMessages,
-          ];
-          if (!warnings.length) {
-            warnings.push('The four EF contours could not be assembled into a valid calculation. Review the contour points and measurement registration.');
-          }
-          renderLVSimpsonWorkflowPanel({
-            measurements: measurementsForCalculation,
-            resultText: 'EF calculation unavailable',
-            warnings: [...new Set(warnings)].slice(0, 8),
-            instruction: 'Correct the indicated contour(s), then retry Calculate EF.',
-            onCalculate: calculateEF,
-            onCancel: hideLVSimpsonWorkflowPanel,
-          });
-          return;
-        }
-        const contourRevisions = new Map<string, string>();
-        for (const component of resolved.composite?.components || []) {
-          const annotationId = String(component.annotationId || '');
-          const revision = annotationId && getLVSimpsonAnnotationRevision(annotationId);
-          if (revision) contourRevisions.set(annotationId, revision);
-        }
-        if (contourRevisions.size !== 4) {
-          renderLVSimpsonWorkflowPanel({
-            measurements: measurementsForCalculation,
-            resultText: 'EF calculation unavailable',
-            warnings: ['The live source contours could not be verified. Reopen the EF workflow and recalculate.'],
-            onCalculate: calculateEF,
-            onCancel: hideLVSimpsonWorkflowPanel,
-          });
-          return;
-        }
-        explicitLVSimpsonResult = {
-          studyInstanceId: currentStudyId,
-          composite: structuredClone(resolved.composite),
-          result: structuredClone(resolved.result),
-          contourRevisions,
-        };
-        reviewedLVSimpsonEF = { studyInstanceId: currentStudyId, value: resolved.composite.value };
-        renderLVSimpsonWorkflowPanel({
-          measurements: measurementsForCalculation,
-          resultText: `Calculated LVEF: ${roundQuizMeasurementValue(resolved.composite.value, 2).toFixed(2)}%`,
-          resultDetails: [
-            `End-diastolic volume (EDV): ${Number(resolved.result.values.edvML).toFixed(2)} mL`,
-            `End-systolic volume (ESV): ${Number(resolved.result.values.esvML).toFixed(2)} mL`,
-          ],
-          instruction: 'Cross-check EF = (EDV - ESV) / EDV × 100, then capture this result in the active EF question.',
-          onCapture: () => requestLVSimpsonQuizCapture({
-            studyInstanceId: currentStudyId, value: resolved.composite.value, mode: 'manual',
-          }),
-          onCancel: hideLVSimpsonWorkflowPanel,
-        });
-      };
       if (lvSimpsonPanelController) {
         lvSimpsonPanelController.onCalculate = calculateEF;
       }
