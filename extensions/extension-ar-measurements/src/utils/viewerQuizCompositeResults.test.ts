@@ -76,7 +76,21 @@ function makeEFSlot(studyId: string, slot: string, halfWidth: number, height: nu
     referenceStudyUID: studyId,
     referencedImageId: `wadors:study/${studyId}/${slot}`,
     measurementKind: 'lvSimpsonSlot',
-    lvSimpson: { measurementKind: 'lvSimpsonSlot', slot },
+    // Synthetic coordinates are already in mm: provide the same explicit
+    // calibrated geometry contract required of real DICOM-derived EF slots.
+    // No patient data or fabricated clinical calibration is involved.
+    lvSimpson: {
+      measurementKind: 'lvSimpsonSlot',
+      slot,
+      contourSource: 'freehandDerived',
+      axisPointIndex: 5,
+      contourPoints: points.map(point => [...point]),
+      originalContourPoints: points.map(point => [...point]),
+      calibratedContourPoints: points.map(point => [...point]),
+      calibratedLongAxisLengthMM: height,
+      longAxisLengthMM: height,
+    },
+    lvSimpsonControlPoints: points.map(point => [...point]),
     points,
   };
 }
