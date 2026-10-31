@@ -1,0 +1,44 @@
+name: Validate LV Simpson EF
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: 'Exact Viewers branch or commit to validate'
+        required: true
+        default: port/3.11-custom
+        type: string
+  pull_request:
+    branches:
+      - port/3.11-custom
+    paths:
+      - 'extensions/cornerstone/src/utils/efPhysicalCalibration.test.ts'
+      - 'extensions/cornerstone/src/utils/measurementServiceMappings/SplineROI.ts'
+      - 'extensions/extension-ar-measurements/src/utils/lvSimpson.ts'
+      - 'extensions/cornerstone/src/commandsModule.ts'
+      - '.github/workflows/validate-lv-simpson-ef.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  ef-unit-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout Viewers source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.source_ref || github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: yarn
+      - name: Install exact locked dependencies
+        run: yarn install --frozen-lockfile --non-interactive
+      - name: Test calibrated EF contours and independent reference volumes
+        run: yarn jest --config extensions/cornerstone/jest.config.js --runInBand --coverage=false --runTestsByPath extensions/cornerstone/src/utils/efPhysicalCalibration.test.ts
+      - name: Test EF quiz composite integration
+        run: yarn jest --config extensions/extension-ar-measurements/jest.config.js --runInBand --coverage=false --runTestsByPath extensions/extension-ar-measurements/src/utils/viewerQuizCompositeResults.test.ts
