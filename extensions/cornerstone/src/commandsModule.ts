@@ -8594,6 +8594,36 @@ function commandsModule({
         return null;
       }
 
+      // EF-specific, read-only persistence diagnostic. On reopen the normal
+      // initial hydrate is panel-only, so restoredCount=0 says nothing about
+      // whether source contours were saved. Query the learner Series itself.
+      if (!requestedSessionId) {
+        try {
+          const stored = await actions.getViewerMeasurementAnnotationsForActiveStudy({
+            workflows: ['viewerMeasurements'],
+            includeRepeated: false,
+          });
+          const saved = Array.isArray(stored?.annotations) ? stored.annotations : [];
+          const efSaved = saved.filter(entry => Boolean(getLVSimpsonSlotFromMeasurement(entry)));
+          const bySlot = getLVSimpsonSlotCandidates(efSaved);
+          console.info('[LV EF saved-slot audit]', {
+            persistedAnnotationCount: saved.length,
+            persistedEFCount: efSaved.length,
+            persistedSlots: Object.fromEntries(
+              LV_TRACE_REQUIRED_SLOTS.map(slot => [slot, bySlot.get(slot)?.length || 0])
+            ),
+            allEFSlotsPresent: LV_TRACE_REQUIRED_SLOTS.every(slot => bySlot.get(slot)?.length === 1),
+            saveTargetPresent: Boolean(stored?.saveTarget),
+          });
+        } catch (error) {
+          console.warn('[LV EF saved-slot audit] read failed', {
+            errorType: error?.name || 'Error',
+            status: Number(error?.response?.status || error?.status || 0) || null,
+          });
+        }
+        if (isWorkflowCancelled()) return null;
+      }
+
       const liveMeasurements = measurementService.getMeasurements?.() || [];
       const sessionLVSimpsonMeasurements = getLVSimpsonSessionMeasurements();
 
