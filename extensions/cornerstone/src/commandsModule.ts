@@ -5707,7 +5707,9 @@ let completedLVSimpsonResult: {
 function getLVSimpsonAnnotationRevision(annotationId: string): string | null {
   const annotation = cornerstoneTools.annotation.state.getAnnotation?.(annotationId);
   if (!annotation) return null;
-  const points = annotation.data?.contour?.polyline || annotation.data?.handles?.points;
+  // The renderer may recompute a densely sampled spline without any user
+  // edit. Revision tracking must use the editable handles, not its cache.
+  const points = annotation.data?.handles?.points || annotation.data?.contour?.polyline;
   if (!Array.isArray(points) || points.length < 3) return null;
   // The revision is internal only; never log identifiers or coordinates.
   return JSON.stringify(points);
@@ -5753,7 +5755,7 @@ function retainCompletedLVSimpsonResult(studyInstanceId: string, composite: any,
   return true;
 }
 
-let explicitLVSimpsonResult: { studyInstanceId: string; composite: any; result: any } | null = null;
+let explicitLVSimpsonResult: { studyInstanceId: string; composite: any; result: any; contourRevisions: Map<string, string> } | null = null;
 function getExplicitLVSimpsonResult(studyInstanceId: string) {
   return explicitLVSimpsonResult?.studyInstanceId === studyInstanceId ? explicitLVSimpsonResult : null;
 }
@@ -5771,6 +5773,14 @@ function invalidateExplicitLVSimpsonAfterAnnotationChange(event: Event) {
   if (result?.composite?.components?.some((component: any) =>
     String(component.annotationId) === annotationId
   )) {
+    // SplineROI sends ANNOTATION_MODIFIED during routine cached-stat
+    // recalculation and rendering. Only revoke EF if an editable handle
+    // actually changed or the source annotation was removed.
+    const revision = result.contourRevisions?.get(annotationId);
+    if (event.type !== Enums.Events.ANNOTATION_REMOVED &&
+        revision && getLVSimpsonAnnotationRevision(annotationId) === revision) {
+      return;
+    }
     // A changed or removed source contour must never leave a capturable EF.
     explicitLVSimpsonResult = null;
     reviewedLVSimpsonEF = null;
@@ -9386,10 +9396,27 @@ function commandsModule({
           });
           return;
         }
+        const contourRevisions = new Map<string, string>();
+        for (const component of resolved.composite?.components || []) {
+          const annotationId = String(component.annotationId || '');
+          const revision = annotationId && getLVSimpsonAnnotationRevision(annotationId);
+          if (revision) contourRevisions.set(annotationId, revision);
+        }
+        if (contourRevisions.size !== 4) {
+          renderLVSimpsonWorkflowPanel({
+            measurements: measurementsForCalculation,
+            resultText: 'EF calculation unavailable',
+            warnings: ['The live source contours could not be verified. Reopen the EF workflow and recalculate.'],
+            onCalculate: calculateEF,
+            onCancel: hideLVSimpsonWorkflowPanel,
+          });
+          return;
+        }
         explicitLVSimpsonResult = {
           studyInstanceId: currentStudyId,
           composite: structuredClone(resolved.composite),
           result: structuredClone(resolved.result),
+          contourRevisions,
         };
         reviewedLVSimpsonEF = { studyInstanceId: currentStudyId, value: resolved.composite.value };
         renderLVSimpsonWorkflowPanel({
