@@ -8615,6 +8615,55 @@ function commandsModule({
             allEFSlotsPresent: LV_TRACE_REQUIRED_SLOTS.every(slot => bySlot.get(slot)?.length === 1),
             saveTargetPresent: Boolean(stored?.saveTarget),
           });
+          // Initial study hydration is deliberately panel-only. On explicit EF
+          // question opening, recover each saved source on its own DICOM frame
+          // via the existing saved-annotation navigation/hydration service.
+          // Never mistake a persisted quiz answer for a persisted contour.
+          const slotRestoration: Record<string, string> = {};
+          if (efSaved.length > 0) {
+            for (const slot of LV_TRACE_REQUIRED_SLOTS) {
+              if (isWorkflowCancelled()) return null;
+              const candidates = bySlot.get(slot) || [];
+              if (candidates.length !== 1) {
+                slotRestoration[slot] = candidates.length ? 'duplicate' : 'missing';
+                continue;
+              }
+              const savedContour = candidates[0];
+              const savedId = getMeasurementAnnotationId(savedContour);
+              if (!savedId) {
+                slotRestoration[slot] = 'missing-id';
+                continue;
+              }
+              const existing = cornerstoneTools.annotation.state.getAnnotation?.(savedId);
+              if (!existing) {
+                const outcome = await actions.jumpToSavedViewerAnnotation({
+                  annotation: savedContour,
+                  selectAnnotation: false,
+                  runDelayedDisplayRefresh: false,
+                });
+                if (outcome?.ok !== true) {
+                  slotRestoration[slot] = outcome?.reason || 'hydration-failed';
+                  continue;
+                }
+              }
+              const restored = getCornerstoneVolumeMeasurementFallback(savedId);
+              if (!restored?.lvSimpson || getLVSimpsonSlotFromMeasurement(restored) !== slot) {
+                slotRestoration[slot] = 'missing-live-geometry';
+                continue;
+              }
+              upsertLVSimpsonSessionMeasurement({
+                ...restored,
+                lvSimpson: savedContour.lvSimpson || savedContour.measurements?.lvSimpson,
+                referenceStudyUID: savedContour.StudyInstanceUID || restored.referenceStudyUID,
+                referenceSeriesUID: savedContour.SeriesInstanceUID || restored.referenceSeriesUID,
+              });
+              slotRestoration[slot] = 'restored';
+            }
+            console.info('[LV EF saved-slot restoration]', {
+              restored: Object.values(slotRestoration).filter(value => value === 'restored').length,
+              slots: slotRestoration,
+            });
+          }
         } catch (error) {
           console.warn('[LV EF saved-slot audit] read failed', {
             errorType: error?.name || 'Error',
