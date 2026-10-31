@@ -1218,6 +1218,22 @@ function getSavedArrowAnnotateTextBox(annotation: any = {}) {
   return isPlainObject(annotation?.textBox) ? annotation.textBox : {};
 }
 
+// Volume measurements persist their clinical geometry as top-level metadata,
+// while ordinary annotations do not carry these fields. Hydration must restore
+// that metadata to Cornerstone's annotation data for the EF/LA measurement
+// mapper and calibrated calculator to recover the original slots.
+function getSavedVolumeContourMetadata(annotation: any = {}) {
+  const lvSimpson = annotation?.lvSimpson || annotation?.measurements?.lvSimpson;
+  const laVolume = annotation?.laVolume || annotation?.measurements?.laVolume;
+  if (lvSimpson?.measurementKind === 'lvSimpsonSlot') {
+    return { measurementKind: 'lvSimpsonSlot', lvSimpson: { ...lvSimpson } };
+  }
+  if (laVolume?.measurementKind === 'laVolumeSlot') {
+    return { measurementKind: 'laVolumeSlot', laVolume: { ...laVolume } };
+  }
+  return {};
+}
+
 function buildCornerstoneAnnotation(annotation, fallbackFrameOfReferenceUID = '') {
   const annotationUID = annotation.uid || annotation.annotationId;
   const referencedImageId = annotation.referencedImageId;
@@ -1246,6 +1262,7 @@ function buildCornerstoneAnnotation(annotation, fallbackFrameOfReferenceUID = ''
     annotation?.spectralDoppler || annotation?.measurements?.spectralDoppler || null;
   const data: any = {
     label: getViewportAnnotationLabel(annotation),
+    ...getSavedVolumeContourMetadata(annotation),
     ...(isSavedBowelCurvedLengthAnnotation(annotation)
       ? {
           measurementKind: BOWEL_CURVED_LENGTH_MEASUREMENT_KIND,
@@ -1386,6 +1403,7 @@ function patchHydratedAnnotationFromSaved({
     ...(target.data || {}),
     ...(fallback?.data || {}),
     label: getViewportAnnotationLabel(savedAnnotation),
+    ...getSavedVolumeContourMetadata(savedAnnotation),
     handles: {
       ...(target.data?.handles || {}),
       ...(fallback?.data?.handles || {}),
@@ -1616,6 +1634,12 @@ export function hydrateSavedViewerAnnotationForViewport({
     const targetAnnotation =
       csToolsAnnotation.state.getAnnotation?.(hydratedAnnotationUID) || toolHydratedAnnotation;
 
+    // ToolClass.hydrate may create a new Cornerstone annotation and omit
+    // AR-specific volume metadata. Reattach only the saved clinical geometry.
+    targetAnnotation.data = {
+      ...(targetAnnotation.data || {}),
+      ...getSavedVolumeContourMetadata(annotationToHydrate),
+    };
     patchContourCachedStatsFromSaved(
       targetAnnotation,
       annotationToHydrate,
