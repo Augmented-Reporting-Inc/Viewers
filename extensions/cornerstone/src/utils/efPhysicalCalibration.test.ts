@@ -168,7 +168,11 @@ describe('LV EF calibrated geometry', () => {
     ];
     expect(calculateLVSimpson(contours)?.status).not.toBe('complete');
     contours[0] = makeMeasurement('A4C_ED', 70, 190);
-    contours[0].points[3][0] += 2;
+    // The rendered polyline can legitimately differ from the original
+    // calibration within its interpolation tolerance. Production EF checks
+    // the live editable SplineROI handles, not the display approximation.
+    contours[0].lvSimpsonControlPoints = contours[0].points.map(point => [...point]);
+    contours[0].lvSimpsonControlPoints[3][0] += 2;
     expect(calculateLVSimpson(contours)?.status).not.toBe('complete');
   });
   test('accepts a densely resampled unchanged contour', () => {
