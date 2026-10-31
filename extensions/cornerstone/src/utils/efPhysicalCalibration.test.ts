@@ -1,6 +1,7 @@
 import { calibrateUSContourPoints } from './usRegionLengthCalibration';
 import { buildLVSimpsonContourFromHingeApex } from './lvSimpsonContour';
 import { calculateLVSimpson } from '../../../extension-ar-measurements/src/utils/lvSimpson';
+import { getSavedVolumeContourMetadata } from './savedVolumeContourMetadata';
 
 const imagePlane = {
   imagePositionPatient: [0, 0, 0],
@@ -46,6 +47,38 @@ function makeMeasurement(slot, halfWidth, height, calibrated = true) {
     },
   };
 }
+
+describe('LV EF saved annotation metadata', () => {
+  test('restores the exact calibrated Simpson slot metadata without generating new calibration', () => {
+    const geometry = {
+      measurementKind: 'lvSimpsonSlot',
+      slot: 'A4C_ED',
+      axisPointIndex: 3,
+      calibratedLongAxisLengthMM: 84.5,
+      originalContourPoints: [[0, 0, 0], [1, 2, 0]],
+    };
+    const restored = getSavedVolumeContourMetadata({
+      measurementKind: 'lvSimpsonSlot',
+      lvSimpson: geometry,
+    });
+    expect(restored.measurementKind).toBe('lvSimpsonSlot');
+    expect(restored.lvSimpson).toEqual(geometry);
+    expect(restored.lvSimpson).not.toBe(geometry);
+  });
+
+  test('does not mistake a generic spline or uncalibrated inferred slot for Simpson', () => {
+    expect(getSavedVolumeContourMetadata({ toolName: 'SplineROI', slot: 'A4C_ED' })).toEqual({});
+    expect(getSavedVolumeContourMetadata({ lvSimpson: { slot: 'A4C_ED' } })).toEqual({});
+  });
+
+  test('does not change other volume slot metadata', () => {
+    const laVolume = { measurementKind: 'laVolumeSlot', slot: 'A4C', longAxisLengthMM: 60 };
+    expect(getSavedVolumeContourMetadata({ laVolume })).toEqual({
+      measurementKind: 'laVolumeSlot',
+      laVolume,
+    });
+  });
+});
 
 describe('LV EF calibrated geometry', () => {
   // Independent analytic reference: a half-ellipsoid of length L and
