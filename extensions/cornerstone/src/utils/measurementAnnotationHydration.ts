@@ -1,4 +1,5 @@
 import { metaData } from '@cornerstonejs/core';
+import { getSavedVolumeContourMetadata } from './savedVolumeContourMetadata';
 import { annotation as csToolsAnnotation, ToolGroupManager } from '@cornerstonejs/tools';
 import * as cornerstoneTools from '@cornerstonejs/tools';
 import {
@@ -1246,6 +1247,7 @@ function buildCornerstoneAnnotation(annotation, fallbackFrameOfReferenceUID = ''
     annotation?.spectralDoppler || annotation?.measurements?.spectralDoppler || null;
   const data: any = {
     label: getViewportAnnotationLabel(annotation),
+    ...getSavedVolumeContourMetadata(annotation),
     ...(isSavedBowelCurvedLengthAnnotation(annotation)
       ? {
           measurementKind: BOWEL_CURVED_LENGTH_MEASUREMENT_KIND,
@@ -1386,6 +1388,7 @@ function patchHydratedAnnotationFromSaved({
     ...(target.data || {}),
     ...(fallback?.data || {}),
     label: getViewportAnnotationLabel(savedAnnotation),
+    ...getSavedVolumeContourMetadata(savedAnnotation),
     handles: {
       ...(target.data?.handles || {}),
       ...(fallback?.data?.handles || {}),
@@ -1616,6 +1619,12 @@ export function hydrateSavedViewerAnnotationForViewport({
     const targetAnnotation =
       csToolsAnnotation.state.getAnnotation?.(hydratedAnnotationUID) || toolHydratedAnnotation;
 
+    // ToolClass.hydrate may create a new Cornerstone annotation and omit
+    // AR-specific volume metadata. Reattach only the saved clinical geometry.
+    targetAnnotation.data = {
+      ...(targetAnnotation.data || {}),
+      ...getSavedVolumeContourMetadata(annotationToHydrate),
+    };
     patchContourCachedStatsFromSaved(
       targetAnnotation,
       annotationToHydrate,
