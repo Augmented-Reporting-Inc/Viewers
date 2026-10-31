@@ -1,4 +1,5 @@
 import { metaData } from '@cornerstonejs/core';
+import { getSavedVolumeContourMetadata } from './savedVolumeContourMetadata';
 import { annotation as csToolsAnnotation, ToolGroupManager } from '@cornerstonejs/tools';
 import * as cornerstoneTools from '@cornerstonejs/tools';
 import {
@@ -1216,22 +1217,6 @@ function getSavedArrowAnnotateText(annotation: any = {}) {
 
 function getSavedArrowAnnotateTextBox(annotation: any = {}) {
   return isPlainObject(annotation?.textBox) ? annotation.textBox : {};
-}
-
-// Volume measurements persist their clinical geometry as top-level metadata,
-// while ordinary annotations do not carry these fields. Hydration must restore
-// that metadata to Cornerstone's annotation data for the EF/LA measurement
-// mapper and calibrated calculator to recover the original slots.
-function getSavedVolumeContourMetadata(annotation: any = {}) {
-  const lvSimpson = annotation?.lvSimpson || annotation?.measurements?.lvSimpson;
-  const laVolume = annotation?.laVolume || annotation?.measurements?.laVolume;
-  if (lvSimpson?.measurementKind === 'lvSimpsonSlot') {
-    return { measurementKind: 'lvSimpsonSlot', lvSimpson: { ...lvSimpson } };
-  }
-  if (laVolume?.measurementKind === 'laVolumeSlot') {
-    return { measurementKind: 'laVolumeSlot', laVolume: { ...laVolume } };
-  }
-  return {};
 }
 
 function buildCornerstoneAnnotation(annotation, fallbackFrameOfReferenceUID = '') {
