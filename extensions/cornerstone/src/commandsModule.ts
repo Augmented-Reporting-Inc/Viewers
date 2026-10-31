@@ -8619,10 +8619,6 @@ function commandsModule({
           // question opening, recover each saved source on its own DICOM frame
           // via the existing saved-annotation navigation/hydration service.
           // Never mistake a persisted quiz answer for a persisted contour.
-          const localIds = new Set([
-            ...(measurementService.getMeasurements?.() || []),
-            ...getLVSimpsonSessionMeasurements(),
-          ].map(getMeasurementAnnotationId).filter(Boolean));
           const slotRestoration: Record<string, string> = {};
           if (efSaved.length > 0) {
             for (const slot of LV_TRACE_REQUIRED_SLOTS) {
@@ -8639,7 +8635,7 @@ function commandsModule({
                 continue;
               }
               const existing = cornerstoneTools.annotation.state.getAnnotation?.(savedId);
-              if (!existing && !localIds.has(savedId)) {
+              if (!existing) {
                 const outcome = await actions.jumpToSavedViewerAnnotation({
                   annotation: savedContour,
                   selectAnnotation: false,
@@ -8662,7 +8658,6 @@ function commandsModule({
                 referenceSeriesUID: savedContour.SeriesInstanceUID || restored.referenceSeriesUID,
               });
               slotRestoration[slot] = 'restored';
-              localIds.add(savedId);
             }
             console.info('[LV EF saved-slot restoration]', {
               restored: Object.values(slotRestoration).filter(value => value === 'restored').length,
