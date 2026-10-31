@@ -105,6 +105,16 @@ function makeCompleteStudyEF(studyId: string, widthScale = 1) {
 }
 
 describe('study-scoped educator/learner EF parity', () => {
+  it('rejects four complete slots when one lacks verified physical calibration', () => {
+    const measurements = makeCompleteStudyEF('study-a');
+    measurements[0].lvSimpson = {
+      ...measurements[0].lvSimpson,
+      calibratedContourPoints: null,
+      calibratedLongAxisLengthMM: null,
+    };
+    expect(resolveViewerQuizLVSimpsonForStudy('study-a', measurements)).toBeNull();
+  });
+
   it('returns matching computed and quiz values from the same source contours', () => {
     const snapshot = resolveViewerQuizLVSimpsonForStudy('study-a', makeCompleteStudyEF('study-a'));
     expect(snapshot).not.toBeNull();
