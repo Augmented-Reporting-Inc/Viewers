@@ -5826,6 +5826,25 @@ function hideLVSimpsonWorkflowPanel() {
 
 // The panel is mounted outside the viewport so changing the cine image/frame
 // cannot destroy the guidance. Progress is derived from actual measurements.
+// Keep the EF panel's selected-slot label synchronized with successful
+// authored-frame navigation. Do not rebuild the panel: that would discard
+// the current drawing instructions or calculated EF result.
+function updateLVSimpsonCurrentSlotLabel(slot: string) {
+  const panel = document.getElementById(LV_SIMPSON_PROGRESS_PANEL_ID);
+  if (!panel) return;
+  for (const rowLabel of panel.querySelectorAll<HTMLElement>('[data-lv-simpson-slot]')) {
+    const isCurrent = rowLabel.dataset.lvSimpsonSlot === slot;
+    const baseText = rowLabel.dataset.lvSimpsonLabel || '';
+    rowLabel.textContent = isCurrent ? `Current: ${baseText}` : baseText;
+    rowLabel.style.fontWeight = isCurrent ? '700' : '';
+    if (isCurrent) {
+      rowLabel.setAttribute('aria-current', 'true');
+    } else {
+      rowLabel.removeAttribute('aria-current');
+    }
+  }
+}
+
 function renderLVSimpsonWorkflowPanel({
   measurements = [],
   instruction = '',
@@ -5905,10 +5924,13 @@ function renderLVSimpsonWorkflowPanel({
     const canNavigateSlot = !!lvSimpsonPanelController?.canNavigateSlot?.(slot);
     const rowLabel = document.createElement(canNavigateSlot ? 'button' : 'span');
     rowLabel.textContent = `${measurement ? '✓' : '○'}  ${displayName}${detail}`;
+    rowLabel.dataset.lvSimpsonSlot = slot;
+    rowLabel.dataset.lvSimpsonLabel = rowLabel.textContent;
     rowLabel.style.flex = '1 1 100%';
     if (lvSimpsonPanelController?.activeSlot === slot) {
       rowLabel.style.fontWeight = '700';
-      rowLabel.textContent = `Current: ${rowLabel.textContent}`;
+      rowLabel.textContent = `Current: ${rowLabel.dataset.lvSimpsonLabel}`;
+      rowLabel.setAttribute('aria-current', 'true');
     }
     if (canNavigateSlot) {
       (rowLabel as HTMLButtonElement).type = 'button';
@@ -8849,7 +8871,13 @@ function commandsModule({
                 type: 'warning',
                 duration: 6000,
               });
+              return;
             }
+            // Only mark the slot current after the requested frame is actually
+            // displayed. Keep instructions/results intact and avoid a rerender.
+            if (!isActiveStudy() || isWorkflowCancelled()) return;
+            this.activeSlot = slot;
+            updateLVSimpsonCurrentSlotLabel(slot);
           },
           onDrawSlot(slot: string, method: string = 'freehand') {
             if (!LV_TRACE_REQUIRED_SLOTS.includes(slot) || !isActiveStudy()) return;
