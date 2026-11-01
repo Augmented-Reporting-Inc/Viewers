@@ -1,7 +1,7 @@
 import { calibrateUSContourPoints } from './usRegionLengthCalibration';
 import { buildLVSimpsonContourFromHingeApex } from './lvSimpsonContour';
 import { calculateLVSimpson } from '../../../extension-ar-measurements/src/utils/lvSimpson';
-import { getSavedVolumeContourMetadata } from './savedVolumeContourMetadata';
+import { getSavedVolumeContourMetadata, getSavedLVSimpsonControlPoints } from './savedVolumeContourMetadata';
 
 const imagePlane = {
   imagePositionPatient: [0, 0, 0],
@@ -49,6 +49,43 @@ function makeMeasurement(slot, halfWidth, height, calibrated = true) {
 }
 
 describe('LV EF saved annotation metadata', () => {
+  test('rehydrates captured sparse EF handles, not 21x sampled display spline', () => {
+    const originalContourPoints = Array.from({ length: 70 }, (_, index) =>
+      [index / 10, 3 + index / 20, 0]
+    );
+    const displayedPolyline = Array.from({ length: 1471 }, (_, index) =>
+      [index / 210, 3 + index / 420, 0]
+    );
+    const saved = {
+      toolName: 'SplineROI',
+      points: displayedPolyline,
+      lvSimpson: { measurementKind: 'lvSimpsonSlot', slot: 'A2C_ES', originalContourPoints },
+    };
+    const handles = getSavedLVSimpsonControlPoints(saved);
+    expect(handles).toHaveLength(70);
+    expect(handles).toEqual(originalContourPoints);
+    expect(handles).not.toBe(originalContourPoints);
+    handles[0][0] += 1;
+    expect(saved.lvSimpson.originalContourPoints[0][0]).toBe(0);
+    expect(saved.points).toHaveLength(1471);
+  });
+
+  test('does not invent calibrated editable handles for old or invalid saved EF', () => {
+    const incomplete = {
+      lvSimpson: { measurementKind: 'lvSimpsonSlot', slot: 'A4C_ED' },
+      points: Array.from({ length: 1260 }, (_, index) => [index, 0, 0]),
+    };
+    expect(getSavedLVSimpsonControlPoints(incomplete)).toBeNull();
+    expect(getSavedLVSimpsonControlPoints({
+      ...incomplete,
+      lvSimpson: { ...incomplete.lvSimpson, originalContourPoints: [[0, 1, NaN]] },
+    })).toBeNull();
+    expect(getSavedLVSimpsonControlPoints({
+      toolName: 'SplineROI',
+      originalContourPoints: Array.from({ length: 10 }, () => [1, 2, 0]),
+    })).toBeNull();
+  });
+
   test('restores the exact calibrated Simpson slot metadata without generating new calibration', () => {
     const geometry = {
       measurementKind: 'lvSimpsonSlot',
