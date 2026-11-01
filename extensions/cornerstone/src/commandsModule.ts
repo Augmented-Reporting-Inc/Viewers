@@ -11740,13 +11740,12 @@ function commandsModule({
         if (activeLVSimpsonWorkflowSessionId) {
           clearLVSimpsonWorkflowIfCurrent(activeLVSimpsonWorkflowSessionId);
         }
-        // The authored learner sequence always opens A4C_ED first, even if
-        // the study has existing contour measurements from an earlier session.
-        // Unconfigured/manual EF retains its established next-missing-slot flow.
-        const firstAuthoredEFFrame = getEFContourFrameTarget(efContourTargets, 'A4C_ED');
+        // Opening the EF question must *not* explicitly request A4C ED:
+        // the workflow first restores any saved contours and then chooses
+        // review mode (4/4 complete) or the next missing slot. Explicit
+        // replacement still comes from each row's Freehand/Axis+Apex action.
         // Duplicate focus/click events are suppressed by Case Questions.
         void actions.startLVSimpsonEFWorkflow({
-          slot: firstAuthoredEFFrame ? 'A4C_ED' : '',
           efContourTargets,
           questionKey,
         }).catch(error =>
