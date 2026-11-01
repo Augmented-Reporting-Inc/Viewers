@@ -1,5 +1,5 @@
 import { metaData } from '@cornerstonejs/core';
-import { getSavedVolumeContourMetadata } from './savedVolumeContourMetadata';
+import { getSavedVolumeContourMetadata, getSavedLVSimpsonControlPoints } from './savedVolumeContourMetadata';
 import { annotation as csToolsAnnotation, ToolGroupManager } from '@cornerstonejs/tools';
 import * as cornerstoneTools from '@cornerstonejs/tools';
 import {
@@ -1116,6 +1116,12 @@ function getSavedContourClosed(annotation: any = {}) {
 }
 
 function getSavedContourHandlePoints(annotation: any = {}, points = []) {
+  // A saved EF contour stores both the dense spline used for display and the
+  // sparse, calibrated user trace. Never turn the display spline into editable
+  // handles: it would invalidate a perfectly unchanged EF on reload.
+  const savedEFControls = getSavedLVSimpsonControlPoints(annotation);
+  if (savedEFControls) return savedEFControls;
+
   const clonedPoints = cloneAnnotationPoints(points);
 
   if (getSavedContourClosed(annotation)) {
