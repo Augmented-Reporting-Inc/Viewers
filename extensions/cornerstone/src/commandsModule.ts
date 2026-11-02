@@ -57,6 +57,7 @@ import {
   hydrateSavedViewerAnnotationForViewport,
   hydrateMeasurementAnnotationsForActiveStudy as hydrateMeasurementAnnotationsForActiveStudyUtil,
 } from './utils/measurementAnnotationHydration';
+import { getTimedLearnerViewerTarget, assertTimedLearnerViewerDocument } from './utils/timedLearnerViewerTarget';
 import { buildFormApiFetchOptions, buildFormApiUrl } from './utils/formApi';
 import { callMultilineTextDialog } from './utils/callMultilineTextDialog';
 import {
@@ -7441,6 +7442,12 @@ function rememberClinicalViewerSeriesDoc(seriesDoc: any = null) {
 
 async function resolveViewerReadSeriesDoc(servicesManager, { allowBaseFallback = true } = {}) {
   const saveTarget = getArViewerSaveTargetFromUrl();
+  const timedTarget = getTimedLearnerViewerTarget(getViewerUrlSearchParams());
+  if (timedTarget) {
+    const seriesDoc = await fetchSeriesDocById(timedTarget.learnerSeriesId);
+    assertTimedLearnerViewerDocument(seriesDoc, timedTarget);
+    return seriesDoc;
+  }
 
   if (isClinicalReportMeasurementsSaveTarget(saveTarget)) {
     return fetchClinicalViewerSeriesDocCached(saveTarget.seriesId);
@@ -7461,6 +7468,22 @@ async function resolveViewerReadSeriesDoc(servicesManager, { allowBaseFallback =
 
 async function resolveViewerSaveSeriesDoc({ servicesManager, currentSeriesDoc }) {
   const saveTarget = getArViewerSaveTargetFromUrl();
+  const timedTarget = getTimedLearnerViewerTarget(getViewerUrlSearchParams());
+  if (timedTarget) {
+    if (!isLearnerCopyOnSaveTarget(saveTarget) ||
+        String(saveTarget.measurementWorkflowRole || '').toLowerCase() !== 'learner') {
+      throw new Error('Timed measurements require an authenticated learner-copy workflow.');
+    }
+    // Verify active DICOM identity, authenticated learner ownership and
+    // the still-active server deadline before preparing a timed save.
+    // The later FormAPI PUT independently guards expiration atomically.
+    const seriesDoc = await ensureSeriesDocForActiveStudy(servicesManager);
+    assertTimedLearnerViewerDocument(seriesDoc, timedTarget);
+    if (seriesDoc?.educationAttempt?.timing?.enabled !== true) {
+      throw new Error('Timed viewer cannot save to an attempt without a server deadline.');
+    }
+    return seriesDoc;
+  }
 
   // Report-first attempts must use the exact report-selected learner copy.
   // Never fall through to a viewer-owned ensure-learner-copy operation.
@@ -14489,6 +14512,8 @@ function commandsModule({
             servicesManager,
             currentSeriesDoc: activeSeriesDoc,
           });
+          const timedTarget = getTimedLearnerViewerTarget(getViewerUrlSearchParams());
+          assertTimedLearnerViewerDocument(seriesDoc, timedTarget);
 
           if (
             isLearnerCopyOnSaveTarget(saveTarget) &&
@@ -15010,6 +15035,11 @@ function commandsModule({
             }
 
             const updatedSeries = await response.json().catch(() => null);
+            if (timedTarget) {
+              // A timed save is acknowledged only by the exact persisted learner attempt.
+              // The FormAPI write predicate independently enforces the deadline.
+              assertTimedLearnerViewerDocument(updatedSeries, timedTarget);
+            }
             if (updatedSeries?._id) {
               savedSeriesDoc = updatedSeries;
             }
@@ -15109,12 +15139,16 @@ function commandsModule({
             error
           );
 
-          uiNotificationService.show({
-            title: 'AR Measurements & Annotations',
-            message: `Save failed: ${error?.message || error}`,
-            type: 'error',
-            duration: 5000,
-          });
+          // Timed draft autosave reports failure inline in the panel.
+          // Preserve the existing notification for explicit manual saves.
+          if (!suppressSuccessNotification) {
+            uiNotificationService.show({
+              title: 'AR Measurements & Annotations',
+              message: `Save failed: ${error?.message || error}`,
+              type: 'error',
+              duration: 5000,
+            });
+          }
 
           throw error;
         }

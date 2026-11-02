@@ -8,6 +8,10 @@ import {
 } from './measurementAnnotations';
 import { buildFormApiFetchOptions, buildFormApiUrl } from './formApi';
 import {
+  getTimedLearnerViewerTarget,
+  assertTimedLearnerViewerDocument,
+} from './timedLearnerViewerTarget';
+import {
   SPECTRAL_DOPPLER_MEASUREMENT_KIND,
   buildSpectralDopplerDisplayText,
 } from './spectralDoppler';
@@ -242,6 +246,11 @@ function getViewerUrlSearchParams(): URLSearchParams {
 
 function getExplicitSeriesIdsFromViewerUrl(): string[] {
   const qs = getViewerUrlSearchParams();
+  const timedTarget = getTimedLearnerViewerTarget(qs);
+  if (timedTarget) {
+    // No base, imaging-identity or shared-container fallback.
+    return [timedTarget.learnerSeriesId];
+  }
   const seen = new Set<string>();
 
   return [
@@ -277,6 +286,7 @@ async function fetchSeriesDocById(seriesId: string) {
 }
 
 async function fetchSeriesDocFromExplicitViewerContext() {
+  const timedTarget = getTimedLearnerViewerTarget(getViewerUrlSearchParams());
   const explicitSeriesIds = getExplicitSeriesIdsFromViewerUrl();
   const cacheKey = getExplicitSeriesDocCacheKey(explicitSeriesIds);
 
@@ -294,6 +304,7 @@ async function fetchSeriesDocFromExplicitViewerContext() {
       const explicitResult = await fetchSeriesDocById(explicitSeriesId);
 
       if (explicitResult.ok) {
+        assertTimedLearnerViewerDocument(explicitResult.data, timedTarget);
         console.info('[MeasurementAnnotations] resolved by explicit viewer series id', {
           seriesId: explicitResult.data?._id,
           requestedSeriesId: explicitSeriesId,
@@ -307,8 +318,16 @@ async function fetchSeriesDocFromExplicitViewerContext() {
         requestedSeriesId: explicitSeriesId,
         status: explicitResult.status,
       });
+      if (timedTarget) {
+        throw new Error(
+          `Timed learner attempt could not be loaded: ${explicitResult.status}`
+        );
+      }
     }
 
+    if (timedTarget) {
+      throw new Error('Timed learner attempt cannot fall back to a base Series.');
+    }
     return null;
   })();
 
@@ -374,6 +393,7 @@ export async function ensureSeriesDocForActiveStudy(
     throw new Error('Cannot determine active study or series.');
   }
 
+  const timedTarget = getTimedLearnerViewerTarget(getViewerUrlSearchParams());
   const response = await fetch(
     buildFormApiUrl('series/viewer-measurements/ensure-series'),
     buildFormApiFetchOptions({
@@ -382,6 +402,7 @@ export async function ensureSeriesDocForActiveStudy(
         StudyInstanceUID: studyInstanceId,
         SeriesInstanceUID: seriesInstanceId,
         measurementDomain: normalizeViewerMeasurementContainerDomain(domain),
+        ...(timedTarget || {}),
       }),
     })
   );
@@ -397,8 +418,12 @@ export async function ensureSeriesDocForActiveStudy(
   const seriesDoc = result?.series || result;
 
   if (!seriesDoc?._id) {
-    throw new Error('Viewer measurement container response did not include a series document.');
+    throw new Error('Viewer measurement persistence response did not include a series document.');
   }
+  if (timedTarget && result?.persistenceTarget !== 'learnerAttempt') {
+    throw new Error('Timed viewer refused an imaging-wide measurement container fallback.');
+  }
+  assertTimedLearnerViewerDocument(seriesDoc, timedTarget);
 
   console.info('[MeasurementAnnotations] viewer measurement container resolved', {
     seriesId: seriesDoc._id,
