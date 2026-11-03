@@ -67,3 +67,35 @@ export function isSavedLVSimpsonImageMatch(annotation: any = {}, imageId = '') {
   return savedImage.sop === candidateImage.sop &&
     savedImage.frameNumber === candidateImage.frameNumber;
 }
+
+
+/**
+ * Resolve the image used by actual viewer annotation hydration, not merely a
+ * display label. Do not trust a same-image batch override or a stale viewport
+ * frame for saved EF. The caller can treat failure as a non-destructive skip.
+ */
+export function resolveSavedLVSimpsonHydrationImage({
+  annotation = {},
+  referencedImageIdOverride = '',
+  currentImageId = '',
+}: {
+  annotation?: any;
+  referencedImageIdOverride?: string;
+  currentImageId?: string;
+} = {}) {
+  const referencedImageId = String(
+    referencedImageIdOverride || annotation?.referencedImageId || ''
+  ).trim();
+  const savedVolume = getSavedVolumeContourMetadata(annotation);
+  if (savedVolume.measurementKind !== 'lvSimpsonSlot') {
+    return { ok: true, referencedImageId };
+  }
+  if (!isSavedLVSimpsonImageMatch(annotation, referencedImageId)) {
+    return { ok: false, referencedImageId: '', reason: 'saved-reference-mismatch' };
+  }
+  if (currentImageId &&
+      !isSavedLVSimpsonImageMatch(annotation, String(currentImageId))) {
+    return { ok: false, referencedImageId: '', reason: 'viewport-frame-mismatch' };
+  }
+  return { ok: true, referencedImageId };
+}
