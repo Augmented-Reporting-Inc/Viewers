@@ -28,3 +28,42 @@ export function getSavedLVSimpsonControlPoints(annotation: any = {}) {
   }
   return points.map(point => [...point]);
 }
+
+
+/**
+ * DICOM frame identity must survive EF annotation hydration. A stack viewport
+ * can reuse a single FrameOfReferenceUID across every frame; that group key
+ * does not prove an EF contour belongs on the currently displayed image.
+ *
+ * Fail closed for LV Simpson only. Other measurement domains retain their
+ * existing, independently implemented frame/view-reference behaviour.
+ */
+export function isSavedLVSimpsonImageMatch(annotation: any = {}, imageId = '') {
+  const geometry = annotation?.lvSimpson || annotation?.measurements?.lvSimpson;
+  if (geometry?.measurementKind !== 'lvSimpsonSlot') return true;
+
+  const parseImage = (value: any) => {
+    const match = String(value || '').match(
+      /\/instances\/([^/?#]+)\/frames\/(\d+)(?:[/?#]|$)/i
+    );
+    if (!match) return null;
+    const frameNumber = Number(match[2]);
+    if (!Number.isSafeInteger(frameNumber) || frameNumber < 1) return null;
+    return { sop: decodeURIComponent(match[1]), frameNumber };
+  };
+
+  const savedImage = parseImage(annotation?.referencedImageId);
+  const candidateImage = parseImage(imageId);
+  // Do not substitute the current viewport's frame when either side lacks
+  // the DICOM instance/frame locator needed to establish identity.
+  if (!savedImage || !candidateImage) return false;
+
+  const explicitSOP = String(annotation?.SOPInstanceUID || '').trim();
+  const explicitFrame = Number(annotation?.frameNumber);
+  if (explicitSOP && explicitSOP !== savedImage.sop) return false;
+  if (Number.isSafeInteger(explicitFrame) && explicitFrame > 0 &&
+      explicitFrame !== savedImage.frameNumber) return false;
+
+  return savedImage.sop === candidateImage.sop &&
+    savedImage.frameNumber === candidateImage.frameNumber;
+}
