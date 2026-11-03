@@ -1,5 +1,5 @@
 import { metaData } from '@cornerstonejs/core';
-import { getSavedVolumeContourMetadata, getSavedLVSimpsonControlPoints } from './savedVolumeContourMetadata';
+import { getSavedVolumeContourMetadata, getSavedLVSimpsonControlPoints, isSavedLVSimpsonImageMatch } from './savedVolumeContourMetadata';
 import { annotation as csToolsAnnotation, ToolGroupManager } from '@cornerstonejs/tools';
 import * as cornerstoneTools from '@cornerstonejs/tools';
 import {
@@ -1531,15 +1531,38 @@ export function hydrateSavedViewerAnnotationForViewport({
   selectAnnotation?: boolean;
 }) {
   const viewportCamera = viewport?.getCamera?.() || {};
+  const savedLVSimpson = getSavedVolumeContourMetadata(annotation).measurementKind === 'lvSimpsonSlot';
+  const currentImageId = String(viewport?.getCurrentImageId?.() || '').trim();
+  const resolvedReferenceImageId = String(
+    referencedImageIdOverride || annotation?.referencedImageId || ''
+  ).trim();
+
+  // LV Simpson annotations cannot be safely shown on a different cine frame.
+  // A valid FrameOfReferenceUID alone is insufficient for multiframe US.
+  // In particular, reject the image override used by same-image batch review
+  // when it points to another EF slot's source SOP/frame.
+  if (savedLVSimpson &&
+      (!isSavedLVSimpsonImageMatch(annotation, resolvedReferenceImageId) ||
+       (currentImageId && !isSavedLVSimpsonImageMatch(annotation, currentImageId)))) {
+    console.warn('[LV EF] refused mismatched saved contour image/frame hydration', {
+      annotationId: annotation?.annotationId || annotation?.uid || '',
+      savedSOPInstanceUID: annotation?.SOPInstanceUID || '',
+      savedFrameNumber: annotation?.frameNumber || null,
+    });
+    return null;
+  }
+
   const annotationPoints = cloneAnnotationPoints(annotation?.points);
   const isSpectralDoppler = isSavedSpectralDopplerAnnotation(annotation);
   const isUltrasoundDirectional = isSavedUltrasoundDirectionalAnnotation(annotation);
   const isBowelCurvedLength = isSavedBowelCurvedLengthAnnotation(annotation);
   const useCurrentViewportAnnotationGroup =
     isSpectralDoppler || isUltrasoundDirectional || isBowelCurvedLength;
-  const viewportViewReference = useCurrentViewportAnnotationGroup
-    ? getViewportViewReferenceMetadata(viewport, annotationPoints)
-    : {};
+  const viewportViewReference = savedLVSimpson
+    ? getViewportViewReferenceMetadata(viewport)
+    : useCurrentViewportAnnotationGroup
+      ? getViewportViewReferenceMetadata(viewport, annotationPoints)
+      : {};
   const viewportAnnotationGroupKey = useCurrentViewportAnnotationGroup
     ? getViewportAnnotationGroupKey(viewport)
     : '';
@@ -1568,7 +1591,7 @@ export function hydrateSavedViewerAnnotationForViewport({
           viewportViewReference?.FrameOfReferenceUID ||
           fallbackFrameOfReferenceUID ||
           '',
-    referencedImageId: referencedImageIdOverride || annotation?.referencedImageId,
+    referencedImageId: resolvedReferenceImageId,
     points: annotationPoints,
     viewPlaneNormal: isUltrasoundDirectional
       ? cloneSavedAnnotationMetadataVector(viewportCamera.viewPlaneNormal) ||
