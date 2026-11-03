@@ -1,5 +1,5 @@
 import { metaData } from '@cornerstonejs/core';
-import { getSavedVolumeContourMetadata, getSavedLVSimpsonControlPoints } from './savedVolumeContourMetadata';
+import { getSavedVolumeContourMetadata, getSavedLVSimpsonControlPoints, resolveSavedLVSimpsonHydrationImage } from './savedVolumeContourMetadata';
 import { annotation as csToolsAnnotation, ToolGroupManager } from '@cornerstonejs/tools';
 import * as cornerstoneTools from '@cornerstonejs/tools';
 import {
@@ -1531,15 +1531,32 @@ export function hydrateSavedViewerAnnotationForViewport({
   selectAnnotation?: boolean;
 }) {
   const viewportCamera = viewport?.getCamera?.() || {};
+  const savedLVSimpson = getSavedVolumeContourMetadata(annotation).measurementKind === 'lvSimpsonSlot';
+  const hydrationImage = resolveSavedLVSimpsonHydrationImage({
+    annotation,
+    referencedImageIdOverride,
+    currentImageId: String(viewport?.getCurrentImageId?.() || '').trim(),
+  });
+  if (!hydrationImage.ok) {
+    console.warn('[LV EF] refused mismatched saved contour image/frame hydration', {
+      annotationId: annotation?.annotationId || annotation?.uid || '',
+      reason: hydrationImage.reason,
+    });
+    return null;
+  }
+  const resolvedReferenceImageId = hydrationImage.referencedImageId;
+
   const annotationPoints = cloneAnnotationPoints(annotation?.points);
   const isSpectralDoppler = isSavedSpectralDopplerAnnotation(annotation);
   const isUltrasoundDirectional = isSavedUltrasoundDirectionalAnnotation(annotation);
   const isBowelCurvedLength = isSavedBowelCurvedLengthAnnotation(annotation);
   const useCurrentViewportAnnotationGroup =
     isSpectralDoppler || isUltrasoundDirectional || isBowelCurvedLength;
-  const viewportViewReference = useCurrentViewportAnnotationGroup
-    ? getViewportViewReferenceMetadata(viewport, annotationPoints)
-    : {};
+  const viewportViewReference = savedLVSimpson
+    ? getViewportViewReferenceMetadata(viewport)
+    : useCurrentViewportAnnotationGroup
+      ? getViewportViewReferenceMetadata(viewport, annotationPoints)
+      : {};
   const viewportAnnotationGroupKey = useCurrentViewportAnnotationGroup
     ? getViewportAnnotationGroupKey(viewport)
     : '';
@@ -1568,7 +1585,7 @@ export function hydrateSavedViewerAnnotationForViewport({
           viewportViewReference?.FrameOfReferenceUID ||
           fallbackFrameOfReferenceUID ||
           '',
-    referencedImageId: referencedImageIdOverride || annotation?.referencedImageId,
+    referencedImageId: resolvedReferenceImageId,
     points: annotationPoints,
     viewPlaneNormal: isUltrasoundDirectional
       ? cloneSavedAnnotationMetadataVector(viewportCamera.viewPlaneNormal) ||

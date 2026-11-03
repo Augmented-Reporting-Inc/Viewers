@@ -1,7 +1,7 @@
 import { calibrateUSContourPoints } from './usRegionLengthCalibration';
 import { buildLVSimpsonContourFromHingeApex } from './lvSimpsonContour';
 import { calculateLVSimpson } from '../../../extension-ar-measurements/src/utils/lvSimpson';
-import { getSavedVolumeContourMetadata, getSavedLVSimpsonControlPoints } from './savedVolumeContourMetadata';
+import { getSavedVolumeContourMetadata, getSavedLVSimpsonControlPoints, isSavedLVSimpsonImageMatch, resolveSavedLVSimpsonHydrationImage } from './savedVolumeContourMetadata';
 
 const imagePlane = {
   imagePositionPatient: [0, 0, 0],
@@ -47,6 +47,140 @@ function makeMeasurement(slot, halfWidth, height, calibrated = true) {
     },
   };
 }
+
+describe('saved LV Simpson DICOM image/frame identity', () => {
+  const image = (sop: string, frame: number) =>
+    `wadors:/orthanc/dicom-web/studies/study/series/series/instances/${sop}/frames/${frame}`;
+  const saved = {
+    SOPInstanceUID: 'sop-a',
+    frameNumber: 4,
+    referencedImageId: image('sop-a', 4),
+    lvSimpson: { measurementKind: 'lvSimpsonSlot', slot: 'A4C_ED' },
+  };
+
+  test('accepts loader/proxy differences but never a different cine frame or SOP', () => {
+    expect(isSavedLVSimpsonImageMatch(saved, image('sop-a', 4))).toBe(true);
+    expect(isSavedLVSimpsonImageMatch(saved, image('sop-a', 8))).toBe(false);
+    expect(isSavedLVSimpsonImageMatch(saved, image('sop-b', 4))).toBe(false);
+    expect(isSavedLVSimpsonImageMatch(saved, image('sop-b', 14))).toBe(false);
+    expect(isSavedLVSimpsonImageMatch(saved,
+      'dicomweb:https://other-host/dicom-web/studies/study/series/series/instances/sop-a/frames/4'
+    )).toBe(true);
+  });
+
+  test('validates all four slots across two instances and four frames', () => {
+    const slots = [
+      ['A4C_ED', 'sop-a', 4],
+      ['A4C_ES', 'sop-a', 8],
+      ['A2C_ED', 'sop-b', 14],
+      ['A2C_ES', 'sop-b', 19],
+    ] as const;
+    const contours = slots.map(([slot, sop, frameNumber]) => ({
+      SOPInstanceUID: sop,
+      frameNumber,
+      referencedImageId: image(sop, frameNumber),
+      lvSimpson: { measurementKind: 'lvSimpsonSlot', slot },
+    }));
+    contours.forEach((contour, i) =>
+      contours.forEach((other, j) =>
+        expect(isSavedLVSimpsonImageMatch(contour, other.referencedImageId)).toBe(i === j)
+      )
+    );
+  });
+
+  test('rejects missing, ambiguous, or contradictory saved references', () => {
+    expect(isSavedLVSimpsonImageMatch(saved, '')).toBe(false);
+    expect(isSavedLVSimpsonImageMatch(saved, 'imageId:unresolved')).toBe(false);
+    expect(isSavedLVSimpsonImageMatch({ ...saved, frameNumber: 8 }, image('sop-a', 4))).toBe(false);
+    expect(isSavedLVSimpsonImageMatch({ ...saved, SOPInstanceUID: 'sop-b' }, image('sop-a', 4))).toBe(false);
+    expect(isSavedLVSimpsonImageMatch({ ...saved, referencedImageId: '' }, image('sop-a', 4))).toBe(false);
+    expect(isSavedLVSimpsonImageMatch({
+      referencedImageId: image('sop-a', 4), toolName: 'Length',
+    }, image('sop-b', 14))).toBe(true); // non-EF workflows are unchanged
+  });
+});
+
+describe('LV Simpson hydration target regression', () => {
+  const frameImage = (sop: string, frame: number) =>
+    `wadors:/orthanc/dicom-web/studies/study/series/series/instances/${sop}/frames/${frame}`;
+  const cases = [
+    { slot: 'A4C_ED', sop: 'sop-a', frame: 4 },
+    { slot: 'A4C_ES', sop: 'sop-a', frame: 8 },
+    { slot: 'A2C_ED', sop: 'sop-b', frame: 14 },
+    { slot: 'A2C_ES', sop: 'sop-b', frame: 19 },
+  ];
+
+  test('a complete four-contour session resolves only each original frame', () => {
+    const saved = cases.map(({ slot, sop, frame }) => ({
+      annotationId: slot,
+      SOPInstanceUID: sop,
+      frameNumber: frame,
+      referencedImageId: frameImage(sop, frame),
+      lvSimpson: {
+        measurementKind: 'lvSimpsonSlot',
+        slot,
+        originalContourPoints: Array.from({ length: 8 }, (_, index) => [index, index * 2, 0]),
+        calibratedContourPoints: Array.from({ length: 8 }, (_, index) => [index * 0.1, index * 0.2, 0]),
+        calibratedLongAxisLengthMM: 82.5,
+      },
+    }));
+    for (const contour of saved) {
+      const original = JSON.parse(JSON.stringify(contour));
+      const valid = resolveSavedLVSimpsonHydrationImage({
+        annotation: contour,
+        currentImageId: contour.referencedImageId,
+      });
+      expect(valid).toEqual({ ok: true, referencedImageId: contour.referencedImageId });
+      const restored = getSavedVolumeContourMetadata(contour).lvSimpson;
+      expect(restored.originalContourPoints).toEqual(contour.lvSimpson.originalContourPoints);
+      expect(restored.calibratedContourPoints).toEqual(contour.lvSimpson.calibratedContourPoints);
+      expect(restored.calibratedLongAxisLengthMM).toBe(82.5);
+      expect(contour).toEqual(original);
+      for (const other of saved) {
+        if (other.annotationId === contour.annotationId) continue;
+        expect(resolveSavedLVSimpsonHydrationImage({
+          annotation: contour,
+          referencedImageIdOverride: other.referencedImageId,
+          currentImageId: other.referencedImageId,
+        })).toEqual({
+          ok: false,
+          referencedImageId: '',
+          reason: 'saved-reference-mismatch',
+        });
+        expect(resolveSavedLVSimpsonHydrationImage({
+          annotation: contour,
+          currentImageId: other.referencedImageId,
+        })).toEqual({
+          ok: false,
+          referencedImageId: '',
+          reason: 'viewport-frame-mismatch',
+        });
+      }
+    }
+  });
+
+  test('rejects ambiguous EF target and retains non-EF hydration behavior', () => {
+    const saved = {
+      referencedImageId: frameImage('sop-a', 4),
+      SOPInstanceUID: 'sop-a',
+      frameNumber: 4,
+      lvSimpson: { measurementKind: 'lvSimpsonSlot' },
+    };
+    expect(resolveSavedLVSimpsonHydrationImage({
+      annotation: saved,
+      currentImageId: 'unknown:image',
+    }).ok).toBe(false);
+    expect(resolveSavedLVSimpsonHydrationImage({
+      annotation: { ...saved, referencedImageId: '' },
+      currentImageId: frameImage('sop-a', 4),
+    }).ok).toBe(false);
+    expect(resolveSavedLVSimpsonHydrationImage({
+      annotation: { toolName: 'Length', referencedImageId: frameImage('sop-a', 4) },
+      referencedImageIdOverride: frameImage('sop-b', 19),
+      currentImageId: frameImage('sop-a', 4),
+    })).toEqual({ ok: true, referencedImageId: frameImage('sop-b', 19) });
+  });
+});
 
 describe('LV EF saved annotation metadata', () => {
   test('rehydrates captured sparse EF handles, not 21x sampled display spline', () => {

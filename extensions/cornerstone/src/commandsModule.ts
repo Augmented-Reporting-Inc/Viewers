@@ -57,6 +57,7 @@ import {
   hydrateSavedViewerAnnotationForViewport,
   hydrateMeasurementAnnotationsForActiveStudy as hydrateMeasurementAnnotationsForActiveStudyUtil,
 } from './utils/measurementAnnotationHydration';
+import { isSavedLVSimpsonImageMatch } from './utils/savedVolumeContourMetadata';
 import { buildFormApiFetchOptions, buildFormApiUrl } from './utils/formApi';
 import { callMultilineTextDialog } from './utils/callMultilineTextDialog';
 import {
@@ -8657,7 +8658,13 @@ function commandsModule({
                 continue;
               }
               const existing = cornerstoneTools.annotation.state.getAnnotation?.(savedId);
-              if (!existing) {
+              if (existing &&
+                  !isSavedLVSimpsonImageMatch(savedContour, existing?.metadata?.referencedImageId)) {
+                // Remove misplaced legacy state; the authoritative source is
+                // the saved SOP/frame, not the image currently shown.
+                cornerstoneTools.annotation.state.removeAnnotation?.(savedId);
+              }
+              if (!cornerstoneTools.annotation.state.getAnnotation?.(savedId)) {
                 const outcome = await actions.jumpToSavedViewerAnnotation({
                   annotation: savedContour,
                   selectAnnotation: false,
@@ -8669,6 +8676,13 @@ function commandsModule({
                 }
               }
               const restored = getCornerstoneVolumeMeasurementFallback(savedId);
+              // Cornerstone may group cine images under one FrameOfReferenceUID.
+              // A live state hit is not sufficient: verify SOP and frame before
+              // trusting saved EF geometry for review or recalculation.
+              if (restored && !isSavedLVSimpsonImageMatch(savedContour, restored.referencedImageId)) {
+                slotRestoration[slot] = 'image-frame-mismatch';
+                continue;
+              }
               if (!restored?.lvSimpson || getLVSimpsonSlotFromMeasurement(restored) !== slot) {
                 slotRestoration[slot] = 'missing-live-geometry';
                 continue;
