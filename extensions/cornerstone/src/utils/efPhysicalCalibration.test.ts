@@ -1,7 +1,7 @@
 import { calibrateUSContourPoints } from './usRegionLengthCalibration';
 import { buildLVSimpsonContourFromHingeApex } from './lvSimpsonContour';
 import { calculateLVSimpson } from '../../../extension-ar-measurements/src/utils/lvSimpson';
-import { getSavedVolumeContourMetadata, getSavedLVSimpsonControlPoints } from './savedVolumeContourMetadata';
+import { getSavedVolumeContourMetadata, getSavedLVSimpsonControlPoints, isSavedLVSimpsonImageMatch } from './savedVolumeContourMetadata';
 
 const imagePlane = {
   imagePositionPatient: [0, 0, 0],
@@ -47,6 +47,58 @@ function makeMeasurement(slot, halfWidth, height, calibrated = true) {
     },
   };
 }
+
+describe('saved LV Simpson DICOM image/frame identity', () => {
+  const image = (sop: string, frame: number) =>
+    `wadors:/orthanc/dicom-web/studies/study/series/series/instances/${sop}/frames/${frame}`;
+  const saved = {
+    SOPInstanceUID: 'sop-a',
+    frameNumber: 4,
+    referencedImageId: image('sop-a', 4),
+    lvSimpson: { measurementKind: 'lvSimpsonSlot', slot: 'A4C_ED' },
+  };
+
+  test('accepts loader/proxy differences but never a different cine frame or SOP', () => {
+    expect(isSavedLVSimpsonImageMatch(saved, image('sop-a', 4))).toBe(true);
+    expect(isSavedLVSimpsonImageMatch(saved, image('sop-a', 8))).toBe(false);
+    expect(isSavedLVSimpsonImageMatch(saved, image('sop-b', 4))).toBe(false);
+    expect(isSavedLVSimpsonImageMatch(saved, image('sop-b', 14))).toBe(false);
+    expect(isSavedLVSimpsonImageMatch(saved,
+      'dicomweb:https://other-host/dicom-web/studies/study/series/series/instances/sop-a/frames/4'
+    )).toBe(true);
+  });
+
+  test('validates all four slots across two instances and four frames', () => {
+    const slots = [
+      ['A4C_ED', 'sop-a', 4],
+      ['A4C_ES', 'sop-a', 8],
+      ['A2C_ED', 'sop-b', 14],
+      ['A2C_ES', 'sop-b', 19],
+    ] as const;
+    const contours = slots.map(([slot, sop, frameNumber]) => ({
+      SOPInstanceUID: sop,
+      frameNumber,
+      referencedImageId: image(sop, frameNumber),
+      lvSimpson: { measurementKind: 'lvSimpsonSlot', slot },
+    }));
+    contours.forEach((contour, i) =>
+      contours.forEach((other, j) =>
+        expect(isSavedLVSimpsonImageMatch(contour, other.referencedImageId)).toBe(i === j)
+      )
+    );
+  });
+
+  test('rejects missing, ambiguous, or contradictory saved references', () => {
+    expect(isSavedLVSimpsonImageMatch(saved, '')).toBe(false);
+    expect(isSavedLVSimpsonImageMatch(saved, 'imageId:unresolved')).toBe(false);
+    expect(isSavedLVSimpsonImageMatch({ ...saved, frameNumber: 8 }, image('sop-a', 4))).toBe(false);
+    expect(isSavedLVSimpsonImageMatch({ ...saved, SOPInstanceUID: 'sop-b' }, image('sop-a', 4))).toBe(false);
+    expect(isSavedLVSimpsonImageMatch({ ...saved, referencedImageId: '' }, image('sop-a', 4))).toBe(false);
+    expect(isSavedLVSimpsonImageMatch({
+      referencedImageId: image('sop-a', 4), toolName: 'Length',
+    }, image('sop-b', 14))).toBe(true); // non-EF workflows are unchanged
+  });
+});
 
 describe('LV EF saved annotation metadata', () => {
   test('rehydrates captured sparse EF handles, not 21x sampled display spline', () => {
