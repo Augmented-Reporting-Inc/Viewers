@@ -2,7 +2,7 @@ import { hydrateSavedViewerAnnotationForViewport } from './measurementAnnotation
 
 jest.mock('@cornerstonejs/core', () => ({
   metaData: { get: jest.fn(() => null) },
-}));
+}), { virtual: true });
 
 jest.mock('@cornerstonejs/tools', () => {
   const annotations = new Map();
@@ -24,7 +24,7 @@ jest.mock('@cornerstonejs/tools', () => {
     SplineROITool: {}, PlanarFreehandROITool: {}, LivewireContourTool: {},
     LengthTool: {}, ArrowAnnotateTool: {},
   };
-});
+}, { virtual: true });
 
 const image = (sop: string, frame: number) =>
   `wadors:/dicom-web/studies/study/series/series/instances/${sop}/frames/${frame}`;
