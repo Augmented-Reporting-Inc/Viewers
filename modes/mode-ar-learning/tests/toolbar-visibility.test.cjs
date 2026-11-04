@@ -49,6 +49,9 @@ test('learning Echo toolbar exposes every registered clinical Echo workflow', ()
   const expected = [
     'LVSimpsonEF',
     'LAVolume',
+    'RAArea',
+    'RVFAC',
+    'SpectralVmax',
     'SpectralDopplerVTI',
     'DecelerationTime',
     'UltrasoundDirectionalTool',
