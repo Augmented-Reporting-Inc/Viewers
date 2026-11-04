@@ -11789,16 +11789,19 @@ function commandsModule({
         // quiz capture verifies both labels and values before submission.
         return actions.activateViewerMeasurementTool({ toolName: 'Length', stopCine: true });
       }
-      if (measurementKind === 'rvFAC' || measurementKind === 'raArea') {
+      if (measurementKind === 'rvFAC') {
+        // RV FAC education offers freehand and axis+apex separately for ED/ES.
+        // Do not start a guided contour before the user chooses a technique.
+        return { ok: true, measurementKind, awaitingTechnique: true };
+      }
+      if (measurementKind === 'raArea') {
         if (activeLVSimpsonWorkflowSessionId) {
           clearLVSimpsonWorkflowIfCurrent(activeLVSimpsonWorkflowSessionId);
         }
         if (activeLAVolumeWorkflowSessionId) {
           clearLAVolumeWorkflowIfCurrent(activeLAVolumeWorkflowSessionId);
         }
-        const command = measurementKind === 'rvFAC'
-          ? actions.startRVFACWorkflow()
-          : actions.startRAAreaWorkflow();
+        const command = actions.startRAAreaWorkflow();
         void Promise.resolve(command).catch(error =>
           console.warn('[Viewer quiz] right-heart capture activation failed:', error)
         );
