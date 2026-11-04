@@ -24,7 +24,7 @@ import {
   isMatchingQuizEFCompletion,
   getInitialGuidedEFQuestionTarget,
 } from '../utils/quizCompositeCaptureIntent';
-import { composeIVCRapRVSP, RAP_CHOICES_MMHG } from '../utils/ivcRapRvsp';
+import { composeIVCRapRVSP, isIVCReviewCurrent, RAP_CHOICES_MMHG } from '../utils/ivcRapRvsp';
 
 const AR_QUIZ_MEASUREMENT_ADDED_EVENT = 'ar-learning:quiz-measurement-added';
 const AR_LV_SIMPSON_CAPTURE_REQUESTED_EVENT = 'ar-measurements:lv-simpson-capture-requested';
@@ -2555,6 +2555,14 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     const savedComposite = quiz
       ? plainObject(plainObject(answersByQuizKey?.[quiz.quizKey]?.[question.questionKey]).compositeResult)
       : plainObject(plainObject(config.goldMeasurement).compositeResult);
+    const reviewedIVC = ivcPreviewByQuestionKey[selectionKey] || savedComposite.ivc;
+    if (!isIVCReviewCurrent(reviewedIVC, result.answer)) {
+      return {
+        ok: false,
+        reason: 'ivc-review-invalidated: review the latest expiration/inspiration measurements and collapsibility before accepting RAP/RVSP',
+      };
+    }
+
     const priorManuallySelectedRAP = [3, 8, 15].includes(Number(savedComposite.rapMMHG))
       ? String(savedComposite.rapMMHG)
       : '';
@@ -3669,6 +3677,11 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       return;
     }
     const selectionKey = `${quizKey}:${question.questionKey}`;
+    const previouslyReviewed = ivcPreviewByQuestionKey[selectionKey];
+    if (previouslyReviewed && !isIVCReviewCurrent(previouslyReviewed, result.answer)) {
+      // A new caliper review requires a new, explicit RAP interpretation.
+      setRapSelectionsByQuestionKey(current => ({ ...current, [selectionKey]: '' }));
+    }
     setIvcPreviewByQuestionKey(current => ({
       ...current,
       [selectionKey]: result.answer,
