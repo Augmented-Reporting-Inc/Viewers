@@ -3,6 +3,7 @@ import {
   calculateRVFACFromMeasurements,
   getCalibratedEchoAreaCM2,
   getEchoAreaSlot,
+  buildClinicalRVFACReportFieldUpdates,
 } from './echoAreaMeasurements';
 
 function area(label: string, value: number, unit = 'mm²', series = 'cine-1', study = 'study-1') {
@@ -55,4 +56,16 @@ describe('echo chamber areas', () => {
     expect(calculateRVFACFromMeasurements([ed, area('RVESA', 3400)])?.status)
       .toBe('invalid');
   });
+
+  it('maps only complete RV FAC calculations to structured report fields', () => {
+    const rv = calculateRVFACFromMeasurements([area('RVEDA', 3000), area('RVESA', 1800)]);
+    expect(buildClinicalRVFACReportFieldUpdates(rv)).toEqual({
+      RVEDA: '30.0', RVEDAUOM: 'cm2',
+      RVESA: '18.0', RVESAUOM: 'cm2',
+      RVFAC: '40.0', RVFACUOM: '%',
+    });
+    expect(buildClinicalRVFACReportFieldUpdates(calculateRVFACFromMeasurements([area('RVEDA', 3000)])))
+      .toEqual({});
+  });
+
 });
