@@ -2598,7 +2598,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         // Composite results require several contours; the explicit result
         // action captures the finished calculation, not intermediate drawings.
         const measurementKind = cleanString(plainObject(question.answerConfig).measurementKind);
-        if (measurementKind === 'lvSimpsonEF' || measurementKind === 'laVolumeBiplane') {
+        if (isGuidedQuizCompositeKind(measurementKind)) {
+          // Never bind an incomplete contour/trace during annotation-created.
+          // The educator explicitly accepts the completed derived result.
           return;
         }
 
@@ -2614,6 +2616,13 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       const question = quiz?.questions?.find(item => item.questionKey === questionKey);
 
       if (!quiz || !question || question.type !== 'measurementNumeric') {
+        return;
+      }
+      if (isGuidedQuizCompositeKind(
+        cleanString(plainObject(question.answerConfig).measurementKind)
+      )) {
+        // Wait for an explicit completed composite/trace capture. A single
+        // annotation-added event does not establish a valid final result.
         return;
       }
 
