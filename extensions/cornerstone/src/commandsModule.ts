@@ -9667,7 +9667,10 @@ function commandsModule({
 
       return measurement;
     },
-    startUltrasoundDirectionalWorkflow: async ({ spectralVmax = false } = {}) => {
+    startUltrasoundDirectionalWorkflow: async ({
+      spectralVmax = false,
+      preferredTargetKey = '',
+    } = {}) => {
       clearEchoAreaWorkflowListeners();
       clearUltrasoundDirectionalWorkflowListeners();
 
@@ -9740,9 +9743,17 @@ function commandsModule({
           ? getSpectralVmaxTargetOptionsForUnit(rawUnit, { includeGeneric: true })
           : getUltrasoundDirectionalTargetOptionsForUnit(rawUnit, { includeGeneric: true });
         const mappedTargetOptions = targetOptions.filter(option => option.value !== 'generic');
-        let selectedTarget = null;
+        // Education questions know the measurement target already. Restrict
+        // automatic selection to a target supported by the actual calibrated
+        // spectral units; leave clinical and generic target selection intact.
+        let selectedTarget = Number.isFinite(rawValue) && preferredTargetKey
+          ? normalizeUltrasoundDirectionalTargetSelection(preferredTargetKey, rawUnit)
+          : null;
+        if (selectedTarget && !targetOptions.some(option => option.value === selectedTarget.key)) {
+          selectedTarget = null;
+        }
 
-        if (Number.isFinite(rawValue) && mappedTargetOptions.length > 0) {
+        if (!preferredTargetKey && Number.isFinite(rawValue) && mappedTargetOptions.length > 0) {
           let selection = null;
 
           try {
@@ -11888,8 +11899,10 @@ function commandsModule({
         return { ok: true, measurementKind, workflowStarted: true };
       }
       if (measurementKind === 'trVmax') {
-        void actions.startUltrasoundDirectionalWorkflow({ spectralVmax: true })
-          .catch(error => console.warn('[Viewer quiz] TR Vmax activation failed:', error));
+        void actions.startUltrasoundDirectionalWorkflow({
+          spectralVmax: true,
+          preferredTargetKey: 'echo.trPeakVelocity',
+        }).catch(error => console.warn('[Viewer quiz] TR Vmax activation failed:', error));
         return { ok: true, measurementKind, workflowStarted: true };
       }
       if (measurementKind === 'trVTI') {
