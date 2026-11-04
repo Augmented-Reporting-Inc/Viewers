@@ -3679,6 +3679,12 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     const existing = plainObject(savedAnswer?.compositeResult);
     const currentSelection = rapSelectionsByQuestionKey[selectionKey] ??
       (existing.rapMMHG != null ? String(existing.rapMMHG) : '');
+    const reviewedIVC = ivcPreviewByQuestionKey[selectionKey] || existing.ivc;
+    const ivcDerived = plainObject(plainObject(reviewedIVC?.compositeResult).derived);
+    const canInterpret = reviewedIVC?.measurementKind === 'ivcCollapsibility' &&
+      reviewedIVC?.compositeResult?.methodId === 'ivc-collapsibility-v1' &&
+      Number.isFinite(Number(reviewedIVC?.value));
+
     const questionList = quizKey === 'authoring'
       ? authoringQuestions
       : (quizzes.find(item => item.quizKey === quizKey)?.questions || []);
@@ -3698,6 +3704,13 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       priorTRAnswer?.unit === 'm/s' &&
       Number.isFinite(trValue) && trValue > 0;
 
+    const proposedRAP = Number(currentSelection);
+    const proposedGradient = validTR ? Number((4 * trValue * trValue).toFixed(2)) : null;
+    const proposedRVSP = canInterpret && proposedGradient !== null &&
+      RAP_CHOICES_MMHG.some(value => value === proposedRAP)
+        ? Number((proposedGradient + proposedRAP).toFixed(2))
+        : null;
+
     return (
       <div className="mt-2 space-y-2 rounded border border-cyan-700 bg-cyan-950/20 p-2 text-xs">
         <div className="font-semibold text-cyan-100">IVC / RAP / RVSP</div>
@@ -3710,13 +3723,38 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
           Measure IVC end-expiration and end-inspiration diameters on the specified
           image/frame targets. The viewer calculates collapsibility.
         </div>
+        <button
+          type="button"
+          className="rounded border border-cyan-500 px-2 py-1 font-semibold text-cyan-100 disabled:opacity-50"
+          disabled={disabled}
+          onClick={event => {
+            event.preventDefault();
+            event.stopPropagation();
+            void previewQuizIVCMeasurement(quizKey, question);
+          }}
+        >
+          Review measured IVC and calculate collapsibility
+        </button>
+        {canInterpret ? (
+          <div className="rounded border border-cyan-600 bg-cyan-950/40 p-2 text-cyan-100">
+            <div>IVC expiration: {Number.isFinite(Number(ivcDerived.expirationDiameterMM))
+              ? (Number(ivcDerived.expirationDiameterMM) / 10).toFixed(2) + ' cm' : 'saved calibrated caliper'}</div>
+            <div>IVC inspiration: {Number.isFinite(Number(ivcDerived.inspirationDiameterMM))
+              ? (Number(ivcDerived.inspirationDiameterMM) / 10).toFixed(2) + ' cm' : 'saved calibrated caliper'}</div>
+            <div>Calculated collapsibility: {Number(reviewedIVC.value).toFixed(1)}%</div>
+          </div>
+        ) : (
+          <div className="text-amber-200">
+            RAP selection becomes available after both IVC calipers are reviewed.
+          </div>
+        )}
         <label className="flex flex-wrap items-center gap-2 font-semibold text-cyan-100">
           RAP interpretation
           <select
             aria-label="RAP interpretation (mmHg)"
             className="rounded border border-cyan-600 bg-black px-2 py-1 text-white"
             value={currentSelection}
-            disabled={disabled}
+            disabled={disabled || !canInterpret}
             onChange={event => setRapSelectionsByQuestionKey(current => ({
               ...current,
               [selectionKey]: event.target.value,
@@ -3729,6 +3767,12 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
             ))}
           </select>
         </label>
+        {proposedRVSP !== null ? (
+          <div className="rounded border border-blue-600 bg-blue-950/30 p-2 text-blue-100">
+            Proposed TR gradient: {proposedGradient} mmHg
+            <div>Proposed RVSP: {proposedRVSP} mmHg (from selected RAP and previously recorded TR Vmax)</div>
+          </div>
+        ) : null}
         {existing.methodId === 'ivc-rap-rvsp-v1' ? (
           <div className="rounded border border-green-700 bg-green-950/30 p-2 text-green-100">
             <div>IVC collapsibility: {existing.ivc?.value ?? '—'}%</div>
