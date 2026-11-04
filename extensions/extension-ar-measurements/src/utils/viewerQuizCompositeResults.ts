@@ -189,9 +189,9 @@ export function resolveViewerQuizCompositeResult(
     components,
     ...(kind === 'ivcCollapsibility' && result?.values ? {
       derived: {
-        expirationDiameterMM: result.values.expirationDiameterMM,
-        inspirationDiameterMM: result.values.inspirationDiameterMM,
-        collapsibilityPercent: result.values.collapsibilityPercent,
+        expirationDiameterMM: (result.values as any).expirationDiameterMM,
+        inspirationDiameterMM: (result.values as any).inspirationDiameterMM,
+        collapsibilityPercent: (result.values as any).collapsibilityPercent,
       },
     } : {}),
   };
