@@ -56,7 +56,11 @@ describe('echo chamber areas', () => {
     expect(good?.values?.esaCM2).toBe(18);
     expect(good?.values?.facPercent).toBe(40);
     expect(calculateRVFACFromMeasurements([ed, { ...es, referenceSeriesUID: 'cine-2' }])?.status)
-      .toBe('invalid');
+      .toBe('invalid'); // Cross-series requires explicit distinct SOP identifiers.
+    expect(calculateRVFACFromMeasurements([
+      { ...ed, SOPInstanceUID: 'sop-ed', frameNumber: 14 },
+      { ...es, referenceSeriesUID: 'cine-2', SOPInstanceUID: 'sop-es', frameNumber: 14 },
+    ])?.status).toBe('complete');
     expect(calculateRVFACFromMeasurements([ed, { ...es, referenceStudyUID: 'study-2' }])?.status)
       .toBe('invalid');
     expect(calculateRVFACFromMeasurements([
