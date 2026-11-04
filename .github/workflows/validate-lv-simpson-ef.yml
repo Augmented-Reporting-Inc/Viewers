@@ -14,6 +14,7 @@ on:
     paths:
       - 'extensions/cornerstone/src/utils/lvSimpsonContour.test.ts'
       - 'extensions/cornerstone/src/utils/spectralVmaxTargets.test.ts'
+      - 'extensions/cornerstone/src/utils/rvFacContour*.ts'
       - 'extensions/cornerstone/src/utils/ultrasoundDirectionalReportMapping.ts'
       - 'extensions/extension-ar-measurements/src/utils/rightHeartMeasurements*.ts'
       - 'extensions/extension-ar-measurements/src/utils/echoAreaMeasurements*.ts'
@@ -47,6 +48,8 @@ jobs:
         run: yarn install --frozen-lockfile --non-interactive
       - name: Test guided LV EF contour geometry
         run: yarn jest --config extensions/cornerstone/jest.config.js --runInBand --coverage=false --runTestsByPath extensions/cornerstone/src/utils/lvSimpsonContour.test.ts
+      - name: Test editable annulus/apex RV contour geometry
+        run: yarn jest --config extensions/cornerstone/jest.config.js --runInBand --coverage=false --runTestsByPath extensions/cornerstone/src/utils/rvFacContour.test.ts
       - name: Test calibrated spectral Vmax target registry
         run: yarn jest --config extensions/cornerstone/jest.config.js --runInBand --coverage=false --runTestsByPath extensions/cornerstone/src/utils/spectralVmaxTargets.test.ts
       - name: Test right-heart calculations and clinical EF mapping
