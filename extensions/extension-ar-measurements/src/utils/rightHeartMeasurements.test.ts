@@ -9,6 +9,20 @@ import {
   estimateRAPFromIVC,
 } from './rightHeartMeasurements';
 
+function ivc(label: string, length: number, unit = 'mm', overrides = {}) {
+  return {
+    toolName: 'Length',
+    label,
+    points: [[0, 0, 0], [1, 0, 0]],
+    measurements: { length, unit },
+    referenceStudyUID: 'study-A',
+    referenceSeriesUID: 'cine-IVC',
+    SOPInstanceUID: 'sop-IVC',
+    frameNumber: /insp/i.test(label) ? 12 : 1,
+    ...overrides,
+  };
+}
+
 describe('right-heart measurement calculations', () => {
   it('calculates FAC from calibrated ED/ES areas without treating it as Simpson EF', () => {
     expect(calculateRVFAC(30, 18)).toEqual({
@@ -76,8 +90,8 @@ describe('right-heart measurement calculations', () => {
 
   it('pairs only uniquely labelled and calibrated IVC lengths', () => {
     const pair = [
-      { toolName: 'Length', label: 'IVCexp', measurements: { length: 2.2, unit: 'cm' } },
-      { toolName: 'Length', label: 'IVCinsp', measurements: { length: 8, unit: 'mm' } },
+      ivc('IVCexp', 2.2, 'cm'),
+      ivc('IVCinsp', 8),
     ];
     const result = calculateIVCFromMeasurements(pair);
     expect(result?.status).toBe('complete');
@@ -89,18 +103,21 @@ describe('right-heart measurement calculations', () => {
       { ...pair[1], label: 'IVC end-inspiration diameter' },
     ];
     expect(calculateIVCFromMeasurements(displayLabelPair)?.status).toBe('complete');
+    expect(calculateIVCFromMeasurements([
+      pair[0], { ...pair[1], referenceSeriesUID: 'different-cine' },
+    ])?.status).toBe('invalid');
     expect(calculateIVCFromMeasurements([...pair, pair[0]])?.status).toBe('invalid');
     expect(calculateIVCFromMeasurements([
-      { toolName: 'Length', label: 'IVCexp', measurements: { length: 20, unit: 'px' } },
+      ivc('IVCexp', 20, 'px'),
       pair[1],
     ])?.status).toBe('incomplete');
-    expect(calculateIVCFromMeasurements([{ toolName: 'Length', label: 'IVC', value: 20, unit: 'mm' }])).toBeNull();
+    expect(calculateIVCFromMeasurements([ivc('IVC', 20)])).toBeNull();
   });
 
   it('maps only complete IVC pairs to distinct clinical fields', () => {
     const pair = calculateIVCFromMeasurements([
-      { toolName: 'Length', label: 'IVCexp', measurements: { length: 20, unit: 'mm' } },
-      { toolName: 'Length', label: 'IVCinsp', measurements: { length: 8, unit: 'mm' } },
+      ivc('IVCexp', 20),
+      ivc('IVCinsp', 8),
     ]);
     expect(buildClinicalIVCReportFieldUpdates(pair)).toEqual({
       IVCExp: '2.00', IVCExpUOM: 'cm',
@@ -108,7 +125,7 @@ describe('right-heart measurement calculations', () => {
       IVCCollapsibility: '60.0', IVCCollapsibilityUOM: '%',
     });
     expect(buildClinicalIVCReportFieldUpdates(calculateIVCFromMeasurements([
-      { toolName: 'Length', label: 'IVCexp', measurements: { length: 20, unit: 'mm' } },
+      ivc('IVCexp', 20),
     ]))).toEqual({});
   });
 
