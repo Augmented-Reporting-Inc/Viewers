@@ -35,6 +35,35 @@ function validCaliperComponents(value: any): boolean {
   );
 }
 
+/**
+ * A RAP selection is informed by an explicitly reviewed pair of IVC calipers.
+ * Reject acceptance if the source identifiers, frames, geometry, or calculated
+ * collapse changed since the review checkpoint.
+ */
+export function isIVCReviewCurrent(reviewed: any, latest: any): boolean {
+  if (reviewed?.measurementKind !== 'ivcCollapsibility' ||
+      latest?.measurementKind !== 'ivcCollapsibility') return false;
+  const a = reviewed?.compositeResult;
+  const b = latest?.compositeResult;
+  if (a?.methodId !== 'ivc-collapsibility-v1' ||
+      b?.methodId !== 'ivc-collapsibility-v1' ||
+      !validCaliperComponents(reviewed) ||
+      !validCaliperComponents(latest)) return false;
+  const aValue = finite(reviewed?.value);
+  const bValue = finite(latest?.value);
+  if (aValue === null || bValue === null ||
+      Math.abs(aValue - bValue) > 0.005) return false;
+  const slots = ['IVC_EXP', 'IVC_INSP'];
+  return slots.every(slot => {
+    const aPart = a.components.find((part: any) => part.slot === slot);
+    const bPart = b.components.find((part: any) => part.slot === slot);
+    if (clean(aPart.annotationId) !== clean(bPart.annotationId)) return false;
+    if (!['studyInstanceUID', 'seriesInstanceUID', 'sopInstanceUID', 'frameNumber']
+      .every(key => clean(aPart.target[key]) === clean(bPart.target[key]))) return false;
+    return JSON.stringify(aPart.points) === JSON.stringify(bPart.points);
+  });
+}
+
 export function composeIVCRapRVSP({
   ivcAnswer,
   rapMMHG,
