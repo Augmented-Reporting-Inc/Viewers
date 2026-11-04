@@ -11,8 +11,9 @@ describe('spectral Vmax targets', () => {
     expect(keys).not.toContain('echo.rvSPrimeVelocity');
     expect(keys).not.toContain('echo.prEndDiastolicVelocity');
   });
-  it('refuses an uncalibrated or tissue velocity unit', () => {
+  it('accepts spectral flow cm/s but refuses uncalibrated values', () => {
     expect(getSpectralVmaxTargetOptionsForUnit('px', { includeGeneric: false })).toEqual([]);
-    expect(getSpectralVmaxTargetOptionsForUnit('cm/s', { includeGeneric: false })).toEqual([]);
+    expect(getSpectralVmaxTargetOptionsForUnit('cm/s', { includeGeneric: false })
+      .map(item => item.value)).toContain('echo.trPeakVelocity');
   });
 });
