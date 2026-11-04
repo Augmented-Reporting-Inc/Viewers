@@ -18,7 +18,7 @@ describe('guided quiz measurement activation', () => {
   it('identifies supported clinical composites without treating Length as composite', () => {
     expect(isGuidedQuizCompositeKind('lvSimpsonEF')).toBe(true);
     expect(isGuidedQuizCompositeKind('laVolumeBiplane')).toBe(true);
-    for (const kind of ['laVolumeBiplaneDisks', 'rvFAC', 'raArea', 'ivcCollapsibility']) {
+    for (const kind of ['laVolumeBiplaneDisks', 'rvFAC', 'raArea', 'ivcCollapsibility', 'trVmax', 'trVTI']) {
       expect(isGuidedQuizCompositeKind(kind)).toBe(true);
     }
     expect(isGuidedQuizCompositeKind('Length')).toBe(false);
