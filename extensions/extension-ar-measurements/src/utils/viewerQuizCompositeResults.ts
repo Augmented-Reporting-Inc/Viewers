@@ -1,8 +1,8 @@
 import { calculateLVSimpson, LV_SIMPSON_SLOT_ORDER } from './lvSimpson';
-import { calculateLAVolume, LA_VOLUME_SLOT_ORDER } from './laVolume';
+import { calculateLAVolume, calculateLABiplaneDisks, LA_VOLUME_SLOT_ORDER, LA_VOLUME_AREA_LENGTH_METHOD, LA_VOLUME_DISKS_METHOD } from './laVolume';
 
 type Measurement = Record<string, any>;
-type CompositeKind = 'lvSimpsonEF' | 'laVolumeBiplane';
+type CompositeKind = 'lvSimpsonEF' | 'laVolumeBiplane' | 'laVolumeBiplaneDisks';
 
 function clean(value: unknown): string {
   return String(value ?? '').trim();
@@ -103,7 +103,7 @@ export function resolveViewerQuizCompositeResult(
   measurements: Measurement[] = [],
   calculatedResult?: ReturnType<typeof calculateLVSimpson> | ReturnType<typeof calculateLAVolume>
 ) {
-  if (kind !== 'lvSimpsonEF' && kind !== 'laVolumeBiplane') return null;
+  if (!['lvSimpsonEF', 'laVolumeBiplane', 'laVolumeBiplaneDisks'].includes(kind)) return null;
   if (!Array.isArray(measurements)) return null;
 
   const components = collectComponents(measurements, kind);
@@ -112,7 +112,16 @@ export function resolveViewerQuizCompositeResult(
   const result = calculatedResult ??
     (kind === 'lvSimpsonEF'
       ? calculateLVSimpson(measurements)
-      : calculateLAVolume(measurements));
+      : kind === 'laVolumeBiplaneDisks'
+        ? calculateLABiplaneDisks(measurements)
+        : calculateLAVolume(measurements));
+
+  const expectedMethodId = kind === 'laVolumeBiplane'
+    ? LA_VOLUME_AREA_LENGTH_METHOD
+    : kind === 'laVolumeBiplaneDisks'
+      ? LA_VOLUME_DISKS_METHOD
+      : null;
+  if (expectedMethodId && result?.methodId !== expectedMethodId) return null;
 
   const value =
     kind === 'lvSimpsonEF'
@@ -126,6 +135,7 @@ export function resolveViewerQuizCompositeResult(
   return {
     schemaVersion: 1,
     measurementKind: kind,
+    ...(expectedMethodId ? { methodId: expectedMethodId } : {}),
     value,
     unit: kind === 'lvSimpsonEF' ? '%' : 'mL',
     components,
