@@ -1,5 +1,6 @@
 import {
   calculateIVCCollapsibility,
+  buildClinicalIVCReportFieldUpdates,
   calculateIVCFromMeasurements,
   calculateRAArea,
   calculateRVFAC,
@@ -95,4 +96,20 @@ describe('right-heart measurement calculations', () => {
     ])?.status).toBe('incomplete');
     expect(calculateIVCFromMeasurements([{ toolName: 'Length', label: 'IVC', value: 20, unit: 'mm' }])).toBeNull();
   });
+
+  it('maps only complete IVC pairs to distinct clinical fields', () => {
+    const pair = calculateIVCFromMeasurements([
+      { toolName: 'Length', label: 'IVCexp', measurements: { length: 20, unit: 'mm' } },
+      { toolName: 'Length', label: 'IVCinsp', measurements: { length: 8, unit: 'mm' } },
+    ]);
+    expect(buildClinicalIVCReportFieldUpdates(pair)).toEqual({
+      IVCExp: '2.00', IVCExpUOM: 'cm',
+      IVCInsp: '0.80', IVCInspUOM: 'cm',
+      IVCCollapsibility: '60.0', IVCCollapsibilityUOM: '%',
+    });
+    expect(buildClinicalIVCReportFieldUpdates(calculateIVCFromMeasurements([
+      { toolName: 'Length', label: 'IVCexp', measurements: { length: 20, unit: 'mm' } },
+    ]))).toEqual({});
+  });
+
 });
