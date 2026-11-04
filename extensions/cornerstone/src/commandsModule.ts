@@ -11646,7 +11646,7 @@ function commandsModule({
         );
         return { ok: true, measurementKind, workflowStarted: true };
       }
-      if (measurementKind === 'laVolumeBiplane') {
+      if (measurementKind === 'laVolumeBiplane' || measurementKind === 'laVolumeBiplaneDisks') {
         if (activeLVSimpsonWorkflowSessionId) {
           clearLVSimpsonWorkflowIfCurrent(activeLVSimpsonWorkflowSessionId);
         }
@@ -13854,7 +13854,7 @@ function commandsModule({
       const expectedSlots =
         rubricMeasurement?.measurementKind === 'lvSimpsonEF'
           ? ['A4C_ED', 'A4C_ES', 'A2C_ED', 'A2C_ES']
-          : rubricMeasurement?.measurementKind === 'laVolumeBiplane'
+          : ['laVolumeBiplane', 'laVolumeBiplaneDisks'].includes(rubricMeasurement?.measurementKind)
             ? ['A4C', 'A2C']
             : [];
       const compositeRubric = expectedSlots.length > 0;
@@ -14206,7 +14206,7 @@ function commandsModule({
         getSelectedMeasurementIdFromViewport(activeEnabledElement?.viewport?.element);
 
       const requestedKind = String(question?.answerConfig?.measurementKind || '').trim();
-      const isCompositeKind = requestedKind === 'lvSimpsonEF' || requestedKind === 'laVolumeBiplane';
+      const isCompositeKind = ['lvSimpsonEF', 'laVolumeBiplane', 'laVolumeBiplaneDisks'].includes(requestedKind);
       // Composite contours can live in AR's session fallback before OHIF
       // MeasurementService receives the completed/calibrated annotation.
       const quizMeasurements = isCompositeKind
