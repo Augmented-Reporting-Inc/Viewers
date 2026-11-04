@@ -150,8 +150,8 @@ export function calculateRVFACFromMeasurements(measurements: Measurement[] = [])
     if (
       edEvidence.sopInstanceUID && esEvidence.sopInstanceUID &&
       edEvidence.sopInstanceUID === esEvidence.sopInstanceUID &&
-      edEvidence.frameNumber > 0 && esEvidence.frameNumber > 0 &&
-      edEvidence.frameNumber === esEvidence.frameNumber
+      (!(edEvidence.frameNumber > 0) || !(esEvidence.frameNumber > 0) ||
+       edEvidence.frameNumber === esEvidence.frameNumber)
     ) {
       return {
         status: 'invalid', values: null, edEvidence, esEvidence,
