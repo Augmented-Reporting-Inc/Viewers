@@ -182,7 +182,7 @@ function calibratedLengthMM(measurement: ViewerMeasurement): number | null {
   const unit = String(
     source.lengthUnit || source.unit || measurement?.lengthUnit ||
     measurement?.unit || firstStats?.lengthUnit || firstStats?.unit || ''
-  ).trim().replace(/\s+(?:US Region|AR_US_REGION_CALIBRATION).*$/i, '').toLowerCase();
+  ).trim().toLowerCase();
   const length = finiteNumber(raw);
 
   // A pixel distance or an unlabelled raw number is not clinical evidence.
