@@ -28,6 +28,13 @@ const config = {
         commonjs: 'react',
         amd: 'react',
       },
+      // The viewer provides ReactDOM at runtime; do not bundle a second copy.
+      'react-dom': {
+        root: 'ReactDOM',
+        commonjs2: 'react-dom',
+        commonjs: 'react-dom',
+        amd: 'react-dom',
+      },
       '@ohif/core': {
         commonjs2: '@ohif/core',
         commonjs: '@ohif/core',
