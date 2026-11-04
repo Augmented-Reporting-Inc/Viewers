@@ -11783,7 +11783,7 @@ function commandsModule({
           .catch(error => console.warn('[Viewer quiz] TR VTI activation failed:', error));
         return { ok: true, measurementKind, workflowStarted: true };
       }
-      if (measurementKind === 'ivcCollapsibility') {
+      if (measurementKind === 'ivcCollapsibility' || measurementKind === 'ivcRapRvsp') {
         // Uses the same calibrated Length tool and AR measurement labels as
         // clinical IVC. Capture IVCexp and IVCinsp on distinct cine frames;
         // quiz capture verifies both labels and values before submission.
