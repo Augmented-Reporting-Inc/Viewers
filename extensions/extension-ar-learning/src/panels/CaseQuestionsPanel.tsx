@@ -3788,6 +3788,13 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         viewerTarget: target, questionKey: question.questionKey,
       });
       if (!jumped?.ok) return false;
+      // Cross-series navigation can load the requested DICOM into another
+      // available viewport. Make it active before checking or drawing.
+      if (cleanString(jumped.viewportId)) {
+        await runViewerCommand(commandsManager, 'setViewportActive', {
+          viewportId: jumped.viewportId,
+        });
+      }
       const response = await runViewerCommand(commandsManager, 'getCurrentViewerQuizFrameAnswer', {});
       const actual = plainObject(response?.answer?.selectedTarget);
       const matches = response?.ok === true &&
