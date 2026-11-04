@@ -3778,6 +3778,36 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     );
   }
 
+  async function ensureConfiguredCompositePhaseFrame(question: QuizQuestion, slot: string) {
+    const config = plainObject(question.answerConfig);
+    if (config.compositeFrameGuidanceEnabled !== true) return true;
+    const target = getCompleteCompositeFrameTargets(config)?.[slot];
+    if (!target) return false;
+    try {
+      const jumped = await runViewerCommand(commandsManager, 'jumpToViewerQuizTarget', {
+        viewerTarget: target, questionKey: question.questionKey,
+      });
+      if (!jumped?.ok) return false;
+      const response = await runViewerCommand(commandsManager, 'getCurrentViewerQuizFrameAnswer', {});
+      const actual = plainObject(response?.answer?.selectedTarget);
+      const matches = response?.ok === true &&
+        ['studyInstanceUID', 'seriesInstanceUID', 'sopInstanceUID'].every(
+          key => cleanString(actual[key]) === cleanString(target[key])
+        ) && Number(actual.frameNumber) === Number(target.frameNumber);
+      if (!matches) {
+        uiNotificationService.show({
+          title: 'Case Questions',
+          message: 'The selected measurement image/frame is not active. Open the configured target and retry.',
+          type: 'warning', duration: 6000,
+        });
+      }
+      return matches;
+    } catch (error) {
+      console.warn('[CaseQuestionsPanel] configured phase navigation failed:', error);
+      return false;
+    }
+  }
+
   function renderLAVolumeContourControls(question: QuizQuestion, disabled: boolean) {
     const views = [
       { slot: 'A4C', label: 'Apical four-chamber' },
@@ -3809,16 +3839,11 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                   event.preventDefault();
                   event.stopPropagation();
                   void (async () => {
-                    if (sources?.[slot]) {
-                      const jumped = await runViewerCommand(commandsManager, 'jumpToViewerQuizTarget', {
-                        viewerTarget: sources[slot],
-                        questionKey: question.questionKey,
-                      });
-                      if (jumped?.ok === false) return;
-                    }
+                    if (!(await ensureConfiguredCompositePhaseFrame(question, slot))) return;
                     await runViewerCommand(commandsManager, 'startLAVolumeWorkflow', {
                       slot,
                       contourTechnique: choice.contourTechnique,
+                      autoContinue: false,
                     });
                   })();
                 }}
@@ -3863,13 +3888,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                   event.preventDefault();
                   event.stopPropagation();
                   void (async () => {
-                    if (sources?.[slot]) {
-                      const jumped = await runViewerCommand(commandsManager, 'jumpToViewerQuizTarget', {
-                        viewerTarget: sources[slot],
-                        questionKey: question.questionKey,
-                      });
-                      if (jumped?.ok === false) return;
-                    }
+                    if (!(await ensureConfiguredCompositePhaseFrame(question, slot))) return;
                     await runViewerCommand(commandsManager, choice.command, { slot });
                   })();
                 }}
