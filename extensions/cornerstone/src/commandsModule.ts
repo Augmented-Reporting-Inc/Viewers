@@ -11646,6 +11646,21 @@ function commandsModule({
         );
         return { ok: true, measurementKind, workflowStarted: true };
       }
+      if (measurementKind === 'rvFAC' || measurementKind === 'raArea') {
+        if (activeLVSimpsonWorkflowSessionId) {
+          clearLVSimpsonWorkflowIfCurrent(activeLVSimpsonWorkflowSessionId);
+        }
+        if (activeLAVolumeWorkflowSessionId) {
+          clearLAVolumeWorkflowIfCurrent(activeLAVolumeWorkflowSessionId);
+        }
+        const command = measurementKind === 'rvFAC'
+          ? actions.startRVFACWorkflow()
+          : actions.startRAAreaWorkflow();
+        void Promise.resolve(command).catch(error =>
+          console.warn('[Viewer quiz] right-heart capture activation failed:', error)
+        );
+        return { ok: true, measurementKind, workflowStarted: true };
+      }
       if (measurementKind === 'laVolumeBiplane' || measurementKind === 'laVolumeBiplaneDisks') {
         if (activeLVSimpsonWorkflowSessionId) {
           clearLVSimpsonWorkflowIfCurrent(activeLVSimpsonWorkflowSessionId);
@@ -13856,7 +13871,11 @@ function commandsModule({
           ? ['A4C_ED', 'A4C_ES', 'A2C_ED', 'A2C_ES']
           : ['laVolumeBiplane', 'laVolumeBiplaneDisks'].includes(rubricMeasurement?.measurementKind)
             ? ['A4C', 'A2C']
-            : [];
+            : rubricMeasurement?.measurementKind === 'rvFAC'
+              ? ['RV_ED', 'RV_ES']
+              : rubricMeasurement?.measurementKind === 'raArea'
+                ? ['RA_ES']
+                : [];
       const compositeRubric = expectedSlots.length > 0;
       const embeddedContourFromComponent = (component: any, slot: string) => {
         const points = component?.points;
@@ -14206,7 +14225,7 @@ function commandsModule({
         getSelectedMeasurementIdFromViewport(activeEnabledElement?.viewport?.element);
 
       const requestedKind = String(question?.answerConfig?.measurementKind || '').trim();
-      const isCompositeKind = ['lvSimpsonEF', 'laVolumeBiplane', 'laVolumeBiplaneDisks'].includes(requestedKind);
+      const isCompositeKind = ['lvSimpsonEF', 'laVolumeBiplane', 'laVolumeBiplaneDisks', 'rvFAC', 'raArea'].includes(requestedKind);
       // Composite contours can live in AR's session fallback before OHIF
       // MeasurementService receives the completed/calibrated annotation.
       const quizMeasurements = isCompositeKind
