@@ -31,6 +31,17 @@ const GENERIC_SPECTRAL_DOPPLER_VTI_TARGET = Object.freeze({
 
 export const SPECTRAL_DOPPLER_GENERIC_TARGET_KEY = GENERIC_SPECTRAL_DOPPLER_VTI_TARGET.key;
 
+// TR VTI can be acquired and assessed without introducing an unreviewed
+// clinical AR report field. The source trace keeps its DICOM calibration.
+export const TR_VTI_QUIZ_TARGET = Object.freeze({
+  key: 'spectral.trVti',
+  label: 'TR VTI',
+  measurementKind: SPECTRAL_DOPPLER_MEASUREMENT_KIND,
+  reportMapped: false,
+});
+
+
+
 function formatVtiCentimeters(value: number) {
   if (!Number.isFinite(value)) {
     return '';
@@ -253,6 +264,7 @@ export function getSpectralDopplerVtiTargetOptions({ includeGeneric = false } = 
   }));
 
   if (includeGeneric) {
+    options.push({ value: TR_VTI_QUIZ_TARGET.key, label: TR_VTI_QUIZ_TARGET.label });
     options.push({
       value: GENERIC_SPECTRAL_DOPPLER_VTI_TARGET.key,
       label: GENERIC_SPECTRAL_DOPPLER_VTI_TARGET.label,
@@ -270,6 +282,13 @@ export function normalizeSpectralDopplerVtiTargetSelection(
 
   if (!raw) {
     return null;
+  }
+
+  if (allowGeneric && (
+    raw === TR_VTI_QUIZ_TARGET.key ||
+    normalizeTargetLabelText(raw) === normalizeTargetLabelText(TR_VTI_QUIZ_TARGET.label)
+  )) {
+    return { ...TR_VTI_QUIZ_TARGET };
   }
 
   if (allowGeneric && raw === GENERIC_SPECTRAL_DOPPLER_VTI_TARGET.key) {
