@@ -8960,6 +8960,15 @@ function commandsModule({
 
       const targetAnnotation =
         cornerstoneTools.annotation.state.getAnnotation?.(annotationUID) || hydrated;
+      if (!targetAnnotation) {
+        clearLAVolumeWorkflowIfCurrent(workflowSessionId);
+        uiNotificationService.show({
+          title: 'LA Volume',
+          message: 'Could not create the editable contour. Previous measurements were not replaced.',
+          type: 'error', duration: 6500,
+        });
+        return { ok: false, reason: 'la-spline-hydration-failed' };
+      }
 
       if (targetAnnotation) {
         targetAnnotation.annotationUID = annotationUID;
@@ -9283,6 +9292,9 @@ function commandsModule({
       const existingSlotMeasurementIds = getLAVolumeExistingMeasurementIds(
         existingSlotMeasurements
       );
+      // Freeze the active source before landmark drawing; each phase must
+      // remain on the same DICOM image/frame through freehand acquisition.
+      const acquisitionImageId = getCurrentViewportImageInfo(viewport)?.imageId || '';
       const overlay = createLVSimpsonPreviewOverlay(viewport.element);
 
       uiNotificationService.show({
@@ -9462,16 +9474,16 @@ function commandsModule({
         return null;
       }
 
-      for (const existingMeasurementId of existingSlotMeasurementIds) {
-        actions.removeMeasurement({ uid: existingMeasurementId });
-      }
-
-      dispatchLiveMeasurementsRefresh({
-        reason: 'la-volume-slot-replaced',
-        slot: slotInfo.slot,
-      });
-
       const imageInfo = getCurrentViewportImageInfo(viewport);
+      if (!acquisitionImageId || imageInfo?.imageId !== acquisitionImageId) {
+        clearLAVolumeWorkflowIfCurrent(workflowSessionId);
+        uiNotificationService.show({
+          title: 'LA Volume',
+          message: 'Image/frame changed during capture. Return to the selected source and retry; the previous contour is preserved.',
+          type: 'warning', duration: 7000,
+        });
+        return { ok: false, reason: 'la-source-frame-changed' };
+      }
       const displaySet = getActiveViewportDisplaySet({
         viewportGridService,
         displaySetService,
@@ -9579,6 +9591,14 @@ function commandsModule({
       }
 
       upsertLAVolumeSessionMeasurement(measurement);
+
+      // Only replace old contours after the new hydrated annotation and
+      // session measurement exist. Failed/cancelled capture stays non-destructive.
+      for (const existingMeasurementId of existingSlotMeasurementIds) {
+        if (existingMeasurementId !== annotationUID) {
+          actions.removeMeasurement({ uid: existingMeasurementId });
+        }
+      }
 
       dispatchLiveMeasurementsRefresh({
         reason: 'la-volume-slot-created',
