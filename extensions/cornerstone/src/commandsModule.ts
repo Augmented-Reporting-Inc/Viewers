@@ -11893,16 +11893,13 @@ function commandsModule({
         return { ok: true, measurementKind, workflowStarted: true };
       }
       if (measurementKind === 'laVolumeBiplane' || measurementKind === 'laVolumeBiplaneDisks') {
-        if (activeLVSimpsonWorkflowSessionId) {
-          clearLVSimpsonWorkflowIfCurrent(activeLVSimpsonWorkflowSessionId);
-        }
+        // The educational asset defines independently selected A4C/A2C frames.
+        // Both roles choose a contour technique for each view rather than
+        // silently starting axis+apex on whichever image happens to be active.
         if (activeLAVolumeWorkflowSessionId) {
           clearLAVolumeWorkflowIfCurrent(activeLAVolumeWorkflowSessionId);
         }
-        void actions.startLAVolumeWorkflow().catch(error =>
-          console.warn('[Viewer quiz] LA Volume activation failed:', error)
-        );
-        return { ok: true, measurementKind, workflowStarted: true };
+        return { ok: true, measurementKind, awaitingTechnique: true };
       }
       if (activeLVSimpsonWorkflowSessionId) {
         clearLVSimpsonWorkflowIfCurrent(activeLVSimpsonWorkflowSessionId);
