@@ -21,6 +21,10 @@ function finitePositive(value: unknown): number | null {
 
 export function getEchoAreaSlot(measurement: Measurement): AreaSlot | null {
   const source = measurement?.echoArea || measurement?.measurements?.echoArea || {};
+  const kind = clean(measurement?.measurementKind || measurement?.measurements?.measurementKind);
+  // A generic ROI with a similar free-text label is not clinical evidence
+  // unless the guided Echo Area workflow recorded its measurement kind/slot.
+  if (!source.slot && kind !== 'echoAreaSlot') return null;
   const explicit = clean(source.slot).toUpperCase();
   if (explicit === 'RA_ES' || explicit === 'RV_ED' || explicit === 'RV_ES') {
     return explicit;
@@ -58,6 +62,9 @@ function convertAreaCM2(rawValue: unknown, rawUnit: unknown): number | null {
  */
 export function getCalibratedEchoAreaCM2(measurement: Measurement): number | null {
   if (!isClosedContour(measurement)) return null;
+  const points = measurement?.points || measurement?.measurements?.points ||
+    measurement?.data?.contour?.polyline || [];
+  if (!Array.isArray(points) || points.length < 3) return null;
 
   const measures = measurement?.measurements || {};
   const direct = convertAreaCM2(
