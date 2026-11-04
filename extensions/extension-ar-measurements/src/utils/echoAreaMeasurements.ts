@@ -147,6 +147,17 @@ export function calculateRVFACFromMeasurements(measurements: Measurement[] = [])
         message: 'RV ED and ES contours must reference the same study and cine series.',
       };
     }
+    if (
+      edEvidence.sopInstanceUID && esEvidence.sopInstanceUID &&
+      edEvidence.sopInstanceUID === esEvidence.sopInstanceUID &&
+      edEvidence.frameNumber > 0 && esEvidence.frameNumber > 0 &&
+      edEvidence.frameNumber === esEvidence.frameNumber
+    ) {
+      return {
+        status: 'invalid', values: null, edEvidence, esEvidence,
+        message: 'RV ED and ES contours cannot be captured from the same cine frame.',
+      };
+    }
   }
   const result = calculateRVFAC(eda, esa);
   return {
