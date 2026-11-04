@@ -635,6 +635,8 @@ const BASE_MEASUREMENT_TOOL_IDS = [
 const ECHO_ONLY_MEASUREMENT_TOOL_IDS = [
   'LVSimpsonEF',
   'LAVolume',
+  'RAArea',
+  'RVFAC',
   'SpectralDopplerVTI',
   'DecelerationTime',
   'UltrasoundDirectionalTool',
