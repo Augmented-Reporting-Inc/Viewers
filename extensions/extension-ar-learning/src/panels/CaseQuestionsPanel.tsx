@@ -24,6 +24,7 @@ import {
   isMatchingQuizEFCompletion,
   getInitialGuidedEFQuestionTarget,
 } from '../utils/quizCompositeCaptureIntent';
+import { composeIVCRapRVSP, RAP_CHOICES_MMHG } from '../utils/ivcRapRvsp';
 
 const AR_QUIZ_MEASUREMENT_ADDED_EVENT = 'ar-learning:quiz-measurement-added';
 const AR_LV_SIMPSON_CAPTURE_REQUESTED_EVENT = 'ar-measurements:lv-simpson-capture-requested';
@@ -1802,6 +1803,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
   const lastActivatedQuestionRef = useRef('');
   const efCaptureInFlightRef = useRef(false);
   const [capturingMeasurementKey, setCapturingMeasurementKey] = useState('');
+  // Explicit educator/learner interpretation only. No default RAP is selected.
+  const [rapSelectionsByQuestionKey, setRapSelectionsByQuestionKey] =
+    useState<Record<string, string>>({});
   const [capturingFrameKey, setCapturingFrameKey] = useState('');
   const [capturingPointKey, setCapturingPointKey] = useState('');
   const [authoringPayload, setAuthoringPayload] = useState<any>(null);
