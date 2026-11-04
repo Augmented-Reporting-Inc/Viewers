@@ -9204,6 +9204,7 @@ function commandsModule({
       slot: requestedSlot = '',
       sessionId: requestedSessionId = '',
       contourTechnique = 'axisApex',
+      autoContinue = true,
     } = {}) => {
       const useFreehand = contourTechnique === 'freehand';
       clearUltrasoundDirectionalWorkflowListeners();
@@ -9601,7 +9602,7 @@ function commandsModule({
       ]);
       const nextSlot = getNextMissingLAVolumeSlot(remainingSlotCandidates);
 
-      if (nextSlot && !isWorkflowCancelled() && !useFreehand) {
+      if (nextSlot && !isWorkflowCancelled() && !useFreehand && autoContinue) {
         uiNotificationService.show({
           title: 'LA Volume',
           message: `${slotInfo.slot} created. Navigate to ${getLAVolumeSlotDisplayName(
@@ -9627,7 +9628,7 @@ function commandsModule({
 
       clearLAVolumeWorkflowIfCurrent(workflowSessionId);
 
-      if (nextSlot && useFreehand) {
+      if (nextSlot && (useFreehand || !autoContinue)) {
         uiNotificationService.show({
           title: 'LA Volume',
           message: `${slotInfo.slot} saved. Select the next LA phase source and start its chosen contour technique.`,
