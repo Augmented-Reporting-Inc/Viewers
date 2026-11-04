@@ -14376,9 +14376,18 @@ function commandsModule({
       const quizMeasurements = isCompositeKind
         ? getCurrentViewerMeasurementSnapshot(measurementService)
         : null;
-      const measurement = isCompositeKind
+      const directMeasurement = isCompositeKind
         ? null
         : findMeasurementServiceMeasurementById(measurementService, selectedMeasurementId);
+      // Spectral ROI data can survive on its Cornerstone source annotation
+      // after MeasurementService remaps the same ROI. Prefer the calibrated
+      // source snapshot over a generic area/length representation.
+      const restoredSpectralMeasurement = ['trVmax', 'trVTI'].includes(requestedKind)
+        ? getCurrentViewerMeasurementSnapshot(measurementService).find(
+            entry => getMeasurementAnnotationId(entry) === selectedMeasurementId
+          )
+        : null;
+      const measurement = restoredSpectralMeasurement || directMeasurement;
 
       if (!isCompositeKind && !selectedMeasurementId) {
         return { ok: false, reason: 'no-selected-measurement' };
