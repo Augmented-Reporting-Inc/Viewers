@@ -83,6 +83,11 @@ describe('right-heart measurement calculations', () => {
     expect(result?.values?.expirationDiameterMM).toBe(22);
     expect(result?.values?.collapsibilityPercent).toBeCloseTo(63.6363636);
     expect(result?.rapEstimateStatus).toBe('not-assessed');
+    const displayLabelPair = [
+      { ...pair[0], label: 'IVC end-expiration diameter' },
+      { ...pair[1], label: 'IVC end-inspiration diameter' },
+    ];
+    expect(calculateIVCFromMeasurements(displayLabelPair)?.status).toBe('complete');
     expect(calculateIVCFromMeasurements([...pair, pair[0]])?.status).toBe('invalid');
     expect(calculateIVCFromMeasurements([
       { toolName: 'Length', label: 'IVCexp', measurements: { length: 20, unit: 'px' } },
