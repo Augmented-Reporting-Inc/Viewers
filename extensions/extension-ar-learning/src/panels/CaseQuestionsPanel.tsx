@@ -3675,6 +3675,46 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     }));
   }
 
+  function renderRVFACContourControls(question: QuizQuestion, disabled: boolean) {
+    const slots = [
+      { slot: 'RV_ED', label: 'End-diastolic area (RVEDA)' },
+      { slot: 'RV_ES', label: 'End-systolic area (RVESA)' },
+    ];
+    return (
+      <div className="mt-2 rounded border border-cyan-700 bg-cyan-950/20 p-2 text-xs">
+        <div className="mb-1 font-semibold text-cyan-100">RV FAC contour technique</div>
+        <div className="mb-2 text-gray-300">
+          Navigate to the required DICOM instance and frame for each phase, then
+          choose either freehand tracing or annulus-axis + apex placement.
+          The measurement result, not the drawing technique, is scored.
+        </div>
+        {slots.map(({ slot, label }) => (
+          <div key={slot} className="mb-2 flex flex-wrap items-center gap-2">
+            <span className="min-w-44 font-medium text-gray-100">{label}</span>
+            {[
+              { text: 'Freehand', command: 'startEchoAreaContourWorkflow' },
+              { text: 'Axis + apex', command: 'startGuidedRVFACContourWorkflow' },
+            ].map(choice => (
+              <button
+                key={choice.command}
+                type="button"
+                disabled={disabled}
+                className="rounded border border-cyan-600 px-2 py-1 text-cyan-100 disabled:opacity-40"
+                onClick={event => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  void runViewerCommand(commandsManager, choice.command, { slot });
+                }}
+              >
+                {choice.text}
+              </button>
+            ))}
+          </div>
+        ))}
+      </div>
+    );
+  }
+
   function renderIVCRapRVSPControls(
     quizKey: string,
     question: QuizQuestion,
@@ -3997,6 +4037,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
 
       return (
         <div className="mt-2 w-full min-w-0 max-w-full space-y-2 overflow-hidden">
+          {cleanString(plainObject(question.answerConfig).measurementKind) === 'rvFAC'
+            ? renderRVFACContourControls(question, disabled)
+            : null}
           {linkedRVSP
             ? renderIVCRapRVSPControls(quiz.quizKey, question, value, disabled)
             : (
@@ -4657,6 +4700,12 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
 
         {question.type === 'measurementNumeric' ? (
           <div className="mt-2 rounded border border-gray-700 p-2">
+            {cleanString(answerConfig.measurementKind) === 'rvFAC'
+              ? renderRVFACContourControls(
+                  question,
+                  isCapturing || authoringSaving || !isDraftDefinition(authoringDefinition)
+                )
+              : null}
             {cleanString(answerConfig.measurementKind) === 'ivcRapRvsp'
               ? renderIVCRapRVSPControls(
                   'authoring', question, answerConfig.goldMeasurement,
