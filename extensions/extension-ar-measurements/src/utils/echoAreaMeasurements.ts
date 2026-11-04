@@ -170,3 +170,24 @@ export function buildClinicalRAAreaReportFieldUpdates(result: any = null) {
     RAaUOM: 'cm2',
   };
 }
+
+
+/** Clinical report adapter; source contours are preserved independently. */
+export function buildClinicalRVFACReportFieldUpdates(result: any = null) {
+  const values = result?.status === 'complete' ? result.values : null;
+  const eda = Number(values?.edaCM2);
+  const esa = Number(values?.esaCM2);
+  const fac = Number(values?.facPercent);
+  if (!values || !Number.isFinite(eda) || !Number.isFinite(esa) ||
+      !Number.isFinite(fac) || eda <= esa || esa <= 0 || fac <= 0 || fac > 100) {
+    return {};
+  }
+  return {
+    RVEDA: eda.toFixed(1),
+    RVEDAUOM: 'cm2',
+    RVESA: esa.toFixed(1),
+    RVESAUOM: 'cm2',
+    RVFAC: fac.toFixed(1),
+    RVFACUOM: '%',
+  };
+}
