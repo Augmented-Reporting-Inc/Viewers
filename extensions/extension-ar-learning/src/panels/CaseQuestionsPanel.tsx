@@ -3837,6 +3837,8 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       { slot: 'RV_ED', label: 'End-diastolic area (RVEDA)' },
       { slot: 'RV_ES', label: 'End-systolic area (RVESA)' },
     ];
+    const config = plainObject(question.answerConfig);
+    const sources = getCompleteCompositeFrameTargets(config);
     return (
       <div className="mt-2 rounded border border-cyan-700 bg-cyan-950/20 p-2 text-xs">
         <div className="mb-1 font-semibold text-cyan-100">RV FAC contour technique</div>
@@ -3855,12 +3857,21 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               <button
                 key={choice.command}
                 type="button"
-                disabled={disabled}
+                disabled={disabled || (config.compositeFrameGuidanceEnabled === true && !sources)}
                 className="rounded border border-cyan-600 px-2 py-1 text-cyan-100 disabled:opacity-40"
                 onClick={event => {
                   event.preventDefault();
                   event.stopPropagation();
-                  void runViewerCommand(commandsManager, choice.command, { slot });
+                  void (async () => {
+                    if (sources?.[slot]) {
+                      const jumped = await runViewerCommand(commandsManager, 'jumpToViewerQuizTarget', {
+                        viewerTarget: sources[slot],
+                        questionKey: question.questionKey,
+                      });
+                      if (jumped?.ok === false) return;
+                    }
+                    await runViewerCommand(commandsManager, choice.command, { slot });
+                  })();
                 }}
               >
                 {choice.text}
