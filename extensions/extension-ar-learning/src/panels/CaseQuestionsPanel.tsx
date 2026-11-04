@@ -1809,6 +1809,8 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
   // Explicit educator/learner interpretation only. No default RAP is selected.
   const [rapSelectionsByQuestionKey, setRapSelectionsByQuestionKey] =
     useState<Record<string, string>>({});
+  const [ivcPreviewByQuestionKey, setIvcPreviewByQuestionKey] =
+    useState<Record<string, any>>({});
   const [capturingFrameKey, setCapturingFrameKey] = useState('');
   const [capturingPointKey, setCapturingPointKey] = useState('');
   const [authoringPayload, setAuthoringPayload] = useState<any>(null);
@@ -3638,6 +3640,33 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     } finally {
       setAuthoringSaving(false);
     }
+  }
+
+  async function previewQuizIVCMeasurement(quizKey: string, question: QuizQuestion) {
+    const config = plainObject(question.answerConfig);
+    const result = await runViewerCommand(commandsManager, 'getSelectedViewerMeasurementQuizAnswer', {
+      question: {
+        ...question,
+        answerConfig: { ...config, measurementKind: 'ivcCollapsibility', unit: '%' },
+      },
+      unit: '%',
+      measurementType: '',
+    });
+    if (!result?.ok || result.answer?.measurementKind !== 'ivcCollapsibility') {
+      uiNotificationService.show({
+        title: 'IVC / RAP / RVSP',
+        message: 'Complete both calibrated IVC calipers before interpreting RAP. ' +
+          cleanString(result?.reason || ''),
+        type: 'warning',
+        duration: 5000,
+      });
+      return;
+    }
+    const selectionKey = `${quizKey}:${question.questionKey}`;
+    setIvcPreviewByQuestionKey(current => ({
+      ...current,
+      [selectionKey]: result.answer,
+    }));
   }
 
   function renderIVCRapRVSPControls(
