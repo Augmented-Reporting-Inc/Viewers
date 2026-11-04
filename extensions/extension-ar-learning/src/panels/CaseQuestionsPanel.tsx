@@ -457,6 +457,39 @@ function getCompleteEFContourFrameTargets(answerConfig: any) {
   return valid ? targets : null;
 }
 
+/**
+ * Saved gold composite evidence is navigable independently of optional guided
+ * frame targets. This is read-only; reopening an authored question must never
+ * restart contour acquisition or rewrite its previously accepted result.
+ */
+function getSavedGoldCompositeNavigationComponents(answerConfig: any) {
+  const gold = plainObject(plainObject(answerConfig).goldMeasurement);
+  const composite = plainObject(gold.compositeResult);
+  const kind = cleanString(plainObject(answerConfig).measurementKind);
+  const slots = kind === 'lvSimpsonEF'
+    ? EF_CONTOUR_FRAME_SLOTS
+    : ['laVolumeBiplane', 'laVolumeBiplaneDisks'].includes(kind)
+      ? [{ slot: 'A4C', label: 'Apical four-chamber' }, { slot: 'A2C', label: 'Apical two-chamber' }]
+      : kind === 'rvFAC'
+        ? [{ slot: 'RV_ED', label: 'RV end-diastole' }, { slot: 'RV_ES', label: 'RV end-systole' }]
+        : kind === 'ivcCollapsibility'
+          ? [{ slot: 'IVC_EXP', label: 'IVC expiration' }, { slot: 'IVC_INSP', label: 'IVC inspiration' }]
+          : kind === 'raArea' ? [{ slot: 'RA_ES', label: 'RA end-systole' }] : [];
+  const components = Array.isArray(composite.components) ? composite.components : [];
+  if (!slots.length || !components.length) return [];
+  return slots.map(({ slot, label }) => {
+    const component = components.find((entry: any) => cleanString(entry?.slot) === slot);
+    const target = plainObject(component?.target);
+    const complete = !!cleanString(component?.annotationId) &&
+      !!cleanString(target.studyInstanceUID) &&
+      !!cleanString(target.seriesInstanceUID) &&
+      !!cleanString(target.sopInstanceUID) &&
+      Number.isInteger(Number(target.frameNumber)) &&
+      Number(target.frameNumber) > 0;
+    return { slot, label, complete, target };
+  });
+}
+
 function getQuestionViewerTarget(question: QuizQuestion) {
   const answerConfig = plainObject(question?.answerConfig);
   const efContourTargets = getCompleteEFContourFrameTargets(answerConfig);
@@ -4137,6 +4170,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     const hasGuidedEFFrames = question.type === 'measurementNumeric' &&
       cleanString(answerConfig.measurementKind) === 'lvSimpsonEF';
     const authoredEFFrames = plainObject(answerConfig.efContourTargets);
+    const savedGoldComponents = getSavedGoldCompositeNavigationComponents(answerConfig);
     const guidedEFFramesComplete = !!getCompleteEFContourFrameTargets(answerConfig);
     const targetSummary = getViewerTargetSummary(viewerTarget);
     const isCapturing = capturingAuthoringKey.endsWith(`:${question.questionKey}`);
@@ -4346,6 +4380,41 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                 Off: preserve manual EF frame navigation and the existing Continue behavior.
               </p>
             )}
+          </div>
+        ) : null}
+
+        {savedGoldComponents.length > 0 ? (
+          <div className="mt-2 rounded border border-emerald-700/70 bg-emerald-950/20 p-2">
+            <div className="text-xs font-semibold text-emerald-100">
+              Saved gold contours — {savedGoldComponents.filter(component => component.complete).length}/{savedGoldComponents.length} verified source references
+            </div>
+            <p className="mt-1 text-[11px] text-gray-300">
+              These contours are already recorded. Select a component to inspect its saved instance and frame; you do not need to measure it again.
+            </p>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {savedGoldComponents.map(component => (
+                <button
+                  type="button"
+                  key={component.slot}
+                  className="rounded border border-emerald-600 px-2 py-1 text-xs text-emerald-100 disabled:opacity-40"
+                  disabled={!component.complete || authoringSaving}
+                  onClick={event => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    setActiveQuestionKey(`authoring:${question.questionKey}`);
+                    void runViewerCommand(commandsManager, 'jumpToViewerQuizTarget', {
+                      viewerTarget: component.target,
+                      questionKey: question.questionKey,
+                    });
+                  }}
+                >
+                  {component.label}{component.complete ? ' · View saved contour' : ' · Source unavailable'}
+                </button>
+              ))}
+            </div>
+            <p className="mt-2 text-xs text-emerald-100">
+              Saved result: {answerConfig.goldValue ?? plainObject(answerConfig.goldMeasurement).value ?? '—'} {answerConfig.unit || plainObject(answerConfig.goldMeasurement).unit || ''}
+            </p>
           </div>
         ) : null}
 
