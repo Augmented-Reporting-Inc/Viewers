@@ -2510,6 +2510,69 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     }
   }
 
+  /**
+   * A linked RVSP result must use the TR Vmax answer already recorded earlier
+   * in this exact quiz. Learner capture never reads an educator's gold TR value.
+   */
+  async function captureQuizMeasurementResult(
+    question: QuizQuestion,
+    { quiz = null, measurementId = '' }: { quiz?: QuizDefinition | null; measurementId?: string } = {}
+  ) {
+    const config = plainObject(question.answerConfig);
+    const linkedRVSP = cleanString(config.measurementKind) === 'ivcRapRvsp';
+    const captureQuestion = linkedRVSP
+      ? { ...question, answerConfig: { ...config, measurementKind: 'ivcCollapsibility', unit: '%' } }
+      : question;
+    const result = await runViewerCommand(commandsManager, 'getSelectedViewerMeasurementQuizAnswer', {
+      question: captureQuestion,
+      measurementType: cleanString(config.measurementType),
+      unit: linkedRVSP ? '%' : cleanString(config.unit),
+      measurementId: cleanString(measurementId),
+    });
+    if (!linkedRVSP || !result?.ok || !result?.answer) return result;
+
+    const quizQuestions = quiz?.questions || authoringQuestionsRef.current;
+    const currentIndex = quizQuestions.findIndex(entry => entry.questionKey === question.questionKey);
+    const priorQuestion = currentIndex > 0
+      ? quizQuestions.slice(0, currentIndex).reverse().find(entry =>
+          entry.type === 'measurementNumeric' &&
+          cleanString(plainObject(entry.answerConfig).measurementKind) === 'trVmax'
+        )
+      : null;
+    const trAnswer = priorQuestion
+      ? quiz
+        ? answersByQuizKey?.[quiz.quizKey]?.[priorQuestion.questionKey]
+        : plainObject(priorQuestion.answerConfig).goldMeasurement
+      : null;
+    const selectionKey = quiz
+      ? `${quiz.quizKey}:${question.questionKey}`
+      : `authoring:${question.questionKey}`;
+    const calculation = composeIVCRapRVSP({
+      ivcAnswer: result.answer,
+      rapMMHG: rapSelectionsByQuestionKey[selectionKey] || '',
+      trVmaxAnswer: trAnswer,
+      trVmaxQuestionKey: priorQuestion?.questionKey || '',
+    });
+    if (calculation.status !== 'complete') {
+      return { ok: false, reason: calculation.reason };
+    }
+    return {
+      ...result,
+      answer: {
+        ...result.answer,
+        ...calculation,
+        viewerTarget: result.answer.viewerTarget,
+        sourceRefs: result.answer.sourceRefs,
+        reviewPayload: {
+          ...plainObject(result.answer.reviewPayload),
+          label: 'IVC / RAP / RVSP',
+          toolName: 'viewer-composite-measurement',
+          components: result.answer.compositeResult?.components,
+        },
+      },
+    };
+  }
+
   async function captureSelectedMeasurementAnswer(
     quiz: QuizDefinition,
     question: QuizQuestion,
@@ -2521,16 +2584,10 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     setCapturingMeasurementKey(captureKey);
 
     try {
-      const result = await runViewerCommand(
-        commandsManager,
-        'getSelectedViewerMeasurementQuizAnswer',
-        {
-          question,
-          measurementType: cleanString(answerConfig.measurementType),
-          unit: cleanString(answerConfig.unit),
-          measurementId: cleanString(options.measurementId),
-        }
-      );
+      const result = await captureQuizMeasurementResult(question, {
+        quiz,
+        measurementId: cleanString(options.measurementId),
+      });
 
       if (!result?.ok || !result?.answer) {
         const reason = cleanString(result?.reason || 'No selected measurement found.');
@@ -3384,16 +3441,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     setCapturingAuthoringKey(captureKey);
 
     try {
-      const result = await runViewerCommand(
-        commandsManager,
-        'getSelectedViewerMeasurementQuizAnswer',
-        {
-          question,
-          measurementType: cleanString(answerConfig.measurementType),
-          unit: cleanString(answerConfig.unit),
-          measurementId: cleanString(options.measurementId),
-        }
-      );
+      const result = await captureQuizMeasurementResult(question, {
+        measurementId: cleanString(options.measurementId),
+      });
 
       if (!result?.ok || !result?.answer) {
         throw new Error(result?.reason || 'selected measurement not found');
