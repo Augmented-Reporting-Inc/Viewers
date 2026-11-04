@@ -637,6 +637,7 @@ const ECHO_ONLY_MEASUREMENT_TOOL_IDS = [
   'LAVolume',
   'RAArea',
   'RVFAC',
+  'SpectralVmax',
   'SpectralDopplerVTI',
   'DecelerationTime',
   'UltrasoundDirectionalTool',
