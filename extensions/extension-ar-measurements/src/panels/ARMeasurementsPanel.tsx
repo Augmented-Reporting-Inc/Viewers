@@ -6,6 +6,7 @@ import {
 } from '../utils/lvSimpson';
 import {
   calculateLAVolume,
+  calculateLABiplaneDisks,
   LA_VOLUME_SLOT_ORDER,
 } from '../utils/laVolume';
 import { getViewerMeasurementDomainFromPath } from '../utils/measurementLabelConfig';
@@ -678,7 +679,7 @@ function getLVSimpsonSlotStatusText(slotResult) {
   return ['incomplete', axisText, coverageText].filter(Boolean).join(' • ') || 'missing';
 }
 
-function LAVolumeSummary({ result }) {
+function LAVolumeSummary({ result, disksResult = null }) {
   if (!result) {
     return null;
   }
@@ -704,6 +705,24 @@ function LAVolumeSummary({ result }) {
         <div className="mt-3 rounded bg-black p-2">
           <div className="text-xs text-gray-400">Biplane LA volume</div>
           <div className="text-lg font-semibold">{formatSimpsonValue(values.volumeML)} mL</div>
+        </div>
+      ) : null}
+
+      {disksResult ? (
+        <div className="mt-3 rounded border border-gray-700 p-2">
+          <div className="text-xs font-semibold text-gray-300">Simpson biplane disks (20 disks)</div>
+          <div className="mt-1 text-sm font-semibold">
+            {disksResult.status === 'complete'
+              ? formatSimpsonValue(disksResult.values?.volumeML) + ' mL'
+              : disksResult.status}
+          </div>
+          <div className="mt-1 text-xs text-gray-400">
+            Independent method preview. The established area-length result remains the
+            report default unless the clinical report explicitly selects disk summation.
+          </div>
+          {disksResult.status === 'invalid' && disksResult.guidance?.length ? (
+            <div className="mt-1 text-xs text-yellow-300">{disksResult.guidance[0]}</div>
+          ) : null}
         </div>
       ) : null}
 
@@ -1905,6 +1924,13 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
     return calculateLAVolume(visibleMeasurements);
   }, [domain, visibleMeasurements]);
 
+  const laDisksResult = useMemo(
+    () => domain === 'echo' && isClinicalReportSaveTarget
+      ? calculateLABiplaneDisks(visibleMeasurements)
+      : null,
+    [domain, isClinicalReportSaveTarget, visibleMeasurements]
+  );
+
   const raAreaResult = useMemo(
     () => domain === 'echo' ? calculateRAAreaFromMeasurements(visibleMeasurements) : null,
     [domain, visibleMeasurements]
@@ -2513,7 +2539,7 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
                     </div>
                   ) : null}
 
-                  {group.summary === 'la' ? <LAVolumeSummary result={laVolumeResult} /> : null}
+                  {group.summary === 'la' ? <LAVolumeSummary result={laVolumeResult} disksResult={laDisksResult} /> : null}
                   {group.summary === 'lv' ? <LVSimpsonSummary result={lvSimpsonResult} /> : null}
                   {group.summary === 'ivc' && isClinicalReportSaveTarget
                     ? <IVCMeasurementSummary result={ivcMeasurementResult} />
