@@ -3124,7 +3124,40 @@ function isCompositeQuizSourceAnnotation(measurement) {
       measurement?.measurements?.lvSimpson || measurement?.measurements?.laVolume);
 }
 
-function getMeasurementValueAndUnitForQuiz(measurement) {
+function getMeasurementValueAndUnitForQuiz(measurement, requestedKind = '') {
+  // TR-specific quiz values must come from the calibrated clinical acquisition,
+  // never from an incidental ROI length/area or a question-provided number.
+  if (requestedKind === 'trVTI') {
+    const spectral = getSpectralDopplerGeometry(measurement, measurement);
+    const vti = Number(spectral?.values?.vtiCM);
+    const trace = spectral?.trace || {};
+    if (
+      String(getMeasurementDisplayLabel(measurement)).trim().toLowerCase() === 'tr vti' &&
+      spectral?.status === 'complete' &&
+      spectral?.calibration?.source === 'SequenceOfUltrasoundRegions' &&
+      Number(trace.calibratedPointCount) >= 2 &&
+      Number(trace.envelopeColumnCount) >= 2 &&
+      Number.isFinite(vti) && vti > 0 &&
+      isSpectralDopplerViewerMeasurement(measurement)
+    ) {
+      return { value: vti, unit: 'cm', measurementKind: 'trVTI' };
+    }
+    return { value: null, unit: '', measurementKind: '' };
+  }
+  if (requestedKind === 'trVmax') {
+    const directional = getUltrasoundDirectionalGeometry(measurement, measurement);
+    const label = String(getMeasurementDisplayLabel(measurement)).trim().toLowerCase();
+    const value = Number(directional?.reportValue);
+    if (
+      label === 'tr peak velocity' &&
+      directional?.acquisitionMode === 'spectralVmax' &&
+      directional?.reportUnit === 'm/s' &&
+      Number.isFinite(value) && value > 0 && value <= 8
+    ) {
+      return { value, unit: 'm/s', measurementKind: 'trVmax' };
+    }
+    return { value: null, unit: '', measurementKind: '' };
+  }
   // A contour's incidental length/area is not its composite clinical result.
   // Prevent it from becoming an accepted scalar quiz answer.
   if (isCompositeQuizSourceAnnotation(measurement)) {
@@ -3248,7 +3281,8 @@ function buildViewerQuizAnswerFromMeasurement({
   expectedUnit = '',
   displaySetService = null,
 } = {}) {
-  const valueAndUnit = getMeasurementValueAndUnitForQuiz(measurement);
+  const requestedKind = String(question?.answerConfig?.measurementKind || '').trim();
+  const valueAndUnit = getMeasurementValueAndUnitForQuiz(measurement, requestedKind);
 
   if (valueAndUnit.value == null) {
     return null;
@@ -11737,6 +11771,16 @@ function commandsModule({
         }).catch(error =>
           console.warn('[Viewer quiz] EF activation failed:', error)
         );
+        return { ok: true, measurementKind, workflowStarted: true };
+      }
+      if (measurementKind === 'trVmax') {
+        void actions.startUltrasoundDirectionalWorkflow({ spectralVmax: true })
+          .catch(error => console.warn('[Viewer quiz] TR Vmax activation failed:', error));
+        return { ok: true, measurementKind, workflowStarted: true };
+      }
+      if (measurementKind === 'trVTI') {
+        void actions.startSpectralDopplerVTIWorkflow()
+          .catch(error => console.warn('[Viewer quiz] TR VTI activation failed:', error));
         return { ok: true, measurementKind, workflowStarted: true };
       }
       if (measurementKind === 'ivcCollapsibility') {
