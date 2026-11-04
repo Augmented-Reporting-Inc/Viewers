@@ -39,6 +39,8 @@ export function isGuidedQuizCompositeKind(value: unknown): boolean {
     'rvFAC',
     'raArea',
     'ivcCollapsibility',
+    'trVmax',
+    'trVTI',
   ].includes(String(value || ''));
 }
 
