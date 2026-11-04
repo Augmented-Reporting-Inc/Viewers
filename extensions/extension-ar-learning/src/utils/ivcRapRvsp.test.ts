@@ -35,8 +35,10 @@ describe('linked educational IVC/RAP/RVSP result', () => {
     expect(result.value).toBe(34.36);
     expect(result.compositeResult.rapMMHG).toBe(3);
     expect(result.compositeResult.trVmax.questionKey).toBe('q-tr');
-    expect(composeIVCRapRVSP({ ...args, rapMMHG: 8 }).value).toBe(39.36);
-    expect(composeIVCRapRVSP({ ...args, rapMMHG: 15 }).value).toBe(46.36);
+    const rap8 = composeIVCRapRVSP({ ...args, rapMMHG: 8 });
+    const rap15 = composeIVCRapRVSP({ ...args, rapMMHG: 15 });
+    expect(rap8.status === 'complete' ? rap8.value : null).toBe(39.36);
+    expect(rap15.status === 'complete' ? rap15.value : null).toBe(46.36);
   });
   it('requires persisted source references rather than synthesized numbers', () => {
     expect(composeIVCRapRVSP({ ...args, trVmaxAnswer: { ...tr, sourceAnnotationId: '' } }).status).toBe('unavailable');
