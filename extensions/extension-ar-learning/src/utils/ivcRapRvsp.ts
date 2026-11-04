@@ -54,10 +54,10 @@ export function composeIVCRapRVSP({
       ivcAnswer?.compositeResult?.methodId !== 'ivc-collapsibility-v1' ||
       ivcAnswer?.unit !== '%' || collapse === null || collapse < 0 || collapse > 100 ||
       !validCaliperComponents(ivcAnswer)) {
-    return { status: 'unavailable', reason: 'ivc-caliper-evidence-incomplete' };
+    return { status: 'unavailable' as const, reason: 'ivc-caliper-evidence-incomplete' };
   }
   if (!RAP_CHOICES_MMHG.includes(rap as 3 | 8 | 15)) {
-    return { status: 'unavailable', reason: 'select-rap-3-8-or-15' };
+    return { status: 'unavailable' as const, reason: 'select-rap-3-8-or-15' };
   }
   if (!clean(trVmaxQuestionKey) ||
       trVmaxAnswer?.measurementKind !== 'trVmax' ||
@@ -65,13 +65,13 @@ export function composeIVCRapRVSP({
       tr === null || tr <= 0 || tr > 8 ||
       !clean(trVmaxAnswer?.sourceAnnotationId) ||
       !hasSourceTarget(trVmaxAnswer?.viewerTarget)) {
-    return { status: 'unavailable', reason: 'previous-tr-vmax-required' };
+    return { status: 'unavailable' as const, reason: 'previous-tr-vmax-required' };
   }
 
   const gradientMMHG = Number((4 * tr * tr).toFixed(2));
   const rvspMMHG = Number((gradientMMHG + rap).toFixed(2));
   return {
-    status: 'complete',
+    status: 'complete' as const,
     measurementKind: 'ivcRapRvsp',
     measurementType: 'ivcRapRvsp',
     value: rvspMMHG,
