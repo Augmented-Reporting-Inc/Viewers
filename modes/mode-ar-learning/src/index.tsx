@@ -25,6 +25,8 @@ const ECHO_LENGTH_MEASUREMENT_LABELS_CONFIG = {
     { value: 'LAd', label: 'Left atrial dimension' },
     { value: 'RVIDd', label: 'RVIDd' },
     { value: 'TAPSE', label: 'TAPSE' },
+    { value: 'IVCexp', label: 'IVC end-expiration diameter' },
+    { value: 'IVCinsp', label: 'IVC end-inspiration diameter' },
   ],
 };
 
