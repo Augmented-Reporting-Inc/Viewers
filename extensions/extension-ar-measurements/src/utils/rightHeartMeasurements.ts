@@ -163,8 +163,8 @@ function ivcSlot(measurement: ViewerMeasurement): IVCSlot | null {
   const label = String(
     measurement?.label || measurement?.measurementRole || measurement?.role || ''
   ).trim().toLowerCase().replace(/[\s_-]+/g, '');
-  if (['ivcexp', 'ivcexpiration', 'ivcendexpiration'].includes(label)) return 'expiration';
-  if (['ivcinsp', 'ivcinspiration', 'ivcendinspiration'].includes(label)) return 'inspiration';
+  if (['ivcexp', 'ivcexpiration', 'ivcendexpiration', 'ivcendexpirationdiameter'].includes(label)) return 'expiration';
+  if (['ivcinsp', 'ivcinspiration', 'ivcendinspiration', 'ivcendinspirationdiameter'].includes(label)) return 'inspiration';
   return null;
 }
 
