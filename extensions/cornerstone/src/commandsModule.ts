@@ -9429,6 +9429,14 @@ function commandsModule({
         // The temporary drawing is only an acquisition carrier; the ordinary
         // persisted LA spline below owns the final editable annotation.
         actions.removeMeasurement({ uid: freehandContour.annotationId });
+        try {
+          actions.setToolActive({
+            toolName: toolNames.WindowLevel || 'WindowLevel',
+            toolGroupId: laToolGroup,
+          });
+        } catch (error) {
+          console.warn('[LA Volume] could not restore navigation after freehand:', error);
+        }
       }
 
       const geometry = buildEchoVolumeContourFromBaseAxis({
