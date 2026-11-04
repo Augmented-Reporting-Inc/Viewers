@@ -1,6 +1,6 @@
 import {
   COMPOSITE_FRAME_SLOTS, getCompleteCompositeFrameTargets,
-  getCompositePhaseFrameTarget,
+  getCompositePhaseFrameTarget, matchesConfiguredCompositeFrame,
 } from './compositeFrameTargets';
 
 const target = (sop: string, frame = 1, study = 'study-1') => ({
@@ -27,6 +27,14 @@ describe('independent DICOM phase targets', () => {
       })).toBeNull();
     }
   );
+  it('requires the active viewport to match the configured source after navigation', () => {
+    const expected = target('sop-a', 14);
+    expect(matchesConfiguredCompositeFrame({ ...expected }, expected)).toBe(true);
+    expect(matchesConfiguredCompositeFrame(target('sop-b', 14), expected)).toBe(false);
+    expect(matchesConfiguredCompositeFrame(target('sop-a', 13), expected)).toBe(false);
+    expect(matchesConfiguredCompositeFrame(target('sop-a', 14, 'other-study'), expected)).toBe(false);
+    expect(matchesConfiguredCompositeFrame({ ...expected, seriesInstanceUID: '' }, expected)).toBe(false);
+  });
   it('supports separate frames within the same DICOM cine', () => {
     const config = {
       measurementKind: 'rvFAC', compositeFrameGuidanceEnabled: true,
