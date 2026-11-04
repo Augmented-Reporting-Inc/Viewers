@@ -10276,7 +10276,8 @@ function commandsModule({
       }
 
       const reportMapping = buildViewerReportMapping(selectedTarget);
-      const measurementLabel = selectedTarget.reportMapped
+      const measurementLabel = selectedTarget.reportMapped ||
+        selectedTarget.key === 'spectral.trVti'
         ? selectedTarget.label
         : SPECTRAL_DOPPLER_LABEL;
 
