@@ -36,6 +36,20 @@ export function isCompleteQuizDicomFrameTarget(value: any): boolean {
     Number(value?.frameNumber) >= 1;
 }
 
+/** Check the rendered active viewport after cross-series DICOM navigation. */
+export function matchesConfiguredCompositeFrame(actual: any, configured: any): boolean {
+  if (!isCompleteQuizDicomFrameTarget(actual) ||
+      !isCompleteQuizDicomFrameTarget(configured)) return false;
+  const identity = (target: any, lower: string, upper: string) =>
+    clean(target[lower] || target[upper]);
+  return [
+    ['studyInstanceUID', 'StudyInstanceUID'],
+    ['seriesInstanceUID', 'SeriesInstanceUID'],
+    ['sopInstanceUID', 'SOPInstanceUID'],
+  ].every(([lower, upper]) => identity(actual, lower, upper) === identity(configured, lower, upper)) &&
+    Number(actual.frameNumber) === Number(configured.frameNumber);
+}
+
 export function getCompleteCompositeFrameTargets(answerConfig: any): Record<string, any> | null {
   const config = answerConfig && typeof answerConfig === 'object' ? answerConfig : {};
   const slots = COMPOSITE_FRAME_SLOTS[clean(config.measurementKind)];
