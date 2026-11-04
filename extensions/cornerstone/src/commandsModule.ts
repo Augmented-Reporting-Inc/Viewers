@@ -81,6 +81,7 @@ import {
   buildEchoVolumeContourFromBaseAxis,
   buildLVSimpsonContourFromHingeApex,
 } from './utils/lvSimpsonContour';
+import { buildRVFACContourFromAnnulusApex } from './utils/rvFacContour';
 import {
   SPECTRAL_DOPPLER_LABEL,
   SPECTRAL_DOPPLER_MEASUREMENT_KIND,
@@ -7749,10 +7750,14 @@ function commandsModule({
   // These one-contour chamber-area sessions share a single ownership boundary.
   // Cancelling or switching tools must never label an unrelated freehand ROI.
   let activeEchoAreaSessionId = '';
+  let rvFACGuidedCancel: null | (() => void) = null;
   let echoAreaCompletionHandler: null | ((event: Event) => void) = null;
   let echoAreaEscapeHandler: null | ((event: KeyboardEvent) => void) = null;
 
   function clearEchoAreaWorkflowListeners() {
+    const cancelGuided = rvFACGuidedCancel;
+    rvFACGuidedCancel = null;
+    cancelGuided?.();
     if (echoAreaCompletionHandler) {
       eventTarget.removeEventListener(Enums.Events.ANNOTATION_COMPLETED, echoAreaCompletionHandler);
       echoAreaCompletionHandler = null;
@@ -9838,6 +9843,144 @@ function commandsModule({
       return { ok: true, sessionId: workflowSessionId, toolName: ULTRASOUND_DIRECTIONAL_TOOL_NAME, target: selectedTarget.key };
     },
     // AR_DECELERATION_TIME:END action
+
+    startGuidedRVFACContourWorkflow: async ({ slot = '' } = {}) => {
+      const chosen = String(slot || '').toUpperCase();
+      if (!['RV_ED', 'RV_ES'].includes(chosen)) return { ok: false, reason: 'invalid-slot' };
+      const existing = getCurrentViewerMeasurementSnapshot(measurementService);
+      if (existing.some(item => getEchoAreaSlot(item) === chosen)) {
+        return { ok: false, reason: 'slot-already-captured' };
+      }
+      if (activeLVSimpsonWorkflowSessionId) clearLVSimpsonWorkflowIfCurrent(activeLVSimpsonWorkflowSessionId);
+      if (activeLAVolumeWorkflowSessionId) clearLAVolumeWorkflowIfCurrent(activeLAVolumeWorkflowSessionId);
+      clearEchoAreaWorkflowListeners();
+      clearUltrasoundDirectionalWorkflowListeners();
+      clearSpectralDopplerWorkflowListeners();
+
+      const { viewport } = _getActiveViewportEnabledElement() || {};
+      const viewportId = viewportGridService.getActiveViewportId();
+      const groupRef = toolGroupService.getToolGroupForViewport(viewportId);
+      const group = typeof groupRef === 'string' ? toolGroupService.getToolGroup(groupRef) : groupRef;
+      if (!viewport?.element || !viewportId || !group) {
+        return { ok: false, reason: 'viewport-not-ready' };
+      }
+
+      const sessionId = csUtils.uuidv4();
+      activeEchoAreaSessionId = sessionId;
+      const isCancelled = () => activeEchoAreaSessionId !== sessionId;
+      const label = chosen === 'RV_ED' ? 'RVEDA' : 'RVESA';
+      const phase = chosen === 'RV_ED' ? 'ED' : 'ES';
+
+      try {
+        uiNotificationService.show({
+          title: label,
+          message: 'Select the RV-focused A4C ' + phase +
+            ' frame. Drag from the free-wall tricuspid annulus hinge to the septal hinge. Esc cancels.',
+          type: 'info',
+          duration: 8000,
+        });
+        const annulus = await captureLVSimpsonDrag({
+          viewport, toolGroup: group, isCancelled,
+          setCancelHandler: cancel => { if (!isCancelled()) rvFACGuidedCancel = cancel; },
+        });
+        if (!annulus || isCancelled()) return { ok: false, reason: 'annulus-cancelled' };
+
+        uiNotificationService.show({
+          title: label,
+          message: 'Now drag from the annular midpoint to the RV apex. Refine the resulting editable spline against the true endocardial border.',
+          type: 'info',
+          duration: 9000,
+        });
+        const apex = await captureLVSimpsonDrag({
+          viewport, toolGroup: group, isCancelled,
+          setCancelHandler: cancel => { if (!isCancelled()) rvFACGuidedCancel = cancel; },
+        });
+        if (!apex || isCancelled()) return { ok: false, reason: 'apex-cancelled' };
+
+        const geometry = buildRVFACContourFromAnnulusApex({
+          freeWallHingePoint: annulus.startWorld,
+          septalHingePoint: annulus.endWorld,
+          apexPoint: apex.endWorld,
+        });
+        if (!geometry) return { ok: false, reason: 'invalid-rv-landmarks' };
+
+        const info = getCurrentViewportImageInfo(viewport);
+        const displaySet = getActiveViewportDisplaySet({
+          viewportGridService, displaySetService, viewportId,
+        });
+        const study = String(displaySet?.StudyInstanceUID || displaySet?.studyInstanceUID || '');
+        const series = String(displaySet?.SeriesInstanceUID || displaySet?.seriesInstanceUID || '');
+        if (!info?.imageId || !study || !series) return { ok: false, reason: 'missing-image-reference' };
+
+        const annotationId = csUtils.uuidv4();
+        let hydrated = null;
+        try {
+          hydrated = cornerstoneTools.SplineROITool?.hydrate?.(viewportId, geometry.points, {
+            annotationUID: annotationId,
+          });
+        } catch (error) {
+          console.warn('[RV FAC] Spline hydration failed:', error);
+        }
+        const state = cornerstoneTools.annotation.state.getAnnotation?.(annotationId) || hydrated;
+        if (!state) return { ok: false, reason: 'spline-hydration-failed' };
+
+        const sop = getSopInstanceIdFromImageId(info.imageId) ||
+          displaySet?.SOPInstanceUID || displaySet?.sopInstanceUID || '';
+        const echoArea = {
+          slot: chosen, phase, view: 'A4C',
+          method: 'closed-contour-planimetry',
+          contourSource: geometry.contourSource,
+          freeWallHingePoint: geometry.freeWallHingePoint,
+          septalHingePoint: geometry.septalHingePoint,
+          apexPoint: geometry.apexPoint,
+        };
+        state.metadata = {
+          ...(state.metadata || {}),
+          toolName: toolNames.SplineROI || 'SplineROI',
+          referencedImageId: info.imageId,
+          StudyInstanceUID: study,
+          SeriesInstanceUID: series,
+          SOPInstanceUID: sop,
+          FrameOfReferenceUID: viewport.getFrameOfReferenceUID?.() || '',
+        };
+        state.data = {
+          ...(state.data || {}),
+          label, echoArea,
+          handles: { ...(state.data?.handles || {}), points: geometry.points },
+          contour: { ...(state.data?.contour || {}), polyline: geometry.points, closed: true },
+        };
+        state.invalidated = true;
+
+        measurementService.update(annotationId, {
+          uid: annotationId,
+          annotationUID: annotationId,
+          toolName: toolNames.SplineROI || 'SplineROI',
+          label, measurementRole: label, role: chosen,
+          measurementKind: 'echoAreaSlot',
+          echoArea, slot: chosen, phase, view: 'A4C',
+          referenceStudyUID: study,
+          referenceSeriesUID: series,
+          SOPInstanceUID: sop,
+          referencedImageId: info.imageId,
+          FrameOfReferenceUID: state.metadata.FrameOfReferenceUID,
+          frameNumber: getFrameNumberFromReferencedImageId(info.imageId),
+          points: geometry.points,
+        }, true);
+        actions.markViewerMeasurementCreatedInSession?.({ uid: annotationId });
+        dispatchLiveMeasurementsRefresh({ reason: 'guided-rv-area-created', annotationUID: annotationId });
+        viewport.render?.();
+        uiNotificationService.show({
+          title: label,
+          message: 'Adjust the spline handles to the RV blood-tissue boundary. ' +
+            (phase === 'ED' ? 'Then capture RVESA in the same cine.' : 'Review RV FAC before saving.'),
+          type: 'success',
+          duration: 9000,
+        });
+        return { ok: true, slot: chosen, annotationId };
+      } finally {
+        if (activeEchoAreaSessionId === sessionId) clearEchoAreaWorkflowListeners();
+      }
+    },
     startEchoAreaContourWorkflow: async ({ slot = '' } = {}) => {
       const configuredSlots = {
         RA_ES: {
@@ -10000,7 +10143,7 @@ function commandsModule({
         });
         return { ok: false, reason: 'rv-fac-contours-complete' };
       }
-      return actions.startEchoAreaContourWorkflow({ slot: next });
+      return actions.startGuidedRVFACContourWorkflow({ slot: next });
     },
     startSpectralDopplerVTIWorkflow: async () => {
       clearEchoAreaWorkflowListeners();
@@ -14290,6 +14433,7 @@ function commandsModule({
     startRAAreaWorkflow: { commandFn: actions.startRAAreaWorkflow },
     startRVFACWorkflow: { commandFn: actions.startRVFACWorkflow },
     startEchoAreaContourWorkflow: { commandFn: actions.startEchoAreaContourWorkflow },
+    startGuidedRVFACContourWorkflow: { commandFn: actions.startGuidedRVFACContourWorkflow },
     startBowelCurvedLengthWorkflow: {
       commandFn: actions.startBowelCurvedLengthWorkflow,
     },
