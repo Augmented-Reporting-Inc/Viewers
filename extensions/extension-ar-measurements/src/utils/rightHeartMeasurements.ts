@@ -204,8 +204,9 @@ function compatibleIVCCinePair(a: ViewerMeasurement, b: ViewerMeasurement): bool
   const sopB = String(b?.SOPInstanceUID || b?.metadata?.SOPInstanceUID || '').trim();
   const frameA = finiteNumber(a?.frameNumber ?? a?.metadata?.frameNumber);
   const frameB = finiteNumber(b?.frameNumber ?? b?.metadata?.frameNumber);
-  if (sopA && sopB && sopA === sopB && frameA != null && frameB != null &&
-      frameA === frameB) return false;
+  if (sopA && sopB && sopA === sopB &&
+      (!Number.isInteger(frameA) || !Number.isInteger(frameB) ||
+       frameA < 1 || frameB < 1 || frameA === frameB)) return false;
   return true;
 }
 
