@@ -9203,7 +9203,9 @@ function commandsModule({
     startLAVolumeWorkflow: async ({
       slot: requestedSlot = '',
       sessionId: requestedSessionId = '',
+      contourTechnique = 'axisApex',
     } = {}) => {
+      const useFreehand = contourTechnique === 'freehand';
       clearUltrasoundDirectionalWorkflowListeners();
       const workflowSessionId = requestedSessionId || `${csUtils.uuidv4()}`;
 
@@ -9359,11 +9361,85 @@ function commandsModule({
         return null;
       }
 
+      // Both techniques retain the same independently calibrated annulus and
+      // superior-wall landmarks. Freehand replaces only the contour geometry;
+      // the area-length/disks calculators continue to use the same long axis.
+      let freehandContour: any = null;
+      if (useFreehand) {
+        laVolumeMouseTools.restore();
+        const toolName = toolNames.PlanarFreehandROI || 'PlanarFreehandROI';
+        const activation = actions.activateViewerMeasurementTool({
+          toolName, stopCine: true,
+        });
+        if (!activation?.ok) {
+          clearLAVolumeWorkflowIfCurrent(workflowSessionId);
+          return { ok: false, reason: 'la-freehand-tool-unavailable' };
+        }
+
+        const expectedImageId = getCurrentViewportImageInfo(viewport)?.imageId || '';
+        uiNotificationService.show({
+          title: 'LA Volume freehand',
+          message: `Trace and close the ${slotDisplayName} LA cavity including the annular closure line. Keep the same DICOM image/frame used for the landmarks. Press Esc to cancel.`,
+          type: 'info', duration: 10000,
+        });
+        freehandContour = await new Promise(resolve => {
+          let finished = false;
+          const finish = (result: any) => {
+            if (finished) return;
+            finished = true;
+            eventTarget.removeEventListener(Enums.Events.ANNOTATION_COMPLETED, completed);
+            window.removeEventListener('keydown', escape);
+            activeLAVolumeCaptureCancel = null;
+            resolve(result);
+          };
+          const completed = (event: Event) => {
+            if (isWorkflowCancelled()) return finish(null);
+            const source = (event as CustomEvent)?.detail?.annotation;
+            if (String(source?.metadata?.toolName || '') !== toolName) return;
+            const annotationId = String(source?.annotationUID || '').trim();
+            const imageId = String(source?.metadata?.referencedImageId || '');
+            const points = source?.data?.contour?.polyline;
+            if (!annotationId || !expectedImageId || imageId !== expectedImageId ||
+                !Array.isArray(points) || points.length < 6 ||
+                source?.data?.contour?.closed !== true ||
+                !points.every((point: any) =>
+                  Array.isArray(point) && point.length >= 2 &&
+                  point.slice(0, 3).every((coordinate: any) => Number.isFinite(Number(coordinate))))) {
+              uiNotificationService.show({
+                title: 'LA Volume freehand',
+                message: 'Closed calibrated LA contour on the landmark image/frame is required.',
+                type: 'warning', duration: 6000,
+              });
+              return;
+            }
+            finish({ annotationId, points: points.map((point: any) =>
+              [Number(point[0]), Number(point[1]), Number(point[2] ?? 0)]) });
+          };
+          const escape = (event: KeyboardEvent) => {
+            if (event.key === 'Escape') finish(null);
+          };
+          activeLAVolumeCaptureCancel = () => finish(null);
+          eventTarget.addEventListener(Enums.Events.ANNOTATION_COMPLETED, completed);
+          window.addEventListener('keydown', escape);
+        });
+        if (!freehandContour || isWorkflowCancelled()) {
+          clearLAVolumeWorkflowIfCurrent(workflowSessionId);
+          return { ok: false, reason: 'la-freehand-contour-cancelled' };
+        }
+        // The temporary drawing is only an acquisition carrier; the ordinary
+        // persisted LA spline below owns the final editable annotation.
+        actions.removeMeasurement({ uid: freehandContour.annotationId });
+      }
+
       const geometry = buildEchoVolumeContourFromBaseAxis({
         baseLeftPoint: annulus.startWorld,
         baseRightPoint: annulus.endWorld,
         axisPoint: superiorDrag.endWorld,
       });
+
+      if (geometry?.points?.length && freehandContour?.points?.length >= 6) {
+        geometry.points = freehandContour.points;
+      }
 
       if (!geometry?.points?.length) {
         clearLAVolumeWorkflowIfCurrent(workflowSessionId);
@@ -9406,7 +9482,7 @@ function commandsModule({
         view: slotInfo.view,
         phase: 'ES',
         label,
-        contourSource: 'annulusAxisGenerated',
+        contourSource: useFreehand ? 'freehandWithAnnulusAxis' : 'annulusAxisGenerated',
         baseLeftPoint: geometry.baseLeftPoint,
         baseRightPoint: geometry.baseRightPoint,
         baseMidpoint: geometry.baseMidpoint,
@@ -9517,7 +9593,7 @@ function commandsModule({
       ]);
       const nextSlot = getNextMissingLAVolumeSlot(remainingSlotCandidates);
 
-      if (nextSlot && !isWorkflowCancelled()) {
+      if (nextSlot && !isWorkflowCancelled() && !useFreehand) {
         uiNotificationService.show({
           title: 'LA Volume',
           message: `${slotInfo.slot} created. Navigate to ${getLAVolumeSlotDisplayName(
@@ -9542,6 +9618,15 @@ function commandsModule({
       }
 
       clearLAVolumeWorkflowIfCurrent(workflowSessionId);
+
+      if (nextSlot && useFreehand) {
+        uiNotificationService.show({
+          title: 'LA Volume',
+          message: `${slotInfo.slot} saved. Select the next LA phase source and start its chosen contour technique.`,
+          type: 'success', duration: 7000,
+        });
+        return measurement;
+      }
 
       uiNotificationService.show({
         title: 'LA Volume',
