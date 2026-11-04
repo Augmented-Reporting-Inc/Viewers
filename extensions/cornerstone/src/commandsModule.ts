@@ -108,6 +108,7 @@ import {
   buildUltrasoundDirectionalReportMapping,
   convertUltrasoundDirectionalValueForTarget,
   getUltrasoundDirectionalTargetOptionsForUnit,
+  getSpectralVmaxTargetOptionsForUnit,
   normalizeUltrasoundDirectionalTargetSelection,
 } from './utils/ultrasoundDirectionalReportMapping';
 import { isIuscanBowelViewerContext } from '../../extension-ar-measurements/src/utils/measurementLabelConfig';
@@ -9489,7 +9490,7 @@ function commandsModule({
 
       return measurement;
     },
-    startUltrasoundDirectionalWorkflow: async () => {
+    startUltrasoundDirectionalWorkflow: async ({ spectralVmax = false } = {}) => {
       clearEchoAreaWorkflowListeners();
       clearUltrasoundDirectionalWorkflowListeners();
 
@@ -9514,8 +9515,9 @@ function commandsModule({
       // ultrasound annotation tool. Learning/research/review workflows must not
       // accidentally acquire clinical AR report mappings.
       if (
-        measurementDomain !== 'echo' ||
-        !isClinicalReportMeasurementsSaveTarget(saveTarget)
+        (!spectralVmax && (measurementDomain !== 'echo' ||
+          !isClinicalReportMeasurementsSaveTarget(saveTarget))) ||
+        (spectralVmax && ['bowel', 'iuscan'].includes(measurementDomain))
       ) {
         return activation;
       }
@@ -9557,9 +9559,9 @@ function commandsModule({
         const rawValue = Number(distance?.value);
         const rawUnit = String(distance?.unit || '').trim();
         const renderContent = customizationService.getCustomization('ui.labellingComponent');
-        const targetOptions = getUltrasoundDirectionalTargetOptionsForUnit(rawUnit, {
-          includeGeneric: true,
-        });
+        const targetOptions = spectralVmax
+          ? getSpectralVmaxTargetOptionsForUnit(rawUnit, { includeGeneric: true })
+          : getUltrasoundDirectionalTargetOptionsForUnit(rawUnit, { includeGeneric: true });
         const mappedTargetOptions = targetOptions.filter(option => option.value !== 'generic');
         let selectedTarget = null;
 
@@ -9570,16 +9572,16 @@ function commandsModule({
             selection = await callInputDialogAutoComplete({
               uiDialogService,
               labelConfig: {
-                id: 'echoUltrasoundDirectionalReportTarget',
+                id: spectralVmax ? 'echoSpectralVmaxTarget' : 'echoUltrasoundDirectionalReportTarget',
                 domain: 'echo',
-                dialogTitle: 'Ultrasound Directional Measurement',
-                annotationTitle: 'Ultrasound Directional Measurement',
+                dialogTitle: spectralVmax ? 'Spectral Vmax Target' : 'Ultrasound Directional Measurement',
+                annotationTitle: spectralVmax ? 'Spectral Vmax Target' : 'Ultrasound Directional Measurement',
                 labelOnMeasure: false,
                 exclusive: true,
                 items: targetOptions,
               },
               renderContent,
-              title: 'Ultrasound Directional Measurement',
+              title: spectralVmax ? 'Spectral Vmax Target' : 'Ultrasound Directional Measurement',
             });
           } catch (error) {
             console.warn(
@@ -9589,7 +9591,7 @@ function commandsModule({
 
             selection = await callInputDialog({
               uiDialogService,
-              title: 'Ultrasound Directional Measurement',
+              title: spectralVmax ? 'Spectral Vmax Target' : 'Ultrasound Directional Measurement',
               placeholder: targetOptions.map(option => option.label).join(', '),
               defaultValue: mappedTargetOptions[0]?.label || targetOptions[0]?.label || '',
             });
@@ -9604,7 +9606,9 @@ function commandsModule({
           selectedTarget = normalizeUltrasoundDirectionalTargetSelection('generic', rawUnit);
         }
 
-        const reportMapping = buildUltrasoundDirectionalReportMapping(selectedTarget);
+        const reportMapping = isClinicalReportMeasurementsSaveTarget(saveTarget)
+          ? buildUltrasoundDirectionalReportMapping(selectedTarget)
+          : null;
         const convertedReportValue = convertUltrasoundDirectionalValueForTarget({
           value: rawValue,
           unit: rawUnit,
@@ -9622,6 +9626,7 @@ function commandsModule({
           value: Number.isFinite(rawValue) ? rawValue : null,
           unit: rawUnit,
           measurementKind: ULTRASOUND_DIRECTIONAL_MEASUREMENT_KIND,
+          ...(spectralVmax ? { acquisitionMode: 'spectralVmax' } : {}),
           ...(convertedReportValue
             ? {
                 reportValue: convertedReportValue.value,
@@ -9681,7 +9686,7 @@ function commandsModule({
         } catch {}
 
         uiNotificationService.show({
-          title: 'Ultrasound Directional',
+          title: spectralVmax ? 'Spectral Vmax' : 'Ultrasound Directional',
           message:
             reportMapping && convertedReportValue
               ? `${measurementLabel}: ${formatLengthMM(convertedReportValue.value)} ${convertedReportValue.unit}`
@@ -9699,9 +9704,10 @@ function commandsModule({
       );
 
       uiNotificationService.show({
-        title: 'Ultrasound Directional',
-        message:
-          'Draw along a calibrated Doppler/time axis. After completion, choose the matching Echo measurement. Unsupported units remain generic annotations.',
+        title: spectralVmax ? 'Spectral Vmax' : 'Ultrasound Directional',
+        message: spectralVmax
+          ? 'Draw from the zero-velocity baseline to the peak of the dense spectral envelope, then select the flow Vmax target. Esc cancels.'
+          : 'Draw along a calibrated Doppler/time axis. After completion, choose the matching Echo measurement. Unsupported units remain generic annotations.',
         type: 'info',
         duration: 7000,
       });
@@ -14245,6 +14251,9 @@ function commandsModule({
     },
     startUltrasoundDirectionalWorkflow: {
       commandFn: actions.startUltrasoundDirectionalWorkflow,
+    },
+    startSpectralVmaxWorkflow: {
+      commandFn: () => actions.startUltrasoundDirectionalWorkflow({ spectralVmax: true }),
     },
     // AR_DECELERATION_TIME:BEGIN definition
     startDecelerationTimeWorkflow: {
