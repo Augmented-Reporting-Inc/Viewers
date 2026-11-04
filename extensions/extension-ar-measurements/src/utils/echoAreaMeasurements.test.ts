@@ -10,6 +10,9 @@ function area(label: string, value: number, unit = 'mm²', series = 'cine-1', st
   return {
     toolName: 'PlanarFreehandROI',
     label,
+    measurementKind: 'echoAreaSlot',
+    echoArea: { slot: label === 'RVEDA' || label === 'RV end-diastolic area' ? 'RV_ED' : label === 'RVESA' || label === 'RV end-systolic area' ? 'RV_ES' : 'RA_ES' },
+    points: [[0, 0, 0], [1, 0, 0], [1, 1, 0]],
     referenceStudyUID: study,
     referenceSeriesUID: series,
     uid: label,
@@ -29,6 +32,10 @@ describe('echo chamber areas', () => {
     expect(getCalibratedEchoAreaCM2(area('RAa', 18, 'cm2'))).toBe(18);
     expect(getCalibratedEchoAreaCM2(area('RAa', 18, 'px²'))).toBeNull();
     expect(getCalibratedEchoAreaCM2({ ...area('RAa', 1800), toolName: 'Length' })).toBeNull();
+    expect(getCalibratedEchoAreaCM2({ ...area('RAa', 1800), points: [] })).toBeNull();
+    expect(calculateRAAreaFromMeasurements([{
+      ...area('RAa', 1800), echoArea: undefined, measurementKind: undefined,
+    }])).toBeNull();
   });
 
   it('provides RA area and rejects duplicate contours', () => {
