@@ -2791,6 +2791,8 @@ function serializeViewerMeasurement(measurement, domain, existingAnnotation = nu
   const lvTrace = domain === 'echo' && isContourMeasurement ? parseLVTraceLabel(label) : null;
   const lvSimpson = getLVSimpsonGeometry(measurement, existingAnnotation);
   const laVolume = getLAVolumeGeometry(measurement, existingAnnotation);
+  const echoArea = measurement?.echoArea || measurement?.measurements?.echoArea || existingAnnotation?.echoArea || null;
+  const echoAreaSlot = getEchoAreaSlot(measurement) || getEchoAreaSlot(existingAnnotation);
   const spectralDoppler = getSpectralDopplerGeometry(measurement, existingAnnotation);
   const decelerationTime = getDecelerationTimeGeometry(measurement, existingAnnotation); // AR_DECELERATION_TIME
   const ultrasoundDirectional = getUltrasoundDirectionalGeometry(measurement, existingAnnotation);
@@ -2809,6 +2811,7 @@ function serializeViewerMeasurement(measurement, domain, existingAnnotation = nu
     null;
   const isLVSimpson = domain === 'echo' && !!lvSimpson;
   const isLAVolume = domain === 'echo' && !!laVolume;
+  const isEchoArea = domain === 'echo' && isContourMeasurement && !!echoAreaSlot && !!echoArea;
   const isSpectralDoppler =
     measurement?.measurementKind === SPECTRAL_DOPPLER_MEASUREMENT_KIND ||
     spectralDoppler?.measurementKind === SPECTRAL_DOPPLER_MEASUREMENT_KIND;
@@ -2866,6 +2869,7 @@ function serializeViewerMeasurement(measurement, domain, existingAnnotation = nu
   // contour copy inside measurements.
   delete persistedMeasurements.lvSimpson;
   delete persistedMeasurements.laVolume;
+  delete persistedMeasurements.echoArea;
   delete persistedMeasurements.ultrasoundDirectional;
   delete persistedMeasurements.decelerationTime; // AR_DECELERATION_TIME
 
@@ -2916,6 +2920,22 @@ function serializeViewerMeasurement(measurement, domain, existingAnnotation = nu
           view: laVolume.view || measurement?.view,
           phase: laVolume.phase || measurement?.phase || 'ES',
           laVolume: nextMeasurements.laVolume,
+        }
+      : {}),
+
+    ...(isEchoArea
+      ? {
+          measurementKind: 'echoAreaSlot',
+          slot: echoAreaSlot,
+          view: 'A4C',
+          phase: echoAreaSlot === 'RV_ED' ? 'ED' : 'ES',
+          // Geometry exists only once at annotation.points.
+          echoArea: {
+            slot: echoAreaSlot,
+            view: 'A4C',
+            phase: echoAreaSlot === 'RV_ED' ? 'ED' : 'ES',
+            method: echoArea?.method || 'closed-contour-planimetry',
+          },
         }
       : {}),
 
