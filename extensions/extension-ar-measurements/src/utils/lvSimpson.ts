@@ -78,11 +78,144 @@ function getSlot(measurement) {
 
 function getContourPoints(measurement) {
   const geometry = getGeometry(measurement);
-  const livePoints = Array.isArray(measurement?.points) ? measurement.points : [];
-  const storedPoints = geometry.contourPoints || geometry.points || [];
-  const points = livePoints.length >= 6 ? livePoints : storedPoints;
-
+  const points = geometry.calibratedContourPoints;
   return (Array.isArray(points) ? points : []).map(getPoint).filter(Boolean);
+}
+
+// SplineROI densely samples the same border: a different point count alone
+// does not imply an edit. Check the two polylines geometrically, in both
+// directions, while requiring the original mitral hinge endpoints to agree.
+function pointToSegmentDistance(point, start, end) {
+  const edge = subtract(end, start);
+  const denom = dot(edge, edge);
+  const t = denom > 0
+    ? Math.max(0, Math.min(1, dot(subtract(point, start), edge) / denom))
+    : 0;
+  return length(subtract(point, [
+    start[0] + edge[0] * t,
+    start[1] + edge[1] * t,
+    start[2] + edge[2] * t,
+  ]));
+}
+
+function withinPolylineDistance(source, target, tolerance) {
+  // Both shapes describe closed cavity boundaries. The stored user trace
+  // leaves the mitral hinge closure implicit, while SplineROI explicitly
+  // samples that closing segment and can start at any position in the loop.
+  for (const point of source) {
+    let nearest = Infinity;
+    for (let index = 0; index < target.length; index += 1) {
+      const next = (index + 1) % target.length;
+      nearest = Math.min(nearest, pointToSegmentDistance(
+        point, target[index], target[next]
+      ));
+      if (nearest <= tolerance) break;
+    }
+    if (nearest > tolerance) return false;
+  }
+  return true;
+}
+
+// Temporary diagnostic only: sample the symmetric boundary distance so that
+// a real spline discrepancy is distinguishable from a point-count mismatch.
+// Never print identifiers or the actual coordinate arrays.
+function describeBoundaryDistance(source, target, tolerance) {
+  const maxSamples = 64;
+  const stride = Math.max(1, Math.ceil(source.length / maxSamples));
+  const distances = [];
+  for (let index = 0; index < source.length; index += stride) {
+    const point = getPoint(source[index]);
+    if (!point) return null;
+    let nearest = Infinity;
+    for (let segment = 0; segment < target.length; segment += 1) {
+      const start = getPoint(target[segment]);
+      const end = getPoint(target[(segment + 1) % target.length]);
+      if (!start || !end) return null;
+      // Never stop at the first segment within tolerance: the smallest
+      // actual distance is needed to diagnose real spline deformation.
+      nearest = Math.min(nearest, pointToSegmentDistance(point, start, end));
+    }
+    distances.push(nearest);
+  }
+  const sorted = [...distances].sort((a, b) => a - b);
+  return {
+    sampled: distances.length,
+    maximum: Math.max(...distances),
+    median: sorted[Math.floor(sorted.length / 2)] ?? null,
+    p95: sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.95))] ?? null,
+    aboveTolerance: distances.filter(d => d > tolerance).length,
+  };
+}
+
+// Temporary diagnostic: report the first *actual* failing sample from the
+// exhaustive comparison. This is intentionally not a sampled estimate.
+function describeFirstPolylineMismatch(source, target, tolerance) {
+  for (let sourceIndex = 0; sourceIndex < source.length; sourceIndex += 1) {
+    const point = getPoint(source[sourceIndex]);
+    if (!point) return { reason: 'invalid_source_point', index: sourceIndex };
+    let nearest = Infinity;
+    for (let segment = 0; segment < target.length; segment += 1) {
+      const start = getPoint(target[segment]);
+      const end = getPoint(target[(segment + 1) % target.length]);
+      if (!start || !end) return { reason: 'invalid_target_point', index: segment };
+      nearest = Math.min(nearest, pointToSegmentDistance(point, start, end));
+      if (nearest <= tolerance) break;
+    }
+    if (nearest > tolerance) {
+      return {
+        reason: 'boundary_difference',
+        index: sourceIndex,
+        fractionThroughBoundary: source.length > 1 ? sourceIndex / (source.length - 1) : 0,
+        nearestDistanceLowerBound: nearest,
+        tolerance,
+      };
+    }
+  }
+  return null;
+}
+
+function hasUnchangedWorldContour(measurement) {
+  const geometry = getGeometry(measurement);
+  const original = geometry.originalContourPoints;
+  const controlPoints = measurement?.lvSimpsonControlPoints;
+  // SplineROI's polyline is presentation geometry (21x resampling) and can
+  // overshoot near spline knots. Only compare the editable control handles
+  // when available, preserving the legacy fail-closed boundary check for
+  // measurements without them.
+  if (Array.isArray(controlPoints)) {
+    if (!Array.isArray(original) || controlPoints.length !== original.length ||
+        controlPoints.length < 6) return false;
+    return original.every((point, index) => {
+      const before = getPoint(point);
+      const after = getPoint(controlPoints[index]);
+      return Boolean(before && after && length(subtract(before, after)) <= 0.00001);
+    });
+  }
+  const current = Array.isArray(measurement?.points) && measurement.points.length >= 6
+    ? measurement.points : geometry.contourPoints;
+  if (!Array.isArray(original) || !Array.isArray(current) ||
+      original.length < 6 || current.length < 6) return false;
+  const originalPoints = original.map(getPoint);
+  const currentPoints = current.map(getPoint);
+  if (originalPoints.some(point => !point) ||
+      currentPoints.some(point => !point)) return false;
+
+  // Use scale of the original contour (not the post-edit curve) so that
+  // stretching the contour cannot inflate its own permitted deviation.
+  const baseLeft = originalPoints[0];
+  const baseRight = originalPoints[originalPoints.length - 1];
+  const axis = originalPoints[Number(geometry.axisPointIndex)];
+  if (!axis) return false;
+  const midpoint = getBaseMidpoint(baseLeft, baseRight);
+  const axisLength = length(subtract(axis, midpoint));
+  if (!Number.isFinite(axisLength) || axisLength <= 0) return false;
+  // Strict relative geometry tolerance to accommodate spline interpolation.
+  // Does not relax the independent physical calibration or axis checks.
+  const tolerance = axisLength * 0.015;
+  // Match anatomical hinges to the curve, not to its first/last sample:
+  // a closed SplineROI's final sample is often beside its first sample.
+  return withinPolylineDistance(originalPoints, currentPoints, tolerance) &&
+    withinPolylineDistance(currentPoints, originalPoints, tolerance);
 }
 
 function getBaseMidpoint(baseLeft, baseRight) {
@@ -205,28 +338,93 @@ function sampleWidths(projectedPoints, longAxisLengthMM) {
 function buildSlotGeometry(measurement, slot) {
   const geometry = getGeometry(measurement);
   const contourPoints = getContourPoints(measurement);
-  const hasLiveContour = Array.isArray(measurement?.points) && measurement.points.length >= 6;
   const configuredAxisPointIndex = Number(geometry.axisPointIndex);
-  const fallbackAxisPointIndex = Math.floor((contourPoints.length - 1) / 2);
-  const axisPointIndex =
-    Number.isInteger(configuredAxisPointIndex) &&
+  const axisPointIndex = Number.isInteger(configuredAxisPointIndex) &&
     configuredAxisPointIndex > 0 &&
     configuredAxisPointIndex < contourPoints.length - 1
-      ? configuredAxisPointIndex
-      : fallbackAxisPointIndex;
-  const baseLeft = hasLiveContour ? contourPoints[0] : getPoint(geometry.baseLeftPoint);
-  const baseRight = hasLiveContour
-    ? contourPoints[contourPoints.length - 1]
-    : getPoint(geometry.baseRightPoint);
-  const apex = hasLiveContour ? contourPoints[axisPointIndex] : getPoint(geometry.apexPoint);
-  const liveBaseMidpoint =
-    baseLeft && baseRight ? getBaseMidpoint(baseLeft, baseRight) : null;
-  const liveAxisLength = liveBaseMidpoint && apex ? length(subtract(apex, liveBaseMidpoint)) : null;
-  const longAxisLengthMM = hasLiveContour
-    ? finiteNumber(liveAxisLength)
-    : finiteNumber(geometry.longAxisLengthMM);
+      ? configuredAxisPointIndex : -1;
+  const baseLeft = contourPoints[0];
+  const baseRight = contourPoints[contourPoints.length - 1];
+  const apex = contourPoints[axisPointIndex];
+  const baseMidpoint = baseLeft && baseRight ? getBaseMidpoint(baseLeft, baseRight) : null;
+  const derivedLength = baseMidpoint && apex ? length(subtract(apex, baseMidpoint)) : null;
+  const calibratedAxisLength = finiteNumber(geometry.calibratedLongAxisLengthMM);
+  const longAxisLengthMM = calibratedAxisLength && calibratedAxisLength > 0
+    ? calibratedAxisLength : null;
+  const contourUnchanged = hasUnchangedWorldContour(measurement);
   const display = LV_SIMPSON_SLOT_INFO[slot].display;
   const messages = [];
+
+  const originalPoints = Array.isArray(geometry.originalContourPoints)
+    ? geometry.originalContourPoints : [];
+  const currentPoints = Array.isArray(measurement?.points) && measurement.points.length >= 6
+    ? measurement.points : Array.isArray(geometry.contourPoints) ? geometry.contourPoints : [];
+  let maximumPointDelta = null;
+  if (originalPoints.length === currentPoints.length && originalPoints.length > 0) {
+    const deltas = originalPoints.map((point, index) => {
+      const before = getPoint(point);
+      const after = getPoint(currentPoints[index]);
+      return before && after ? length(subtract(before, after)) : Number.NaN;
+    });
+    maximumPointDelta = deltas.every(Number.isFinite) ? Math.max(...deltas) : null;
+  }
+  const axisDifferenceMM = Number.isFinite(derivedLength) && longAxisLengthMM
+    ? Math.abs(derivedLength - longAxisLengthMM) : null;
+  const originalBoundary = Array.isArray(geometry.originalContourPoints)
+    ? geometry.originalContourPoints : [];
+  const representedBoundary = currentPoints;
+  const baseLeftPoint = getPoint(originalBoundary[0]);
+  const baseRightPoint = getPoint(originalBoundary[originalBoundary.length - 1]);
+  const originalAxisWorldLength = baseLeftPoint && baseRightPoint &&
+    getPoint(originalBoundary[Number(geometry.axisPointIndex)])
+    ? length(subtract(getPoint(originalBoundary[Number(geometry.axisPointIndex)]),
+        getBaseMidpoint(baseLeftPoint, baseRightPoint)))
+    : null;
+  const boundaryTolerance = originalAxisWorldLength && originalAxisWorldLength > 0
+    ? originalAxisWorldLength * 0.015 : null;
+  const measuredBoundary = boundaryTolerance && representedBoundary.length >= 6
+    ? {
+        originalToSpline: describeBoundaryDistance(originalBoundary, representedBoundary, boundaryTolerance),
+        splineToOriginal: describeBoundaryDistance(representedBoundary, originalBoundary, boundaryTolerance),
+      } : null;
+  const firstMismatch = !contourUnchanged && boundaryTolerance
+    ? {
+        originalToSpline: describeFirstPolylineMismatch(originalBoundary, representedBoundary, boundaryTolerance),
+        splineToOriginal: describeFirstPolylineMismatch(representedBoundary, originalBoundary, boundaryTolerance),
+      } : null;
+  // EF-only, temporary, aggregate diagnostics; no identifiers or coordinates.
+  console.info('[LV EF slot validation]', {
+    firstMismatch,
+    liveControlPointCount: measurement?.lvSimpsonControlPoints?.length ?? null,
+    liveControlPointsMatch: Array.isArray(measurement?.lvSimpsonControlPoints)
+      ? contourUnchanged : null,
+    boundaryTolerance,
+    measuredBoundary,
+    slot,
+    originalPointCount: originalPoints.length,
+    currentPointCount: currentPoints.length,
+    calibratedPointCount: contourPoints.length,
+    maximumPointDelta,
+    contourUnchanged,
+    calibrationError: geometry.calibrationError || null,
+    calibratedAxisPresent: Boolean(longAxisLengthMM),
+    derivedAxisValid: Number.isFinite(derivedLength),
+    axisDifferenceMM,
+    axisToleranceMM: longAxisLengthMM
+      ? Math.max(0.01, longAxisLengthMM * 0.001) : null,
+  });
+
+  if (geometry.calibrationError) {
+    messages.push(`${display}: EF calibration failure (${geometry.calibrationError}). Check the active DICOM instance and spatial ultrasound-region metadata.`);
+  }
+
+  if (!contourUnchanged || !longAxisLengthMM ||
+      !Number.isFinite(derivedLength) ||
+      Math.abs(derivedLength - longAxisLengthMM) > Math.max(0.01, longAxisLengthMM * 0.001)) {
+    messages.push(
+      `${display}: verified physical calibration is missing or the contour has been edited since calibration. Re-enter the EF contour on a calibrated DICOM ultrasound region.`
+    );
+  }
 
   if (contourPoints.length < 6) {
     messages.push(
@@ -270,6 +468,24 @@ function buildSlotGeometry(measurement, slot) {
 
   const widths = sampleWidths(projectedPoints, longAxisLengthMM);
   const coverageRatio = widths.filter(width => width > 0).length / SAMPLE_COUNT;
+  const maxWidth = Math.max(...widths);
+  // A disk diameter larger than 1.5 times the full LV long axis indicates
+  // inconsistent contour/world geometry or calibration, not a plausible
+  // ventricular cross-section. Reject the result rather than presenting a
+  // misleading EF derived from enormous volumes.
+  if (geometry.contourSource === 'freehandDerived' &&
+      (!Number.isFinite(maxWidth) || maxWidth > longAxisLengthMM * 1.5)) {
+    return {
+      ...LV_SIMPSON_SLOT_INFO[slot],
+      complete: false,
+      longAxisLengthMM,
+      widths,
+      coverageRatio,
+      messages: [
+        `${display}: contour width/axis calibration inconsistent (maximum diameter ${formatMM(maxWidth)} mm vs long axis ${formatMM(longAxisLengthMM)} mm). Do not capture EF; verify image calibration and redraw.`,
+      ],
+    };
+  }
 
   if (coverageRatio < MIN_WIDTH_COVERAGE_RATIO) {
     return {
@@ -436,6 +652,27 @@ export function calculateLVSimpson(measurements = []) {
       values: null,
       messages,
       guidance: messages,
+    };
+  }
+
+  // An upper-bound safety check, not a substitute for calibrated contour
+  // geometry. Prevent obviously impossible volumes from being scored.
+  const containsFreehandContour = LV_SIMPSON_SLOT_ORDER.some(slot =>
+    getGeometry(measurements.find(measurement => getSlot(measurement) === slot))
+      .contourSource === 'freehandDerived'
+  );
+  if (containsFreehandContour &&
+      (!Number.isFinite(ed.volumeML) || !Number.isFinite(es.volumeML) ||
+       ed.volumeML > 1000 || es.volumeML > 1000)) {
+    const warning = 'EF volume calculation exceeds the 1000 mL safety limit or is non-finite. Verify contour coordinate calibration; do not capture this result.';
+    return {
+      status: 'invalid',
+      method: 'Biplane Simpson from explicit hinge, apex, and LV contour geometry.',
+      slots,
+      phases: { ED: ed, ES: es },
+      values: null,
+      messages: [...messages, warning],
+      guidance: [...messages, warning],
     };
   }
 
