@@ -236,3 +236,24 @@ export function calculateIVCFromMeasurements(measurements: ViewerMeasurement[] =
     rapEstimateStatus: 'not-assessed',
   };
 }
+
+
+/** Does not overwrite the legacy IVC field or infer RAP without respiratory context. */
+export function buildClinicalIVCReportFieldUpdates(result: any = null) {
+  const v = result?.status === 'complete' ? result.values : null;
+  if (!v) return {};
+  const expiration = Number(v.expirationDiameterMM);
+  const inspiration = Number(v.inspirationDiameterMM);
+  const collapse = Number(v.collapsibilityPercent);
+  if (!Number.isFinite(expiration) || !Number.isFinite(inspiration) ||
+      !Number.isFinite(collapse) || expiration <= 0 || inspiration < 0 ||
+      inspiration > expiration || collapse < 0 || collapse > 100) return {};
+  return {
+    IVCExp: (expiration / 10).toFixed(2),
+    IVCExpUOM: 'cm',
+    IVCInsp: (inspiration / 10).toFixed(2),
+    IVCInspUOM: 'cm',
+    IVCCollapsibility: collapse.toFixed(1),
+    IVCCollapsibilityUOM: '%',
+  };
+}
