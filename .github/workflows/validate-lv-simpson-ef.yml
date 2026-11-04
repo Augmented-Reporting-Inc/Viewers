@@ -20,6 +20,7 @@ on:
       - 'extensions/extension-ar-measurements/src/utils/echoAreaMeasurements*.ts'
       - 'extensions/extension-ar-measurements/src/utils/laVolume.ts'
       - 'extensions/extension-ar-measurements/src/utils/laBiplaneDisks.test.ts'
+      - 'extensions/extension-ar-measurements/src/utils/viewerRightHeartQuizComposite.test.ts'
       - 'modes/longitudinal/src/toolbarButtons.ts'
       - 'extensions/extension-ar-measurements/src/utils/lvSimpsonReportMapping.test.ts'
       - 'extensions/cornerstone/src/utils/measurementServiceMappings/SplineROI.ts'
@@ -55,6 +56,6 @@ jobs:
       - name: Test calibrated spectral Vmax target registry
         run: yarn jest --config extensions/cornerstone/jest.config.js --runInBand --coverage=false --runTestsByPath extensions/cornerstone/src/utils/spectralVmaxTargets.test.ts
       - name: Test right-heart calculations and clinical EF mapping
-        run: yarn jest --config extensions/extension-ar-measurements/jest.config.js --runInBand --coverage=false --runTestsByPath extensions/extension-ar-measurements/src/utils/rightHeartMeasurements.test.ts extensions/extension-ar-measurements/src/utils/lvSimpsonReportMapping.test.ts extensions/extension-ar-measurements/src/utils/echoAreaMeasurements.test.ts extensions/extension-ar-measurements/src/utils/laBiplaneDisks.test.ts
+        run: yarn jest --config extensions/extension-ar-measurements/jest.config.js --runInBand --coverage=false --runTestsByPath extensions/extension-ar-measurements/src/utils/rightHeartMeasurements.test.ts extensions/extension-ar-measurements/src/utils/lvSimpsonReportMapping.test.ts extensions/extension-ar-measurements/src/utils/echoAreaMeasurements.test.ts extensions/extension-ar-measurements/src/utils/laBiplaneDisks.test.ts extensions/extension-ar-measurements/src/utils/viewerRightHeartQuizComposite.test.ts
       - name: Test EF quiz composite integration
         run: yarn jest --config extensions/extension-ar-measurements/jest.config.js --runInBand --coverage=false --runTestsByPath extensions/extension-ar-measurements/src/utils/viewerQuizCompositeResults.test.ts
