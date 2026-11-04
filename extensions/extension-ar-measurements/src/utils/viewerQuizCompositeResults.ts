@@ -187,6 +187,13 @@ export function resolveViewerQuizCompositeResult(
     unit: kind === 'lvSimpsonEF' || kind === 'rvFAC' || kind === 'ivcCollapsibility'
       ? '%' : kind === 'raArea' ? 'cm2' : 'mL',
     components,
+    ...(kind === 'ivcCollapsibility' && result?.values ? {
+      derived: {
+        expirationDiameterMM: result.values.expirationDiameterMM,
+        inspirationDiameterMM: result.values.inspirationDiameterMM,
+        collapsibilityPercent: result.values.collapsibilityPercent,
+      },
+    } : {}),
   };
 }
 
