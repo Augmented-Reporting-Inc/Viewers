@@ -467,16 +467,19 @@ function getSavedGoldCompositeNavigationComponents(answerConfig: any) {
   const gold = plainObject(plainObject(answerConfig).goldMeasurement);
   const composite = plainObject(gold.compositeResult);
   const kind = cleanString(plainObject(answerConfig).measurementKind);
+  const sourceComposite = kind === 'ivcRapRvsp'
+    ? plainObject(plainObject(composite.ivc).compositeResult)
+    : composite;
   const slots = kind === 'lvSimpsonEF'
     ? EF_CONTOUR_FRAME_SLOTS
     : ['laVolumeBiplane', 'laVolumeBiplaneDisks'].includes(kind)
       ? [{ slot: 'A4C', label: 'Apical four-chamber' }, { slot: 'A2C', label: 'Apical two-chamber' }]
       : kind === 'rvFAC'
         ? [{ slot: 'RV_ED', label: 'RV end-diastole' }, { slot: 'RV_ES', label: 'RV end-systole' }]
-        : kind === 'ivcCollapsibility'
+        : (kind === 'ivcCollapsibility' || kind === 'ivcRapRvsp')
           ? [{ slot: 'IVC_EXP', label: 'IVC expiration' }, { slot: 'IVC_INSP', label: 'IVC inspiration' }]
           : kind === 'raArea' ? [{ slot: 'RA_ES', label: 'RA end-systole' }] : [];
-  const components = Array.isArray(composite.components) ? composite.components : [];
+  const components = Array.isArray(sourceComposite.components) ? sourceComposite.components : [];
   if (!slots.length || !components.length) return [];
   return slots.map(({ slot, label }) => {
     const component = components.find((entry: any) => cleanString(entry?.slot) === slot);
