@@ -12,11 +12,12 @@ import {
 } from '../utils/laVolume';
 import { getViewerMeasurementDomainFromPath } from '../utils/measurementLabelConfig';
 import { BOWEL_CURVED_LENGTH_MEASUREMENT_KIND } from '../utils/bowelMeasurementTargets';
-import { calculateIVCFromMeasurements, isIVCDiameterMeasurement } from '../utils/rightHeartMeasurements';
+import { calculateIVCFromMeasurements, isIVCDiameterMeasurement, buildClinicalIVCReportFieldUpdates } from '../utils/rightHeartMeasurements';
 import {
   calculateRAAreaFromMeasurements,
   calculateRVFACFromMeasurements,
   buildClinicalRAAreaReportFieldUpdates,
+  buildClinicalRVFACReportFieldUpdates,
   getEchoAreaSlot,
   isEchoAreaMeasurement,
 } from '../utils/echoAreaMeasurements';
@@ -1917,18 +1918,20 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
     [domain, visibleMeasurements]
   );
 
+  const ivcMeasurementResult = useMemo(
+    () => domain === 'echo' ? calculateIVCFromMeasurements(visibleMeasurements) : null,
+    [domain, visibleMeasurements]
+  );
+
   const clinicalViewerReportFieldUpdates = useMemo(
     () => ({
       ...buildCseLAVolumeReportFieldUpdatesFromResult(laVolumeResult),
       ...buildClinicalLVSimpsonReportFieldUpdates(lvSimpsonResult),
       ...buildClinicalRAAreaReportFieldUpdates(raAreaResult),
+      ...buildClinicalRVFACReportFieldUpdates(rvFacResult),
+      ...buildClinicalIVCReportFieldUpdates(ivcMeasurementResult),
     }),
-    [laVolumeResult, lvSimpsonResult, raAreaResult]
-  );
-
-  const ivcMeasurementResult = useMemo(
-    () => domain === 'echo' ? calculateIVCFromMeasurements(visibleMeasurements) : null,
-    [domain, visibleMeasurements]
+    [laVolumeResult, lvSimpsonResult, raAreaResult, rvFacResult, ivcMeasurementResult]
   );
 
   const measurementGroups = useMemo(() => {
