@@ -67,7 +67,7 @@ function collectComponents(measurements: Measurement[], kind: CompositeKind) {
       return null; // Ambiguous, incomplete, or untraceable evidence must not be scored.
     }
     const contour = geometry(measurement, kind);
-    const rawPoints = Array.isArray(measurement?.points) && measurement.points.length >= 3
+    const rawPoints = Array.isArray(measurement?.points) && measurement.points.length >= (isIVC ? 2 : 3)
       ? measurement.points
       : (contour.contourPoints || contour.points || []);
     const points = Array.isArray(rawPoints)
