@@ -2177,7 +2177,16 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     const measurementKind = question.type === 'measurementNumeric'
       ? cleanString(plainObject(question.answerConfig).measurementKind)
       : '';
-    const deferGuidedActivation = isNewQuestion && isGuidedQuizCompositeKind(measurementKind);
+    // Reopening an educator's completed composite is a review action, not
+    // an instruction to start another measurement session over saved contours.
+    const savedGoldComponents = authoringMode
+      ? getSavedGoldCompositeNavigationComponents(question.answerConfig)
+      : [];
+    const hasSavedGoldComposite = savedGoldComponents.length > 0 &&
+      savedGoldComponents.every(component => component.complete);
+    const deferGuidedActivation = isNewQuestion &&
+      isGuidedQuizCompositeKind(measurementKind) &&
+      !hasSavedGoldComposite;
     const activateGuidedAfterNavigation = async () => {
       if (!deferGuidedActivation || lastActivatedQuestionRef.current !== nextActiveQuestionKey) return;
       const result = await runViewerCommand(commandsManager, 'activateViewerQuizMeasurementTool', {
