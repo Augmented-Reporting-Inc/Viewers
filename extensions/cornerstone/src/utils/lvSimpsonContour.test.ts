@@ -111,6 +111,11 @@ describe('landmark-assisted LV EF contour', () => {
         apexPoint,
       });
 
+      // The synthetic geometry is defined in millimetres. Record the same
+      // verified/calibrated contour contract as the real DICOM capture path;
+      // the calculator deliberately rejects uncalibrated legacy shapes.
+      const originalContourPoints = geometry.points.map(point => [...point]);
+      const calibratedContourPoints = geometry.points.map(point => [...point]);
       return {
         measurementKind: 'lvSimpsonSlot',
         slot: slotName,
@@ -118,7 +123,12 @@ describe('landmark-assisted LV EF contour', () => {
           ...geometry,
           measurementKind: 'lvSimpsonSlot',
           slot: slotName,
+          contourSource: 'hingeApexGenerated',
+          originalContourPoints,
+          calibratedContourPoints,
+          calibratedLongAxisLengthMM: geometry.longAxisLengthMM,
         },
+        lvSimpsonControlPoints: geometry.points.map(point => [...point]),
         points: geometry.points,
       };
     };
