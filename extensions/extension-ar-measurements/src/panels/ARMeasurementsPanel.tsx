@@ -8,6 +8,7 @@ import {
 } from '../utils/laVolume';
 import { getViewerMeasurementDomainFromPath } from '../utils/measurementLabelConfig';
 import { BOWEL_CURVED_LENGTH_MEASUREMENT_KIND } from '../utils/bowelMeasurementTargets';
+import { calculateIVCFromMeasurements, isIVCDiameterMeasurement } from '../utils/rightHeartMeasurements';
 
 const ULTRASOUND_DIRECTIONAL_TOOL_NAME = 'UltrasoundDirectionalTool';
 const CLINICAL_REPORT_MEASUREMENTS_SAVE_TARGET = 'clinicalReportMeasurements';
@@ -738,6 +739,45 @@ function LAVolumeSummary({ result }) {
           </div>
         </div>
       ) : null}
+    </div>
+  );
+}
+
+function IVCMeasurementSummary({ result }) {
+  if (!result) return null;
+  const values = result.values || {};
+  const expiration = values.expirationDiameterMM;
+  const inspiration = values.inspirationDiameterMM;
+  return (
+    <div className="bg-gray-950 mb-3 rounded border border-gray-700 p-3">
+      <div className="flex items-center justify-between gap-2">
+        <div className="text-sm font-semibold">IVC Diameter &amp; Collapsibility</div>
+        <span className={result.status === 'complete' ? 'text-green-300 text-xs' : 'text-yellow-300 text-xs'}>
+          {result.status}
+        </span>
+      </div>
+      <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
+        <div className="rounded bg-black p-2">
+          <div className="text-xs text-gray-400">Expiration</div>
+          <div className="font-semibold">{expiration != null ? formatSimpsonValue(expiration) + ' mm' : 'Not captured'}</div>
+        </div>
+        <div className="rounded bg-black p-2">
+          <div className="text-xs text-gray-400">Inspiration</div>
+          <div className="font-semibold">{inspiration != null ? formatSimpsonValue(inspiration) + ' mm' : 'Not captured'}</div>
+        </div>
+      </div>
+      {result.status === 'complete' ? (
+        <div className="mt-2 rounded bg-black p-2">
+          <div className="text-xs text-gray-400">IVC collapsibility</div>
+          <div className="text-lg font-semibold">{formatSimpsonValue(values.collapsibilityPercent)}%</div>
+        </div>
+      ) : (
+        <div className="mt-2 text-xs text-yellow-300">{result.message}</div>
+      )}
+      <div className="mt-2 text-xs text-gray-400">
+        RAP is not automatically estimated until respiratory maneuver and breathing status are
+        documented. Review the paired calipers before using them clinically.
+      </div>
     </div>
   );
 }
@@ -1817,6 +1857,11 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
     [laVolumeResult]
   );
 
+  const ivcMeasurementResult = useMemo(
+    () => domain === 'echo' ? calculateIVCFromMeasurements(visibleMeasurements) : null,
+    [domain, visibleMeasurements]
+  );
+
   const measurementGroups = useMemo(() => {
     if (domain === 'echo' && !isReviewWorkflow) {
       const laMeasurements = visibleMeasurements.filter(
@@ -1825,8 +1870,10 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
       const lvMeasurements = visibleMeasurements.filter(
         measurement => getEchoMeasurementAnatomyGroup(measurement) === 'lv'
       );
+      const ivcMeasurements = visibleMeasurements.filter(isIVCDiameterMeasurement);
       const otherMeasurements = visibleMeasurements.filter(
-        measurement => getEchoMeasurementAnatomyGroup(measurement) === 'other'
+        measurement => getEchoMeasurementAnatomyGroup(measurement) === 'other' &&
+          !isIVCDiameterMeasurement(measurement)
       );
 
       return [
@@ -1842,6 +1889,9 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
           measurements: lvMeasurements,
           summary: 'lv',
         },
+        ...(ivcMeasurements.length > 0
+          ? [{ key: 'ivc', title: 'IVC', measurements: ivcMeasurements, summary: 'ivc' }]
+          : []),
         ...(otherMeasurements.length > 0
           ? [
               {
@@ -2407,6 +2457,9 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
 
                   {group.summary === 'la' ? <LAVolumeSummary result={laVolumeResult} /> : null}
                   {group.summary === 'lv' ? <LVSimpsonSummary result={lvSimpsonResult} /> : null}
+                  {group.summary === 'ivc' && isClinicalReportSaveTarget
+                    ? <IVCMeasurementSummary result={ivcMeasurementResult} />
+                    : null}
 
                   {group.measurements.length === 0 ? (
                     <div className="text-sm text-gray-500">
