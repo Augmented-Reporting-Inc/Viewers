@@ -159,3 +159,14 @@ export function calculateRVFACFromMeasurements(measurements: Measurement[] = [])
           : 'Capture calibrated RV end-diastolic and end-systolic contours from the same cine series.',
   };
 }
+
+
+/** Applies only a validated RA planimetry value to the existing AR report field. */
+export function buildClinicalRAAreaReportFieldUpdates(result: any = null) {
+  const areaCM2 = result?.status === 'complete' ? Number(result.values?.areaCM2) : null;
+  if (areaCM2 == null || !Number.isFinite(areaCM2) || areaCM2 <= 0) return {};
+  return {
+    RAa: areaCM2.toFixed(1),
+    RAaUOM: 'cm2',
+  };
+}
