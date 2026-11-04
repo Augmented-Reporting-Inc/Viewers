@@ -2582,7 +2582,6 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     options: { measurementId?: string; silent?: boolean } = {}
   ) {
     const captureKey = `${quiz.quizKey}:${question.questionKey}`;
-    const answerConfig = plainObject(question?.answerConfig);
 
     setCapturingMeasurementKey(captureKey);
 
