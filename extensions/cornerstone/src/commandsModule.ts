@@ -9742,9 +9742,12 @@ function commandsModule({
         const element = viewport?.element;
         const imageId = viewport?.getCurrentImageId?.() || '';
         const instance = imageId ? metaData.get('instance', imageId) : null;
+        const directRegions = metaData.get('ultrasoundRegions', imageId);
         const regionSources = [
           ...getUltrasoundRegionsFromSource(instance),
-          ...getUltrasoundRegionsFromSource(metaData.get('ultrasoundRegions', imageId)),
+          ...(Array.isArray(directRegions)
+            ? directRegions
+            : getUltrasoundRegionsFromSource(directRegions)),
         ];
         const readRegion = (region: any) => ({
           minX: readDicomNumber(region, ['RegionLocationMinX0', 'regionLocationMinX0', '00186018', 'x00186018']),
