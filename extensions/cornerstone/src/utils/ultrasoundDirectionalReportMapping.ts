@@ -112,7 +112,10 @@ export function getSpectralVmaxTargetOptionsForUnit(
   unit = '',
   { includeGeneric = true }: { includeGeneric?: boolean } = {}
 ) {
-  if (getUltrasoundDirectionalUnitKind(unit) !== 'flowVelocity') {
+  // DICOM spectral velocity is commonly calibrated in cm/s. It represents
+  // blood-flow speed here, not tissue Doppler; target selection supplies context.
+  const unitKind = getUltrasoundDirectionalUnitKind(unit);
+  if (unitKind !== 'flowVelocity' && unitKind !== 'tissueVelocity') {
     return includeGeneric ? [{ value: GENERIC_TARGET.key, label: GENERIC_TARGET.label }] : [];
   }
 
