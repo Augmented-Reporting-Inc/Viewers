@@ -9435,13 +9435,6 @@ function commandsModule({
           eventTarget.addEventListener(Enums.Events.ANNOTATION_COMPLETED, completed);
           window.addEventListener('keydown', escape);
         });
-        if (!freehandContour || isWorkflowCancelled()) {
-          clearLAVolumeWorkflowIfCurrent(workflowSessionId);
-          return { ok: false, reason: 'la-freehand-contour-cancelled' };
-        }
-        // The temporary drawing is only an acquisition carrier; the ordinary
-        // persisted LA spline below owns the final editable annotation.
-        actions.removeMeasurement({ uid: freehandContour.annotationId });
         try {
           actions.setToolActive({
             toolName: toolNames.WindowLevel || 'WindowLevel',
@@ -9450,6 +9443,13 @@ function commandsModule({
         } catch (error) {
           console.warn('[LA Volume] could not restore navigation after freehand:', error);
         }
+        if (!freehandContour || isWorkflowCancelled()) {
+          clearLAVolumeWorkflowIfCurrent(workflowSessionId);
+          return { ok: false, reason: 'la-freehand-contour-cancelled' };
+        }
+        // The temporary drawing is only an acquisition carrier; the ordinary
+        // persisted LA spline below owns the final editable annotation.
+        actions.removeMeasurement({ uid: freehandContour.annotationId });
       }
 
       const geometry = buildEchoVolumeContourFromBaseAxis({
