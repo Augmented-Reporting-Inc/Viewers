@@ -10191,7 +10191,7 @@ function commandsModule({
         uiNotificationService.show({
           title: label,
           message: 'Adjust the spline handles to the RV blood-tissue boundary. ' +
-            (phase === 'ED' ? 'Then capture RVESA in the same cine.' : 'Review RV FAC before saving.'),
+            (phase === 'ED' ? 'Then capture RVESA on the intended end-systolic frame in the same study.' : 'Review RV FAC before saving.'),
           type: 'success',
           duration: 9000,
         });
@@ -10218,7 +10218,7 @@ function commandsModule({
           label: 'RVESA',
           phase: 'ES',
           title: 'RV end-systolic area',
-          prompt: 'Select end-systole in the SAME RV-focused A4C cine as RVEDA. Trace the RV cavity and close across the tricuspid annular hinge line.',
+          prompt: 'Select the configured end-systolic RV-focused A4C frame in the same study as RVEDA. Trace the RV cavity and close across the tricuspid annular hinge line.',
         },
       };
       const selectedSlot = String(slot || '').toUpperCase();
