@@ -3734,6 +3734,50 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     }));
   }
 
+  function renderCompositePhaseNavigation(question: QuizQuestion, disabled: boolean) {
+    const config = plainObject(question.answerConfig);
+    if (config.compositeFrameGuidanceEnabled !== true) return null;
+    const slots = COMPOSITE_FRAME_SLOTS[cleanString(config.measurementKind)] || [];
+    if (!slots.length) return null;
+    const targets = getCompleteCompositeFrameTargets(config);
+    if (!targets) {
+      return (
+        <div className="mt-2 text-xs text-amber-200" role="alert">
+          Measurement phase instances/frames are not fully configured in the educational asset.
+          Ask the educator to complete the source targets before measuring.
+        </div>
+      );
+    }
+    return (
+      <div className="mt-2 rounded border border-blue-700 bg-blue-950/20 p-2 text-xs">
+        <div className="mb-1 font-semibold text-blue-100">Required measurement image/frame</div>
+        <div className="mb-2 text-gray-300">
+          Open each specified DICOM instance and frame before capturing its measurement.
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {slots.map(({ slot, label }) => (
+            <button
+              key={slot}
+              type="button"
+              disabled={disabled}
+              className="rounded border border-blue-600 px-2 py-1 text-blue-100 disabled:opacity-40"
+              onClick={event => {
+                event.preventDefault();
+                event.stopPropagation();
+                void runViewerCommand(commandsManager, 'jumpToViewerQuizTarget', {
+                  viewerTarget: targets[slot],
+                  questionKey: question.questionKey,
+                });
+              }}
+            >
+              {label} · Open source
+            </button>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
   function renderRVFACContourControls(question: QuizQuestion, disabled: boolean) {
     const slots = [
       { slot: 'RV_ED', label: 'End-diastolic area (RVEDA)' },
@@ -4096,6 +4140,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
 
       return (
         <div className="mt-2 w-full min-w-0 max-w-full space-y-2 overflow-hidden">
+          {renderCompositePhaseNavigation(question, disabled)}
           {cleanString(plainObject(question.answerConfig).measurementKind) === 'rvFAC'
             ? renderRVFACContourControls(question, disabled)
             : null}
@@ -4829,6 +4874,10 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
 
         {question.type === 'measurementNumeric' ? (
           <div className="mt-2 rounded border border-gray-700 p-2">
+            {renderCompositePhaseNavigation(
+              question,
+              isCapturing || authoringSaving || !isDraftDefinition(authoringDefinition)
+            )}
             {cleanString(answerConfig.measurementKind) === 'rvFAC'
               ? renderRVFACContourControls(
                   question,
