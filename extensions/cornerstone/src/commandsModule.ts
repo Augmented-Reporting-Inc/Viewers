@@ -117,6 +117,7 @@ import {
   normalizeBowelMeasurementTargetSelection,
 } from '../../extension-ar-measurements/src/utils/bowelMeasurementTargets';
 import { calculateLVSimpson } from '../../extension-ar-measurements/src/utils/lvSimpson';
+import { getEchoAreaSlot } from '../../extension-ar-measurements/src/utils/echoAreaMeasurements';
 import { resolveViewerQuizCompositeResult, resolveViewerQuizLVSimpsonForStudy, isViewerQuizCompositeReviewCurrent } from '../../extension-ar-measurements/src/utils/viewerQuizCompositeResults';
 import { createGuidedMouseToolOwnership } from './utils/guidedMouseToolOwnership';
 
@@ -7724,6 +7725,24 @@ function commandsModule({
     });
   }
 
+  // These one-contour chamber-area sessions share a single ownership boundary.
+  // Cancelling or switching tools must never label an unrelated freehand ROI.
+  let activeEchoAreaSessionId = '';
+  let echoAreaCompletionHandler: null | ((event: Event) => void) = null;
+  let echoAreaEscapeHandler: null | ((event: KeyboardEvent) => void) = null;
+
+  function clearEchoAreaWorkflowListeners() {
+    if (echoAreaCompletionHandler) {
+      eventTarget.removeEventListener(Enums.Events.ANNOTATION_COMPLETED, echoAreaCompletionHandler);
+      echoAreaCompletionHandler = null;
+    }
+    if (echoAreaEscapeHandler) {
+      window.removeEventListener('keydown', echoAreaEscapeHandler);
+      echoAreaEscapeHandler = null;
+    }
+    activeEchoAreaSessionId = '';
+  }
+
   let activeSpectralDopplerWorkflowSessionId = '';
   let spectralDopplerCompletionHandler: null | ((event: Event) => void) = null;
   let spectralDopplerEscapeHandler: null | ((event: KeyboardEvent) => void) = null;
@@ -7855,6 +7874,7 @@ function commandsModule({
       activeLAVolumeWorkflowSessionId = '';
       hideLVSimpsonWorkflowPanel();
       clearSpectralDopplerWorkflowListeners();
+      clearEchoAreaWorkflowListeners();
       clearDecelerationTimeWorkflowListeners(); // AR_DECELERATION_TIME
       clearBowelCurvedLengthWorkflowListeners();
       dispatchLVSimpsonSessionMeasurements({ reason: 'viewer-session-cleared' });
@@ -9470,6 +9490,7 @@ function commandsModule({
       return measurement;
     },
     startUltrasoundDirectionalWorkflow: async () => {
+      clearEchoAreaWorkflowListeners();
       clearUltrasoundDirectionalWorkflowListeners();
 
       const measurementDomain = inferDomainWithoutSeriesDoc('');
@@ -9787,7 +9808,172 @@ function commandsModule({
       return { ok: true, sessionId: workflowSessionId, toolName: ULTRASOUND_DIRECTIONAL_TOOL_NAME, target: selectedTarget.key };
     },
     // AR_DECELERATION_TIME:END action
+    startEchoAreaContourWorkflow: async ({ slot = '' } = {}) => {
+      const configuredSlots = {
+        RA_ES: {
+          label: 'RAa',
+          phase: 'ES',
+          title: 'RA area',
+          prompt: 'At end-systole, free-trace the RA wall and close across the tricuspid annulus. Exclude the venous openings and appendage.',
+        },
+        RV_ED: {
+          label: 'RVEDA',
+          phase: 'ED',
+          title: 'RV end-diastolic area',
+          prompt: 'Select end-diastole in an RV-focused A4C cine. Free-trace between both tricuspid annular hinges around the RV apex, free wall and septal boundary.',
+        },
+        RV_ES: {
+          label: 'RVESA',
+          phase: 'ES',
+          title: 'RV end-systolic area',
+          prompt: 'Select end-systole in the SAME RV-focused A4C cine as RVEDA. Trace the RV cavity and close across the tricuspid annular hinge line.',
+        },
+      };
+      const selectedSlot = String(slot || '').toUpperCase();
+      const target = configuredSlots[selectedSlot];
+      if (!target) {
+        return { ok: false, reason: 'invalid-echo-area-slot' };
+      }
+
+      // Forcing the user to delete/replace a previous slot prevents silently
+      // scoring or reporting a stale contour from an earlier attempt.
+      const current = getCurrentViewerMeasurementSnapshot(measurementService);
+      if (current.some(measurement => getEchoAreaSlot(measurement) === selectedSlot)) {
+        uiNotificationService.show({
+          title: target.title,
+          message: 'A contour already exists for this measurement. Delete the previous contour before drawing a replacement.',
+          type: 'warning',
+          duration: 7000,
+        });
+        return { ok: false, reason: 'echo-area-slot-already-exists', slot: selectedSlot };
+      }
+
+      clearEchoAreaWorkflowListeners();
+      clearSpectralDopplerWorkflowListeners();
+      clearUltrasoundDirectionalWorkflowListeners();
+
+      const activation = actions.activateViewerMeasurementTool({
+        toolName: toolNames.PlanarFreehandROI || 'PlanarFreehandROI',
+        stopCine: true,
+      });
+      if (!activation?.ok) return activation;
+      const viewportId = activation.activeViewportId;
+      const sessionId = csUtils.uuidv4();
+      activeEchoAreaSessionId = sessionId;
+
+      const restoreTool = () => {
+        try {
+          const toolGroup = toolGroupService.getToolGroupForViewport(viewportId);
+          actions.setToolActive({
+            toolName: toolNames.WindowLevel || 'WindowLevel',
+            toolGroupId: toolGroup,
+          });
+        } catch {}
+      };
+
+      echoAreaEscapeHandler = (event: KeyboardEvent) => {
+        if (event.key !== 'Escape' || activeEchoAreaSessionId !== sessionId) return;
+        clearEchoAreaWorkflowListeners();
+        restoreTool();
+        uiNotificationService.show({
+          title: target.title,
+          message: 'Area tracing cancelled.',
+          type: 'info',
+          duration: 3000,
+        });
+      };
+
+      echoAreaCompletionHandler = async (event: Event) => {
+        if (activeEchoAreaSessionId !== sessionId) return;
+        const sourceAnnotation = (event as CustomEvent)?.detail?.annotation;
+        const sourceToolName = String(sourceAnnotation?.metadata?.toolName || '');
+        if (sourceToolName !== (toolNames.PlanarFreehandROI || 'PlanarFreehandROI')) return;
+        const annotationId = String(sourceAnnotation?.annotationUID || '').trim();
+        if (!annotationId) return;
+
+        clearEchoAreaWorkflowListeners();
+        restoreTool();
+
+        const existing = await waitForViewerMeasurementServiceEntry(measurementService, annotationId);
+        const echoArea = {
+          slot: selectedSlot,
+          phase: target.phase,
+          view: 'A4C',
+          method: 'closed-contour-planimetry',
+        };
+
+        sourceAnnotation.data = {
+          ...(sourceAnnotation.data || {}),
+          label: target.label,
+          echoArea,
+          measurementKind: 'echoAreaSlot',
+        };
+        sourceAnnotation.invalidated = true;
+
+        const resultMeasurement = {
+          ...(existing || {}),
+          uid: annotationId,
+          annotationUID: annotationId,
+          toolName: sourceToolName,
+          label: target.label,
+          measurementRole: target.label,
+          role: target.label,
+          measurementKind: 'echoAreaSlot',
+          echoArea,
+          points: sourceAnnotation?.data?.contour?.polyline || existing?.points || [],
+          measurements: {
+            ...(existing?.measurements || {}),
+            measurementKind: 'echoAreaSlot',
+            echoArea,
+          },
+        };
+        try {
+          measurementService.update(annotationId, resultMeasurement, true);
+          actions.markViewerMeasurementCreatedInSession?.({ uid: annotationId });
+        } catch (error) {
+          console.warn('[Echo Area] measurement service update failed:', error);
+        }
+        dispatchLiveMeasurementsRefresh({ reason: 'echo-area-created', annotationUID: annotationId });
+        uiNotificationService.show({
+          title: target.title,
+          message: selectedSlot === 'RV_ED'
+            ? 'RVEDA contour recorded. Select the end-systolic frame in the same cine and choose RV FAC again to capture RVESA.'
+            : selectedSlot === 'RV_ES'
+              ? 'RVESA contour recorded. Review RV FAC in AR Measurements.'
+              : 'RA area contour recorded. Review its calibrated area in AR Measurements.',
+          type: 'success',
+          duration: 8500,
+        });
+      };
+
+      eventTarget.addEventListener(Enums.Events.ANNOTATION_COMPLETED, echoAreaCompletionHandler);
+      window.addEventListener('keydown', echoAreaEscapeHandler);
+      uiNotificationService.show({
+        title: target.title,
+        message: target.prompt + ' Finish the closed trace to record; Esc cancels.',
+        type: 'info',
+        duration: 9000,
+      });
+      return { ok: true, sessionId, slot: selectedSlot };
+    },
+    startRAAreaWorkflow: () => actions.startEchoAreaContourWorkflow({ slot: 'RA_ES' }),
+    startRVFACWorkflow: () => {
+      const measurements = getCurrentViewerMeasurementSnapshot(measurementService);
+      const occupied = new Set(measurements.map(getEchoAreaSlot).filter(Boolean));
+      const next = !occupied.has('RV_ED') ? 'RV_ED' : !occupied.has('RV_ES') ? 'RV_ES' : '';
+      if (!next) {
+        uiNotificationService.show({
+          title: 'RV FAC',
+          message: 'Both RV contours are present. Review FAC or delete the contour you intend to replace.',
+          type: 'info',
+          duration: 6000,
+        });
+        return { ok: false, reason: 'rv-fac-contours-complete' };
+      }
+      return actions.startEchoAreaContourWorkflow({ slot: next });
+    },
     startSpectralDopplerVTIWorkflow: async () => {
+      clearEchoAreaWorkflowListeners();
       clearUltrasoundDirectionalWorkflowListeners();
       clearSpectralDopplerWorkflowListeners();
 
@@ -11109,6 +11295,7 @@ function commandsModule({
       }
 
       clearUltrasoundDirectionalWorkflowListeners();
+      clearEchoAreaWorkflowListeners();
       toolGroupIds = toolGroupIds.length ? toolGroupIds : toolGroupService.getToolGroupIds();
 
       toolGroupIds.forEach(toolGroupId => {
@@ -14067,6 +14254,9 @@ function commandsModule({
     startSpectralDopplerVTIWorkflow: {
       commandFn: actions.startSpectralDopplerVTIWorkflow,
     },
+    startRAAreaWorkflow: { commandFn: actions.startRAAreaWorkflow },
+    startRVFACWorkflow: { commandFn: actions.startRVFACWorkflow },
+    startEchoAreaContourWorkflow: { commandFn: actions.startEchoAreaContourWorkflow },
     startBowelCurvedLengthWorkflow: {
       commandFn: actions.startBowelCurvedLengthWorkflow,
     },
