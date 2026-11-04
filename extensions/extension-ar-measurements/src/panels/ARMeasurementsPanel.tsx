@@ -1,6 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { calculateLVSimpson, LV_SIMPSON_SLOT_ORDER } from '../utils/lvSimpson';
+import {
+  calculateLVSimpson,
+  LV_SIMPSON_SLOT_ORDER,
+  buildClinicalLVSimpsonReportFieldUpdates,
+} from '../utils/lvSimpson';
 import {
   calculateLAVolume,
   LA_VOLUME_SLOT_ORDER,
@@ -1852,9 +1856,12 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
     return calculateLAVolume(visibleMeasurements);
   }, [domain, visibleMeasurements]);
 
-  const cseLAVolumeReportFieldUpdates = useMemo(
-    () => buildCseLAVolumeReportFieldUpdatesFromResult(laVolumeResult),
-    [laVolumeResult]
+  const clinicalViewerReportFieldUpdates = useMemo(
+    () => ({
+      ...buildCseLAVolumeReportFieldUpdatesFromResult(laVolumeResult),
+      ...buildClinicalLVSimpsonReportFieldUpdates(lvSimpsonResult),
+    }),
+    [laVolumeResult, lvSimpsonResult]
   );
 
   const ivcMeasurementResult = useMemo(
@@ -1944,9 +1951,9 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
 
   const runMeasurementSave = async (scoreNow = false, options: any = {}) => {
     const viewerDerivedReportFieldUpdates =
-      isClinicalReportSaveTarget && Object.keys(cseLAVolumeReportFieldUpdates).length > 0
+      isClinicalReportSaveTarget && Object.keys(clinicalViewerReportFieldUpdates).length > 0
         ? {
-            ...cseLAVolumeReportFieldUpdates,
+            ...clinicalViewerReportFieldUpdates,
             ...(options.viewerDerivedReportFieldUpdates || {}),
           }
         : options.viewerDerivedReportFieldUpdates;
