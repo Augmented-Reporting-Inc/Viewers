@@ -9778,7 +9778,7 @@ function commandsModule({
             event.stopImmediatePropagation();
             spectralVmaxClickCleanup?.();
             spectralVmaxClickCleanup = null;
-            const baselineIndex = [peakIndex[0], resolved.result.baselineY, peakIndex[2] || 0];
+            const baselineIndex: [number, number, number] = [peakIndex[0], resolved.result.baselineY, peakIndex[2] || 0];
             const baselineWorld = csUtils.transformIndexToWorld(imageData, baselineIndex);
             const annotationId = csUtils.uuidv4();
             const stats = {
