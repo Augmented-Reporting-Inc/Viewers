@@ -1,4 +1,4 @@
-import { composeIVCRapRVSP } from './ivcRapRvsp';
+import { composeIVCRapRVSP, isIVCReviewCurrent } from './ivcRapRvsp';
 
 function target(instance: string, frame: number) {
   return {
@@ -47,5 +47,20 @@ describe('linked educational IVC/RAP/RVSP result', () => {
     expect(composeIVCRapRVSP({ ...args, ivcAnswer: {
       ...ivc, compositeResult: { ...ivc.compositeResult, components: ivc.compositeResult.components.slice(0,1) },
     }}).status).toBe('unavailable');
+  });
+});
+
+describe('IVC review integrity checkpoint', () => {
+  it('allows the exact reviewed source calipers to be accepted', () => {
+    expect(isIVCReviewCurrent(ivc, structuredClone(ivc))).toBe(true);
+  });
+  it('invalidates source, geometry and derived value changes', () => {
+    const differentFrame = structuredClone(ivc);
+    differentFrame.compositeResult.components[0].target.frameNumber = 2;
+    expect(isIVCReviewCurrent(ivc, differentFrame)).toBe(false);
+    const editedContour = structuredClone(ivc);
+    editedContour.compositeResult.components[1].points[1][0] = 9;
+    expect(isIVCReviewCurrent(ivc, editedContour)).toBe(false);
+    expect(isIVCReviewCurrent(ivc, { ...ivc, value: 65 })).toBe(false);
   });
 });
