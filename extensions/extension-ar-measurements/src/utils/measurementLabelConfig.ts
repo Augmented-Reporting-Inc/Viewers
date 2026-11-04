@@ -13,6 +13,8 @@ export const ECHO_MEASUREMENT_LABELS = [
   { value: 'LAd', label: 'Left atrial dimension' },
   { value: 'RVIDd', label: 'RVIDd' },
   { value: 'TAPSE', label: 'TAPSE' },
+  { value: 'IVCexp', label: 'IVC end-expiration diameter' },
+  { value: 'IVCinsp', label: 'IVC end-inspiration diameter' },
 ];
 
 function getViewerUrlSearchParams() {
