@@ -118,6 +118,7 @@ import {
   normalizeBowelMeasurementTargetSelection,
 } from '../../extension-ar-measurements/src/utils/bowelMeasurementTargets';
 import { calculateLVSimpson } from '../../extension-ar-measurements/src/utils/lvSimpson';
+import { buildClinicalEchoDerivedReportFieldUpdates } from '../../extension-ar-measurements/src/utils/clinicalEchoDerivedReportFields';
 import { getEchoAreaSlot } from '../../extension-ar-measurements/src/utils/echoAreaMeasurements';
 import { resolveViewerQuizCompositeResult, resolveViewerQuizLVSimpsonForStudy, isViewerQuizCompositeReviewCurrent } from '../../extension-ar-measurements/src/utils/viewerQuizCompositeResults';
 import { createGuidedMouseToolOwnership } from './utils/guidedMouseToolOwnership';
@@ -15092,7 +15093,12 @@ function commandsModule({
                 VIEWER_MEASUREMENTS_WORKFLOW,
               ]);
 
-              clinicalReportFieldUpdates = buildViewerReportFieldUpdates(reportAnnotations);
+              clinicalReportFieldUpdates = {
+                ...buildViewerReportFieldUpdates(reportAnnotations),
+                ...(isClinicalReportMeasurementsSaveTarget(saveTarget) && domain === 'echo'
+                  ? buildClinicalEchoDerivedReportFieldUpdates(reportAnnotations)
+                  : {}),
+              };
 
               if (Object.keys(clinicalReportFieldUpdates).length) {
                 console.info('[MeasurementAnnotations] clinical report field updates', {
