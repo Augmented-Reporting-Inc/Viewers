@@ -14372,6 +14372,19 @@ function commandsModule({
           const entryStudy = String(entry?.referenceStudyUID || entry?.StudyInstanceUID || '').trim();
           return selectedStudy && entryStudy === selectedStudy;
         });
+        // RA area is a single-contour question. When the educator explicitly
+        // selects an annotation, do not reject that contour merely because an
+        // earlier RA contour remains saved elsewhere in the same study.
+        // The composite resolver still validates the chosen contour's clinical
+        // kind, RA_ES slot, calibrated area and exact SOP/frame provenance.
+        const selectedRAContour = requestedKind === 'raArea' && selectedMeasurementId
+          ? studyMeasurements.find(
+              entry => getMeasurementAnnotationId(entry) === selectedMeasurementId
+            )
+          : null;
+        const sourceMeasurements = selectedRAContour
+          ? [selectedRAContour]
+          : studyMeasurements;
         const reviewedEFIsActive =
           requestedKind === 'lvSimpsonEF' &&
           reviewedLVSimpsonEF?.studyInstanceId === selectedStudy &&
@@ -14396,7 +14409,7 @@ function commandsModule({
         }
         const composite = requestedKind === 'lvSimpsonEF'
           ? authoritativeEF?.composite
-          : resolveViewerQuizCompositeResult(requestedKind, studyMeasurements);
+          : resolveViewerQuizCompositeResult(requestedKind, sourceMeasurements);
         if (!composite) {
           return {
             ok: false,
