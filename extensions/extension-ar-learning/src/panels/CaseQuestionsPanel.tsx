@@ -3814,6 +3814,55 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     }
   }
 
+  function renderIVCCaliperControls(question: QuizQuestion, disabled: boolean) {
+    return (
+      <div className="mt-2 rounded border border-cyan-700/70 p-2 text-xs">
+        <div className="mb-1 font-semibold text-cyan-100">IVC phase measurements</div>
+        <p className="mb-2 text-gray-300">
+          Use the expiration and inspiration source images independently.
+          After drawing each calibrated Length caliper, label it IVCexp or IVCinsp.
+        </p>
+        <div className="flex flex-wrap gap-2">
+          {[
+            { slot: 'IVC_EXP', label: 'Measure expiration (IVCexp)' },
+            { slot: 'IVC_INSP', label: 'Measure inspiration (IVCinsp)' },
+          ].map(phase => (
+            <button
+              key={phase.slot}
+              type="button"
+              disabled={disabled}
+              className="rounded border border-cyan-600 px-2 py-1 text-cyan-100 disabled:opacity-40"
+              onClick={event => {
+                event.preventDefault();
+                event.stopPropagation();
+                void (async () => {
+                  if (!(await ensureConfiguredCompositePhaseFrame(question, phase.slot))) return;
+                  await runViewerCommand(commandsManager, 'setViewerLengthLabelMode', {
+                    labelMode: 'prompt',
+                  });
+                  const activation = await runViewerCommand(
+                    commandsManager, 'activateViewerMeasurementTool', {
+                      toolName: 'Length', stopCine: true,
+                    }
+                  );
+                  if (activation?.ok === false) {
+                    uiNotificationService.show({
+                      title: 'IVC measurement',
+                      message: 'The calibrated Length tool could not be activated.',
+                      type: 'warning', duration: 5000,
+                    });
+                  }
+                })();
+              }}
+            >
+              {phase.label}
+            </button>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
   function renderLAVolumeContourControls(question: QuizQuestion, disabled: boolean) {
     const views = [
       { slot: 'A4C', label: 'Apical four-chamber' },
@@ -4231,6 +4280,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       return (
         <div className="mt-2 w-full min-w-0 max-w-full space-y-2 overflow-hidden">
           {renderCompositePhaseNavigation(question, disabled)}
+          {['ivcCollapsibility', 'ivcRapRvsp'].includes(
+            cleanString(plainObject(question.answerConfig).measurementKind)
+          ) ? renderIVCCaliperControls(question, disabled) : null}
           {['laVolumeBiplane', 'laVolumeBiplaneDisks'].includes(
             cleanString(plainObject(question.answerConfig).measurementKind)
           ) ? renderLAVolumeContourControls(question, disabled) : null}
@@ -4971,6 +5023,12 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               question,
               isCapturing || authoringSaving || !isDraftDefinition(authoringDefinition)
             )}
+            {['ivcCollapsibility', 'ivcRapRvsp'].includes(
+              cleanString(answerConfig.measurementKind)
+            ) ? renderIVCCaliperControls(
+              question,
+              isCapturing || authoringSaving || !isDraftDefinition(authoringDefinition)
+            ) : null}
             {['laVolumeBiplane', 'laVolumeBiplaneDisks'].includes(
               cleanString(answerConfig.measurementKind)
             ) ? renderLAVolumeContourControls(
