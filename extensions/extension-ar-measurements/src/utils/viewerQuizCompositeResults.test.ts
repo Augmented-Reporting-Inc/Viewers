@@ -76,7 +76,21 @@ function makeEFSlot(studyId: string, slot: string, halfWidth: number, height: nu
     referenceStudyUID: studyId,
     referencedImageId: `wadors:study/${studyId}/${slot}`,
     measurementKind: 'lvSimpsonSlot',
-    lvSimpson: { measurementKind: 'lvSimpsonSlot', slot },
+    // Synthetic coordinates are already in mm: provide the same explicit
+    // calibrated geometry contract required of real DICOM-derived EF slots.
+    // No patient data or fabricated clinical calibration is involved.
+    lvSimpson: {
+      measurementKind: 'lvSimpsonSlot',
+      slot,
+      contourSource: 'freehandDerived',
+      axisPointIndex: 5,
+      contourPoints: points.map(point => [...point]),
+      originalContourPoints: points.map(point => [...point]),
+      calibratedContourPoints: points.map(point => [...point]),
+      calibratedLongAxisLengthMM: height,
+      longAxisLengthMM: height,
+    },
+    lvSimpsonControlPoints: points.map(point => [...point]),
     points,
   };
 }
@@ -91,6 +105,16 @@ function makeCompleteStudyEF(studyId: string, widthScale = 1) {
 }
 
 describe('study-scoped educator/learner EF parity', () => {
+  it('rejects four complete slots when one lacks verified physical calibration', () => {
+    const measurements = makeCompleteStudyEF('study-a');
+    measurements[0].lvSimpson = {
+      ...measurements[0].lvSimpson,
+      calibratedContourPoints: null,
+      calibratedLongAxisLengthMM: null,
+    };
+    expect(resolveViewerQuizLVSimpsonForStudy('study-a', measurements)).toBeNull();
+  });
+
   it('returns matching computed and quiz values from the same source contours', () => {
     const snapshot = resolveViewerQuizLVSimpsonForStudy('study-a', makeCompleteStudyEF('study-a'));
     expect(snapshot).not.toBeNull();
