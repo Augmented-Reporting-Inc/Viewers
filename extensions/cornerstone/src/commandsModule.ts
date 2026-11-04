@@ -9670,6 +9670,7 @@ function commandsModule({
     startUltrasoundDirectionalWorkflow: async ({
       spectralVmax = false,
       preferredTargetKey = '',
+      quizCapture = false,
     } = {}) => {
       clearEchoAreaWorkflowListeners();
       clearUltrasoundDirectionalWorkflowListeners();
@@ -9798,7 +9799,7 @@ function commandsModule({
           selectedTarget = normalizeUltrasoundDirectionalTargetSelection('generic', rawUnit);
         }
 
-        const reportMapping = isClinicalReportMeasurementsSaveTarget(saveTarget)
+        const reportMapping = !quizCapture && isClinicalReportMeasurementsSaveTarget(saveTarget)
           ? buildUltrasoundDirectionalReportMapping(selectedTarget)
           : null;
         const convertedReportValue = convertUltrasoundDirectionalValueForTarget({
@@ -10396,7 +10397,10 @@ function commandsModule({
       }
       return actions.startGuidedRVFACContourWorkflow({ slot: next });
     },
-    startSpectralDopplerVTIWorkflow: async ({ preferredTargetKey = '' } = {}) => {
+    startSpectralDopplerVTIWorkflow: async ({
+      preferredTargetKey = '',
+      quizCapture = false,
+    } = {}) => {
       clearEchoAreaWorkflowListeners();
       clearUltrasoundDirectionalWorkflowListeners();
       clearSpectralDopplerWorkflowListeners();
@@ -10418,7 +10422,7 @@ function commandsModule({
       const isClinicalReportTarget = isClinicalReportMeasurementsSaveTarget(saveTarget);
       // A quiz's TR VTI target is already configured by its question.
       // Retain the target picker for existing clinical and general workflows.
-      const selectedTarget = preferredTargetKey && !isClinicalReportTarget
+      const selectedTarget = preferredTargetKey && quizCapture
         ? normalizeSpectralDopplerVtiTargetSelection(preferredTargetKey, {
             allowGeneric: true,
           })
@@ -10440,7 +10444,7 @@ function commandsModule({
         return null;
       }
 
-      const reportMapping = buildViewerReportMapping(selectedTarget);
+      const reportMapping = quizCapture ? null : buildViewerReportMapping(selectedTarget);
       const measurementLabel = selectedTarget.reportMapped ||
         selectedTarget.key === 'spectral.trVti'
         ? selectedTarget.label
@@ -11908,12 +11912,14 @@ function commandsModule({
         void actions.startUltrasoundDirectionalWorkflow({
           spectralVmax: true,
           preferredTargetKey: 'echo.trPeakVelocity',
+          quizCapture: true,
         }).catch(error => console.warn('[Viewer quiz] TR Vmax activation failed:', error));
         return { ok: true, measurementKind, workflowStarted: true };
       }
       if (measurementKind === 'trVTI') {
         void actions.startSpectralDopplerVTIWorkflow({
           preferredTargetKey: 'spectral.trVti',
+          quizCapture: true,
         }).catch(error => console.warn('[Viewer quiz] TR VTI activation failed:', error));
         return { ok: true, measurementKind, workflowStarted: true };
       }
