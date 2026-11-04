@@ -28,6 +28,7 @@ import { composeIVCRapRVSP, isIVCReviewCurrent, RAP_CHOICES_MMHG } from '../util
 import {
   COMPOSITE_FRAME_SLOTS,
   getCompleteCompositeFrameTargets,
+  matchesConfiguredCompositeFrame,
 } from '../utils/compositeFrameTargets';
 
 const AR_QUIZ_MEASUREMENT_ADDED_EVENT = 'ar-learning:quiz-measurement-added';
@@ -3798,9 +3799,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       const response = await runViewerCommand(commandsManager, 'getCurrentViewerQuizFrameAnswer', {});
       const actual = plainObject(response?.answer?.selectedTarget);
       const matches = response?.ok === true &&
-        ['studyInstanceUID', 'seriesInstanceUID', 'sopInstanceUID'].every(
-          key => cleanString(actual[key]) === cleanString(target[key])
-        ) && Number(actual.frameNumber) === Number(target.frameNumber);
+        matchesConfiguredCompositeFrame(actual, target);
       if (!matches) {
         uiNotificationService.show({
           title: 'Case Questions',
