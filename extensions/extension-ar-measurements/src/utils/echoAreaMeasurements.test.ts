@@ -63,6 +63,10 @@ describe('echo chamber areas', () => {
       { ...ed, SOPInstanceUID: 'sop', frameNumber: 14 },
       { ...es, SOPInstanceUID: 'sop', frameNumber: 14 },
     ])?.status).toBe('invalid');
+    expect(calculateRVFACFromMeasurements([
+      { ...ed, SOPInstanceUID: 'sop', frameNumber: 0 },
+      { ...es, SOPInstanceUID: 'sop', frameNumber: 0 },
+    ])?.status).toBe('invalid');
     expect(calculateRVFACFromMeasurements([ed])?.status).toBe('incomplete');
     expect(calculateRVFACFromMeasurements([ed, area('RVESA', 3400)])?.status)
       .toBe('invalid');
