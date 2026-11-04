@@ -643,6 +643,17 @@ const toolbarButtons: Button[] = [
     },
   },
   {
+    id: 'SpectralVmax',
+    uiType: 'ohif.toolButton',
+    props: {
+      icon: 'icon-tool-freehand-roi',
+      label: 'Vmax',
+      tooltip: 'Measure calibrated peak spectral velocity from the zero baseline to the dense envelope peak. Choose the Doppler target.',
+      commands: 'startSpectralVmaxWorkflow',
+      evaluate: 'evaluate.action',
+    },
+  },
+  {
     id: 'SpectralDopplerVTI',
     uiType: 'ohif.toolButton',
     props: {
