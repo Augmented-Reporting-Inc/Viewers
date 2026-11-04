@@ -3814,7 +3814,13 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     }
   }
 
-  function renderIVCCaliperControls(question: QuizQuestion, disabled: boolean) {
+  async function activateQuestionForPhaseCapture(quiz: QuizDefinition, question: QuizQuestion) {
+    if (activeQuestionKey !== `${quiz.quizKey}:${question.questionKey}`) {
+      await selectQuestion(quiz, question, { force: true });
+    }
+  }
+
+  function renderIVCCaliperControls(quiz: QuizDefinition, question: QuizQuestion, disabled: boolean) {
     return (
       <div className="mt-2 rounded border border-cyan-700/70 p-2 text-xs">
         <div className="mb-1 font-semibold text-cyan-100">IVC phase measurements</div>
@@ -3836,6 +3842,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                 event.preventDefault();
                 event.stopPropagation();
                 void (async () => {
+                  await activateQuestionForPhaseCapture(quiz, question);
                   if (!(await ensureConfiguredCompositePhaseFrame(question, phase.slot))) return;
                   await runViewerCommand(commandsManager, 'setViewerLengthLabelMode', {
                     labelMode: 'prompt',
@@ -3863,7 +3870,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     );
   }
 
-  function renderLAVolumeContourControls(question: QuizQuestion, disabled: boolean) {
+  function renderLAVolumeContourControls(quiz: QuizDefinition, question: QuizQuestion, disabled: boolean) {
     const views = [
       { slot: 'A4C', label: 'Apical four-chamber' },
       { slot: 'A2C', label: 'Apical two-chamber' },
@@ -3894,6 +3901,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                   event.preventDefault();
                   event.stopPropagation();
                   void (async () => {
+                    await activateQuestionForPhaseCapture(quiz, question);
                     if (!(await ensureConfiguredCompositePhaseFrame(question, slot))) return;
                     await runViewerCommand(commandsManager, 'startLAVolumeWorkflow', {
                       slot,
@@ -3912,7 +3920,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     );
   }
 
-  function renderRVFACContourControls(question: QuizQuestion, disabled: boolean) {
+  function renderRVFACContourControls(quiz: QuizDefinition, question: QuizQuestion, disabled: boolean) {
     const slots = [
       { slot: 'RV_ED', label: 'End-diastolic area (RVEDA)' },
       { slot: 'RV_ES', label: 'End-systolic area (RVESA)' },
@@ -3943,6 +3951,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                   event.preventDefault();
                   event.stopPropagation();
                   void (async () => {
+                    await activateQuestionForPhaseCapture(quiz, question);
                     if (!(await ensureConfiguredCompositePhaseFrame(question, slot))) return;
                     await runViewerCommand(commandsManager, choice.command, { slot });
                   })();
@@ -4282,12 +4291,12 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
           {renderCompositePhaseNavigation(question, disabled)}
           {['ivcCollapsibility', 'ivcRapRvsp'].includes(
             cleanString(plainObject(question.answerConfig).measurementKind)
-          ) ? renderIVCCaliperControls(question, disabled) : null}
+          ) ? renderIVCCaliperControls(quiz, question, disabled) : null}
           {['laVolumeBiplane', 'laVolumeBiplaneDisks'].includes(
             cleanString(plainObject(question.answerConfig).measurementKind)
-          ) ? renderLAVolumeContourControls(question, disabled) : null}
+          ) ? renderLAVolumeContourControls(quiz, question, disabled) : null}
           {cleanString(plainObject(question.answerConfig).measurementKind) === 'rvFAC'
-            ? renderRVFACContourControls(question, disabled)
+            ? renderRVFACContourControls(quiz, question, disabled)
             : null}
           {linkedRVSP
             ? renderIVCRapRVSPControls(quiz.quizKey, question, value, disabled)
@@ -5026,18 +5035,18 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
             {['ivcCollapsibility', 'ivcRapRvsp'].includes(
               cleanString(answerConfig.measurementKind)
             ) ? renderIVCCaliperControls(
-              question,
+              { quizKey: 'authoring', quizVersion: 1 }, question,
               isCapturing || authoringSaving || !isDraftDefinition(authoringDefinition)
             ) : null}
             {['laVolumeBiplane', 'laVolumeBiplaneDisks'].includes(
               cleanString(answerConfig.measurementKind)
             ) ? renderLAVolumeContourControls(
-              question,
+              { quizKey: 'authoring', quizVersion: 1 }, question,
               isCapturing || authoringSaving || !isDraftDefinition(authoringDefinition)
             ) : null}
             {cleanString(answerConfig.measurementKind) === 'rvFAC'
               ? renderRVFACContourControls(
-                  question,
+                  { quizKey: 'authoring', quizVersion: 1 }, question,
                   isCapturing || authoringSaving || !isDraftDefinition(authoringDefinition)
                 )
               : null}
