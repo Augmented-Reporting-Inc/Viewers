@@ -3,21 +3,17 @@ import { createPortal } from 'react-dom';
 import {
   calculateLVSimpson,
   LV_SIMPSON_SLOT_ORDER,
-  buildClinicalLVSimpsonReportFieldUpdates,
 } from '../utils/lvSimpson';
 import {
   calculateLAVolume,
   LA_VOLUME_SLOT_ORDER,
-  buildCseLAVolumeReportFieldUpdatesFromResult,
 } from '../utils/laVolume';
 import { getViewerMeasurementDomainFromPath } from '../utils/measurementLabelConfig';
 import { BOWEL_CURVED_LENGTH_MEASUREMENT_KIND } from '../utils/bowelMeasurementTargets';
-import { calculateIVCFromMeasurements, isIVCDiameterMeasurement, buildClinicalIVCReportFieldUpdates } from '../utils/rightHeartMeasurements';
+import { calculateIVCFromMeasurements, isIVCDiameterMeasurement } from '../utils/rightHeartMeasurements';
 import {
   calculateRAAreaFromMeasurements,
   calculateRVFACFromMeasurements,
-  buildClinicalRAAreaReportFieldUpdates,
-  buildClinicalRVFACReportFieldUpdates,
   getEchoAreaSlot,
   isEchoAreaMeasurement,
 } from '../utils/echoAreaMeasurements';
@@ -1923,17 +1919,6 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
     [domain, visibleMeasurements]
   );
 
-  const clinicalViewerReportFieldUpdates = useMemo(
-    () => ({
-      ...buildCseLAVolumeReportFieldUpdatesFromResult(laVolumeResult),
-      ...buildClinicalLVSimpsonReportFieldUpdates(lvSimpsonResult),
-      ...buildClinicalRAAreaReportFieldUpdates(raAreaResult),
-      ...buildClinicalRVFACReportFieldUpdates(rvFacResult),
-      ...buildClinicalIVCReportFieldUpdates(ivcMeasurementResult),
-    }),
-    [laVolumeResult, lvSimpsonResult, raAreaResult, rvFacResult, ivcMeasurementResult]
-  );
-
   const measurementGroups = useMemo(() => {
     if (domain === 'echo' && !isReviewWorkflow) {
       const laMeasurements = visibleMeasurements.filter(
@@ -2027,14 +2012,6 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
   }, [domain, isReviewWorkflow, saveTarget, visibleMeasurements]);
 
   const runMeasurementSave = async (scoreNow = false, options: any = {}) => {
-    const viewerDerivedReportFieldUpdates =
-      isClinicalReportSaveTarget && Object.keys(clinicalViewerReportFieldUpdates).length > 0
-        ? {
-            ...clinicalViewerReportFieldUpdates,
-            ...(options.viewerDerivedReportFieldUpdates || {}),
-          }
-        : options.viewerDerivedReportFieldUpdates;
-
     return withTimeout(
       commandsManager.runCommand('saveViewerMeasurementsForActiveStudy', {
         domain: domain === 'generic' ? undefined : domain,
@@ -2042,9 +2019,6 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
         educationAttemptIntent: scoreNow ? 'score-attempt' : 'draft',
         deleteAnnotationIds: pendingDeletedMeasurementIds,
         ...options,
-        ...(viewerDerivedReportFieldUpdates
-          ? { viewerDerivedReportFieldUpdates }
-          : {}),
       }),
       30000,
       options?.previewOnly ? 'Review measurements' : 'Save measurements'
