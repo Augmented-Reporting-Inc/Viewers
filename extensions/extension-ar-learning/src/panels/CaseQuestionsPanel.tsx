@@ -3912,35 +3912,40 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     if (question.type === 'measurementNumeric') {
       const captureKey = `${quiz.quizKey}:${question.questionKey}`;
       const captureInProgress = capturingMeasurementKey === captureKey;
+      const linkedRVSP = cleanString(plainObject(question.answerConfig).measurementKind) === 'ivcRapRvsp';
 
       return (
         <div className="mt-2 w-full min-w-0 max-w-full space-y-2 overflow-hidden">
-          <div className="flex w-full min-w-0 max-w-full items-center gap-2 overflow-hidden">
-            <input
-              className="min-w-0 flex-1 rounded border border-gray-700 bg-black px-2 py-1 text-sm text-white"
-              type="number"
-              inputMode="decimal"
-              step="0.01"
-              value={numberOrEmpty(value?.value)}
-              onChange={event =>
-                setAnswer(
-                  quiz.quizKey,
-                  question,
-                  setObjectAnswerPart(value, {
-                    value: event.target.value,
-                    measurementType:
-                      value?.measurementType || question?.answerConfig?.measurementType || '',
-                    unit: value?.unit || question?.answerConfig?.unit || '',
-                  })
-                )
-              }
-              disabled={disabled}
-              placeholder="Measurement value"
-            />
-            <div className="w-14 shrink-0 truncate rounded border border-gray-700 px-2 py-1 text-center text-sm text-gray-300">
-              {value?.unit || question?.answerConfig?.unit || ''}
-            </div>
-          </div>
+          {linkedRVSP
+            ? renderIVCRapRVSPControls(quiz.quizKey, question, value, disabled)
+            : (
+                        <div className="flex w-full min-w-0 max-w-full items-center gap-2 overflow-hidden">
+                          <input
+                            className="min-w-0 flex-1 rounded border border-gray-700 bg-black px-2 py-1 text-sm text-white"
+                            type="number"
+                            inputMode="decimal"
+                            step="0.01"
+                            value={numberOrEmpty(value?.value)}
+                            onChange={event =>
+                              setAnswer(
+                                quiz.quizKey,
+                                question,
+                                setObjectAnswerPart(value, {
+                                  value: event.target.value,
+                                  measurementType:
+                                    value?.measurementType || question?.answerConfig?.measurementType || '',
+                                  unit: value?.unit || question?.answerConfig?.unit || '',
+                                })
+                              )
+                            }
+                            disabled={disabled}
+                            placeholder="Measurement value"
+                          />
+                          <div className="w-14 shrink-0 truncate rounded border border-gray-700 px-2 py-1 text-center text-sm text-gray-300">
+                            {value?.unit || question?.answerConfig?.unit || ''}
+                          </div>
+                        </div>
+            )}
 
           <button
             type="button"
