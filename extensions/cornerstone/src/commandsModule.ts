@@ -82,6 +82,7 @@ import {
   buildLVSimpsonContourFromHingeApex,
 } from './utils/lvSimpsonContour';
 import { buildRVFACContourFromAnnulusApex } from './utils/rvFacContour';
+import { resolveSpectralVmaxClick } from './utils/spectralVmaxClick';
 import {
   SPECTRAL_DOPPLER_LABEL,
   SPECTRAL_DOPPLER_MEASUREMENT_KIND,
@@ -7793,8 +7794,11 @@ function commandsModule({
 
   let activeUltrasoundDirectionalWorkflowSessionId = '';
   let ultrasoundDirectionalCompletionHandler: null | ((event: Event) => void) = null;
+  let spectralVmaxClickCleanup: null | (() => void) = null;
 
   function clearUltrasoundDirectionalWorkflowListeners({ resetSession = true } = {}) {
+    spectralVmaxClickCleanup?.();
+    spectralVmaxClickCleanup = null;
     if (ultrasoundDirectionalCompletionHandler) {
       eventTarget.removeEventListener(
         Enums.Events.ANNOTATION_COMPLETED,
@@ -9732,10 +9736,95 @@ function commandsModule({
         ultrasoundDirectionalCompletionHandler
       );
 
+      if (spectralVmax) {
+        const activeViewportId = viewportGridService.getActiveViewportId();
+        const viewport = cornerstoneViewportService.getCornerstoneViewport(activeViewportId);
+        const element = viewport?.element;
+        const imageId = viewport?.getCurrentImageId?.() || '';
+        const instance = imageId ? metaData.get('instance', imageId) : null;
+        const regionSources = [
+          ...getUltrasoundRegionsFromSource(instance),
+          ...getUltrasoundRegionsFromSource(metaData.get('ultrasoundRegions', imageId)),
+        ];
+        const readRegion = (region: any) => ({
+          minX: readDicomNumber(region, ['RegionLocationMinX0', 'regionLocationMinX0', '00186018', 'x00186018']),
+          maxX: readDicomNumber(region, ['RegionLocationMaxX1', 'regionLocationMaxX1', '0018601C', 'x0018601C']),
+          minY: readDicomNumber(region, ['RegionLocationMinY0', 'regionLocationMinY0', '0018601A', 'x0018601A']),
+          maxY: readDicomNumber(region, ['RegionLocationMaxY1', 'regionLocationMaxY1', '0018601E', 'x0018601E']),
+          referenceY: readDicomNumber(region, ['ReferencePixelY0', 'referencePixelY0', '00186022', 'x00186022']),
+          referencePhysicalY: readDicomNumber(region, ['ReferencePixelPhysicalValueY', 'referencePixelPhysicalValueY', '0018602A', 'x0018602A']),
+          physicalDeltaY: readDicomNumber(region, ['PhysicalDeltaY', 'physicalDeltaY', '0018602E', 'x0018602E']),
+          spatialFormat: readDicomNumber(region, ['RegionSpatialFormat', 'regionSpatialFormat', '00186012', 'x00186012']),
+          unitsY: readDicomNumber(region, ['PhysicalUnitsYDirection', 'physicalUnitsYDirection', '00186026', 'x00186026']),
+        });
+        const regions = regionSources.map(readRegion);
+        if (element && imageId && regions.length > 0) {
+          const captureClick = (event: PointerEvent) => {
+            if (event.button !== 0 || activeUltrasoundDirectionalWorkflowSessionId !== workflowSessionId) return;
+            const bounds = element.getBoundingClientRect();
+            const canvasPoint: [number, number] = [event.clientX - bounds.left, event.clientY - bounds.top];
+            const imageData = viewport.getImageData?.();
+            if (!imageData) return;
+            const worldPoint = viewport.canvasToWorld?.(canvasPoint);
+            if (!worldPoint) return;
+            const peakIndex = csUtils.transformWorldToIndex(imageData, worldPoint);
+            if (!peakIndex || !Number.isFinite(peakIndex[0]) || !Number.isFinite(peakIndex[1])) return;
+            const resolved = regions.map(region => ({
+              region,
+              result: resolveSpectralVmaxClick(region as any, peakIndex[0], peakIndex[1]),
+            })).find(candidate => candidate.result);
+            if (!resolved?.result) return; // Existing two-point workflow remains available.
+            event.preventDefault();
+            event.stopImmediatePropagation();
+            spectralVmaxClickCleanup?.();
+            spectralVmaxClickCleanup = null;
+            const baselineIndex = [peakIndex[0], resolved.result.baselineY, peakIndex[2] || 0];
+            const baselineWorld = csUtils.transformIndexToWorld(imageData, baselineIndex);
+            const annotationId = csUtils.uuidv4();
+            const stats = {
+              xValues: [0, 0],
+              yValues: [0, resolved.result.velocityMps * 100],
+              units: ['s', 'cm/s'],
+              isHorizontal: false,
+              isUnitless: false,
+            };
+            const data = {
+              handles: { points: [baselineWorld, worldPoint], activeHandleIndex: null,
+                textBox: { hasMoved: false, worldPosition: worldPoint, worldBoundingBox: null } },
+              cachedStats: { [`imageId:${imageId}`]: stats },
+              ultrasoundDirectional: { acquisitionMode: 'spectralVmax', value: resolved.result.velocityMps * 100, unit: 'cm/s' },
+            };
+            const viewReference = getViewerAnnotationViewportReference(viewport, [baselineWorld, worldPoint]);
+            const ToolClass: any = (cornerstoneTools as any).UltrasoundDirectionalTool;
+            const baseData = {
+              annotationUID: annotationId,
+              highlighted: true,
+              invalidated: false,
+              metadata: { ...viewReference, toolName: ULTRASOUND_DIRECTIONAL_TOOL_NAME, referencedImageId: imageId },
+              data,
+            };
+            const created = typeof ToolClass?.createAnnotationForViewport === 'function'
+              ? ToolClass.createAnnotationForViewport(viewport, baseData)
+              : baseData;
+            created.annotationUID = annotationId;
+            created.data = { ...(created.data || {}), ...data };
+            created.metadata = { ...(created.metadata || {}), ...baseData.metadata };
+            created.invalidated = false;
+            annotation.state.addAnnotation(created, element);
+            eventTarget.dispatchEvent(new CustomEvent(Enums.Events.ANNOTATION_COMPLETED, {
+              detail: { annotation: created },
+            }));
+            viewport.render?.();
+          };
+          element.addEventListener('pointerdown', captureClick, true);
+          spectralVmaxClickCleanup = () => element.removeEventListener('pointerdown', captureClick, true);
+        }
+      }
+
       uiNotificationService.show({
         title: spectralVmax ? 'Spectral Vmax' : 'Ultrasound Directional',
         message: spectralVmax
-          ? 'Draw from the zero-velocity baseline to the peak of the dense spectral envelope, then select the flow Vmax target. Esc cancels.'
+          ? 'Click the dense spectral peak once when DICOM zero-velocity calibration is available. Otherwise draw from the zero baseline to the peak. Select the flow target; Esc cancels.'
           : 'Draw along a calibrated Doppler/time axis. After completion, choose the matching Echo measurement. Unsupported units remain generic annotations.',
         type: 'info',
         duration: 7000,
