@@ -198,12 +198,14 @@ function compatibleIVCCinePair(a: ViewerMeasurement, b: ViewerMeasurement): bool
   const seriesA = String(a?.referenceSeriesUID || a?.SeriesInstanceUID || '').trim();
   const seriesB = String(b?.referenceSeriesUID || b?.SeriesInstanceUID || '').trim();
   if (!studyA || !studyB || studyA !== studyB ||
-      !seriesA || !seriesB || seriesA !== seriesB) return false;
+      !seriesA || !seriesB) return false;
 
   const sopA = String(a?.SOPInstanceUID || a?.metadata?.SOPInstanceUID || '').trim();
   const sopB = String(b?.SOPInstanceUID || b?.metadata?.SOPInstanceUID || '').trim();
   const frameA = finiteNumber(a?.frameNumber ?? a?.metadata?.frameNumber);
   const frameB = finiteNumber(b?.frameNumber ?? b?.metadata?.frameNumber);
+  // Cross-series pairing is valid only with explicit distinct DICOM instances.
+  if (seriesA !== seriesB && (!sopA || !sopB || sopA === sopB)) return false;
   if (sopA && sopB && sopA === sopB &&
       (!Number.isInteger(frameA) || !Number.isInteger(frameB) ||
        frameA < 1 || frameB < 1 || frameA === frameB)) return false;
@@ -241,7 +243,7 @@ export function calculateIVCFromMeasurements(measurements: ViewerMeasurement[] =
     return {
       status: 'invalid' as MeasurementCalculationStatus,
       values: null,
-      message: 'IVC expiration and inspiration must use separate frames of the same study and cine series.',
+      message: 'IVC expiration and inspiration must share a study and use distinct frames or identified DICOM instances.',
     };
   }
 
