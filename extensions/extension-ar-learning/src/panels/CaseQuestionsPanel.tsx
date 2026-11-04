@@ -3959,6 +3959,8 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
           >
             {captureInProgress
               ? 'Capturing…'
+              : linkedRVSP
+                ? 'Accept IVC / RAP / RVSP measurement'
               : cleanString(plainObject(question.answerConfig).measurementKind) === 'lvSimpsonEF' ||
                   cleanString(plainObject(question.answerConfig).measurementKind) === 'laVolumeBiplane'
                 ? 'Capture calculated measurement'
@@ -4574,6 +4576,12 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
 
         {question.type === 'measurementNumeric' ? (
           <div className="mt-2 rounded border border-gray-700 p-2">
+            {cleanString(answerConfig.measurementKind) === 'ivcRapRvsp'
+              ? renderIVCRapRVSPControls(
+                  'authoring', question, answerConfig.goldMeasurement,
+                  isCapturing || authoringSaving || !isDraftDefinition(authoringDefinition)
+                )
+              : null}
             {!isActiveAuthoringQuestion ? (
               <div className="mb-2 text-xs text-amber-200">Select this question before drawing its measurement. A new measurement is associated with the active question.</div>
             ) : null}
@@ -4589,6 +4597,8 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
             >
               {isCapturing
                 ? 'Capturing measurement…'
+                : cleanString(answerConfig.measurementKind) === 'ivcRapRvsp'
+                  ? 'Accept IVC / RAP / RVSP gold answer'
                 : answerConfig.goldValue != null && answerConfig.goldValue !== ''
                   ? (cleanString(answerConfig.measurementKind) === 'lvSimpsonEF' || cleanString(answerConfig.measurementKind) === 'laVolumeBiplane') ? 'Replace gold answer with calculated result' : 'Replace gold answer with selected measurement'
                   : (cleanString(answerConfig.measurementKind) === 'lvSimpsonEF' || cleanString(answerConfig.measurementKind) === 'laVolumeBiplane') ? 'Use calculated result as gold answer' : 'Use selected measurement as gold answer'}
