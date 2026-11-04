@@ -5,6 +5,7 @@ import {
   LA_VOLUME_AREA_LENGTH_METHOD,
   LA_VOLUME_DISKS_METHOD,
 } from './laVolume';
+import { resolveViewerQuizCompositeResult } from './viewerQuizCompositeResults';
 
 function laContour(slot: 'A4C' | 'A2C', widthMM: number, axisMM = 80) {
   const half = widthMM / 2;
@@ -85,6 +86,25 @@ describe('versioned LA biplane methods', () => {
       laContour('A4C', 20, 80),
       laContour('A2C', 16, 73),
     ])?.status).toBe('invalid');
+  });
+
+  it('captures separate education composite kinds with explicit method provenance', () => {
+    const legacy = resolveViewerQuizCompositeResult('laVolumeBiplane', contours);
+    const disks = resolveViewerQuizCompositeResult('laVolumeBiplaneDisks', contours);
+    expect(legacy?.measurementKind).toBe('laVolumeBiplane');
+    expect(legacy?.methodId).toBe(LA_VOLUME_AREA_LENGTH_METHOD);
+    expect(disks?.measurementKind).toBe('laVolumeBiplaneDisks');
+    expect(disks?.methodId).toBe(LA_VOLUME_DISKS_METHOD);
+    expect(disks?.components).toHaveLength(2);
+    expect(disks?.value).toBeCloseTo((Math.PI / 4) * 20 * 16 * 80 / 1000, 3);
+
+    // Passing a precomputed value from the other LA method cannot cross-score.
+    expect(resolveViewerQuizCompositeResult(
+      'laVolumeBiplaneDisks', contours, calculateLAVolume(contours)
+    )).toBeNull();
+    expect(resolveViewerQuizCompositeResult(
+      'laVolumeBiplane', contours, calculateLABiplaneDisks(contours)
+    )).toBeNull();
   });
 
   it('cannot use uncalibrated, degenerate, or unrelated contours', () => {
