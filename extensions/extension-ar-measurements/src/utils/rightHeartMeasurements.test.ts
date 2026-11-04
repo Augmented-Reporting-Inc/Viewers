@@ -105,7 +105,11 @@ describe('right-heart measurement calculations', () => {
     expect(calculateIVCFromMeasurements(displayLabelPair)?.status).toBe('complete');
     expect(calculateIVCFromMeasurements([
       pair[0], { ...pair[1], referenceSeriesUID: 'different-cine' },
-    ])?.status).toBe('invalid');
+    ])?.status).toBe('invalid'); // Same SOP may not cross series.
+    expect(calculateIVCFromMeasurements([
+      pair[0],
+      { ...pair[1], referenceSeriesUID: 'different-cine', SOPInstanceUID: 'sop-IVC-insp' },
+    ])?.status).toBe('complete');
     expect(calculateIVCFromMeasurements([...pair, pair[0]])?.status).toBe('invalid');
     expect(calculateIVCFromMeasurements([
       ivc('IVCexp', 20, 'px'),
