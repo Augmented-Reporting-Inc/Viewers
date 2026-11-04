@@ -3778,6 +3778,60 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     );
   }
 
+  function renderLAVolumeContourControls(question: QuizQuestion, disabled: boolean) {
+    const views = [
+      { slot: 'A4C', label: 'Apical four-chamber' },
+      { slot: 'A2C', label: 'Apical two-chamber' },
+    ];
+    const config = plainObject(question.answerConfig);
+    const sources = getCompleteCompositeFrameTargets(config);
+    return (
+      <div className="mt-2 rounded border border-cyan-700 bg-cyan-950/20 p-2 text-xs">
+        <div className="mb-1 font-semibold text-cyan-100">LA volume contour technique</div>
+        <p className="mb-2 text-gray-300">
+          For each apical view, navigate to its selected end-systolic DICOM frame.
+          Both techniques preserve calibrated annular and superior-wall landmarks;
+          freehand additionally requires tracing the closed LA cavity.
+        </p>
+        {views.map(({ slot, label }) => (
+          <div key={slot} className="mb-2 flex flex-wrap items-center gap-2">
+            <span className="min-w-40 font-medium text-gray-100">{label}</span>
+            {[
+              { text: 'Freehand', contourTechnique: 'freehand' },
+              { text: 'Axis + apex', contourTechnique: 'axisApex' },
+            ].map(choice => (
+              <button
+                key={choice.contourTechnique}
+                type="button"
+                disabled={disabled || (config.compositeFrameGuidanceEnabled === true && !sources)}
+                className="rounded border border-cyan-600 px-2 py-1 text-cyan-100 disabled:opacity-40"
+                onClick={event => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  void (async () => {
+                    if (sources?.[slot]) {
+                      const jumped = await runViewerCommand(commandsManager, 'jumpToViewerQuizTarget', {
+                        viewerTarget: sources[slot],
+                        questionKey: question.questionKey,
+                      });
+                      if (jumped?.ok === false) return;
+                    }
+                    await runViewerCommand(commandsManager, 'startLAVolumeWorkflow', {
+                      slot,
+                      contourTechnique: choice.contourTechnique,
+                    });
+                  })();
+                }}
+              >
+                {choice.text}
+              </button>
+            ))}
+          </div>
+        ))}
+      </div>
+    );
+  }
+
   function renderRVFACContourControls(question: QuizQuestion, disabled: boolean) {
     const slots = [
       { slot: 'RV_ED', label: 'End-diastolic area (RVEDA)' },
@@ -4141,6 +4195,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       return (
         <div className="mt-2 w-full min-w-0 max-w-full space-y-2 overflow-hidden">
           {renderCompositePhaseNavigation(question, disabled)}
+          {['laVolumeBiplane', 'laVolumeBiplaneDisks'].includes(
+            cleanString(plainObject(question.answerConfig).measurementKind)
+          ) ? renderLAVolumeContourControls(question, disabled) : null}
           {cleanString(plainObject(question.answerConfig).measurementKind) === 'rvFAC'
             ? renderRVFACContourControls(question, disabled)
             : null}
@@ -4878,6 +4935,12 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               question,
               isCapturing || authoringSaving || !isDraftDefinition(authoringDefinition)
             )}
+            {['laVolumeBiplane', 'laVolumeBiplaneDisks'].includes(
+              cleanString(answerConfig.measurementKind)
+            ) ? renderLAVolumeContourControls(
+              question,
+              isCapturing || authoringSaving || !isDraftDefinition(authoringDefinition)
+            ) : null}
             {cleanString(answerConfig.measurementKind) === 'rvFAC'
               ? renderRVFACContourControls(
                   question,
