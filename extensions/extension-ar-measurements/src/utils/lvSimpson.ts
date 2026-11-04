@@ -475,3 +475,40 @@ export function calculateLVSimpson(measurements = []) {
     guidance: messages,
   };
 }
+
+
+/**
+ * Clinical report adapter for the existing Simpson biplane result.
+ * Education scoring consumes the structured contour evidence separately;
+ * this mapping is used only by the clinical report review-before-save flow.
+ */
+export function buildClinicalLVSimpsonReportFieldUpdates(result = null) {
+  const values = result?.status === 'complete' ? result.values : null;
+  const edv = Number(values?.edvML);
+  const esv = Number(values?.esvML);
+  const ef = Number(values?.ejectionFraction);
+
+  if (
+    !values ||
+    !Number.isFinite(edv) ||
+    !Number.isFinite(esv) ||
+    !Number.isFinite(ef) ||
+    edv <= 0 ||
+    esv < 0 ||
+    esv >= edv ||
+    ef <= 0 ||
+    ef > 100
+  ) {
+    return {};
+  }
+
+  const format = value => Number(value).toFixed(1).replace(/\.0$/, '');
+  return {
+    LVEDV: format(edv),
+    LVEDVUOM: 'ml',
+    LVESV: format(esv),
+    LVESVUOM: 'ml',
+    EFSimpsons: format(ef),
+    EFSimpsonsUOM: '%',
+  };
+}
