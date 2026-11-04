@@ -121,7 +121,7 @@ export function resolveViewerQuizCompositeResult(
     : kind === 'laVolumeBiplaneDisks'
       ? LA_VOLUME_DISKS_METHOD
       : null;
-  if (expectedMethodId && result?.methodId !== expectedMethodId) return null;
+  if (expectedMethodId && (!result || !('methodId' in result) || result.methodId !== expectedMethodId)) return null;
 
   const value =
     kind === 'lvSimpsonEF'
