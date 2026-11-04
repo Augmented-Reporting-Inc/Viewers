@@ -102,7 +102,8 @@ function collectComponents(measurements: Measurement[], kind: CompositeKind) {
       const ed = ordered[0].target;
       const es = ordered[1].target;
       if (ed.studyInstanceUID !== es.studyInstanceUID ||
-          ed.seriesInstanceUID !== es.seriesInstanceUID ||
+          (ed.seriesInstanceUID !== es.seriesInstanceUID &&
+           ed.sopInstanceUID === es.sopInstanceUID) ||
           (ed.sopInstanceUID === es.sopInstanceUID &&
            ed.frameNumber === es.frameNumber)) return null;
     }
