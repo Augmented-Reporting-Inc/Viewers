@@ -169,6 +169,9 @@ function ivcSlot(measurement: ViewerMeasurement): IVCSlot | null {
 }
 
 function calibratedLengthMM(measurement: ViewerMeasurement): number | null {
+  if (String(measurement?.toolName || '') !== 'Length') return null;
+  const points = measurement?.points || measurement?.measurements?.points || [];
+  if (!Array.isArray(points) || points.length < 2) return null;
   const stats = measurement?.cachedStats || measurement?.data || {};
   const firstStats = Object.values(stats).find(value => value && typeof value === 'object') as
     | Record<string, any>
@@ -187,6 +190,23 @@ function calibratedLengthMM(measurement: ViewerMeasurement): number | null {
   if (unit === 'mm') return length;
   if (unit === 'cm') return length * 10;
   return null;
+}
+
+function compatibleIVCCinePair(a: ViewerMeasurement, b: ViewerMeasurement): boolean {
+  const studyA = String(a?.referenceStudyUID || a?.StudyInstanceUID || '').trim();
+  const studyB = String(b?.referenceStudyUID || b?.StudyInstanceUID || '').trim();
+  const seriesA = String(a?.referenceSeriesUID || a?.SeriesInstanceUID || '').trim();
+  const seriesB = String(b?.referenceSeriesUID || b?.SeriesInstanceUID || '').trim();
+  if (!studyA || !studyB || studyA !== studyB ||
+      !seriesA || !seriesB || seriesA !== seriesB) return false;
+
+  const sopA = String(a?.SOPInstanceUID || a?.metadata?.SOPInstanceUID || '').trim();
+  const sopB = String(b?.SOPInstanceUID || b?.metadata?.SOPInstanceUID || '').trim();
+  const frameA = finiteNumber(a?.frameNumber ?? a?.metadata?.frameNumber);
+  const frameB = finiteNumber(b?.frameNumber ?? b?.metadata?.frameNumber);
+  if (sopA && sopB && sopA === sopB && frameA != null && frameB != null &&
+      frameA === frameB) return false;
+  return true;
 }
 
 export function isIVCDiameterMeasurement(measurement: ViewerMeasurement): boolean {
@@ -212,6 +232,15 @@ export function calculateIVCFromMeasurements(measurements: ViewerMeasurement[] =
       status: 'invalid' as MeasurementCalculationStatus,
       values: null,
       message: 'More than one IVC measurement has the same phase label. Select an unambiguous expiration/inspiration pair.',
+    };
+  }
+
+  if (expiration.length && inspiration.length &&
+      !compatibleIVCCinePair(expiration[0], inspiration[0])) {
+    return {
+      status: 'invalid' as MeasurementCalculationStatus,
+      values: null,
+      message: 'IVC expiration and inspiration must use separate frames of the same study and cine series.',
     };
   }
 
