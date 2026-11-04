@@ -25,6 +25,10 @@ import {
   getInitialGuidedEFQuestionTarget,
 } from '../utils/quizCompositeCaptureIntent';
 import { composeIVCRapRVSP, isIVCReviewCurrent, RAP_CHOICES_MMHG } from '../utils/ivcRapRvsp';
+import {
+  COMPOSITE_FRAME_SLOTS,
+  getCompleteCompositeFrameTargets,
+} from '../utils/compositeFrameTargets';
 
 const AR_QUIZ_MEASUREMENT_ADDED_EVENT = 'ar-learning:quiz-measurement-added';
 const AR_LV_SIMPSON_CAPTURE_REQUESTED_EVENT = 'ar-measurements:lv-simpson-capture-requested';
@@ -3123,6 +3127,48 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     }
   }
 
+  async function captureAuthoringCompositeFrame(question: QuizQuestion, slot: string) {
+    const config = plainObject(question.answerConfig);
+    if (!COMPOSITE_FRAME_SLOTS[cleanString(config.measurementKind)]?.some(item => item.slot === slot)) {
+      return;
+    }
+    setCapturingAuthoringKey(`authoring-composite-frame:${question.questionKey}`);
+    try {
+      const response = await runViewerCommand(commandsManager, 'getCurrentViewerQuizFrameAnswer', {});
+      const target = plainObject(response?.answer?.selectedTarget);
+      if (!response?.ok || !cleanString(target.studyInstanceUID) ||
+          !cleanString(target.seriesInstanceUID) ||
+          !cleanString(target.sopInstanceUID) ||
+          !cleanString(target.referencedImageId) ||
+          !Number.isInteger(Number(target.frameNumber)) || Number(target.frameNumber) < 1) {
+        throw new Error('Select an identified DICOM instance and frame before capture.');
+      }
+      updateAuthoringQuestion(question.questionKey, current => ({
+        ...current,
+        answerConfig: {
+          ...plainObject(current.answerConfig),
+          compositeFrameTargets: {
+            ...plainObject(plainObject(current.answerConfig).compositeFrameTargets),
+            [slot]: target,
+          },
+        },
+      }));
+      uiNotificationService.show({
+        title: 'Quiz Authoring',
+        message: `${slot} source captured: ${getViewerTargetSummary(target)}`,
+        type: 'success', duration: 2500,
+      });
+    } catch (error) {
+      uiNotificationService.show({
+        title: 'Quiz Authoring',
+        message: `Composite frame capture failed: ${error?.message || error}`,
+        type: 'warning', duration: 5000,
+      });
+    } finally {
+      setCapturingAuthoringKey('');
+    }
+  }
+
   async function captureAuthoringEFContourFrame(question: QuizQuestion, slot: string) {
     if (cleanString(plainObject(question.answerConfig).measurementKind) !== 'lvSimpsonEF' ||
         !EF_CONTOUR_FRAME_SLOTS.some(entry => entry.slot === slot)) {
@@ -4463,6 +4509,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     const hasGuidedEFFrames = question.type === 'measurementNumeric' &&
       cleanString(answerConfig.measurementKind) === 'lvSimpsonEF';
     const authoredEFFrames = plainObject(answerConfig.efContourTargets);
+    const compositePhaseSlots = COMPOSITE_FRAME_SLOTS[cleanString(answerConfig.measurementKind)] || [];
+    const authoredCompositeFrames = plainObject(answerConfig.compositeFrameTargets);
+    const compositeFramesComplete = !!getCompleteCompositeFrameTargets(answerConfig);
     const savedGoldComponents = getSavedGoldCompositeNavigationComponents(answerConfig);
     const guidedEFFramesComplete = !!getCompleteEFContourFrameTargets(answerConfig);
     const targetSummary = getViewerTargetSummary(viewerTarget);
@@ -4673,6 +4722,73 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                 Off: preserve manual EF frame navigation and the existing Continue behavior.
               </p>
             )}
+          </div>
+        ) : null}
+
+        {compositePhaseSlots.length > 0 ? (
+          <div className="mt-2 rounded border border-slate-600 bg-slate-900/60 p-2">
+            <label className="flex items-center gap-2 text-xs font-semibold text-gray-100">
+              <input
+                type="checkbox"
+                checked={answerConfig.compositeFrameGuidanceEnabled === true}
+                disabled={authoringSaving || !isDraftDefinition(authoringDefinition)}
+                onClick={event => event.stopPropagation()}
+                onChange={event => patchAuthoringAnswerConfig(question, {
+                  compositeFrameGuidanceEnabled: event.target.checked,
+                })}
+              />
+              Require educator-selected DICOM instances/frames for each measurement phase
+            </label>
+            {answerConfig.compositeFrameGuidanceEnabled === true ? (
+              <div className="mt-2 space-y-2">
+                {compositePhaseSlots.map(({ slot, label }) => {
+                  const target = plainObject(authoredCompositeFrames[slot]);
+                  const captured = !!cleanString(target.sopInstanceUID) &&
+                    Number(target.frameNumber) >= 1;
+                  return (
+                    <div key={slot} className="flex flex-wrap items-center gap-2 border-t border-gray-700 pt-2 text-xs">
+                      <span className="min-w-40 font-medium text-gray-100">{label}</span>
+                      <span className={captured ? 'text-green-200' : 'text-amber-200'}>
+                        {captured ? getViewerTargetSummary(target) : 'Not captured'}
+                      </span>
+                      <button
+                        type="button"
+                        disabled={authoringSaving || !isDraftDefinition(authoringDefinition)}
+                        className="rounded border border-blue-500 px-2 py-1 text-blue-100 disabled:opacity-40"
+                        onClick={event => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          void captureAuthoringCompositeFrame(question, slot);
+                        }}
+                      >
+                        {captured ? 'Replace source' : 'Capture current instance/frame'}
+                      </button>
+                      {captured ? (
+                        <button
+                          type="button"
+                          className="rounded border border-slate-500 px-2 py-1 text-gray-100"
+                          onClick={event => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            void runViewerCommand(commandsManager, 'jumpToViewerQuizTarget', {
+                              viewerTarget: target,
+                              questionKey: question.questionKey,
+                            });
+                          }}
+                        >
+                          Jump to source
+                        </button>
+                      ) : null}
+                    </div>
+                  );
+                })}
+                <div className={compositeFramesComplete ? 'text-green-200 text-xs' : 'text-amber-200 text-xs'}>
+                  {compositeFramesComplete
+                    ? 'All phase sources are configured with unique, same-study frames.'
+                    : 'Capture all phase sources in the same study on distinct DICOM frames.'}
+                </div>
+              </div>
+            ) : null}
           </div>
         ) : null}
 
