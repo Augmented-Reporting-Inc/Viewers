@@ -1,9 +1,10 @@
 import { calculateLVSimpson, LV_SIMPSON_SLOT_ORDER } from './lvSimpson';
 import { calculateLAVolume, calculateLABiplaneDisks, LA_VOLUME_SLOT_ORDER, LA_VOLUME_AREA_LENGTH_METHOD, LA_VOLUME_DISKS_METHOD } from './laVolume';
 import { calculateRVFACFromMeasurements, calculateRAAreaFromMeasurements, getEchoAreaSlot } from './echoAreaMeasurements';
+import { calculateIVCFromMeasurements, isIVCDiameterMeasurement } from './rightHeartMeasurements';
 
 type Measurement = Record<string, any>;
-type CompositeKind = 'lvSimpsonEF' | 'laVolumeBiplane' | 'laVolumeBiplaneDisks' | 'rvFAC' | 'raArea';
+type CompositeKind = 'lvSimpsonEF' | 'laVolumeBiplane' | 'laVolumeBiplaneDisks' | 'rvFAC' | 'raArea' | 'ivcCollapsibility';
 
 function clean(value: unknown): string {
   return String(value ?? '').trim();
@@ -32,22 +33,33 @@ function sourceKind(measurement: Measurement): string {
 
 function slotOf(measurement: Measurement, kind: CompositeKind): string {
   const g = geometry(measurement, kind);
-  const slot = kind === 'rvFAC' || kind === 'raArea'
-    ? getEchoAreaSlot(measurement)
-    : clean(g?.slot || measurement?.slot).toUpperCase();
+  const slot = kind === 'ivcCollapsibility'
+    ? (() => {
+        if (!isIVCDiameterMeasurement(measurement)) return '';
+        const label = clean(measurement?.label || measurement?.measurementRole || measurement?.role)
+          .toLowerCase().replace(/[\s_-]+/g, '');
+        return ['ivcexp', 'ivcexpiration', 'ivcendexpiration', 'ivcendexpirationdiameter'].includes(label)
+          ? 'IVC_EXP' : 'IVC_INSP';
+      })()
+    : kind === 'rvFAC' || kind === 'raArea'
+      ? getEchoAreaSlot(measurement)
+      : clean(g?.slot || measurement?.slot).toUpperCase();
   return slot || '';
 }
 
 function collectComponents(measurements: Measurement[], kind: CompositeKind) {
-  const isRightHeart = kind === 'rvFAC' || kind === 'raArea';
+  const isIVC = kind === 'ivcCollapsibility';
+  const isRightHeart = kind === 'rvFAC' || kind === 'raArea' || isIVC;
   const expectedKind = kind === 'lvSimpsonEF' ? 'lvSimpsonSlot' : isRightHeart ? 'echoAreaSlot' : 'laVolumeSlot';
   const requiredSlots = kind === 'lvSimpsonEF' ? LV_SIMPSON_SLOT_ORDER
     : kind === 'rvFAC' ? ['RV_ED', 'RV_ES']
-    : kind === 'raArea' ? ['RA_ES'] : LA_VOLUME_SLOT_ORDER;
+    : kind === 'raArea' ? ['RA_ES']
+    : isIVC ? ['IVC_EXP', 'IVC_INSP'] : LA_VOLUME_SLOT_ORDER;
   const components = new Map<string, { slot: string; annotationId: string; points: number[][]; target: Record<string, unknown> }>();
 
   for (const measurement of measurements) {
-    if (sourceKind(measurement) !== expectedKind) continue;
+    if (isIVC ? !isIVCDiameterMeasurement(measurement) || clean(measurement.toolName) !== 'Length'
+      : sourceKind(measurement) !== expectedKind) continue;
     const slot = slotOf(measurement, kind);
     const annotationId = identifier(measurement);
     if (isRightHeart && !requiredSlots.includes(slot)) continue;
@@ -63,7 +75,7 @@ function collectComponents(measurements: Measurement[], kind: CompositeKind) {
         ? point.slice(0, 3)
         : [point?.x, point?.y, point?.z ?? 0])
       : [];
-    const validPoints = points.length >= 3 &&
+    const validPoints = points.length >= (isIVC ? 2 : 3) &&
       points.every(point => point.length >= 2 &&
         point.every(value => Number.isFinite(Number(value))));
     components.set(slot, {
@@ -83,10 +95,10 @@ function collectComponents(measurements: Measurement[], kind: CompositeKind) {
   if (components.size !== requiredSlots.length) return null;
   const ordered = requiredSlots.map(slot => components.get(slot)!);
   if (isRightHeart) {
-    if (ordered.some(c => !c.annotationId || c.points.length < 3 ||
+    if (ordered.some(c => !c.annotationId || c.points.length < (isIVC ? 2 : 3) ||
         !c.target.studyInstanceUID || !c.target.seriesInstanceUID ||
         !c.target.sopInstanceUID || !(Number(c.target.frameNumber) > 0))) return null;
-    if (kind === 'rvFAC') {
+    if (kind === 'rvFAC' || isIVC) {
       const ed = ordered[0].target;
       const es = ordered[1].target;
       if (ed.studyInstanceUID !== es.studyInstanceUID ||
@@ -124,9 +136,9 @@ export function isViewerQuizCompositeReviewCurrent(
 export function resolveViewerQuizCompositeResult(
   kind: CompositeKind,
   measurements: Measurement[] = [],
-  calculatedResult?: ReturnType<typeof calculateLVSimpson> | ReturnType<typeof calculateLAVolume> | ReturnType<typeof calculateRVFACFromMeasurements> | ReturnType<typeof calculateRAAreaFromMeasurements>
+  calculatedResult?: ReturnType<typeof calculateLVSimpson> | ReturnType<typeof calculateLAVolume> | ReturnType<typeof calculateRVFACFromMeasurements> | ReturnType<typeof calculateRAAreaFromMeasurements> | ReturnType<typeof calculateIVCFromMeasurements>
 ) {
-  if (!['lvSimpsonEF', 'laVolumeBiplane', 'laVolumeBiplaneDisks', 'rvFAC', 'raArea'].includes(kind)) return null;
+  if (!['lvSimpsonEF', 'laVolumeBiplane', 'laVolumeBiplaneDisks', 'rvFAC', 'raArea', 'ivcCollapsibility'].includes(kind)) return null;
   if (!Array.isArray(measurements)) return null;
 
   const components = collectComponents(measurements, kind);
@@ -141,7 +153,9 @@ export function resolveViewerQuizCompositeResult(
           ? calculateRVFACFromMeasurements(measurements)
           : kind === 'raArea'
             ? calculateRAAreaFromMeasurements(measurements)
-            : calculateLAVolume(measurements));
+            : kind === 'ivcCollapsibility'
+              ? calculateIVCFromMeasurements(measurements)
+              : calculateLAVolume(measurements));
 
   const expectedMethodId = kind === 'laVolumeBiplane'
     ? LA_VOLUME_AREA_LENGTH_METHOD
@@ -149,6 +163,7 @@ export function resolveViewerQuizCompositeResult(
       ? LA_VOLUME_DISKS_METHOD
       : kind === 'rvFAC' ? 'rv-fac-planimetry-v1'
         : kind === 'raArea' ? 'ra-area-planimetry-v1'
+        : kind === 'ivcCollapsibility' ? 'ivc-collapsibility-v1'
         : null;
   if (['laVolumeBiplane', 'laVolumeBiplaneDisks'].includes(kind) &&
       expectedMethodId && (!result || !('methodId' in result) || result.methodId !== expectedMethodId)) return null;
@@ -156,6 +171,7 @@ export function resolveViewerQuizCompositeResult(
   const value = kind === 'lvSimpsonEF' ? result?.values?.ejectionFraction
     : kind === 'rvFAC' ? result?.values?.facPercent
     : kind === 'raArea' ? result?.values?.areaCM2
+    : kind === 'ivcCollapsibility' ? result?.values?.collapsibilityPercent
     : result?.values?.volumeML;
 
   if (result?.status !== 'complete' || typeof value !== 'number' || !Number.isFinite(value)) {
@@ -167,7 +183,8 @@ export function resolveViewerQuizCompositeResult(
     measurementKind: kind,
     ...(expectedMethodId ? { methodId: expectedMethodId } : {}),
     value,
-    unit: kind === 'lvSimpsonEF' || kind === 'rvFAC' ? '%' : kind === 'raArea' ? 'cm2' : 'mL',
+    unit: kind === 'lvSimpsonEF' || kind === 'rvFAC' || kind === 'ivcCollapsibility'
+      ? '%' : kind === 'raArea' ? 'cm2' : 'mL',
     components,
   };
 }
