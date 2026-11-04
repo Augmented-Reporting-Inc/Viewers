@@ -8417,6 +8417,7 @@ function commandsModule({
       viewportId: requestedViewportId = '',
     } = {}) => {
       clearUltrasoundDirectionalWorkflowListeners();
+      const isClinicalReportWorkflow = isClinicalReportMeasurementsSaveTarget(getArViewerSaveTargetFromUrl());
       const workflowSessionId = requestedSessionId || `${csUtils.uuidv4()}`;
 
       if (!requestedSessionId) {
@@ -9094,8 +9095,10 @@ function commandsModule({
             `End-diastolic volume (EDV): ${Number(resolved.result.values.edvML).toFixed(2)} mL`,
             `End-systolic volume (ESV): ${Number(resolved.result.values.esvML).toFixed(2)} mL`,
           ],
-          instruction: 'Cross-check EF = (EDV - ESV) / EDV × 100, then capture this result in the active EF question.',
-          onCapture: () => requestLVSimpsonQuizCapture({
+          instruction: isClinicalReportWorkflow
+            ? 'Review the four contours and calculated EF. Save through AR Measurements to review and apply EF, EDV and ESV to the clinical report.'
+            : 'Cross-check EF = (EDV - ESV) / EDV × 100, then capture this result in the active EF question.',
+          onCapture: isClinicalReportWorkflow ? null : () => requestLVSimpsonQuizCapture({
             studyInstanceId: currentStudyId, value: resolved.composite.value, mode: 'manual',
           }),
           onCancel: hideLVSimpsonWorkflowPanel,
