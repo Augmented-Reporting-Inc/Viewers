@@ -1783,7 +1783,6 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
   const [authoringSaving, setAuthoringSaving] = useState(false);
   const [capturingAuthoringKey, setCapturingAuthoringKey] = useState('');
   const [authoringMeasurementDomain, setAuthoringMeasurementDomain] = useState('');
-  const [showStudyTypeSelector, setShowStudyTypeSelector] = useState(false);
 
   const quizzes: QuizDefinition[] = useMemo(() => {
     return Array.isArray(payload?.quizzes) ? payload.quizzes : [];
@@ -1853,7 +1852,6 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       setAuthoringPayload(nextPayload);
       setAuthoringDefinition(selectedDefinition);
       setAuthoringMeasurementDomain(selectedMeasurementDomain);
-      setShowStudyTypeSelector(false);
       setAuthoringRubric(selectedRubric);
       authoringQuestionsRef.current = questionsToUse;
       setAuthoringQuestions(questionsToUse);
@@ -2933,7 +2931,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     try {
       if (question.type === 'measurementNumeric') {
         if (!authoringMeasurementDomain) {
-          throw new Error('Choose Echo or Bowel as the study type before capturing a measurement.');
+          throw new Error('Measurement domain is missing from the educational asset. Configure Echo or Bowel before opening the viewer.');
         }
 
         syncQuizAuthoringMeasurementDomainToUrl(authoringMeasurementDomain, { overwrite: true });
@@ -3455,7 +3453,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       );
 
       if (hasMeasurementQuestions && !authoringMeasurementDomain) {
-        throw new Error('Choose Echo or Bowel as the study type before saving measurement questions.');
+        throw new Error('Measurement domain is missing from the educational asset. Configure Echo or Bowel before opening the viewer.');
       }
       const incompleteEF = questionsToSave.find(question => {
         const config = plainObject(question.answerConfig);
@@ -4697,52 +4695,16 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                 <div className="font-semibold">
                   {authoringDefinition.title || authoringDefinition.quizKey}
                 </div>
-                <div className="mt-1 text-xs text-purple-100">
-                  Content key: {authoringPayload?.libraryContentKey || 'unknown'} · v
-                  {Number(authoringDefinition.quizVersion || 1)}
-                </div>
-                <div className="mt-2 flex items-center justify-between gap-2">
-                  <span className="text-xs font-semibold text-purple-100">Study type</span>
-                  {/* A resolved quiz/URL domain should not require another educator selection. */}
-                {authoringMeasurementDomain && !showStudyTypeSelector ? (
-                    <button
-                      type="button"
-                      className="text-xs text-purple-200 underline hover:text-white"
-                      disabled={authoringSaving || !canEditDraft}
-                      onClick={() => setShowStudyTypeSelector(true)}
-                    >
-                      Change study type
-                    </button>
-                  ) : null}
-                </div>
-                {authoringMeasurementDomain && !showStudyTypeSelector ? (
-                  <div className="mt-1 text-sm text-purple-100">
-                    {authoringMeasurementDomain === 'echo' ? 'Echo' : 'Bowel'}
+                {/* Educational asset configuration owns the domain and assessment type.
+                    Internal content keys and study-type mutation are not viewer controls. */}
+                {!authoringMeasurementDomain && authoringQuestions.some(
+                  question => question.type === 'measurementNumeric'
+                ) ? (
+                  <div className="mt-2 text-xs text-amber-200" role="alert">
+                    Measurement domain is unavailable from the educational asset.
+                    Return to asset configuration and select Echo or Bowel there.
                   </div>
-                ) : (
-                  <select
-                    aria-label="Study type"
-                    className="mt-1 w-full rounded border border-purple-700 bg-black px-2 py-1 text-sm text-white"
-                    value={authoringMeasurementDomain}
-                    disabled={authoringSaving || !canEditDraft}
-                    onChange={event => {
-                      const nextDomain = normalizeQuizMeasurementDomain(event.target.value);
-                      setAuthoringMeasurementDomain(nextDomain);
-                      setAuthoringDefinition(current =>
-                        current ? { ...current, domain: nextDomain } : current
-                      );
-                      syncQuizAuthoringMeasurementDomainToUrl(nextDomain, { overwrite: true });
-                      if (nextDomain) setShowStudyTypeSelector(false);
-                    }}
-                  >
-                    <option value="">Choose Echo or Bowel</option>
-                    <option value="bowel">Bowel</option>
-                    <option value="echo">Echo</option>
-                  </select>
-                )}
-                <div className="mt-1 text-[11px] text-purple-200">
-                  Controls the measurement labels used while authoring this quiz.
-                </div>
+                ) : null}
               </div>
 
               <div className="space-y-3">
