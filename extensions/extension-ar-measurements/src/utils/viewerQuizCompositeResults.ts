@@ -1,8 +1,9 @@
 import { calculateLVSimpson, LV_SIMPSON_SLOT_ORDER } from './lvSimpson';
 import { calculateLAVolume, calculateLABiplaneDisks, LA_VOLUME_SLOT_ORDER, LA_VOLUME_AREA_LENGTH_METHOD, LA_VOLUME_DISKS_METHOD } from './laVolume';
+import { calculateRVFACFromMeasurements, calculateRAAreaFromMeasurements, getEchoAreaSlot } from './echoAreaMeasurements';
 
 type Measurement = Record<string, any>;
-type CompositeKind = 'lvSimpsonEF' | 'laVolumeBiplane' | 'laVolumeBiplaneDisks';
+type CompositeKind = 'lvSimpsonEF' | 'laVolumeBiplane' | 'laVolumeBiplaneDisks' | 'rvFAC' | 'raArea';
 
 function clean(value: unknown): string {
   return String(value ?? '').trim();
@@ -20,7 +21,9 @@ function identifier(measurement: Measurement): string {
 function geometry(measurement: Measurement, kind: CompositeKind) {
   return kind === 'lvSimpsonEF'
     ? measurement?.lvSimpson || measurement?.measurements?.lvSimpson || {}
-    : measurement?.laVolume || measurement?.measurements?.laVolume || {};
+    : kind === 'rvFAC' || kind === 'raArea'
+      ? measurement?.echoArea || measurement?.measurements?.echoArea || {}
+      : measurement?.laVolume || measurement?.measurements?.laVolume || {};
 }
 
 function sourceKind(measurement: Measurement): string {
@@ -29,19 +32,25 @@ function sourceKind(measurement: Measurement): string {
 
 function slotOf(measurement: Measurement, kind: CompositeKind): string {
   const g = geometry(measurement, kind);
-  const slot = clean(g?.slot || measurement?.slot).toUpperCase();
-  return slot;
+  const slot = kind === 'rvFAC' || kind === 'raArea'
+    ? getEchoAreaSlot(measurement)
+    : clean(g?.slot || measurement?.slot).toUpperCase();
+  return slot || '';
 }
 
 function collectComponents(measurements: Measurement[], kind: CompositeKind) {
-  const expectedKind = kind === 'lvSimpsonEF' ? 'lvSimpsonSlot' : 'laVolumeSlot';
-  const requiredSlots = kind === 'lvSimpsonEF' ? LV_SIMPSON_SLOT_ORDER : LA_VOLUME_SLOT_ORDER;
+  const isRightHeart = kind === 'rvFAC' || kind === 'raArea';
+  const expectedKind = kind === 'lvSimpsonEF' ? 'lvSimpsonSlot' : isRightHeart ? 'echoAreaSlot' : 'laVolumeSlot';
+  const requiredSlots = kind === 'lvSimpsonEF' ? LV_SIMPSON_SLOT_ORDER
+    : kind === 'rvFAC' ? ['RV_ED', 'RV_ES']
+    : kind === 'raArea' ? ['RA_ES'] : LA_VOLUME_SLOT_ORDER;
   const components = new Map<string, { slot: string; annotationId: string; points: number[][]; target: Record<string, unknown> }>();
 
   for (const measurement of measurements) {
     if (sourceKind(measurement) !== expectedKind) continue;
     const slot = slotOf(measurement, kind);
     const annotationId = identifier(measurement);
+    if (isRightHeart && !requiredSlots.includes(slot)) continue;
     if (!requiredSlots.includes(slot) || !annotationId || components.has(slot)) {
       return null; // Ambiguous, incomplete, or untraceable evidence must not be scored.
     }
@@ -72,7 +81,21 @@ function collectComponents(measurements: Measurement[], kind: CompositeKind) {
   }
 
   if (components.size !== requiredSlots.length) return null;
-  return requiredSlots.map(slot => components.get(slot)!);
+  const ordered = requiredSlots.map(slot => components.get(slot)!);
+  if (isRightHeart) {
+    if (ordered.some(c => !c.annotationId || c.points.length < 3 ||
+        !c.target.studyInstanceUID || !c.target.seriesInstanceUID ||
+        !c.target.sopInstanceUID || !(Number(c.target.frameNumber) > 0))) return null;
+    if (kind === 'rvFAC') {
+      const ed = ordered[0].target;
+      const es = ordered[1].target;
+      if (ed.studyInstanceUID !== es.studyInstanceUID ||
+          ed.seriesInstanceUID !== es.seriesInstanceUID ||
+          (ed.sopInstanceUID === es.sopInstanceUID &&
+           ed.frameNumber === es.frameNumber)) return null;
+    }
+  }
+  return ordered;
 }
 
 /**
@@ -101,9 +124,9 @@ export function isViewerQuizCompositeReviewCurrent(
 export function resolveViewerQuizCompositeResult(
   kind: CompositeKind,
   measurements: Measurement[] = [],
-  calculatedResult?: ReturnType<typeof calculateLVSimpson> | ReturnType<typeof calculateLAVolume>
+  calculatedResult?: ReturnType<typeof calculateLVSimpson> | ReturnType<typeof calculateLAVolume> | ReturnType<typeof calculateRVFACFromMeasurements> | ReturnType<typeof calculateRAAreaFromMeasurements>
 ) {
-  if (!['lvSimpsonEF', 'laVolumeBiplane', 'laVolumeBiplaneDisks'].includes(kind)) return null;
+  if (!['lvSimpsonEF', 'laVolumeBiplane', 'laVolumeBiplaneDisks', 'rvFAC', 'raArea'].includes(kind)) return null;
   if (!Array.isArray(measurements)) return null;
 
   const components = collectComponents(measurements, kind);
@@ -114,19 +137,26 @@ export function resolveViewerQuizCompositeResult(
       ? calculateLVSimpson(measurements)
       : kind === 'laVolumeBiplaneDisks'
         ? calculateLABiplaneDisks(measurements)
-        : calculateLAVolume(measurements));
+        : kind === 'rvFAC'
+          ? calculateRVFACFromMeasurements(measurements)
+          : kind === 'raArea'
+            ? calculateRAAreaFromMeasurements(measurements)
+            : calculateLAVolume(measurements));
 
   const expectedMethodId = kind === 'laVolumeBiplane'
     ? LA_VOLUME_AREA_LENGTH_METHOD
     : kind === 'laVolumeBiplaneDisks'
       ? LA_VOLUME_DISKS_METHOD
-      : null;
-  if (expectedMethodId && (!result || !('methodId' in result) || result.methodId !== expectedMethodId)) return null;
+      : kind === 'rvFAC' ? 'rv-fac-planimetry-v1'
+        : kind === 'raArea' ? 'ra-area-planimetry-v1'
+        : null;
+  if (['laVolumeBiplane', 'laVolumeBiplaneDisks'].includes(kind) &&
+      expectedMethodId && (!result || !('methodId' in result) || result.methodId !== expectedMethodId)) return null;
 
-  const value =
-    kind === 'lvSimpsonEF'
-      ? result?.values?.ejectionFraction
-      : result?.values?.volumeML;
+  const value = kind === 'lvSimpsonEF' ? result?.values?.ejectionFraction
+    : kind === 'rvFAC' ? result?.values?.facPercent
+    : kind === 'raArea' ? result?.values?.areaCM2
+    : result?.values?.volumeML;
 
   if (result?.status !== 'complete' || typeof value !== 'number' || !Number.isFinite(value)) {
     return null;
@@ -137,7 +167,7 @@ export function resolveViewerQuizCompositeResult(
     measurementKind: kind,
     ...(expectedMethodId ? { methodId: expectedMethodId } : {}),
     value,
-    unit: kind === 'lvSimpsonEF' ? '%' : 'mL',
+    unit: kind === 'lvSimpsonEF' || kind === 'rvFAC' ? '%' : kind === 'raArea' ? 'cm2' : 'mL',
     components,
   };
 }
