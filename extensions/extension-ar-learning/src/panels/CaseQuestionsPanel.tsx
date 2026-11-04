@@ -3638,6 +3638,83 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     }
   }
 
+  function renderIVCRapRVSPControls(
+    quizKey: string,
+    question: QuizQuestion,
+    savedAnswer: any,
+    disabled: boolean
+  ) {
+    const selectionKey = `${quizKey}:${question.questionKey}`;
+    const existing = plainObject(savedAnswer?.compositeResult);
+    const currentSelection = rapSelectionsByQuestionKey[selectionKey] ??
+      (existing.rapMMHG != null ? String(existing.rapMMHG) : '');
+    const questionList = quizKey === 'authoring'
+      ? authoringQuestions
+      : (quizzes.find(item => item.quizKey === quizKey)?.questions || []);
+    const index = questionList.findIndex(item => item.questionKey === question.questionKey);
+    const previousTR = index > 0
+      ? questionList.slice(0, index).reverse().find(item =>
+          cleanString(plainObject(item.answerConfig).measurementKind) === 'trVmax'
+        )
+      : null;
+    const priorTRAnswer = previousTR
+      ? quizKey === 'authoring'
+        ? plainObject(previousTR.answerConfig).goldMeasurement
+        : answersByQuizKey?.[quizKey]?.[previousTR.questionKey]
+      : null;
+    const trValue = Number(priorTRAnswer?.value);
+    const validTR = priorTRAnswer?.measurementKind === 'trVmax' &&
+      priorTRAnswer?.unit === 'm/s' &&
+      Number.isFinite(trValue) && trValue > 0;
+
+    return (
+      <div className="mt-2 space-y-2 rounded border border-cyan-700 bg-cyan-950/20 p-2 text-xs">
+        <div className="font-semibold text-cyan-100">IVC / RAP / RVSP</div>
+        <div className={validTR ? 'text-green-200' : 'text-amber-200'}>
+          Previous TR Vmax: {validTR
+            ? `${trValue.toFixed(2)} m/s · ${previousTR?.title || previousTR?.questionKey}`
+            : 'Capture the earlier TR Vmax question first.'}
+        </div>
+        <div className="text-gray-300">
+          Measure IVC end-expiration and end-inspiration diameters on the specified
+          image/frame targets. The viewer calculates collapsibility.
+        </div>
+        <label className="flex flex-wrap items-center gap-2 font-semibold text-cyan-100">
+          RAP interpretation
+          <select
+            aria-label="RAP interpretation (mmHg)"
+            className="rounded border border-cyan-600 bg-black px-2 py-1 text-white"
+            value={currentSelection}
+            disabled={disabled}
+            onChange={event => setRapSelectionsByQuestionKey(current => ({
+              ...current,
+              [selectionKey]: event.target.value,
+            }))}
+            onClick={event => event.stopPropagation()}
+          >
+            <option value="">Select RAP</option>
+            {RAP_CHOICES_MMHG.map(rap => (
+              <option key={rap} value={String(rap)}>{rap} mmHg</option>
+            ))}
+          </select>
+        </label>
+        {existing.methodId === 'ivc-rap-rvsp-v1' ? (
+          <div className="rounded border border-green-700 bg-green-950/30 p-2 text-green-100">
+            <div>IVC collapsibility: {existing.ivc?.value ?? '—'}%</div>
+            <div>Manual RAP: {existing.rapMMHG} mmHg</div>
+            <div>TR gradient: {existing.trGradientMMHG} mmHg</div>
+            <div>Calculated RVSP: {existing.rvspMMHG} mmHg</div>
+          </div>
+        ) : (
+          <div className="text-gray-300">
+            Review your chosen RAP and select Accept measurement after both IVC
+            calipers and the preceding TR Vmax are complete.
+          </div>
+        )}
+      </div>
+    );
+  }
+
   function renderQuestion(quiz: QuizDefinition, question: QuizQuestion, disabled = false) {
     const quizAnswers = answersByQuizKey[quiz.quizKey] || {};
     const value = quizAnswers[question.questionKey];
