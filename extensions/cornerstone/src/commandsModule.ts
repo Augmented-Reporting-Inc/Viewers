@@ -11646,6 +11646,12 @@ function commandsModule({
         );
         return { ok: true, measurementKind, workflowStarted: true };
       }
+      if (measurementKind === 'ivcCollapsibility') {
+        // Uses the same calibrated Length tool and AR measurement labels as
+        // clinical IVC. Capture IVCexp and IVCinsp on distinct cine frames;
+        // quiz capture verifies both labels and values before submission.
+        return actions.activateViewerMeasurementTool({ toolName: 'Length', stopCine: true });
+      }
       if (measurementKind === 'rvFAC' || measurementKind === 'raArea') {
         if (activeLVSimpsonWorkflowSessionId) {
           clearLVSimpsonWorkflowIfCurrent(activeLVSimpsonWorkflowSessionId);
@@ -13875,7 +13881,9 @@ function commandsModule({
               ? ['RV_ED', 'RV_ES']
               : rubricMeasurement?.measurementKind === 'raArea'
                 ? ['RA_ES']
-                : [];
+                : rubricMeasurement?.measurementKind === 'ivcCollapsibility'
+                  ? ['IVC_EXP', 'IVC_INSP']
+                  : [];
       const compositeRubric = expectedSlots.length > 0;
       const embeddedContourFromComponent = (component: any, slot: string) => {
         const points = component?.points;
@@ -14225,7 +14233,7 @@ function commandsModule({
         getSelectedMeasurementIdFromViewport(activeEnabledElement?.viewport?.element);
 
       const requestedKind = String(question?.answerConfig?.measurementKind || '').trim();
-      const isCompositeKind = ['lvSimpsonEF', 'laVolumeBiplane', 'laVolumeBiplaneDisks', 'rvFAC', 'raArea'].includes(requestedKind);
+      const isCompositeKind = ['lvSimpsonEF', 'laVolumeBiplane', 'laVolumeBiplaneDisks', 'rvFAC', 'raArea', 'ivcCollapsibility'].includes(requestedKind);
       // Composite contours can live in AR's session fallback before OHIF
       // MeasurementService receives the completed/calibrated annotation.
       const quizMeasurements = isCompositeKind
