@@ -41,6 +41,7 @@ export function isGuidedQuizCompositeKind(value: unknown): boolean {
     'ivcCollapsibility',
     'trVmax',
     'trVTI',
+    'ivcRapRvsp',
   ].includes(String(value || ''));
 }
 
