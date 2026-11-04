@@ -140,11 +140,13 @@ export function calculateRVFACFromMeasurements(measurements: Measurement[] = [])
       !edEvidence.studyInstanceUID || !esEvidence.studyInstanceUID ||
       edEvidence.studyInstanceUID !== esEvidence.studyInstanceUID ||
       !edEvidence.seriesInstanceUID || !esEvidence.seriesInstanceUID ||
-      edEvidence.seriesInstanceUID !== esEvidence.seriesInstanceUID
+      (edEvidence.seriesInstanceUID !== esEvidence.seriesInstanceUID &&
+       (!edEvidence.sopInstanceUID || !esEvidence.sopInstanceUID ||
+        edEvidence.sopInstanceUID === esEvidence.sopInstanceUID))
     ) {
       return {
         status: 'invalid', values: null, edEvidence, esEvidence,
-        message: 'RV ED and ES contours must reference the same study and cine series.',
+        message: 'RV ED and ES contours must share a study; different cine series require distinct identified DICOM instances.',
       };
     }
     if (
@@ -174,7 +176,7 @@ export function calculateRVFACFromMeasurements(measurements: Measurement[] = [])
         ? ''
         : result.status === 'invalid'
           ? 'RV end-systolic area must be smaller than end-diastolic area. Check both contours.'
-          : 'Capture calibrated RV end-diastolic and end-systolic contours from the same cine series.',
+          : 'Capture calibrated RV end-diastolic and end-systolic contours from distinct frames or identified DICOM instances.',
   };
 }
 
