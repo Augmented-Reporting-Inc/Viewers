@@ -10396,7 +10396,7 @@ function commandsModule({
       }
       return actions.startGuidedRVFACContourWorkflow({ slot: next });
     },
-    startSpectralDopplerVTIWorkflow: async () => {
+    startSpectralDopplerVTIWorkflow: async ({ preferredTargetKey = '' } = {}) => {
       clearEchoAreaWorkflowListeners();
       clearUltrasoundDirectionalWorkflowListeners();
       clearSpectralDopplerWorkflowListeners();
@@ -10416,11 +10416,17 @@ function commandsModule({
 
       const saveTarget = getArViewerSaveTargetFromUrl();
       const isClinicalReportTarget = isClinicalReportMeasurementsSaveTarget(saveTarget);
-      const selectedTarget = await resolveSpectralDopplerVtiTarget({
-        uiDialogService,
-        customizationService,
-        allowGeneric: !isClinicalReportTarget,
-      });
+      // A quiz's TR VTI target is already configured by its question.
+      // Retain the target picker for existing clinical and general workflows.
+      const selectedTarget = preferredTargetKey && !isClinicalReportTarget
+        ? normalizeSpectralDopplerVtiTargetSelection(preferredTargetKey, {
+            allowGeneric: true,
+          })
+        : await resolveSpectralDopplerVtiTarget({
+            uiDialogService,
+            customizationService,
+            allowGeneric: !isClinicalReportTarget,
+          });
 
       if (!selectedTarget) {
         uiNotificationService.show({
@@ -11906,8 +11912,9 @@ function commandsModule({
         return { ok: true, measurementKind, workflowStarted: true };
       }
       if (measurementKind === 'trVTI') {
-        void actions.startSpectralDopplerVTIWorkflow()
-          .catch(error => console.warn('[Viewer quiz] TR VTI activation failed:', error));
+        void actions.startSpectralDopplerVTIWorkflow({
+          preferredTargetKey: 'spectral.trVti',
+        }).catch(error => console.warn('[Viewer quiz] TR VTI activation failed:', error));
         return { ok: true, measurementKind, workflowStarted: true };
       }
       if (measurementKind === 'ivcCollapsibility' || measurementKind === 'ivcRapRvsp') {
