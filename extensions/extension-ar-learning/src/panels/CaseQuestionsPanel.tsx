@@ -2552,9 +2552,15 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     const selectionKey = quiz
       ? `${quiz.quizKey}:${question.questionKey}`
       : `authoring:${question.questionKey}`;
+    const savedComposite = quiz
+      ? plainObject(plainObject(answersByQuizKey?.[quiz.quizKey]?.[question.questionKey]).compositeResult)
+      : plainObject(plainObject(config.goldMeasurement).compositeResult);
+    const priorManuallySelectedRAP = [3, 8, 15].includes(Number(savedComposite.rapMMHG))
+      ? String(savedComposite.rapMMHG)
+      : '';
     const calculation = composeIVCRapRVSP({
       ivcAnswer: result.answer,
-      rapMMHG: rapSelectionsByQuestionKey[selectionKey] || '',
+      rapMMHG: rapSelectionsByQuestionKey[selectionKey] || priorManuallySelectedRAP,
       trVmaxAnswer: trAnswer,
       trVmaxQuestionKey: priorQuestion?.questionKey || '',
     });
