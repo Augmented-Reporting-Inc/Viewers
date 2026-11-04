@@ -9598,6 +9598,10 @@ function commandsModule({
           }
 
           selectedTarget = normalizeUltrasoundDirectionalTargetSelection(selection, rawUnit);
+          if (spectralVmax && selectedTarget &&
+              !targetOptions.some(option => option.value === selectedTarget.key)) {
+            selectedTarget = null;
+          }
         }
 
         // Cancelled or unsupported units remain valid annotations, but they do not
