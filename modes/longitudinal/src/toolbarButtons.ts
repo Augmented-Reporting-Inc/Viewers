@@ -621,6 +621,39 @@ const toolbarButtons: Button[] = [
     },
   },
   {
+    id: 'RAArea',
+    uiType: 'ohif.toolButton',
+    props: {
+      icon: 'icon-tool-freehand-roi',
+      label: 'RA Area',
+      tooltip: 'Trace right-atrial area at end-systole using a closed freehand contour.',
+      commands: 'startRAAreaWorkflow',
+      evaluate: 'evaluate.action',
+    },
+  },
+  {
+    id: 'RVFAC',
+    uiType: 'ohif.toolButton',
+    props: {
+      icon: 'icon-tool-freehand-roi',
+      label: 'RV FAC',
+      tooltip: 'Capture RV end-diastolic and end-systolic area contours from the same A4C cine.',
+      commands: 'startRVFACWorkflow',
+      evaluate: 'evaluate.action',
+    },
+  },
+  {
+    id: 'SpectralVmax',
+    uiType: 'ohif.toolButton',
+    props: {
+      icon: 'icon-tool-freehand-roi',
+      label: 'Vmax',
+      tooltip: 'Measure calibrated peak spectral velocity from the zero baseline to the dense envelope peak. Choose the Doppler target.',
+      commands: 'startSpectralVmaxWorkflow',
+      evaluate: 'evaluate.action',
+    },
+  },
+  {
     id: 'SpectralDopplerVTI',
     uiType: 'ohif.toolButton',
     props: {

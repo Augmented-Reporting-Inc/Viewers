@@ -1,13 +1,23 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { calculateLVSimpson, LV_SIMPSON_SLOT_ORDER } from '../utils/lvSimpson';
+import {
+  calculateLVSimpson,
+  LV_SIMPSON_SLOT_ORDER,
+} from '../utils/lvSimpson';
 import {
   calculateLAVolume,
+  calculateLABiplaneDisks,
   LA_VOLUME_SLOT_ORDER,
-  buildCseLAVolumeReportFieldUpdatesFromResult,
 } from '../utils/laVolume';
 import { getViewerMeasurementDomainFromPath } from '../utils/measurementLabelConfig';
 import { BOWEL_CURVED_LENGTH_MEASUREMENT_KIND } from '../utils/bowelMeasurementTargets';
+import { calculateIVCFromMeasurements, isIVCDiameterMeasurement } from '../utils/rightHeartMeasurements';
+import {
+  calculateRAAreaFromMeasurements,
+  calculateRVFACFromMeasurements,
+  getEchoAreaSlot,
+  isEchoAreaMeasurement,
+} from '../utils/echoAreaMeasurements';
 
 const ULTRASOUND_DIRECTIONAL_TOOL_NAME = 'UltrasoundDirectionalTool';
 const CLINICAL_REPORT_MEASUREMENTS_SAVE_TARGET = 'clinicalReportMeasurements';
@@ -669,7 +679,7 @@ function getLVSimpsonSlotStatusText(slotResult) {
   return ['incomplete', axisText, coverageText].filter(Boolean).join(' • ') || 'missing';
 }
 
-function LAVolumeSummary({ result }) {
+function LAVolumeSummary({ result, disksResult = null }) {
   if (!result) {
     return null;
   }
@@ -695,6 +705,24 @@ function LAVolumeSummary({ result }) {
         <div className="mt-3 rounded bg-black p-2">
           <div className="text-xs text-gray-400">Biplane LA volume</div>
           <div className="text-lg font-semibold">{formatSimpsonValue(values.volumeML)} mL</div>
+        </div>
+      ) : null}
+
+      {disksResult ? (
+        <div className="mt-3 rounded border border-gray-700 p-2">
+          <div className="text-xs font-semibold text-gray-300">Simpson biplane disks (20 disks)</div>
+          <div className="mt-1 text-sm font-semibold">
+            {disksResult.status === 'complete'
+              ? formatSimpsonValue(disksResult.values?.volumeML) + ' mL'
+              : disksResult.status}
+          </div>
+          <div className="mt-1 text-xs text-gray-400">
+            Independent method preview. The established area-length result remains the
+            report default unless the clinical report explicitly selects disk summation.
+          </div>
+          {disksResult.status === 'invalid' && disksResult.guidance?.length ? (
+            <div className="mt-1 text-xs text-yellow-300">{disksResult.guidance[0]}</div>
+          ) : null}
         </div>
       ) : null}
 
@@ -738,6 +766,90 @@ function LAVolumeSummary({ result }) {
           </div>
         </div>
       ) : null}
+    </div>
+  );
+}
+
+function RAAndRVAreaSummary({ raResult, rvResult }) {
+  if (!raResult && !rvResult) return null;
+  const formatArea = value =>
+    Number.isFinite(Number(value)) && value != null
+      ? formatSimpsonValue(value, 1) + ' cm²'
+      : 'Not captured';
+  return (
+    <div className="bg-gray-950 mb-3 rounded border border-gray-700 p-3">
+      {raResult ? (
+        <div>
+          <div className="flex justify-between gap-3 text-sm">
+            <span>RA area (end-systole)</span>
+            <span className="font-semibold">
+              {raResult.status === 'complete' ? formatArea(raResult.values?.areaCM2) : raResult.status}
+            </span>
+          </div>
+          {raResult.message ? <div className="mt-1 text-xs text-yellow-300">{raResult.message}</div> : null}
+        </div>
+      ) : null}
+      {rvResult ? (
+        <div className={raResult ? 'mt-3 border-t border-gray-700 pt-3' : ''}>
+          <div className="text-sm font-semibold">RV fractional area change</div>
+          <div className="mt-2 flex justify-between text-xs">
+            <span>RV end-diastolic area</span>
+            <span>{formatArea(rvResult.values?.edaCM2)}</span>
+          </div>
+          <div className="mt-1 flex justify-between text-xs">
+            <span>RV end-systolic area</span>
+            <span>{formatArea(rvResult.values?.esaCM2)}</span>
+          </div>
+          <div className="mt-2 flex justify-between text-sm">
+            <span>RV FAC</span>
+            <span className="font-semibold">
+              {rvResult.status === 'complete'
+                ? formatSimpsonValue(rvResult.values?.facPercent, 1) + '%'
+                : rvResult.status}
+            </span>
+          </div>
+          {rvResult.message ? <div className="mt-1 text-xs text-yellow-300">{rvResult.message}</div> : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function IVCMeasurementSummary({ result }) {
+  if (!result) return null;
+  const values = result.values || {};
+  const expiration = values.expirationDiameterMM;
+  const inspiration = values.inspirationDiameterMM;
+  return (
+    <div className="bg-gray-950 mb-3 rounded border border-gray-700 p-3">
+      <div className="flex items-center justify-between gap-2">
+        <div className="text-sm font-semibold">IVC Diameter &amp; Collapsibility</div>
+        <span className={result.status === 'complete' ? 'text-green-300 text-xs' : 'text-yellow-300 text-xs'}>
+          {result.status}
+        </span>
+      </div>
+      <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
+        <div className="rounded bg-black p-2">
+          <div className="text-xs text-gray-400">Expiration</div>
+          <div className="font-semibold">{expiration != null ? formatSimpsonValue(expiration) + ' mm' : 'Not captured'}</div>
+        </div>
+        <div className="rounded bg-black p-2">
+          <div className="text-xs text-gray-400">Inspiration</div>
+          <div className="font-semibold">{inspiration != null ? formatSimpsonValue(inspiration) + ' mm' : 'Not captured'}</div>
+        </div>
+      </div>
+      {result.status === 'complete' ? (
+        <div className="mt-2 rounded bg-black p-2">
+          <div className="text-xs text-gray-400">IVC collapsibility</div>
+          <div className="text-lg font-semibold">{formatSimpsonValue(values.collapsibilityPercent)}%</div>
+        </div>
+      ) : (
+        <div className="mt-2 text-xs text-yellow-300">{result.message}</div>
+      )}
+      <div className="mt-2 text-xs text-gray-400">
+        RAP is not automatically estimated until respiratory maneuver and breathing status are
+        documented. Review the paired calipers before using them clinically.
+      </div>
     </div>
   );
 }
@@ -1812,9 +1924,25 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
     return calculateLAVolume(visibleMeasurements);
   }, [domain, visibleMeasurements]);
 
-  const cseLAVolumeReportFieldUpdates = useMemo(
-    () => buildCseLAVolumeReportFieldUpdatesFromResult(laVolumeResult),
-    [laVolumeResult]
+  const laDisksResult = useMemo(
+    () => domain === 'echo' && isClinicalReportSaveTarget
+      ? calculateLABiplaneDisks(visibleMeasurements)
+      : null,
+    [domain, isClinicalReportSaveTarget, visibleMeasurements]
+  );
+
+  const raAreaResult = useMemo(
+    () => domain === 'echo' ? calculateRAAreaFromMeasurements(visibleMeasurements) : null,
+    [domain, visibleMeasurements]
+  );
+  const rvFacResult = useMemo(
+    () => domain === 'echo' ? calculateRVFACFromMeasurements(visibleMeasurements) : null,
+    [domain, visibleMeasurements]
+  );
+
+  const ivcMeasurementResult = useMemo(
+    () => domain === 'echo' ? calculateIVCFromMeasurements(visibleMeasurements) : null,
+    [domain, visibleMeasurements]
   );
 
   const measurementGroups = useMemo(() => {
@@ -1825,8 +1953,16 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
       const lvMeasurements = visibleMeasurements.filter(
         measurement => getEchoMeasurementAnatomyGroup(measurement) === 'lv'
       );
+      const raMeasurements = visibleMeasurements.filter(
+        measurement => getEchoAreaSlot(measurement) === 'RA_ES'
+      );
+      const rvMeasurements = visibleMeasurements.filter(
+        measurement => ['RV_ED', 'RV_ES'].includes(getEchoAreaSlot(measurement))
+      );
+      const ivcMeasurements = visibleMeasurements.filter(isIVCDiameterMeasurement);
       const otherMeasurements = visibleMeasurements.filter(
-        measurement => getEchoMeasurementAnatomyGroup(measurement) === 'other'
+        measurement => getEchoMeasurementAnatomyGroup(measurement) === 'other' &&
+          !isIVCDiameterMeasurement(measurement) && !isEchoAreaMeasurement(measurement)
       );
 
       return [
@@ -1842,6 +1978,15 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
           measurements: lvMeasurements,
           summary: 'lv',
         },
+        ...(raMeasurements.length > 0
+          ? [{ key: 'ra', title: 'RA', measurements: raMeasurements, summary: 'ra' }]
+          : []),
+        ...(rvMeasurements.length > 0
+          ? [{ key: 'rv', title: 'RV', measurements: rvMeasurements, summary: 'rv' }]
+          : []),
+        ...(ivcMeasurements.length > 0
+          ? [{ key: 'ivc', title: 'IVC', measurements: ivcMeasurements, summary: 'ivc' }]
+          : []),
         ...(otherMeasurements.length > 0
           ? [
               {
@@ -1893,14 +2038,6 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
   }, [domain, isReviewWorkflow, saveTarget, visibleMeasurements]);
 
   const runMeasurementSave = async (scoreNow = false, options: any = {}) => {
-    const viewerDerivedReportFieldUpdates =
-      isClinicalReportSaveTarget && Object.keys(cseLAVolumeReportFieldUpdates).length > 0
-        ? {
-            ...cseLAVolumeReportFieldUpdates,
-            ...(options.viewerDerivedReportFieldUpdates || {}),
-          }
-        : options.viewerDerivedReportFieldUpdates;
-
     return withTimeout(
       commandsManager.runCommand('saveViewerMeasurementsForActiveStudy', {
         domain: domain === 'generic' ? undefined : domain,
@@ -1908,9 +2045,6 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
         educationAttemptIntent: scoreNow ? 'score-attempt' : 'draft',
         deleteAnnotationIds: pendingDeletedMeasurementIds,
         ...options,
-        ...(viewerDerivedReportFieldUpdates
-          ? { viewerDerivedReportFieldUpdates }
-          : {}),
       }),
       30000,
       options?.previewOnly ? 'Review measurements' : 'Save measurements'
@@ -2405,8 +2539,17 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
                     </div>
                   ) : null}
 
-                  {group.summary === 'la' ? <LAVolumeSummary result={laVolumeResult} /> : null}
+                  {group.summary === 'la' ? <LAVolumeSummary result={laVolumeResult} disksResult={laDisksResult} /> : null}
                   {group.summary === 'lv' ? <LVSimpsonSummary result={lvSimpsonResult} /> : null}
+                  {group.summary === 'ivc' && isClinicalReportSaveTarget
+                    ? <IVCMeasurementSummary result={ivcMeasurementResult} />
+                    : null}
+                  {(group.summary === 'ra' || group.summary === 'rv') && isClinicalReportSaveTarget
+                    ? <RAAndRVAreaSummary
+                        raResult={group.summary === 'ra' ? raAreaResult : null}
+                        rvResult={group.summary === 'rv' ? rvFacResult : null}
+                      />
+                    : null}
 
                   {group.measurements.length === 0 ? (
                     <div className="text-sm text-gray-500">

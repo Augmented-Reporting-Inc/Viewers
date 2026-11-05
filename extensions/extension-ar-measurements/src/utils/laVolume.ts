@@ -2,6 +2,9 @@ const SAMPLE_COUNT = 20;
 const MIN_WIDTH_COVERAGE_RATIO = 0.8;
 const MAX_RECOMMENDED_AXIS_DIFFERENCE_MM = 5;
 
+export const LA_VOLUME_AREA_LENGTH_METHOD = 'biplane-area-length-v1';
+export const LA_VOLUME_DISKS_METHOD = 'biplane-disks-v1';
+
 export const LA_VOLUME_SLOT_ORDER = ['A4C', 'A2C'];
 
 const LA_VOLUME_SLOT_INFO = {
@@ -299,6 +302,9 @@ function buildSlotGeometry(measurement, slot) {
     areaMM2,
     areaCM2: areaMM2 / 100,
     coverageRatio,
+    // Independently sampled calibrated contour diameters are reused for
+    // explicit biplane disk summation, without altering area-length results.
+    widths,
     messages: [],
   };
 }
@@ -375,11 +381,13 @@ export function calculateLAVolume(measurements = [], seriesDocOrBsa = null) {
   const allSlotsComplete = LA_VOLUME_SLOT_ORDER.every(slot => slots[slot]?.complete);
   const method =
     'CSE biplane area-length LA volume: 0.85 × A4C area × A2C area / shorter LA length.';
+  const methodId = LA_VOLUME_AREA_LENGTH_METHOD;
 
   if (!allSlotsComplete) {
     return {
       status: 'incomplete',
       method,
+      methodId,
       slots,
       values: null,
       messages,
@@ -415,6 +423,7 @@ export function calculateLAVolume(measurements = [], seriesDocOrBsa = null) {
     return {
       status: 'invalid',
       method,
+      methodId,
       slots,
       values: null,
       axisDifferenceMM,
@@ -429,6 +438,7 @@ export function calculateLAVolume(measurements = [], seriesDocOrBsa = null) {
   return {
     status: 'complete',
     method,
+    methodId,
     slots,
     values: {
       volumeML,
@@ -447,10 +457,142 @@ export function calculateLAVolume(measurements = [], seriesDocOrBsa = null) {
   };
 }
 
+/**
+ * LA biplane summation-of-disks (20 elliptical disks).
+ *
+ * Only the two guided A4C/A2C end-systolic contours qualify. Each view is
+ * sampled along its own calibrated axis. Use the LONGER LA axis for common
+ * disk height, not the SHORTER length required by legacy area-length.
+ * It is a different technique with different reference intervals.
+ *
+ * Returned separately; it never changes the historical area-length report
+ * field or the existing laVolumeBiplane education scoring kind implicitly.
+ */
+export function calculateLABiplaneDisks(
+  measurements = [],
+  seriesDocOrBsa = null
+) {
+  const methodId = LA_VOLUME_DISKS_METHOD;
+  const method = 'Biplane Simpson summation of 20 elliptical LA disks (longer LA axis).';
+  const sourceSlots = new Set();
+  for (const measurement of measurements || []) {
+    const g = getGeometry(measurement);
+    const kind = measurement?.measurementKind || measurement?.measurements?.measurementKind;
+    if (kind && kind !== 'laVolumeSlot') continue;
+    if (!g?.measurementKind && kind !== 'laVolumeSlot') continue;
+    const slot = getSlot(measurement);
+    if (!slot) continue;
+    if (sourceSlots.has(slot)) {
+      return {
+        status: 'invalid',
+        method,
+        methodId,
+        slots: null,
+        values: null,
+        messages: ['Duplicate LA contour slots. Delete the old contour before measuring biplane disks.'],
+        guidance: ['Duplicate LA contour slots. Delete the old contour before measuring biplane disks.'],
+      };
+    }
+    sourceSlots.add(slot);
+  }
+
+  const base = calculateLAVolume(measurements, seriesDocOrBsa);
+  if (!base) return null;
+  if (base.status !== 'complete') {
+    return { ...base, method, methodId };
+  }
+
+  const a4c = base.slots.A4C;
+  const a2c = base.slots.A2C;
+  const axisDifferenceMM = Math.abs(a4c.longAxisLengthMM - a2c.longAxisLengthMM);
+  if (axisDifferenceMM > MAX_RECOMMENDED_AXIS_DIFFERENCE_MM) {
+    const warning = 'LA A4C/A2C long axes differ by more than 5 mm; reacquire or redraw for Simpson disk summation.';
+    return {
+      status: 'invalid',
+      method,
+      methodId,
+      slots: base.slots,
+      values: null,
+      messages: [...(base.messages || []), warning],
+      guidance: [...(base.messages || []), warning],
+    };
+  }
+
+  const widths4 = a4c.widths;
+  const widths2 = a2c.widths;
+  if (!Array.isArray(widths4) || !Array.isArray(widths2) ||
+      widths4.length !== SAMPLE_COUNT || widths2.length !== SAMPLE_COUNT) {
+    return {
+      status: 'invalid',
+      method,
+      methodId,
+      slots: base.slots,
+      values: null,
+      messages: ['Calibrated disk widths are missing from one or both contours.'],
+      guidance: ['Calibrated disk widths are missing from one or both contours.'],
+    };
+  }
+
+  const lengthMM = Math.max(a4c.longAxisLengthMM, a2c.longAxisLengthMM);
+  const diskHeightMM = lengthMM / SAMPLE_COUNT;
+  let volumeMM3 = 0;
+  for (let index = 0; index < SAMPLE_COUNT; index += 1) {
+    const d4 = widths4[index];
+    const d2 = widths2[index];
+    if (!(d4 >= 0) || !(d2 >= 0) ||
+        !Number.isFinite(d4) || !Number.isFinite(d2)) {
+      return {
+        status: 'invalid',
+        method,
+        methodId,
+        slots: base.slots,
+        values: null,
+        messages: ['A sampled LA disk diameter is invalid.'],
+        guidance: ['A sampled LA disk diameter is invalid.'],
+      };
+    }
+    volumeMM3 += (Math.PI / 4) * d4 * d2 * diskHeightMM;
+  }
+
+  const volumeML = volumeMM3 / 1000;
+  if (!(volumeML > 0) || !Number.isFinite(volumeML)) {
+    return {
+      status: 'invalid',
+      method,
+      methodId,
+      slots: base.slots,
+      values: null,
+      messages: ['Calculated LA disk-summation volume is invalid.'],
+      guidance: ['Calculated LA disk-summation volume is invalid.'],
+    };
+  }
+
+  const bsa = getBsaValue(seriesDocOrBsa);
+  return {
+    status: 'complete',
+    method,
+    methodId,
+    slots: base.slots,
+    values: {
+      volumeML,
+      lavi: bsa > 0 ? volumeML / bsa : null,
+      axisDifferenceMM,
+      laLengthMM: lengthMM,
+      laLengthSource: 'longer A4C/A2C LA length',
+      diskCount: SAMPLE_COUNT,
+      diskHeightMM,
+    },
+    messages: base.messages || [],
+    guidance: base.guidance || [],
+  };
+}
+
 export function buildCseLAVolumeReportFieldUpdatesFromResult(
   result = null,
   seriesDocOrBsa = null
 ) {
+  // Never reinterpret a Simpson disk result as the legacy CSE area-length.
+  if (result?.methodId && result.methodId !== LA_VOLUME_AREA_LENGTH_METHOD) return {};
   const values = result?.status === 'complete' ? result.values : null;
 
   if (!values || !Number.isFinite(Number(values.volumeML)) || Number(values.volumeML) <= 0) {

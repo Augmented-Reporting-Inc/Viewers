@@ -32,7 +32,17 @@ export function isMatchingQuizEFCompletion({
 }
 
 export function isGuidedQuizCompositeKind(value: unknown): boolean {
-  return value === 'lvSimpsonEF' || value === 'laVolumeBiplane';
+  return [
+    'lvSimpsonEF',
+    'laVolumeBiplane',
+    'laVolumeBiplaneDisks',
+    'rvFAC',
+    'raArea',
+    'ivcCollapsibility',
+    'trVmax',
+    'trVTI',
+    'ivcRapRvsp',
+  ].includes(String(value || ''));
 }
 
 /**

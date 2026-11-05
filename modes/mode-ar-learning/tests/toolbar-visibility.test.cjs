@@ -49,6 +49,9 @@ test('learning Echo toolbar exposes every registered clinical Echo workflow', ()
   const expected = [
     'LVSimpsonEF',
     'LAVolume',
+    'RAArea',
+    'RVFAC',
+    'SpectralVmax',
     'SpectralDopplerVTI',
     'DecelerationTime',
     'UltrasoundDirectionalTool',
@@ -95,4 +98,16 @@ test('measurement read-only branch remains navigation-only', () => {
   assert.match(branch, /Pan/);
   assert.doesNotMatch(branch, /getEditablePrimaryToolbarIdsForDomain/);
   assert.doesNotMatch(branch, /ECHO_ONLY_MEASUREMENT_TOOL_IDS/);
+});
+
+test('EF learner progress panel retains both capture methods and calibrated freehand path', () => {
+  const commandsSource = fs.readFileSync(
+    path.join(__dirname, '..', '..', '..', 'extensions', 'cornerstone', 'src', 'commandsModule.ts'),
+    'utf8'
+  );
+  assert.match(commandsSource, /rowButton\('Freehand'/, 'EF Freehand action missing');
+  assert.match(commandsSource, /rowButton\('Axis \+ Apex'/, 'EF Axis + Apex action missing');
+  assert.match(commandsSource, /captureMethod === 'freehand'/, 'EF freehand capture dispatch missing');
+  assert.match(commandsSource, /calibrateUSContourPoints/, 'EF physical calibration missing');
+  assert.match(commandsSource, /resolveSpectralVmaxClick/, 'Right-heart Vmax workflow must remain present');
 });

@@ -103,6 +103,32 @@ export function getUltrasoundDirectionalTargetOptionsForUnit(
   return options;
 }
 
+/**
+ * Spectral Vmax uses the existing ultrasound-directional calibration,
+ * but offers only peak *flow* velocity targets. Do not confuse tissue velocity
+ * or deceleration/diastolic velocities with a peak CW/PW spectral measurement.
+ */
+export function getSpectralVmaxTargetOptionsForUnit(
+  unit = '',
+  { includeGeneric = true }: { includeGeneric?: boolean } = {}
+) {
+  // DICOM spectral velocity is commonly calibrated in cm/s. It represents
+  // blood-flow speed here, not tissue Doppler; target selection supplies context.
+  const unitKind = getUltrasoundDirectionalUnitKind(unit);
+  if (unitKind !== 'flowVelocity' && unitKind !== 'tissueVelocity') {
+    return includeGeneric ? [{ value: GENERIC_TARGET.key, label: GENERIC_TARGET.label }] : [];
+  }
+
+  const targets = ULTRASOUND_DIRECTIONAL_REPORT_TARGETS
+    .filter(target => target.unitKind === 'flowVelocity' && /peakvelocity$/i.test(target.key))
+    .map(target => ({ value: target.key, label: target.label }));
+
+  if (includeGeneric) {
+    targets.push({ value: GENERIC_TARGET.key, label: GENERIC_TARGET.label });
+  }
+  return targets;
+}
+
 export function getUltrasoundDirectionalReportTarget(targetKey = '') {
   const key = String(targetKey || '').trim();
 
