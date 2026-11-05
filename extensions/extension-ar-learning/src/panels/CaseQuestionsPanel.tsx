@@ -2280,11 +2280,14 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       ? getReviewLearnerAnswer(question, questionAnswer, scoreItem)
       : questionAnswer;
     const reviewDetails = plainObject(scoreItem?.reviewDetails);
+    // A saved draft has a learner measurement answer before any scoring result.
+    // Do not gate viewport annotation restoration on scoreItem: that hides all
+    // saved-but-unscored measurement overlays when reopening a learner case.
     const learnerMeasurement =
-      scoreItem && question.type === 'measurementNumeric'
+      question.type === 'measurementNumeric'
         ? mergeReviewReferenceValues(
             questionAnswer,
-            scoreItem.learnerResponse,
+            scoreItem?.learnerResponse,
             reviewDetails.learnerMeasurement
           )
         : {};
