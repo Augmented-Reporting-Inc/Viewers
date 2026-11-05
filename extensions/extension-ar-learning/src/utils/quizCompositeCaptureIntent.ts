@@ -95,9 +95,11 @@ export function getEFQuizSubmissionEvidenceError(question: any, answer: any): st
       !expected.every(slot => components.some((part: any) => part?.slot === slot &&
         Array.isArray(part.points) && part.points.length >= 3 &&
         part.points.every((point: any) => Array.isArray(point) &&
-          point.length >= 2 && point.every((coordinate: any) =>
+          point.length === 3 && point.every((coordinate: any) =>
             typeof coordinate === 'number' && Number.isFinite(coordinate))) &&
         String(part.annotationId || '').trim() &&
+        String(part.target?.studyInstanceUID || '').trim() &&
+        String(part.target?.seriesInstanceUID || '').trim() &&
         String(part.target?.sopInstanceUID || '').trim() &&
         Number.isInteger(Number(part.target?.frameNumber)) &&
         Number(part.target.frameNumber) >= 1))) {
