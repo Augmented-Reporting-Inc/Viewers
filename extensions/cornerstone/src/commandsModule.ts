@@ -14574,9 +14574,18 @@ function commandsModule({
         };
       }
 
-      await actions.jumpToSavedViewerAnnotation({
+      const navigationOutcome = await actions.jumpToSavedViewerAnnotation({
         annotation: learnerAnnotation,
       });
+      if (navigationOutcome?.ok !== true) {
+        // A cached annotation in Cornerstone state is not evidence that its
+        // saved SOP/frame is visible. Report the real navigation failure.
+        return {
+          ok: false,
+          reason: navigationOutcome?.reason || 'learner-measurement-navigation-failed',
+          learnerRendered: false,
+        };
+      }
 
       const learnerAnnotationId = getMeasurementAnnotationId(learnerAnnotation);
       const renderedAnnotation = learnerAnnotationId
