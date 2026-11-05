@@ -101,7 +101,8 @@ describe('EF submitted evidence gate', () => {
     compositeResult: {
       components: slots.map((slot, index) => ({
         slot, annotationId: 'contour-' + index,
-        target: { sopInstanceUID: 'sop-' + index, frameNumber: 1 },
+        target: { studyInstanceUID: 'study-a', seriesInstanceUID: 'series-a',
+          sopInstanceUID: 'sop-' + index, frameNumber: 1 },
         points: [[0, 0, 0], [1, 0, 0], [0, 1, 0]],
       })),
     },
