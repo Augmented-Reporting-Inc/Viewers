@@ -31,6 +31,8 @@ test('restoration retains learner evidence and separate EF frame-aware saved con
   assert.match(commandsSource, /showViewerQuizLearnerMeasurement:\s*async/);
   assert.match(commandsSource, /findViewerQuizMeasurementAnnotationInSeriesDocs\(learnerMeasurement/);
   assert.match(commandsSource, /jumpToSavedViewerAnnotation\(\{/);
+  assert.match(commandsSource, /navigationOutcome\?\.ok !== true/);
+  assert.match(commandsSource, /learner-measurement-navigation-failed/);
   assert.match(commandsSource, /\[LV EF saved-slot restoration\]/);
   assert.match(commandsSource, /isSavedLVSimpsonImageMatch/);
   assert.match(commandsSource, /rowButton\('Freehand'/);
