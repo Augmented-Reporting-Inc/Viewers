@@ -1,4 +1,5 @@
 import { metaData } from '@cornerstonejs/core';
+import { getSavedVolumeContourMetadata, getSavedLVSimpsonControlPoints, resolveSavedLVSimpsonHydrationImage } from './savedVolumeContourMetadata';
 import { annotation as csToolsAnnotation, ToolGroupManager } from '@cornerstonejs/tools';
 import * as cornerstoneTools from '@cornerstonejs/tools';
 import {
@@ -1115,6 +1116,12 @@ function getSavedContourClosed(annotation: any = {}) {
 }
 
 function getSavedContourHandlePoints(annotation: any = {}, points = []) {
+  // A saved EF contour stores both the dense spline used for display and the
+  // sparse, calibrated user trace. Never turn the display spline into editable
+  // handles: it would invalidate a perfectly unchanged EF on reload.
+  const savedEFControls = getSavedLVSimpsonControlPoints(annotation);
+  if (savedEFControls) return savedEFControls;
+
   const clonedPoints = cloneAnnotationPoints(points);
 
   if (getSavedContourClosed(annotation)) {
@@ -1246,6 +1253,7 @@ function buildCornerstoneAnnotation(annotation, fallbackFrameOfReferenceUID = ''
     annotation?.spectralDoppler || annotation?.measurements?.spectralDoppler || null;
   const data: any = {
     label: getViewportAnnotationLabel(annotation),
+    ...getSavedVolumeContourMetadata(annotation),
     ...(isSavedBowelCurvedLengthAnnotation(annotation)
       ? {
           measurementKind: BOWEL_CURVED_LENGTH_MEASUREMENT_KIND,
@@ -1386,6 +1394,7 @@ function patchHydratedAnnotationFromSaved({
     ...(target.data || {}),
     ...(fallback?.data || {}),
     label: getViewportAnnotationLabel(savedAnnotation),
+    ...getSavedVolumeContourMetadata(savedAnnotation),
     handles: {
       ...(target.data?.handles || {}),
       ...(fallback?.data?.handles || {}),
@@ -1522,15 +1531,32 @@ export function hydrateSavedViewerAnnotationForViewport({
   selectAnnotation?: boolean;
 }) {
   const viewportCamera = viewport?.getCamera?.() || {};
+  const savedLVSimpson = getSavedVolumeContourMetadata(annotation).measurementKind === 'lvSimpsonSlot';
+  const hydrationImage = resolveSavedLVSimpsonHydrationImage({
+    annotation,
+    referencedImageIdOverride,
+    currentImageId: String(viewport?.getCurrentImageId?.() || '').trim(),
+  });
+  if (!hydrationImage.ok) {
+    console.warn('[LV EF] refused mismatched saved contour image/frame hydration', {
+      annotationId: annotation?.annotationId || annotation?.uid || '',
+      reason: hydrationImage.reason,
+    });
+    return null;
+  }
+  const resolvedReferenceImageId = hydrationImage.referencedImageId;
+
   const annotationPoints = cloneAnnotationPoints(annotation?.points);
   const isSpectralDoppler = isSavedSpectralDopplerAnnotation(annotation);
   const isUltrasoundDirectional = isSavedUltrasoundDirectionalAnnotation(annotation);
   const isBowelCurvedLength = isSavedBowelCurvedLengthAnnotation(annotation);
   const useCurrentViewportAnnotationGroup =
     isSpectralDoppler || isUltrasoundDirectional || isBowelCurvedLength;
-  const viewportViewReference = useCurrentViewportAnnotationGroup
-    ? getViewportViewReferenceMetadata(viewport, annotationPoints)
-    : {};
+  const viewportViewReference = savedLVSimpson
+    ? getViewportViewReferenceMetadata(viewport)
+    : useCurrentViewportAnnotationGroup
+      ? getViewportViewReferenceMetadata(viewport, annotationPoints)
+      : {};
   const viewportAnnotationGroupKey = useCurrentViewportAnnotationGroup
     ? getViewportAnnotationGroupKey(viewport)
     : '';
@@ -1559,7 +1585,7 @@ export function hydrateSavedViewerAnnotationForViewport({
           viewportViewReference?.FrameOfReferenceUID ||
           fallbackFrameOfReferenceUID ||
           '',
-    referencedImageId: referencedImageIdOverride || annotation?.referencedImageId,
+    referencedImageId: resolvedReferenceImageId,
     points: annotationPoints,
     viewPlaneNormal: isUltrasoundDirectional
       ? cloneSavedAnnotationMetadataVector(viewportCamera.viewPlaneNormal) ||
@@ -1616,6 +1642,12 @@ export function hydrateSavedViewerAnnotationForViewport({
     const targetAnnotation =
       csToolsAnnotation.state.getAnnotation?.(hydratedAnnotationUID) || toolHydratedAnnotation;
 
+    // ToolClass.hydrate may create a new Cornerstone annotation and omit
+    // AR-specific volume metadata. Reattach only the saved clinical geometry.
+    targetAnnotation.data = {
+      ...(targetAnnotation.data || {}),
+      ...getSavedVolumeContourMetadata(annotationToHydrate),
+    };
     patchContourCachedStatsFromSaved(
       targetAnnotation,
       annotationToHydrate,

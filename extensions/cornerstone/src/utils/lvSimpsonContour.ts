@@ -213,3 +213,65 @@ export function buildLVSimpsonContourFromHingeApex({
     longAxisLengthMM,
   };
 }
+
+/**
+ * Infer LV landmarks from a traced freehand endocardial border.
+ *
+ * The trace MUST start at one mitral hinge, follow the endocardial border
+ * around the apex, and end at the opposite hinge. The implicit closing chord
+ * represents the mitral annular plane. A generic arbitrarily-started closed
+ * freehand loop is not safe for automatic EF landmark placement.
+ *
+ * Returns null when a credible basal chord and apex cannot be established.
+ * Do not silently calculate an EF in this case.
+ */
+export function deriveLVSimpsonGeometryFromFreehand(contour) {
+  if (!Array.isArray(contour)) return null;
+  const points = contour.map(getPoint);
+  if (points.length < 6 || points.some(point => !point)) return null;
+
+  const baseLeftPoint = points[0];
+  const baseRightPoint = points[points.length - 1];
+  const baseVector = subtract(baseRightPoint, baseLeftPoint);
+  const baseLength = length(baseVector);
+  if (!Number.isFinite(baseLength) || baseLength <= 0) return null;
+
+  const baseMidpoint = midpoint(baseLeftPoint, baseRightPoint);
+  const baseUnit = normalize(baseVector);
+  let axisPointIndex = -1;
+  let greatestDistance = 0;
+  let apexSide = 0;
+
+  for (let index = 1; index < points.length - 1; index += 1) {
+    const offset = subtract(points[index], baseMidpoint);
+    const projected = scale(baseUnit, offset[0] * baseUnit[0] +
+      offset[1] * baseUnit[1] + offset[2] * baseUnit[2]);
+    const perpendicular = subtract(offset, projected);
+    const candidate = length(perpendicular);
+    if (candidate > greatestDistance) {
+      greatestDistance = candidate;
+      axisPointIndex = index;
+      apexSide = index;
+    }
+  }
+
+  // A tracing that ends back at its starting hinge has no unambiguous
+  // opposite mitral hinge. Also reject extremely shallow/degenerate traces.
+  if (axisPointIndex < 1 || greatestDistance < baseLength * 0.4 ||
+      baseLength < greatestDistance * 0.1) return null;
+
+  const apexPoint = points[apexSide];
+  const longAxisLengthMM = distance(baseMidpoint, apexPoint);
+  if (!Number.isFinite(longAxisLengthMM) || longAxisLengthMM <= 0) return null;
+
+  return {
+    points,
+    baseLeftPoint,
+    baseRightPoint,
+    baseMidpoint,
+    apexPoint,
+    axisPoint: apexPoint,
+    axisPointIndex,
+    longAxisLengthMM,
+  };
+}
