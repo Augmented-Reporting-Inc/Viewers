@@ -67,6 +67,28 @@ function efSourceFrameNumber(measurement: Measurement): number {
   return Number(measurement?.frameNumber || measurement?.metadata?.frameNumber || 0);
 }
 
+// The FormAPI EF evidence contract rejects contours above 5,000 points.
+// Keep a margin for future protocol metadata and leave clinical/source contours
+// untouched. This reduces only the polygon sent as spatial quiz evidence.
+const MAX_EF_QUIZ_EVIDENCE_POINTS = 4096;
+
+/**
+ * Select a deterministic, ordered subset of original contour vertices.
+ * This preserves the original spatial coordinate system, endpoints, and
+ * explicit polygon closure without rounding or changing EF calculations.
+ * Only EF quiz evidence is bounded; other composite measurements are intact.
+ */
+export function boundEFQuizEvidencePoints(points: number[][]): number[][] {
+  if (points.length <= MAX_EF_QUIZ_EVIDENCE_POINTS) return points;
+  const last = points.length - 1;
+  const output: number[][] = [];
+  for (let index = 0; index < MAX_EF_QUIZ_EVIDENCE_POINTS; index++) {
+    const sourceIndex = Math.floor(index * last / (MAX_EF_QUIZ_EVIDENCE_POINTS - 1));
+    output.push(points[sourceIndex]);
+  }
+  return output;
+}
+
 function collectComponents(measurements: Measurement[], kind: CompositeKind) {
   const isIVC = kind === 'ivcCollapsibility';
   const isRightHeart = kind === 'rvFAC' || kind === 'raArea' || isIVC;
@@ -101,7 +123,11 @@ function collectComponents(measurements: Measurement[], kind: CompositeKind) {
     components.set(slot, {
       slot,
       annotationId,
-      points: validPoints ? points.map(point => [Number(point[0]), Number(point[1]), Number(point[2] ?? 0)]) : [],
+      points: validPoints
+        ? (kind === 'lvSimpsonEF'
+          ? boundEFQuizEvidencePoints(points.map(point => [Number(point[0]), Number(point[1]), Number(point[2] ?? 0)]))
+          : points.map(point => [Number(point[0]), Number(point[1]), Number(point[2] ?? 0)]))
+        : [],
       target: {
         studyInstanceUID: clean(measurement.referenceStudyUID || measurement.StudyInstanceUID),
         seriesInstanceUID: clean(measurement.referenceSeriesUID || measurement.SeriesInstanceUID),
