@@ -5418,7 +5418,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               </div>
 
               <div className="space-y-3">
-                {authoringQuestions.map((question, index) =>
+                {authoringQuestions.filter(isViewerNativeQuestion).map((question, index) =>
                   renderAuthoringQuestion(question, index)
                 )}
               </div>
