@@ -181,6 +181,7 @@ describe('study-scoped educator/learner EF parity', () => {
       const angle = 2 * Math.PI * index / 5586;
       return [80 + 20 * Math.cos(angle), 100 + 30 * Math.sin(angle), 0];
     });
+    original[original.length - 1] = [...original[0]];
     measurements[0].points = original;
     const before = resolveViewerQuizLVSimpsonForStudy('study-a', measurements);
     expect(before).not.toBeNull();
@@ -212,6 +213,7 @@ describe('study-scoped educator/learner EF parity', () => {
       20 + 7 * Math.sin(2 * Math.PI * index / 6000),
       0,
     ]);
+    first[first.length - 1] = [...first[0]];
     const gold = boundEFQuizEvidencePoints(first);
     const learner = boundEFQuizEvidencePoints(first.map(point => [...point]));
     expect(gold).toHaveLength(4096);
