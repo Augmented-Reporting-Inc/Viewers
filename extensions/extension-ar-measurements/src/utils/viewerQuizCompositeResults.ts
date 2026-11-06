@@ -47,6 +47,26 @@ function slotOf(measurement: Measurement, kind: CompositeKind): string {
   return slot || '';
 }
 
+/**
+ * For multiframe EF contours, the referenced image is the actual viewed
+ * frame. Some legacy annotations retain a default frameNumber=1 despite
+ * referencing another /frames/N image. Do not transfer that stale number
+ * into newly authored gold/scored composite evidence.
+ *
+ * Restrict this correction to EF; other measurement contracts are unchanged.
+ */
+function efSourceFrameNumber(measurement: Measurement): number {
+  const imageId = clean(
+    measurement?.referencedImageId || measurement?.metadata?.referencedImageId
+  );
+  const match = imageId.match(/\/frames\/([1-9][0-9]*)(?:[/?#]|$)/);
+  if (match) {
+    const referencedFrame = Number(match[1]);
+    if (Number.isSafeInteger(referencedFrame)) return referencedFrame;
+  }
+  return Number(measurement?.frameNumber || measurement?.metadata?.frameNumber || 0);
+}
+
 function collectComponents(measurements: Measurement[], kind: CompositeKind) {
   const isIVC = kind === 'ivcCollapsibility';
   const isRightHeart = kind === 'rvFAC' || kind === 'raArea' || isIVC;
@@ -87,7 +107,9 @@ function collectComponents(measurements: Measurement[], kind: CompositeKind) {
         seriesInstanceUID: clean(measurement.referenceSeriesUID || measurement.SeriesInstanceUID),
         sopInstanceUID: clean(measurement.SOPInstanceUID || measurement.metadata?.SOPInstanceUID),
         referencedImageId: clean(measurement.referencedImageId || measurement.metadata?.referencedImageId),
-        frameNumber: Number(measurement.frameNumber || measurement.metadata?.frameNumber || 0),
+        frameNumber: kind === 'lvSimpsonEF'
+          ? efSourceFrameNumber(measurement)
+          : Number(measurement.frameNumber || measurement.metadata?.frameNumber || 0),
       },
     });
   }

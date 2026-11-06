@@ -141,6 +141,39 @@ describe('study-scoped educator/learner EF parity', () => {
     expect(resolveViewerQuizLVSimpsonForStudy('unknown-study', combined)).toBeNull();
   });
 
+  it('captures multiframe EF target frames from referenced images even when annotation frame defaults to 1', () => {
+    const measurements = makeCompleteStudyEF('study-a');
+    const frames = [4, 8, 14, 19];
+    for (let index = 0; index < measurements.length; index++) {
+      const frame = frames[index];
+      measurements[index].frameNumber = 1; // stale legacy default
+      measurements[index].metadata = { frameNumber: 1 };
+      measurements[index].referencedImageId =
+        `wadors:/orthanc/dicom-web/studies/study-a/series/series-a/instances/sop-${index}/frames/${frame}`;
+    }
+    const captured = resolveViewerQuizLVSimpsonForStudy('study-a', measurements);
+    expect(captured).not.toBeNull();
+    expect(captured!.composite.components.map(c => c.target.frameNumber)).toEqual(frames);
+    expect(captured!.composite.components.map(c => c.slot)).toEqual([
+      'A4C_ED', 'A4C_ES', 'A2C_ED', 'A2C_ES',
+    ]);
+  });
+
+  it('preserves legitimate EF frame 1 and falls back when no frame is encoded in the image reference', () => {
+    const measurements = makeCompleteStudyEF('study-a');
+    measurements.forEach((measurement, index) => {
+      measurement.frameNumber = index + 1;
+      measurement.metadata = { frameNumber: index + 1 };
+      if (index === 0) {
+        measurement.referencedImageId =
+          'wadors:/orthanc/dicom-web/studies/study-a/series/series-a/instances/sop-0/frames/1';
+      }
+    });
+    const captured = resolveViewerQuizLVSimpsonForStudy('study-a', measurements);
+    expect(captured).not.toBeNull();
+    expect(captured!.composite.components.map(c => c.target.frameNumber)).toEqual([1, 2, 3, 4]);
+  });
+
   it('rejects an incomplete or ambiguous EF for both gold authoring and learner answers', () => {
     const measurements = makeCompleteStudyEF('study-a');
     expect(resolveViewerQuizLVSimpsonForStudy('study-a', measurements.slice(0, 3))).toBeNull();
