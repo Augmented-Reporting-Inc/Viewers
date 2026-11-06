@@ -1,4 +1,4 @@
-import { isViewerQuizCompositeReviewCurrent, resolveViewerQuizCompositeResult, resolveViewerQuizLVSimpsonForStudy } from './viewerQuizCompositeResults';
+import { boundEFQuizEvidencePoints, isViewerQuizCompositeReviewCurrent, resolveViewerQuizCompositeResult, resolveViewerQuizLVSimpsonForStudy } from './viewerQuizCompositeResults';
 
 describe('viewer quiz composite result evidence', () => {
   it('rejects missing required Simpson slots', () => {
@@ -172,6 +172,52 @@ describe('study-scoped educator/learner EF parity', () => {
     const captured = resolveViewerQuizLVSimpsonForStudy('study-a', measurements);
     expect(captured).not.toBeNull();
     expect(captured!.composite.components.map(c => c.target.frameNumber)).toEqual([1, 2, 3, 4]);
+  });
+
+  it('bounds a 5,587-vertex EF contour for FormAPI without editing its clinical source or EF calculation', () => {
+    const measurements = makeCompleteStudyEF('study-a');
+    const original = Array.from({ length: 5587 }, (_, index) => {
+      // A closed physical-coordinate ellipse with its final point matching the first.
+      const angle = 2 * Math.PI * index / 5586;
+      return [80 + 20 * Math.cos(angle), 100 + 30 * Math.sin(angle), 0];
+    });
+    measurements[0].points = original;
+    const before = resolveViewerQuizLVSimpsonForStudy('study-a', measurements);
+    expect(before).not.toBeNull();
+    const captured = before!.composite.components;
+    expect(captured.map(component => component.slot)).toEqual([
+      'A4C_ED', 'A4C_ES', 'A2C_ED', 'A2C_ES',
+    ]);
+    expect(captured[0].points).toHaveLength(4096);
+    expect(captured[0].points.length).toBeLessThanOrEqual(5000);
+    expect(captured[0].points[0]).toEqual(original[0]);
+    expect(captured[0].points[captured[0].points.length - 1]).toEqual(original[original.length - 1]);
+    expect(measurements[0].points).toBe(original);
+    expect(measurements[0].points).toHaveLength(5587);
+    expect(before!.composite.value).toBeCloseTo(before!.result.values!.ejectionFraction, 10);
+    // A polygon's area/centroid controls contour-overlap and position grading.
+    const area = (points: number[][]) => Math.abs(points.reduce((total, point, index) => {
+      const next = points[(index + 1) % points.length];
+      return total + point[0] * next[1] - next[0] * point[1];
+    }, 0) / 2);
+    expect(Math.abs(area(captured[0].points) - area(original)) / area(original))
+      .toBeLessThan(0.001);
+    expect(boundEFQuizEvidencePoints(original)).toEqual(captured[0].points);
+    expect(boundEFQuizEvidencePoints(original.slice(0, 4096))).toHaveLength(4096);
+  });
+
+  it('normalizes identical educator and learner EF evidence deterministically', () => {
+    const first = Array.from({ length: 6001 }, (_, index) => [
+      10 + 4 * Math.cos(2 * Math.PI * index / 6000),
+      20 + 7 * Math.sin(2 * Math.PI * index / 6000),
+      0,
+    ]);
+    const gold = boundEFQuizEvidencePoints(first);
+    const learner = boundEFQuizEvidencePoints(first.map(point => [...point]));
+    expect(gold).toHaveLength(4096);
+    expect(gold).toEqual(learner);
+    expect(gold.every(point => point.length === 3 && point.every(Number.isFinite))).toBe(true);
+    expect(gold[0]).toEqual(gold[gold.length - 1]);
   });
 
   it('rejects an incomplete or ambiguous EF for both gold authoring and learner answers', () => {
