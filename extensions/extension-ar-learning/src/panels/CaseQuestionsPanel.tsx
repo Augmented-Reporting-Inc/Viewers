@@ -23,6 +23,7 @@ import {
   isGuidedQuizCompositeKind,
   isMatchingQuizEFCompletion,
   getInitialGuidedEFQuestionTarget,
+  getEFQuizSubmissionEvidenceError,
 } from '../utils/quizCompositeCaptureIntent';
 import { composeIVCRapRVSP, isIVCReviewCurrent, RAP_CHOICES_MMHG } from '../utils/ivcRapRvsp';
 import {
@@ -2907,6 +2908,23 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         duration: 3000,
       });
       return null;
+    }
+
+    if (status === 'submitted') {
+      const incompleteEF = (quiz.questions || [])
+        .map(question => getEFQuizSubmissionEvidenceError(
+          question, quizAnswers[question.questionKey],
+        ))
+        .find(Boolean);
+      if (incompleteEF) {
+        uiNotificationService.show({
+          title: 'EF measurement incomplete',
+          message: incompleteEF,
+          type: 'warning',
+          duration: 6500,
+        });
+        return null;
+      }
     }
 
     setSavingQuizKey(quiz.quizKey);

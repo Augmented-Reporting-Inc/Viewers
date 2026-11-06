@@ -2,6 +2,7 @@ import {
   isMatchingQuizEFCompletion,
   isGuidedQuizCompositeKind,
   getInitialGuidedEFQuestionTarget,
+  getEFQuizSubmissionEvidenceError,
 } from './quizCompositeCaptureIntent';
 
 const matching = {
@@ -85,5 +86,49 @@ describe('initial guided EF question navigation', () => {
         questionType, measurementKind, authoredFirstFrame, existingTarget: last,
       })).toEqual(last);
     }
+  });
+});
+
+describe('EF submitted evidence gate', () => {
+  const question: any = {
+    type: 'measurementNumeric',
+    answerConfig: { measurementKind: 'lvSimpsonEF' },
+    scoringConfig: { absoluteTolerance: 10, radius: '20' },
+  };
+  const slots = ['A4C_ED', 'A4C_ES', 'A2C_ED', 'A2C_ES'];
+  const complete = {
+    value: 32.5, measurementKind: 'lvSimpsonEF',
+    compositeResult: {
+      components: slots.map((slot, index) => ({
+        slot, annotationId: 'contour-' + index,
+        target: { studyInstanceUID: 'study-a', seriesInstanceUID: 'series-a',
+          sopInstanceUID: 'sop-' + index, frameNumber: 1 },
+        points: [[0, 0, 0], [1, 0, 0], [0, 1, 0]],
+      })),
+    },
+  };
+  it('rejects a scalar-only saved EF when spatial radius is configured', () => {
+    expect(getEFQuizSubmissionEvidenceError(question, { value: 32.5, unit: '%' }))
+      .toMatch(/missing captured contour evidence/);
+  });
+  it('accepts a complete four-slot EF result', () => {
+    expect(getEFQuizSubmissionEvidenceError(question, complete)).toBe('');
+  });
+  it('rejects missing and duplicate slots', () => {
+    const missing = { ...complete, compositeResult: { components: complete.compositeResult.components.slice(1) } };
+    expect(getEFQuizSubmissionEvidenceError(question, missing)).not.toBe('');
+    const duplicate = { ...complete, compositeResult: { components: [
+      ...complete.compositeResult.components.slice(0, 3), complete.compositeResult.components[0],
+    ] } };
+    expect(getEFQuizSubmissionEvidenceError(question, duplicate)).not.toBe('');
+  });
+  it('preserves numeric-only legacy EF and unrelated questions', () => {
+    expect(getEFQuizSubmissionEvidenceError({ ...question, scoringConfig: { absoluteTolerance: 10 } }, { value: 32.5 })).toBe('');
+    expect(getEFQuizSubmissionEvidenceError({
+      ...question, scoringConfig: { compositeContour: { enabled: true } },
+    }, { value: 32.5 })).not.toBe('');
+    expect(getEFQuizSubmissionEvidenceError({
+      ...question, answerConfig: { measurementKind: 'length' },
+    }, { value: 32.5 })).toBe('');
   });
 });

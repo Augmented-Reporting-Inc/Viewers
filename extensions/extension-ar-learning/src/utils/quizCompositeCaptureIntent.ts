@@ -74,3 +74,36 @@ export function getInitialGuidedEFQuestionTarget({
   }
   return existingTarget;
 }
+
+/**
+ * Submitted EF results that will be judged for contour position or overlap
+ * must carry four independently captured contour slots. Numeric-only legacy
+ * responses are permitted when neither geometry criterion was configured.
+ * This is an early UX guard, not a substitute for server-side scoring.
+ */
+export function getEFQuizSubmissionEvidenceError(question: any, answer: any): string {
+  if (question?.type !== 'measurementNumeric' ||
+      String(question?.answerConfig?.measurementKind || '') !== 'lvSimpsonEF') return '';
+  const scoring = question?.scoringConfig || {};
+  const hasRadius = scoring.radius !== null &&
+    scoring.radius !== undefined && String(scoring.radius).trim() !== '';
+  if (!hasRadius && scoring.compositeContour?.enabled !== true) return '';
+  const expected = ['A4C_ED', 'A4C_ES', 'A2C_ED', 'A2C_ES'];
+  const components = answer?.compositeResult?.components;
+  if (!Array.isArray(components) || components.length !== expected.length ||
+      new Set(components.map((part: any) => String(part?.slot || ''))).size !== expected.length ||
+      !expected.every(slot => components.some((part: any) => part?.slot === slot &&
+        Array.isArray(part.points) && part.points.length >= 3 &&
+        part.points.every((point: any) => Array.isArray(point) &&
+          point.length === 3 && point.every((coordinate: any) =>
+            typeof coordinate === 'number' && Number.isFinite(coordinate))) &&
+        String(part.annotationId || '').trim() &&
+        String(part.target?.studyInstanceUID || '').trim() &&
+        String(part.target?.seriesInstanceUID || '').trim() &&
+        String(part.target?.sopInstanceUID || '').trim() &&
+        Number.isInteger(Number(part.target?.frameNumber)) &&
+        Number(part.target.frameNumber) >= 1))) {
+    return 'EF answer is missing captured contour evidence. Reopen the EF measurement, complete and review all four contours, then capture the calculated result again before submitting.';
+  }
+  return '';
+}
