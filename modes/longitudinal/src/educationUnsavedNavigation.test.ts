@@ -48,6 +48,24 @@ describe('education viewer navigation protection', () => {
     guard.dispose();
   });
 
+  it('rejects browser Back without exposing an unwanted route change', () => {
+    const original = window.location.href;
+    const guard = createEducationUnsavedWorkGuard(window);
+    const cleanup = installEducationUnsavedNavigation(window, guard);
+    guard.markChanged('quiz:example');
+    try {
+      // A legacy entry without React Router's idx uses the URL restore path.
+      window.history.replaceState(null, '', '/another-study');
+      window.dispatchEvent(new PopStateEvent('popstate'));
+      expect(window.location.href).toBe(original);
+      expect(window.confirm).toHaveBeenCalledTimes(1);
+    } finally {
+      cleanup();
+      guard.dispose();
+      window.history.replaceState(null, '', original);
+    }
+  });
+
   it('allows navigation after the user approves discarding edits', () => {
     const guard = createEducationUnsavedWorkGuard(window);
     const cleanup = installEducationUnsavedNavigation(window, guard);
