@@ -3290,7 +3290,11 @@ function getBowelQuizCalibratedPointContext({ viewport, displaySetService, measu
       !Number.isFinite(point[0]) || !Number.isFinite(point[1]) ||
       (point[2] != null && !Number.isFinite(point[2])))) return null;
   const instance = getInstanceForViewerMeasurement(displaySetService, measurement);
-  const regions = getUltrasoundRegionsFromSource(instance).map(normalizeUltrasoundRegion).filter(Boolean);
+  const rawRegions = getUltrasoundRegionsFromSource(instance);
+  const regions = rawRegions.map(normalizeUltrasoundRegion).filter(Boolean);
+  // If the DICOM declares ultrasound regions but none are physically valid,
+  // never silently fall back to generic pixel spacing.
+  if (rawRegions.length && !regions.length) return null;
   let spacing;
   if (regions.length) {
     // All points must be unambiguously located in the same calibrated region.
