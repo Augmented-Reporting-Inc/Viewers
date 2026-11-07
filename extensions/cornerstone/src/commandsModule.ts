@@ -3266,6 +3266,59 @@ function buildViewerQuizTargetFromMeasurement(measurement, displaySetService = n
   };
 }
 
+/**
+ * Physical locations for bowel quiz calipers. Cornerstone world coordinates
+ * are NOT assumed to be millimetres. Transform them into image indices, then
+ * apply DICOM ultrasound-region / pixel calibration for that exact image.
+ * Return null if any part of that provenance is unavailable.
+ */
+function getBowelQuizCalibratedPointContext({ viewport, displaySetService, measurement, points }) {
+  const imageInfo = getCurrentViewportImageInfo(viewport);
+  const sourceImageId = String(measurement?.referencedImageId || '');
+  if (!imageInfo.imageId || !sourceImageId || imageInfo.imageId !== sourceImageId) return null;
+  const imageData = viewport?.getImageData?.();
+  if (!imageData || !Array.isArray(points) || !points.length ||
+      points.some(p => !Array.isArray(p) || p.length !== 3 ||
+        p.some(n => !Number.isFinite(Number(n))))) return null;
+  let indexPoints;
+  try {
+    indexPoints = points.map(point =>
+      csUtils.transformWorldToIndex(imageData, point).map(Number)
+    );
+  } catch { return null; }
+  if (indexPoints.some(point => !Array.isArray(point) || point.length < 2 ||
+      !Number.isFinite(point[0]) || !Number.isFinite(point[1]) ||
+      (point[2] != null && !Number.isFinite(point[2])))) return null;
+  const instance = getInstanceForViewerMeasurement(displaySetService, measurement);
+  const regions = getUltrasoundRegionsFromSource(instance).map(normalizeUltrasoundRegion).filter(Boolean);
+  let spacing;
+  if (regions.length) {
+    // All points must be unambiguously located in the same calibrated region.
+    const candidates = regions.filter(region =>
+      [region.minX, region.maxX, region.minY, region.maxY].every(Number.isFinite) &&
+      indexPoints.every(point =>
+        point[0] >= region.minX && point[0] <= region.maxX &&
+        point[1] >= region.minY && point[1] <= region.maxY
+      )
+    );
+    if (candidates.length !== 1) return null;
+    spacing = candidates[0];
+  } else {
+    spacing = getCornerstonePixelSpacingMM(imageInfo.imageId);
+  }
+  if (!spacing || !(spacing.column > 0) || !(spacing.row > 0) ||
+      !Number.isFinite(spacing.column) || !Number.isFinite(spacing.row)) return null;
+  return {
+    source: 'dicom-calibrated-image-index-v1',
+    calibrationSource: spacing.source,
+    pixelSpacing: { row: spacing.row, column: spacing.column },
+    indexPoints: indexPoints.map(point => [point[0], point[1], 0]),
+    physicalPoints: indexPoints.map(point => [
+      point[0] * spacing.column, point[1] * spacing.row, 0,
+    ]),
+  };
+}
+
 function getMeasurementDisplayLabel(measurement) {
   return (
     measurement?.label ||
@@ -15190,6 +15243,22 @@ function commandsModule({
           reason: 'selected-measurement-has-no-numeric-value',
           selectedMeasurementId,
         };
+      }
+
+      if (question?.answerConfig?.measurementSet?.enabled === true) {
+        const activeViewportId = viewportGridService.getActiveViewportId();
+        const activeViewport = cornerstoneViewportService.getCornerstoneViewport(activeViewportId);
+        const points = measurement?.points;
+        const evidence = getBowelQuizCalibratedPointContext({
+          viewport: activeViewport, displaySetService, measurement, points,
+        });
+        if (!evidence || evidence.physicalPoints.length !== 2) {
+          return {
+            ok: false,
+            reason: 'bwt-spatial-calibration-unavailable: select a BWT caliper on the current image with verifiable DICOM physical spacing',
+          };
+        }
+        answer.quizSpatialEvidence = evidence;
       }
 
       return {
