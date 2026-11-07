@@ -3310,6 +3310,13 @@ function getBowelQuizCalibratedPointContext({ viewport, displaySetService, measu
           row[2] * point[2] + row[3] - indexPoints[index][axis]) > 0.1
       ))) return null;
   const instance = getInstanceForViewerMeasurement(displaySetService, measurement);
+  const requestedSopInstance = String(measurement?.SOPInstanceUID || '').trim();
+  if (instance && requestedSopInstance &&
+      String(getSopInstanceIdFromSource(instance) || '').trim() !== requestedSopInstance) {
+    // Existing general-purpose lookup can fall back to the first instance.
+    // Physical quiz scoring must never inherit calibration from that fallback.
+    return null;
+  }
   const rawRegions = getUltrasoundRegionsFromSource(instance);
   const regions = rawRegions.map(normalizeUltrasoundRegion).filter(Boolean);
   // If the DICOM declares ultrasound regions but none are physically valid,
