@@ -34,11 +34,31 @@ export function installEducationUnsavedWorkEvents(targetWindow: Window, guard: G
     if (snapshot) guard.acknowledgeSave(source, snapshot.revision, succeeded === true);
   };
 
+  const onMeasurementDelete = () => guard.markChanged('measurements');
+  const onMeasurementSaveStart = (event: Event) => {
+    const { requestId } = (event as CustomEvent)?.detail || {};
+    onSaveStart(new CustomEvent(SAVE_START_EVENT, {
+      detail: { source: 'measurements', requestId },
+    }));
+  };
+  const onMeasurementSaveResult = (event: Event) => {
+    const { requestId, succeeded } = (event as CustomEvent)?.detail || {};
+    onSaveResult(new CustomEvent(SAVE_RESULT_EVENT, {
+      detail: { source: 'measurements', requestId, succeeded },
+    }));
+  };
+
+  targetWindow.addEventListener('ar:education-measurement-deleted', onMeasurementDelete);
+  targetWindow.addEventListener('ar:education-measurements-save-start', onMeasurementSaveStart);
+  targetWindow.addEventListener('ar:education-measurements-save-result', onMeasurementSaveResult);
   targetWindow.addEventListener(CHANGE_EVENT, onChange);
   targetWindow.addEventListener(SAVE_START_EVENT, onSaveStart);
   targetWindow.addEventListener(SAVE_RESULT_EVENT, onSaveResult);
 
   return () => {
+    targetWindow.removeEventListener('ar:education-measurement-deleted', onMeasurementDelete);
+    targetWindow.removeEventListener('ar:education-measurements-save-start', onMeasurementSaveStart);
+    targetWindow.removeEventListener('ar:education-measurements-save-result', onMeasurementSaveResult);
     targetWindow.removeEventListener(CHANGE_EVENT, onChange);
     targetWindow.removeEventListener(SAVE_START_EVENT, onSaveStart);
     targetWindow.removeEventListener(SAVE_RESULT_EVENT, onSaveResult);
