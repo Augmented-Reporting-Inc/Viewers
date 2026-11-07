@@ -15652,6 +15652,7 @@ function commandsModule({
         educationAttemptIntent,
         deleteAnnotationIds = [],
         measurementIds = null,
+        quizSpatialEvidenceByAnnotationId = null,
         previewOnly = false,
         reportFieldNames = null,
         suppressSuccessNotification = false,
@@ -15889,10 +15890,24 @@ function commandsModule({
               // MeasurementService object that drives the panel. This keeps contour
               // points in parity with the panel while saved guided geometry remains
               // authoritative through serializeViewerMeasurement().
-              return serializeViewerMeasurement(sourceMeasurement, domain, existingAnnotation, {
+              const annotation = serializeViewerMeasurement(sourceMeasurement, domain, existingAnnotation, {
                 displaySetService,
                 workflow: targetWorkflow,
               });
+              if (domain === 'bowel' &&
+                  quizSpatialEvidenceByAnnotationId &&
+                  Object.prototype.hasOwnProperty.call(quizSpatialEvidenceByAnnotationId, measurementId)) {
+                const evidence = quizSpatialEvidenceByAnnotationId[measurementId];
+                // Only this opt-in quiz save path persists physical reference
+                // evidence; do not add it to unrelated clinical annotations.
+                if (evidence?.source !== 'dicom-calibrated-image-index-v1' ||
+                    !Array.isArray(evidence.physicalPoints) ||
+                    evidence.physicalPoints.length !== 2) {
+                  throw new Error('Bowel quiz source calibration evidence is incomplete.');
+                }
+                annotation.quizSpatialEvidence = evidence;
+              }
+              return annotation;
             })
             .map(annotation =>
               isReviewWorkflowSave
