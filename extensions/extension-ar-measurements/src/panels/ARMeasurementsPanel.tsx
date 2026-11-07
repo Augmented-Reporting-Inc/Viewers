@@ -2075,9 +2075,16 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
 
     saveInFlightRef.current = true;
     setSavingAction(scoreNow ? 'score' : 'draft');
+    // The mode guard snapshots the revision before the save request starts.
+    // It must not clear edits added while that request is in flight.
+    window.dispatchEvent(new CustomEvent('ar:education-measurements-save-start'));
+    let savedSuccessfully = false;
 
     try {
-      return await saveCurrentMeasurements(scoreNow, options);
+      const result = await saveCurrentMeasurements(scoreNow, options);
+      savedSuccessfully = !!result && result.ok !== false &&
+        (Array.isArray(result.annotations) || result.success === true);
+      return result;
     } catch (error) {
       console.error('[ARMeasurementsPanel] save failed:', error);
       uiNotificationService.show({
@@ -2088,6 +2095,9 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
       });
       return null;
     } finally {
+      window.dispatchEvent(new CustomEvent('ar:education-measurements-save-result', {
+        detail: { succeeded: savedSuccessfully },
+      }));
       saveInFlightRef.current = false;
       setSavingAction('');
     }
