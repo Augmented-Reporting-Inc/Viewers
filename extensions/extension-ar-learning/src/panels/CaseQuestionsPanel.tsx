@@ -4416,6 +4416,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       const captureKey = `${quiz.quizKey}:${question.questionKey}`;
       const captureInProgress = capturingMeasurementKey === captureKey;
       const linkedRVSP = cleanString(plainObject(question.answerConfig).measurementKind) === 'ivcRapRvsp';
+      const bowelSet = isBowelMeasurementSetQuestion(question);
+      const bowelEntries = getBowelMeasurementSetEntries(plainObject(value).measurements);
+      const bowelCount = Number(plainObject(plainObject(question.answerConfig).measurementSet).requiredCount) || 2;
 
       return (
         <div className="mt-2 w-full min-w-0 max-w-full space-y-2 overflow-hidden">
@@ -4429,7 +4432,28 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
           {cleanString(plainObject(question.answerConfig).measurementKind) === 'rvFAC'
             ? renderRVFACContourControls(quiz, question, disabled)
             : null}
-          {linkedRVSP
+          {bowelSet ? (
+            <div className="rounded border border-blue-700 bg-blue-950/20 p-2 text-xs text-gray-200">
+              <div className="font-semibold">Bowel measurements: {bowelEntries.length} / {bowelCount}</div>
+              <div className="mt-1 text-gray-400">
+                Capture distinct labelled BWT calipers on the same DICOM frame.
+              </div>
+              {bowelEntries.map((measurement, index) => (
+                <div key={measurement.sourceAnnotationId || index}
+                  className="mt-1 flex items-center justify-between gap-2">
+                  <span>#{index + 1}: {measurement.value} {measurement.unit}</span>
+                  <button type="button" className="text-red-300 underline disabled:opacity-50"
+                    disabled={disabled}
+                    onClick={event => {
+                      event.stopPropagation();
+                      setAnswer(quiz.quizKey, question, {
+                        measurements: bowelEntries.filter((_, i) => i !== index),
+                      });
+                    }}>Remove</button>
+                </div>
+              ))}
+            </div>
+          ) : linkedRVSP
             ? renderIVCRapRVSPControls(quiz.quizKey, question, value, disabled)
             : (
                         <div className="flex w-full min-w-0 max-w-full items-center gap-2 overflow-hidden">
@@ -4477,7 +4501,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               : cleanString(plainObject(question.answerConfig).measurementKind) === 'lvSimpsonEF' ||
                   cleanString(plainObject(question.answerConfig).measurementKind) === 'laVolumeBiplane'
                 ? 'Capture calculated measurement'
-                : 'Recapture selected measurement'}
+                : bowelSet ? 'Add selected BWT caliper' : 'Recapture selected measurement'}
           </button>
 
           {cleanString(
