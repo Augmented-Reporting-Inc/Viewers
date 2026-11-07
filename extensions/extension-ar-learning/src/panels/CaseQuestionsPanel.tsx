@@ -5416,6 +5416,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                             ...plainObject(cfg.measurementSet),
                             measurementTarget: '', referenceTarget: null,
                             longitudinalAxisPhysical: null, lumenCenterPhysical: null,
+                            lumenCenterCalibration: null,
                           },
                         },
                       };
