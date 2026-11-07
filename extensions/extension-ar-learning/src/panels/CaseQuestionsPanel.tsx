@@ -4746,6 +4746,23 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         </div>
 
         {question.type === 'measurementNumeric' ? (
+          reviewDetails.mode === 'bowelMeasurementSet' ? (
+            <div className="mt-2 space-y-1 text-gray-200">
+              <div className="font-semibold">Bowel measurement set</div>
+              <div>Captured: {reviewDetails.submittedCount ?? 0} / {reviewDetails.requiredCount ?? '—'}</div>
+              <div>Within numeric tolerance: {reviewDetails.numericMatches ?? 0} / {reviewDetails.requiredCount ?? '—'}</div>
+              <div>
+                Spatial separation: {reviewDetails.spatial?.matched === true ? 'met' : 'not met'}
+                {Number.isFinite(reviewDetails.spatial?.observed)
+                  ? ` · ${Number(reviewDetails.spatial.observed).toFixed(1)} ${reviewDetails.spatial.unit || ''}`
+                  : ''}
+                {Number.isFinite(reviewDetails.spatial?.threshold)
+                  ? ` (minimum ${reviewDetails.spatial.threshold} ${reviewDetails.spatial.unit || ''})`
+                  : ''}
+              </div>
+              {reviewDetails.reason ? <div className="text-amber-200">{reviewDetails.reason.replace(/_/g, ' ')}</div> : null}
+            </div>
+          ) : (
           <>
             <div className="mt-2">
               <div className="font-semibold">Your answer</div>
@@ -4769,6 +4786,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               </div>
             ) : null}
           </>
+          )
         ) : (
           <>
             <div className="mt-2">
