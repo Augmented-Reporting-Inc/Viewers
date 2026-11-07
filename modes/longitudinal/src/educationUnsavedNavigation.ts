@@ -11,6 +11,9 @@ export function installEducationUnsavedNavigation(
   guard: Guard
 ) {
   let lastUrl = targetWindow.location.href;
+  let lastHistoryIndex = Number.isInteger(targetWindow.history.state?.idx)
+    ? targetWindow.history.state.idx : null;
+  let rollingBackPop = false;
   const onExplicitLeave = (event: Event) => {
     if (!guard.confirmExit()) event.preventDefault();
   };
@@ -36,15 +39,33 @@ export function installEducationUnsavedNavigation(
 
   const onPopState = (event: PopStateEvent) => {
     const destination = targetWindow.location.href;
+    const nextIndex = Number.isInteger(targetWindow.history.state?.idx)
+      ? targetWindow.history.state.idx : null;
+    if (rollingBackPop) {
+      rollingBackPop = false;
+      lastUrl = destination;
+      lastHistoryIndex = nextIndex;
+      // Cancelled navigation should not cause a transient viewer route change.
+      event.stopImmediatePropagation();
+      return;
+    }
     if (destination === lastUrl) return;
     if (!guard.confirmExit()) {
-      // popstate is not cancelable; reinstate the previous URL before router
-      // listeners consume the event. This listener is installed in capture.
-      targetWindow.history.pushState(targetWindow.history.state, '', lastUrl);
+      // The browser has already changed history position. Roll back before
+      // React Router's bubble-phase popstate listener receives this event.
+      if (lastHistoryIndex !== null && nextIndex !== null &&
+          lastHistoryIndex !== nextIndex) {
+        rollingBackPop = true;
+        targetWindow.history.go(lastHistoryIndex - nextIndex);
+      } else {
+        // Legacy history entries without a React Router index: preserve URL.
+        targetWindow.history.pushState(targetWindow.history.state, '', lastUrl);
+      }
       event.stopImmediatePropagation();
       return;
     }
     lastUrl = destination;
+    lastHistoryIndex = nextIndex;
   };
 
   targetWindow.addEventListener('ar:education-request-leave', onExplicitLeave);
