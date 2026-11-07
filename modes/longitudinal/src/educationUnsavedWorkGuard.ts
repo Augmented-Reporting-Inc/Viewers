@@ -8,6 +8,7 @@ export function createEducationUnsavedWorkGuard(targetWindow: Window) {
   const savedRevisions = new Map<string, number>();
   let disposed = false;
   let exitApproved = false;
+  let approvalResetTimer: number | null = null;
 
   const hasUnsavedChanges = () =>
     !disposed &&
@@ -50,15 +51,27 @@ export function createEducationUnsavedWorkGuard(targetWindow: Window) {
     },
     hasUnsavedChanges,
     confirmExit() {
-      if (!hasUnsavedChanges()) return true;
+      if (exitApproved || !hasUnsavedChanges()) return true;
       if (!targetWindow.confirm(
         'You have unsaved education work. Leave the viewer and discard your changes?'
       )) return false;
       exitApproved = true;
       syncListener();
+      // If navigation is cancelled by another part of the app, restore the
+      // warning instead of leaving this viewer permanently unprotected.
+      if (approvalResetTimer !== null) targetWindow.clearTimeout(approvalResetTimer);
+      approvalResetTimer = targetWindow.setTimeout(() => {
+        approvalResetTimer = null;
+        exitApproved = false;
+        syncListener();
+      }, 1500);
       return true;
     },
     dispose() {
+      if (approvalResetTimer !== null) {
+        targetWindow.clearTimeout(approvalResetTimer);
+        approvalResetTimer = null;
+      }
       disposed = true;
       exitApproved = false;
       syncListener();
