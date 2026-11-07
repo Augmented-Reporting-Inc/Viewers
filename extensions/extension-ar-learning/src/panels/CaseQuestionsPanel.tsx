@@ -269,6 +269,9 @@ function isAnswerEmpty(value: any): boolean {
   }
 
   if (value && typeof value === 'object') {
+    if (Object.prototype.hasOwnProperty.call(value, 'measurements')) {
+      return !Array.isArray(value.measurements) || value.measurements.length === 0;
+    }
     if (Object.prototype.hasOwnProperty.call(value, 'value')) {
       return value.value === null || value.value === undefined || cleanString(value.value) === '';
     }
