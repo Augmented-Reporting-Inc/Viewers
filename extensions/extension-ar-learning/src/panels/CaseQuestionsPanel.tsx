@@ -1843,6 +1843,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
   );
   const [authoringSaving, setAuthoringSaving] = useState(false);
   const educationSaveRequestCounter = useRef(0);
+  const restoredSessionDirtyCheckedRef = useRef(false);
   const nextEducationSaveRequestId = () => String(++educationSaveRequestCounter.current);
   const [capturingAuthoringKey, setCapturingAuthoringKey] = useState('');
   const [authoringMeasurementDomain, setAuthoringMeasurementDomain] = useState('');
@@ -1913,8 +1914,11 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
           : nextQuestions;
 
       // Restored session edits are still unsaved until FormAPI confirms a save.
-      if (authoringMode && JSON.stringify(questionsToUse) !== JSON.stringify(nextQuestions)) {
-        reportEducationChange('authoring');
+      if (!restoredSessionDirtyCheckedRef.current) {
+        restoredSessionDirtyCheckedRef.current = true;
+        if (authoringMode && JSON.stringify(questionsToUse) !== JSON.stringify(nextQuestions)) {
+          reportEducationChange('authoring');
+        }
       }
       setAuthoringPayload(nextPayload);
       setAuthoringDefinition(selectedDefinition);
@@ -1963,13 +1967,16 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
 
       // The session cache preserves drafts after refresh; it is not proof of
       // server persistence. Re-arm the guard for any locally restored changes.
-      nextQuizzes.forEach(quiz => {
-        const quizKey = quiz.quizKey;
-        if (JSON.stringify(answersToUse[quizKey] || {}) !==
-            JSON.stringify(persistedAnswers[quizKey] || {})) {
-          reportEducationChange(`quiz:${quizKey}`);
-        }
-      });
+      if (!restoredSessionDirtyCheckedRef.current) {
+        restoredSessionDirtyCheckedRef.current = true;
+        nextQuizzes.forEach(quiz => {
+          const quizKey = quiz.quizKey;
+          if (JSON.stringify(answersToUse[quizKey] || {}) !==
+              JSON.stringify(persistedAnswers[quizKey] || {})) {
+            reportEducationChange(`quiz:${quizKey}`);
+          }
+        });
+      }
       setPayload(nextPayload);
       setAnswersByQuizKey(answersToUse);
       writeViewerQuizSessionState(sessionStateKey, {
