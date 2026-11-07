@@ -995,10 +995,6 @@ function modeFactory({ modeConfiguration }) {
   let _educationUnsavedGuard: ReturnType<typeof createEducationUnsavedWorkGuard> | null = null;
   let _educationNavigationCleanup: null | (() => void) = null;
   let _educationWorkEventsCleanup: null | (() => void) = null;
-  const _educationSaveSnapshots = new Map<string, number>();
-  let _educationSaveStartHandler: null | ((event: Event) => void) = null;
-  let _educationMeasurementDeletedHandler: null | (() => void) = null;
-  let _educationSaveResultHandler: null | ((event: Event) => void) = null;
   let restoreConsoleWarn: null | (() => void) = null;
   let removeARUSRegionPixelSpacingProvider: null | (() => void) = null;
 
@@ -1016,26 +1012,6 @@ function modeFactory({ modeConfiguration }) {
         _educationUnsavedGuard = createEducationUnsavedWorkGuard(window);
         _educationNavigationCleanup = installEducationUnsavedNavigation(window, _educationUnsavedGuard);
         _educationWorkEventsCleanup = installEducationUnsavedWorkEvents(window, _educationUnsavedGuard);
-        _educationMeasurementDeletedHandler = () => _educationUnsavedGuard?.markChanged('measurements');
-        _educationSaveStartHandler = (event: Event) => {
-          const { requestId, source } = (event as CustomEvent)?.detail || {};
-          if (typeof requestId !== 'string' || source !== 'measurements') return;
-          _educationSaveSnapshots.set(requestId, _educationUnsavedGuard?.beginSave(source) ?? 0);
-        };
-        _educationSaveResultHandler = (event: Event) => {
-          const { requestId, source, succeeded } = (event as CustomEvent)?.detail || {};
-          if (typeof requestId !== 'string' || source !== 'measurements') return;
-          const snapshot = _educationSaveSnapshots.get(requestId);
-          _educationSaveSnapshots.delete(requestId);
-          if (snapshot !== undefined) {
-            _educationUnsavedGuard?.acknowledgeSave(source, snapshot, succeeded === true);
-          }
-        };
-        window.addEventListener('ar:education-measurements-save-start', _educationSaveStartHandler);
-        window.addEventListener('ar:education-measurements-save-result', _educationSaveResultHandler);
-        // Deletions originate in the AR Measurements panel, not Cornerstone
-        // annotation-completed or annotation-modified events.
-        window.addEventListener('ar:education-measurement-deleted', _educationMeasurementDeletedHandler);
       }
 
       // Suppress repeated per-frame US region calibration warning
@@ -1419,19 +1395,6 @@ function modeFactory({ modeConfiguration }) {
       _educationWorkEventsCleanup = null;
       _educationUnsavedGuard?.dispose();
       _educationUnsavedGuard = null;
-      _educationSaveSnapshots.clear();
-      if (_educationMeasurementDeletedHandler) {
-        window.removeEventListener('ar:education-measurement-deleted', _educationMeasurementDeletedHandler);
-        _educationMeasurementDeletedHandler = null;
-      }
-      if (_educationSaveStartHandler) {
-        window.removeEventListener('ar:education-measurements-save-start', _educationSaveStartHandler);
-        _educationSaveStartHandler = null;
-      }
-      if (_educationSaveResultHandler) {
-        window.removeEventListener('ar:education-measurements-save-result', _educationSaveResultHandler);
-        _educationSaveResultHandler = null;
-      }
       const {
         toolGroupService,
         syncGroupService,
