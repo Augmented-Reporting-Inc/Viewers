@@ -1010,6 +1010,8 @@ function modeFactory({ modeConfiguration }) {
   let educationUnsavedGuard: ReturnType<typeof createEducationUnsavedWorkGuard> | null = null;
   let educationNavigationCleanup: null | (() => void) = null;
   let educationWorkEventsCleanup: null | (() => void) = null;
+  let educationMeasurementCompletedHandler: null | ((event: Event) => void) = null;
+  let educationMeasurementModifiedHandler: null | ((event: Event) => void) = null;
   let removeARUSRegionPixelSpacingProvider: null | (() => void) = null;
 
   return {
@@ -1130,6 +1132,39 @@ function modeFactory({ modeConfiguration }) {
       );
 
       const measurementToolsReadOnly = isViewerMeasurementReadOnlyFromUrl();
+      const measurementSaveTarget = normalizeLearningUrlToken(getLearningUrlParam('arSaveTarget'));
+      const trackStandaloneMeasurements = !measurementToolsReadOnly &&
+        !isViewerQuizWorkflowFromUrl() &&
+        ['learnercopyonsave', 'reviewworkflowmeasurements'].includes(measurementSaveTarget);
+      if (trackStandaloneMeasurements && educationUnsavedGuard) {
+        educationMeasurementCompletedHandler = (event: Event) => {
+          const annotation = (event as CustomEvent)?.detail?.annotation;
+          const annotationId = String(annotation?.annotationUID || '').trim();
+          if (!annotationId) return;
+          window.setTimeout(() => {
+            if (!isHydratedSavedWorkflowAnnotation(annotationId, annotation) &&
+                !annotation?.data?.arMeasurementReadOnly) {
+              educationUnsavedGuard?.markChanged('measurements');
+            }
+          }, 0);
+        };
+        educationMeasurementModifiedHandler = (event: Event) => {
+          const detail = (event as CustomEvent)?.detail || {};
+          const annotation = detail.annotation;
+          const changeType = String(detail.changeType || '');
+          if (!annotation?.annotationUID || annotation?.data?.arMeasurementReadOnly ||
+              !['HandlesUpdated', 'LabelChange', 'History'].includes(changeType)) return;
+          educationUnsavedGuard?.markChanged('measurements');
+        };
+        eventTarget.addEventListener(
+          CornerstoneToolsEnums.Events.ANNOTATION_COMPLETED,
+          educationMeasurementCompletedHandler
+        );
+        eventTarget.addEventListener(
+          CornerstoneToolsEnums.Events.ANNOTATION_MODIFIED,
+          educationMeasurementModifiedHandler
+        );
+      }
       const editableReviewWorkflow = isEditableReviewMeasurementWorkflowFromUrl();
       const quizMeasurementWorkflow = isViewerQuizMeasurementCaptureMode();
       const completionAwareMeasurementWorkflow =
@@ -1614,6 +1649,20 @@ function modeFactory({ modeConfiguration }) {
       // ];
     },
     onModeExit: ({ servicesManager }: withAppTypes) => {
+      if (educationMeasurementCompletedHandler) {
+        eventTarget.removeEventListener(
+          CornerstoneToolsEnums.Events.ANNOTATION_COMPLETED,
+          educationMeasurementCompletedHandler
+        );
+        educationMeasurementCompletedHandler = null;
+      }
+      if (educationMeasurementModifiedHandler) {
+        eventTarget.removeEventListener(
+          CornerstoneToolsEnums.Events.ANNOTATION_MODIFIED,
+          educationMeasurementModifiedHandler
+        );
+        educationMeasurementModifiedHandler = null;
+      }
       educationNavigationCleanup?.();
       educationNavigationCleanup = null;
       educationWorkEventsCleanup?.();
