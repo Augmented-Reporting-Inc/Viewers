@@ -8,6 +8,8 @@ import { id } from './id';
 import initToolGroups from './initToolGroups';
 import toolbarButtons from './toolbarButtons';
 import { createEducationUnsavedWorkGuard } from './educationUnsavedWorkGuard';
+import { installEducationUnsavedNavigation } from './educationUnsavedNavigation';
+import { installEducationUnsavedWorkEvents } from './educationUnsavedWorkEvents';
 
 const ECHO_LENGTH_MEASUREMENT_LABELS_CONFIG = {
   id: 'echoLengthMeasurementLabels',
@@ -991,6 +993,8 @@ function modeFactory({ modeConfiguration }) {
   let _directionalMeasurementRefreshTimer: number | null = null;
   const _handledCompletedAnnotationIds = new Set<string>();
   let _educationUnsavedGuard: ReturnType<typeof createEducationUnsavedWorkGuard> | null = null;
+  let _educationNavigationCleanup: null | (() => void) = null;
+  let _educationWorkEventsCleanup: null | (() => void) = null;
   const _educationSaveSnapshots = new Map<string, number>();
   let _educationSaveStartHandler: null | ((event: Event) => void) = null;
   let _educationMeasurementDeletedHandler: null | (() => void) = null;
@@ -1010,6 +1014,8 @@ function modeFactory({ modeConfiguration }) {
     onModeEnter: function ({ servicesManager, extensionManager, commandsManager }: withAppTypes) {
       if (shouldProtectEducationMeasurementsFromUrl()) {
         _educationUnsavedGuard = createEducationUnsavedWorkGuard(window);
+        _educationNavigationCleanup = installEducationUnsavedNavigation(window, _educationUnsavedGuard);
+        _educationWorkEventsCleanup = installEducationUnsavedWorkEvents(window, _educationUnsavedGuard);
         _educationMeasurementDeletedHandler = () => _educationUnsavedGuard?.markChanged('measurements');
         _educationSaveStartHandler = (event: Event) => {
           const { requestId, source } = (event as CustomEvent)?.detail || {};
@@ -1406,7 +1412,11 @@ function modeFactory({ modeConfiguration }) {
       // ];
     },
     onModeExit: ({ servicesManager }: withAppTypes) => {
-      // Cleanup must precede other mode teardown, including failed transitions.
+      // Route navigation is confirmed by the guard before mode teardown.
+      _educationNavigationCleanup?.();
+      _educationNavigationCleanup = null;
+      _educationWorkEventsCleanup?.();
+      _educationWorkEventsCleanup = null;
       _educationUnsavedGuard?.dispose();
       _educationUnsavedGuard = null;
       _educationSaveSnapshots.clear();
@@ -1573,3 +1583,6 @@ const mode = {
 
 export default mode;
 export { initToolGroups, toolbarButtons };
+export { createEducationUnsavedWorkGuard } from './educationUnsavedWorkGuard';
+export { installEducationUnsavedNavigation, requestEducationViewerExit } from './educationUnsavedNavigation';
+export { installEducationUnsavedWorkEvents, emitEducationWorkChange, emitEducationWorkSaveStart, emitEducationWorkSaveResult } from './educationUnsavedWorkEvents';
