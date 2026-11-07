@@ -7,6 +7,7 @@ import {
 import { id } from './id';
 import initToolGroups from './initToolGroups';
 import toolbarButtons from './toolbarButtons';
+import { createEducationUnsavedWorkGuard } from './educationUnsavedWorkGuard';
 
 const ECHO_LENGTH_MEASUREMENT_LABELS_CONFIG = {
   id: 'echoLengthMeasurementLabels',
@@ -150,6 +151,17 @@ function isEditableVirtualCoachingMeasurementWorkflowFromUrl() {
     isVirtualCoachingWorkflowFromUrl() &&
     normalizeViewerUrlToken(params.get('arSaveTarget')) === 'reviewworkflowmeasurements' &&
     normalizeViewerUrlToken(params.get('arMeasurementAccess')) === 'edit'
+  );
+}
+
+function shouldProtectEducationMeasurementsFromUrl() {
+  const params = getViewerUrlSearchParams();
+  const target = normalizeViewerUrlToken(params.get('arSaveTarget'));
+  // An explicit writable education persistence target is required; clinical
+  // reporting, research, and read-only reviewer sessions are unaffected.
+  return (
+    !isViewerMeasurementReadOnlyFromUrl() &&
+    ['learnercopyonsave', 'reviewworkflowmeasurements'].includes(target)
   );
 }
 
@@ -978,6 +990,10 @@ function modeFactory({ modeConfiguration }) {
   let _annotationModifiedHandler: null | ((event: Event) => void) = null;
   let _directionalMeasurementRefreshTimer: number | null = null;
   const _handledCompletedAnnotationIds = new Set<string>();
+  let _educationUnsavedGuard: ReturnType<typeof createEducationUnsavedWorkGuard> | null = null;
+  let _educationSaveSnapshot: number | null = null;
+  let _educationSaveStartHandler: null | (() => void) = null;
+  let _educationSaveResultHandler: null | ((event: Event) => void) = null;
   let restoreConsoleWarn: null | (() => void) = null;
   let removeARUSRegionPixelSpacingProvider: null | (() => void) = null;
 
@@ -991,6 +1007,22 @@ function modeFactory({ modeConfiguration }) {
      * Lifecycle hooks
      */
     onModeEnter: function ({ servicesManager, extensionManager, commandsManager }: withAppTypes) {
+      if (shouldProtectEducationMeasurementsFromUrl()) {
+        _educationUnsavedGuard = createEducationUnsavedWorkGuard(window);
+        _educationSaveStartHandler = () => {
+          _educationSaveSnapshot = _educationUnsavedGuard?.beginSave() ?? null;
+        };
+        _educationSaveResultHandler = (event: Event) => {
+          const succeeded = (event as CustomEvent)?.detail?.succeeded === true;
+          if (_educationSaveSnapshot !== null) {
+            _educationUnsavedGuard?.acknowledgeSave(_educationSaveSnapshot, succeeded);
+          }
+          _educationSaveSnapshot = null;
+        };
+        window.addEventListener('ar:education-measurements-save-start', _educationSaveStartHandler);
+        window.addEventListener('ar:education-measurements-save-result', _educationSaveResultHandler);
+      }
+
       // Suppress repeated per-frame US region calibration warning
       const _origWarn = console.warn.bind(console);
       let _usRegionWarnSuppressed = false;
@@ -1082,6 +1114,10 @@ function modeFactory({ modeConfiguration }) {
         );
 
         if (annotationId && isPersistedMeasurementEdit) {
+          if (!isHydratedSavedWorkflowAnnotation(annotationId, sourceAnnotation) ||
+              !sourceAnnotation?.data?.arMeasurementReadOnly) {
+            _educationUnsavedGuard?.markChanged();
+          }
           commandsManager.runCommand('markViewerMeasurementModifiedInSession', {
             uid: annotationId,
           });
@@ -1134,6 +1170,7 @@ function modeFactory({ modeConfiguration }) {
 
         if (completedToolName === ULTRASOUND_DIRECTIONAL_TOOL_NAME) {
           _handledCompletedAnnotationIds.add(annotationId);
+          _educationUnsavedGuard?.markChanged();
 
           commandsManager.runCommand('markViewerMeasurementCreatedInSession', {
             uid: annotationId,
@@ -1168,6 +1205,7 @@ function modeFactory({ modeConfiguration }) {
         }
 
         _handledCompletedAnnotationIds.add(annotationId);
+        _educationUnsavedGuard?.markChanged();
 
         commandsManager.runCommand('markViewerMeasurementCreatedInSession', {
           uid: annotationId,
@@ -1359,6 +1397,18 @@ function modeFactory({ modeConfiguration }) {
       // ];
     },
     onModeExit: ({ servicesManager }: withAppTypes) => {
+      // Cleanup must precede other mode teardown, including failed transitions.
+      _educationUnsavedGuard?.dispose();
+      _educationUnsavedGuard = null;
+      _educationSaveSnapshot = null;
+      if (_educationSaveStartHandler) {
+        window.removeEventListener('ar:education-measurements-save-start', _educationSaveStartHandler);
+        _educationSaveStartHandler = null;
+      }
+      if (_educationSaveResultHandler) {
+        window.removeEventListener('ar:education-measurements-save-result', _educationSaveResultHandler);
+        _educationSaveResultHandler = null;
+      }
       const {
         toolGroupService,
         syncGroupService,
