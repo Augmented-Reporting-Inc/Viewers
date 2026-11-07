@@ -20,7 +20,7 @@ export function installEducationUnsavedNavigation(
         event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
     const target = event.target;
     if (!(target instanceof Element)) return;
-    const anchor = target.closest('a[href]');
+    const anchor = target.closest<HTMLAnchorElement>('a[href]');
     if (!anchor || anchor.hasAttribute('download') || anchor.target === '_blank') return;
     const destination = new URL(anchor.href, targetWindow.location.href);
     const current = new URL(targetWindow.location.href);
