@@ -2996,6 +2996,14 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         const persisted = await Promise.resolve(commandsManager.runCommand(
           'saveViewerMeasurementsForActiveStudy', {
             domain: 'bowel', measurementIds: pendingIds,
+            quizSpatialEvidenceByAnnotationId: Object.fromEntries(
+              (quiz.questions || []).filter(isBowelMeasurementSetQuestion)
+                .flatMap(question => getBowelMeasurementSetEntries(
+                  plainObject(quizAnswers[question.questionKey]).measurements
+                ))
+                .filter(entry => pendingIds.includes(String(entry.sourceAnnotationId)))
+                .map(entry => [String(entry.sourceAnnotationId), entry.quizSpatialEvidence])
+            ),
             scoringIntent: 'draft', educationAttemptIntent: 'draft',
             suppressSuccessNotification: true,
           }
@@ -3638,7 +3646,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
           referenceTarget: appended.referenceTarget,
           measurementTarget: cleanString(set.measurementTarget || answer.measurementType),
           ...(set.orientation === 'longitudinal' && appended.axis
-            ? { longitudinalAxisWorld: appended.axis }
+            ? { longitudinalAxisPhysical: appended.axis }
             : {}),
         };
         updateAuthoringQuestion(question.questionKey, current => ({
@@ -3776,7 +3784,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     }
     setCapturingAuthoringKey(`bowel-center:${question.questionKey}`);
     try {
-      const response = await runViewerCommand(commandsManager, 'captureViewerQuizPointAnswer');
+      const response = await runViewerCommand(commandsManager, 'captureBowelQuizLumenCenter');
       if (!response?.ok) {
         if (response?.reason !== 'cancelled') throw new Error(response?.reason || 'lumen centre not captured');
         return;
@@ -3785,14 +3793,16 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       const target = plainObject(response.answer?.viewerTarget);
       const fields = ['studyInstanceUID', 'seriesInstanceUID', 'sopInstanceUID', 'frameNumber'];
       if (point.coordinateSpace !== 'world' ||
-          ![point.x, point.y, point.z].every(Number.isFinite) ||
+          !Array.isArray(response.answer?.physicalPoint) ||
+          response.answer.physicalPoint.length !== 3 ||
+          !response.answer.physicalPoint.every(Number.isFinite) ||
           fields.some(field => String(target[field] ?? '') !== String(referenceTarget[field] ?? ''))) {
         throw new Error('Select the lumen centre on the same DICOM frame as the captured gold BWT measurements.');
       }
       patchAuthoringAnswerConfig(current, {
         measurementSet: {
           ...settings,
-          lumenCenterWorld: [point.x, point.y, point.z],
+          lumenCenterPhysical: response.answer.physicalPoint,
         },
       });
       uiNotificationService.show({
@@ -5394,7 +5404,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                           measurementSet: {
                             ...plainObject(cfg.measurementSet),
                             measurementTarget: '', referenceTarget: null,
-                            longitudinalAxisWorld: null, lumenCenterWorld: null,
+                            longitudinalAxisPhysical: null, lumenCenterPhysical: null,
                           },
                         },
                       };
