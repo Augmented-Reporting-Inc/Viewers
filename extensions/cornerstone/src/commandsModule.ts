@@ -3289,6 +3289,26 @@ function getBowelQuizCalibratedPointContext({ viewport, displaySetService, measu
   if (indexPoints.some(point => !Array.isArray(point) || point.length < 2 ||
       !Number.isFinite(point[0]) || !Number.isFinite(point[1]) ||
       (point[2] != null && !Number.isFinite(point[2])))) return null;
+  // Record the exact world-to-image affine mapping used to link these
+  // physical indices to the saved caliper's world-space endpoints.
+  let affine;
+  try {
+    const samples = [[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]].map(world =>
+      csUtils.transformWorldToIndex(imageData, world)
+    );
+    const base = samples[0];
+    affine = [0, 1].map(axis => [
+      Number(samples[1][axis] - base[axis]),
+      Number(samples[2][axis] - base[axis]),
+      Number(samples[3][axis] - base[axis]),
+      Number(base[axis]),
+    ]);
+  } catch { return null; }
+  if (affine.some(row => row.some(n => !Number.isFinite(n))) ||
+      points.some((point, index) => affine.some((row, axis) =>
+        Math.abs(row[0] * point[0] + row[1] * point[1] +
+          row[2] * point[2] + row[3] - indexPoints[index][axis]) > 0.1
+      ))) return null;
   const instance = getInstanceForViewerMeasurement(displaySetService, measurement);
   const rawRegions = getUltrasoundRegionsFromSource(instance);
   const regions = rawRegions.map(normalizeUltrasoundRegion).filter(Boolean);
@@ -3316,6 +3336,8 @@ function getBowelQuizCalibratedPointContext({ viewport, displaySetService, measu
     source: 'dicom-calibrated-image-index-v1',
     calibrationSource: spacing.source,
     pixelSpacing: { row: spacing.row, column: spacing.column },
+    worldPoints: points.map(point => [...point]),
+    worldToImageAffine: affine,
     indexPoints: indexPoints.map(point => [point[0], point[1], 0]),
     physicalPoints: indexPoints.map(point => [
       point[0] * spacing.column, point[1] * spacing.row, 0,
