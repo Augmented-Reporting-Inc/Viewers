@@ -3799,10 +3799,21 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
           fields.some(field => String(target[field] ?? '') !== String(referenceTarget[field] ?? ''))) {
         throw new Error('Select the lumen centre on the same DICOM frame as the captured gold BWT measurements.');
       }
+      const sourceCalibration = plainObject(
+        getBowelMeasurementSetEntries(config.goldMeasurements)[0]?.quizSpatialEvidence
+      );
+      const capturedCalibration = plainObject(response.answer.spatialCalibration);
+      if (!sourceCalibration.pixelSpacing ||
+          sourceCalibration.calibrationSource !== capturedCalibration.calibrationSource ||
+          sourceCalibration.pixelSpacing.row !== capturedCalibration.pixelSpacing?.row ||
+          sourceCalibration.pixelSpacing.column !== capturedCalibration.pixelSpacing?.column) {
+        throw new Error('The lumen centre and BWT calipers have different physical calibration.');
+      }
       patchAuthoringAnswerConfig(current, {
         measurementSet: {
           ...settings,
           lumenCenterPhysical: response.answer.physicalPoint,
+          lumenCenterCalibration: capturedCalibration,
         },
       });
       uiNotificationService.show({
