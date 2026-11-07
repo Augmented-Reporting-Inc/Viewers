@@ -2074,14 +2074,14 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
         Array.isArray(result.annotations);
 
       if (!result?.previewOnly && result?.annotations) {
-      applySavedAnnotationsResult({
-        annotations: result.annotations,
-        processedAnnotations: result.annotations,
-        seriesDoc: result.seriesDoc,
-        saveTarget,
-        domain,
-      });
-      setPendingDeletedMeasurementIds([]);
+        applySavedAnnotationsResult({
+          annotations: result.annotations,
+          processedAnnotations: result.annotations,
+          seriesDoc: result.seriesDoc,
+          saveTarget,
+          domain,
+        });
+        setPendingDeletedMeasurementIds([]);
       }
 
       return result;
