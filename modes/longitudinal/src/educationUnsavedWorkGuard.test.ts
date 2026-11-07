@@ -3,8 +3,8 @@ import { createEducationUnsavedWorkGuard } from './educationUnsavedWorkGuard';
 function mockWindow() {
   const listeners = new Set<EventListener>();
   const win = {
-    addEventListener: jest.fn((_name, listener) => listeners.add(listener)),
-    removeEventListener: jest.fn((_name, listener) => listeners.delete(listener)),
+    addEventListener: jest.fn((_name: string, listener: EventListener) => listeners.add(listener)),
+    removeEventListener: jest.fn((_name: string, listener: EventListener) => listeners.delete(listener)),
   } as unknown as Window;
   return {
     win,
