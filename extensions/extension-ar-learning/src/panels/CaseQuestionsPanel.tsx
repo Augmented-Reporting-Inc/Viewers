@@ -1912,6 +1912,10 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
           ? (sessionState.authoringQuestions as QuizQuestion[])
           : nextQuestions;
 
+      // Restored session edits are still unsaved until FormAPI confirms a save.
+      if (authoringMode && JSON.stringify(questionsToUse) !== JSON.stringify(nextQuestions)) {
+        reportEducationChange('authoring');
+      }
       setAuthoringPayload(nextPayload);
       setAuthoringDefinition(selectedDefinition);
       setAuthoringMeasurementDomain(selectedMeasurementDomain);
@@ -1957,6 +1961,15 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
           ? mergeQuizAnswers(persistedAnswers, sessionState.answersByQuizKey || {})
           : persistedAnswers;
 
+      // The session cache preserves drafts after refresh; it is not proof of
+      // server persistence. Re-arm the guard for any locally restored changes.
+      nextQuizzes.forEach(quiz => {
+        const quizKey = quiz.quizKey;
+        if (JSON.stringify(answersToUse[quizKey] || {}) !==
+            JSON.stringify(persistedAnswers[quizKey] || {})) {
+          reportEducationChange(`quiz:${quizKey}`);
+        }
+      });
       setPayload(nextPayload);
       setAnswersByQuizKey(answersToUse);
       writeViewerQuizSessionState(sessionStateKey, {
