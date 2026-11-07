@@ -41,7 +41,7 @@ export function appendBowelMeasurementSetAnswer(
   }
   const label = clean(answer.measurementType || obj(answer.reviewPayload).label);
   const requiredLabel = clean(settings.measurementTarget);
-  if (!label || !/(?:\\bBWT\\b|BWT(?:Long|Cross)?$)/i.test(label) ||
+  if (!label || !/BWT/i.test(label) ||
       (requiredLabel && label !== requiredLabel)) {
     return { ok: false, reason: 'Select a bowel wall-thickness caliper with the expected anatomical label.' };
   }
