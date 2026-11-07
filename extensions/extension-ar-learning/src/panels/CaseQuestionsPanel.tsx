@@ -3728,6 +3728,59 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     }
   }
 
+  async function captureBowelQuizLumenCenter(question: QuizQuestion) {
+    const current = authoringQuestionsRef.current.find(
+      item => item.questionKey === question.questionKey
+    ) || question;
+    const config = plainObject(current.answerConfig);
+    const settings = plainObject(config.measurementSet);
+    const referenceTarget = plainObject(settings.referenceTarget);
+    if (!isBowelMeasurementSetQuestion(current) || settings.orientation !== 'crossSection' ||
+        !cleanString(referenceTarget.sopInstanceUID)) {
+      uiNotificationService.show({
+        title: 'Bowel measurement set',
+        message: 'Capture a gold cross-sectional BWT caliper first.',
+        type: 'warning', duration: 4000,
+      });
+      return;
+    }
+    setCapturingAuthoringKey(`bowel-center:${question.questionKey}`);
+    try {
+      const response = await runViewerCommand(commandsManager, 'captureViewerQuizPointAnswer');
+      if (!response?.ok) {
+        if (response?.reason !== 'cancelled') throw new Error(response?.reason || 'lumen centre not captured');
+        return;
+      }
+      const point = plainObject(response.answer?.point);
+      const target = plainObject(response.answer?.viewerTarget);
+      const fields = ['studyInstanceUID', 'seriesInstanceUID', 'sopInstanceUID', 'frameNumber'];
+      if (point.coordinateSpace !== 'world' ||
+          ![point.x, point.y, point.z].every(Number.isFinite) ||
+          fields.some(field => String(target[field] ?? '') !== String(referenceTarget[field] ?? ''))) {
+        throw new Error('Select the lumen centre on the same DICOM frame as the captured gold BWT measurements.');
+      }
+      patchAuthoringAnswerConfig(current, {
+        measurementSet: {
+          ...settings,
+          lumenCenterWorld: [point.x, point.y, point.z],
+        },
+      });
+      uiNotificationService.show({
+        title: 'Bowel measurement set',
+        message: 'Lumen centre captured for angular separation scoring.',
+        type: 'success', duration: 3000,
+      });
+    } catch (error) {
+      uiNotificationService.show({
+        title: 'Bowel measurement set',
+        message: error?.message || String(error),
+        type: 'warning', duration: 5000,
+      });
+    } finally {
+      setCapturingAuthoringKey('');
+    }
+  }
+
   async function saveAuthoringDraft() {
     if (!authoringDefinition || !isDraftDefinition(authoringDefinition)) {
       return;
