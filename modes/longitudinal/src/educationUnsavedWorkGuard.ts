@@ -7,6 +7,7 @@ export function createEducationUnsavedWorkGuard(targetWindow: Window) {
   const revisions = new Map<string, number>();
   const savedRevisions = new Map<string, number>();
   let disposed = false;
+  let exitApproved = false;
 
   const hasUnsavedChanges = () =>
     !disposed &&
@@ -15,14 +16,14 @@ export function createEducationUnsavedWorkGuard(targetWindow: Window) {
     );
 
   const handleBeforeUnload = (event: BeforeUnloadEvent) => {
-    if (!hasUnsavedChanges()) return;
+    if (!hasUnsavedChanges() || exitApproved) return;
     event.preventDefault();
     event.returnValue = '';
   };
 
   const syncListener = () => {
     targetWindow.removeEventListener('beforeunload', handleBeforeUnload);
-    if (hasUnsavedChanges()) {
+    if (hasUnsavedChanges() && !exitApproved) {
       targetWindow.addEventListener('beforeunload', handleBeforeUnload);
     }
   };
@@ -48,8 +49,18 @@ export function createEducationUnsavedWorkGuard(targetWindow: Window) {
       syncListener();
     },
     hasUnsavedChanges,
+    confirmExit() {
+      if (!hasUnsavedChanges()) return true;
+      if (!targetWindow.confirm(
+        'You have unsaved education work. Leave the viewer and discard your changes?'
+      )) return false;
+      exitApproved = true;
+      syncListener();
+      return true;
+    },
     dispose() {
       disposed = true;
+      exitApproved = false;
       syncListener();
       revisions.clear();
       savedRevisions.clear();
