@@ -4910,6 +4910,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
 
   function renderAuthoringQuestion(question: QuizQuestion, index: number) {
     const answerConfig = plainObject(question.answerConfig);
+    const bowelSet = isBowelMeasurementSetQuestion(question);
+    const bowelSettings = plainObject(answerConfig.measurementSet);
+    const goldBowelMeasurements = getBowelMeasurementSetEntries(answerConfig.goldMeasurements);
     const markerOptions = normalizeMarkerOptions(answerConfig.markerOptions);
     const correctMarkerIds = getCorrectMarkerIdsFromAnswerConfig(answerConfig);
     const viewerTarget = getQuestionViewerTarget(question);
@@ -5236,6 +5239,41 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
 
         {question.type === 'measurementNumeric' ? (
           <div className="mt-2 rounded border border-gray-700 p-2">
+            {bowelSet ? (
+              <div className="mb-3 rounded border border-blue-700 bg-blue-950/30 p-2 text-xs text-blue-100">
+                <div className="font-semibold">
+                  Bowel gold calipers: {goldBowelMeasurements.length} / {bowelSettings.requiredCount || 2}
+                </div>
+                <div className="mt-1">Capture separately labelled BWT calipers on one DICOM frame.</div>
+                {goldBowelMeasurements.map((entry, index) => (
+                  <div key={entry.sourceAnnotationId || index} className="mt-1">
+                    #{index + 1}: {entry.value} {entry.unit} · {entry.measurementType}
+                  </div>
+                ))}
+                {bowelSettings.orientation === 'longitudinal' ? (
+                  <div className="mt-1">
+                    Axis: {Array.isArray(bowelSettings.longitudinalAxisWorld)
+                      ? 'derived from gold caliper positions' : 'capture two distinct gold calipers'}
+                  </div>
+                ) : (
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <button type="button" className="rounded border border-blue-400 px-2 py-1"
+                      disabled={!goldBowelMeasurements.length || isCapturing || authoringSaving ||
+                        !isDraftDefinition(authoringDefinition)}
+                      onClick={event => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        void captureBowelQuizLumenCenter(question);
+                      }}>
+                      {Array.isArray(bowelSettings.lumenCenterWorld)
+                        ? 'Replace lumen centre' : 'Capture lumen centre'}
+                    </button>
+                    <span>{Array.isArray(bowelSettings.lumenCenterWorld)
+                      ? 'Centre captured' : 'Centre required for angular scoring'}</span>
+                  </div>
+                )}
+              </div>
+            ) : null}
             {renderCompositePhaseNavigation(
               question,
               isCapturing || authoringSaving || !isDraftDefinition(authoringDefinition)
