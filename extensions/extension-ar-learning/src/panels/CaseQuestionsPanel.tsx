@@ -1829,6 +1829,8 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
   // synchronously rather than relying on a pending React state update.
   const lastActivatedQuestionRef = useRef('');
   const efCaptureInFlightRef = useRef(false);
+  // Only newly captured BWT calipers need an annotation save before quiz save.
+  const pendingBowelQuizMeasurementIdsRef = useRef(new Set<string>());
   const [capturingMeasurementKey, setCapturingMeasurementKey] = useState('');
   // Explicit educator/learner interpretation only. No default RAP is selected.
   const [rapSelectionsByQuestionKey, setRapSelectionsByQuestionKey] =
@@ -2689,6 +2691,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
           return;
         }
         setAnswer(quiz.quizKey, question, { measurements: appended.entries });
+        pendingBowelQuizMeasurementIdsRef.current.add(String(result.answer.sourceAnnotationId));
         if (!options.silent) uiNotificationService.show({
           title: 'Bowel measurement set',
           message: `Captured ${appended.entries?.length} / ${question.answerConfig?.measurementSet?.requiredCount} measurements.`,
@@ -2977,6 +2980,30 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     }
 
     try {
+      // Bowel quiz answers require persisted canonical calipers. Save newly
+      // captured measurements on the learner copy before saving quiz JSON.
+      const pendingIds = Array.from(new Set((quiz.questions || [])
+        .filter(isBowelMeasurementSetQuestion)
+        .flatMap(question => getBowelMeasurementSetEntries(
+          plainObject(quizAnswers[question.questionKey]).measurements
+        ))
+        .map(entry => String(entry.sourceAnnotationId || ''))
+        .filter(id => id && pendingBowelQuizMeasurementIdsRef.current.has(id))));
+      if (pendingIds.length) {
+        const persisted = await Promise.resolve(commandsManager.runCommand(
+          'saveViewerMeasurementsForActiveStudy', {
+            domain: 'bowel', measurementIds: pendingIds,
+            scoringIntent: 'draft', educationAttemptIntent: 'draft',
+            suppressSuccessNotification: true,
+          }
+        ));
+        const savedIds = new Set((persisted?.annotations || [])
+          .map(annotation => String(annotation?.uid || annotation?.annotationId || '')));
+        if (!persisted?.seriesDoc?._id || pendingIds.some(id => !savedIds.has(id))) {
+          throw new Error('BWT caliper persistence failed; quiz answers were not saved.');
+        }
+        pendingIds.forEach(id => pendingBowelQuizMeasurementIdsRef.current.delete(id));
+      }
       // Combined report assessment: measurement review and persistence precede quiz answer save.
       // Ordinary imaging quizzes retain their existing independent save/score workflow.
       if (deferredReportScoring && quiz.questions.some(q => q.type === 'measurementNumeric')) {
