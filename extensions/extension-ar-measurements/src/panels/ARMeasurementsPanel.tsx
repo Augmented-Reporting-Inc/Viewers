@@ -1553,6 +1553,13 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
   const [sessionLVSimpsonMeasurements, setSessionLVSimpsonMeasurements] = useState([]);
   const [sessionLAVolumeMeasurements, setSessionLAVolumeMeasurements] = useState([]);
   const saveInFlightRef = useRef(false);
+  const educationSaveSequenceRef = useRef(0);
+  const tracksEducationMeasurementEdits =
+    (saveTarget.mode === 'learnerCopyOnSave' ||
+      saveTarget.mode === REVIEW_WORKFLOW_MEASUREMENTS_SAVE_TARGET) &&
+    !isReviewWorkflowReadOnly &&
+    String(saveTarget.measurementAccess || '').toLowerCase() !== 'readonly' &&
+    String(saveTarget.measurementAccess || '').toLowerCase() !== 'feedbackreadonly';
   const quizSaveRequestRef = useRef<string | null>(null);
   const finishQuizMeasurementSave = (ok: boolean) => {
     const requestId = quizSaveRequestRef.current;
@@ -2052,9 +2059,21 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
   };
 
   const saveCurrentMeasurements = async (scoreNow = false, options: any = {}) => {
-    const result = await runMeasurementSave(scoreNow, options);
+    // Use the established persistence command unchanged; an explicit returned
+    // annotation array is the existing panel's durable-save acknowledgement.
+    const requestId = String(++educationSaveSequenceRef.current);
+    if (tracksEducationMeasurementEdits) {
+      window.dispatchEvent(new CustomEvent('ar:education-measurements-save-start', {
+        detail: { requestId, source: 'measurements' },
+      }));
+    }
+    let succeeded = false;
+    try {
+      const result = await runMeasurementSave(scoreNow, options);
+      succeeded = !!result && !result.previewOnly && result.ok !== false &&
+        Array.isArray(result.annotations);
 
-    if (!result?.previewOnly && result?.annotations) {
+      if (!result?.previewOnly && result?.annotations) {
       applySavedAnnotationsResult({
         annotations: result.annotations,
         processedAnnotations: result.annotations,
@@ -2063,9 +2082,16 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
         domain,
       });
       setPendingDeletedMeasurementIds([]);
-    }
+      }
 
-    return result;
+      return result;
+    } finally {
+      if (tracksEducationMeasurementEdits) {
+        window.dispatchEvent(new CustomEvent('ar:education-measurements-save-result', {
+          detail: { requestId, source: 'measurements', succeeded },
+        }));
+      }
+    }
   };
 
   const executeMeasurementSave = async (scoreNow = false, options: any = {}) => {
@@ -2075,16 +2101,8 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
 
     saveInFlightRef.current = true;
     setSavingAction(scoreNow ? 'score' : 'draft');
-    // The mode guard snapshots the revision before the save request starts.
-    // It must not clear edits added while that request is in flight.
-    window.dispatchEvent(new CustomEvent('ar:education-measurements-save-start'));
-    let savedSuccessfully = false;
-
     try {
-      const result = await saveCurrentMeasurements(scoreNow, options);
-      savedSuccessfully = !!result && result.ok !== false &&
-        (Array.isArray(result.annotations) || result.success === true);
-      return result;
+      return await saveCurrentMeasurements(scoreNow, options);
     } catch (error) {
       console.error('[ARMeasurementsPanel] save failed:', error);
       uiNotificationService.show({
@@ -2095,9 +2113,6 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
       });
       return null;
     } finally {
-      window.dispatchEvent(new CustomEvent('ar:education-measurements-save-result', {
-        detail: { succeeded: savedSuccessfully },
-      }));
       saveInFlightRef.current = false;
       setSavingAction('');
     }
@@ -2300,6 +2315,9 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
         setPendingDeletedMeasurementIds(current =>
           current.includes(measurementId) ? current : [...current, measurementId]
         );
+        if (tracksEducationMeasurementEdits) {
+          window.dispatchEvent(new CustomEvent('ar:education-measurement-deleted'));
+        }
         setSavedAnnotations(current =>
           current.filter(candidate => getMeasurementKey(candidate) !== measurementId)
         );
@@ -2331,7 +2349,7 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
         });
       }
     },
-    [commandsManager, refreshLiveMeasurements, saveTarget, uiNotificationService]
+    [commandsManager, refreshLiveMeasurements, saveTarget, uiNotificationService, tracksEducationMeasurementEdits]
   );
 
   const jumpToMeasurement = useCallback(
