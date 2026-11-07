@@ -1,50 +1,58 @@
 /**
- * Protect editable education measurements from accidental browser/tab closure.
- *
- * Each save owns a snapshot of the mutation revision at its start. A successful
- * response cannot clear a newer edit made while that request was in flight.
- * This deliberately does not intercept clinical viewer navigation.
+ * Tracks independently persisted education edits and protects browser unload.
+ * The caller must provide a persistence acknowledgement for each source.
+ * A save snapshot cannot clear newer edits made while the request was active.
  */
 export function createEducationUnsavedWorkGuard(targetWindow: Window) {
-  let revision = 0;
-  let savedRevision = 0;
+  const revisions = new Map<string, number>();
+  const savedRevisions = new Map<string, number>();
   let disposed = false;
 
+  const hasUnsavedChanges = () =>
+    !disposed &&
+    Array.from(revisions).some(([source, revision]) =>
+      revision > (savedRevisions.get(source) || 0)
+    );
+
   const handleBeforeUnload = (event: BeforeUnloadEvent) => {
-    if (revision === savedRevision || disposed) {
-      return;
-    }
+    if (!hasUnsavedChanges()) return;
     event.preventDefault();
     event.returnValue = '';
   };
 
   const syncListener = () => {
     targetWindow.removeEventListener('beforeunload', handleBeforeUnload);
-    if (!disposed && revision !== savedRevision) {
+    if (hasUnsavedChanges()) {
       targetWindow.addEventListener('beforeunload', handleBeforeUnload);
     }
   };
 
   return {
-    markChanged() {
-      if (disposed) return;
-      revision += 1;
+    markChanged(source = 'measurements') {
+      if (disposed || !source) return;
+      revisions.set(source, (revisions.get(source) || 0) + 1);
       syncListener();
     },
-    beginSave() {
-      return revision;
+    beginSave(source = 'measurements') {
+      return revisions.get(source) || 0;
     },
-    acknowledgeSave(savedSnapshot: number, succeeded: boolean) {
-      if (disposed || !succeeded || !Number.isInteger(savedSnapshot)) return;
-      savedRevision = Math.max(savedRevision, Math.min(savedSnapshot, revision));
+    acknowledgeSave(
+      source: string,
+      snapshot: number,
+      succeeded: boolean
+    ) {
+      if (disposed || !succeeded || !source || !Number.isInteger(snapshot)) return;
+      const currentRevision = revisions.get(source) || 0;
+      const previousSaved = savedRevisions.get(source) || 0;
+      savedRevisions.set(source, Math.max(previousSaved, Math.min(snapshot, currentRevision)));
       syncListener();
     },
-    hasUnsavedChanges() {
-      return !disposed && revision !== savedRevision;
-    },
+    hasUnsavedChanges,
     dispose() {
       disposed = true;
       syncListener();
+      revisions.clear();
+      savedRevisions.clear();
     },
   };
 }
