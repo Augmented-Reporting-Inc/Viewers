@@ -5,7 +5,13 @@ import {
   annotation as cornerstoneAnnotation,
 } from '@cornerstonejs/tools';
 import { id } from './id';
-import { initToolGroups, toolbarButtons } from '@ohif/mode-longitudinal';
+import {
+  initToolGroups,
+  toolbarButtons,
+  createEducationUnsavedWorkGuard,
+  installEducationUnsavedNavigation,
+  installEducationUnsavedWorkEvents,
+} from '@ohif/mode-longitudinal';
 
 const ECHO_LENGTH_MEASUREMENT_LABELS_CONFIG = {
   id: 'echoLengthMeasurementLabels',
@@ -1001,6 +1007,9 @@ function modeFactory({ modeConfiguration }) {
   let _quizMeasurementDomain = '';
   let _quizMeasurementDomainHandler: null | ((event: Event) => void) = null;
   let restoreConsoleWarn: null | (() => void) = null;
+  let educationUnsavedGuard: ReturnType<typeof createEducationUnsavedWorkGuard> | null = null;
+  let educationNavigationCleanup: null | (() => void) = null;
+  let educationWorkEventsCleanup: null | (() => void) = null;
   let removeARUSRegionPixelSpacingProvider: null | (() => void) = null;
 
   return {
@@ -1013,6 +1022,17 @@ function modeFactory({ modeConfiguration }) {
      * Lifecycle hooks
      */
     onModeEnter: function ({ servicesManager, extensionManager, commandsManager }: withAppTypes) {
+      // Education-only guard. The mode itself is never used for ordinary clinical
+      // reports. Read-only educational sessions must not emit unload prompts.
+      if (!isViewerMeasurementReadOnlyFromUrl() &&
+          (isViewerQuizWorkflowFromUrl() ||
+            isEditableReviewMeasurementWorkflowFromUrl() ||
+            !!getLearningUrlParam('arSaveTarget'))) {
+        educationUnsavedGuard = createEducationUnsavedWorkGuard(window);
+        educationNavigationCleanup = installEducationUnsavedNavigation(window, educationUnsavedGuard);
+        educationWorkEventsCleanup = installEducationUnsavedWorkEvents(window, educationUnsavedGuard);
+      }
+
       // Suppress repeated per-frame US region calibration warning
       const _origWarn = console.warn.bind(console);
       let _usRegionWarnSuppressed = false;
@@ -1594,6 +1614,13 @@ function modeFactory({ modeConfiguration }) {
       // ];
     },
     onModeExit: ({ servicesManager }: withAppTypes) => {
+      educationNavigationCleanup?.();
+      educationNavigationCleanup = null;
+      educationWorkEventsCleanup?.();
+      educationWorkEventsCleanup = null;
+      educationUnsavedGuard?.dispose();
+      educationUnsavedGuard = null;
+
       const {
         toolGroupService,
         syncGroupService,
