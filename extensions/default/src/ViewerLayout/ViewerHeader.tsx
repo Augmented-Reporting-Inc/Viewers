@@ -18,6 +18,10 @@ function ViewerHeader({ appConfig }: withAppTypes<{ appConfig: AppTypes.Config }
   const location = useLocation();
 
   const onClickReturnButton = () => {
+    // No listener in clinical viewing: this is a no-op outside education.
+    if (!window.dispatchEvent(new CustomEvent('ar:education-request-leave', {
+      cancelable: true,
+    }))) return;
     const { pathname } = location;
     const dataSourceIdx = pathname.indexOf('/', 1);
 
@@ -77,6 +81,9 @@ function ViewerHeader({ appConfig }: withAppTypes<{ appConfig: AppTypes.Config }
       title: t('Header:Logout'),
       icon: 'power-off',
       onClick: async () => {
+        if (!window.dispatchEvent(new CustomEvent('ar:education-request-leave', {
+          cancelable: true,
+        }))) return;
         navigate(`/logout?redirect_uri=${encodeURIComponent(window.location.href)}`);
       },
     });
