@@ -5321,7 +5321,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                   ? 'Accept IVC / RAP / RVSP gold answer'
                 : answerConfig.goldValue != null && answerConfig.goldValue !== ''
                   ? (cleanString(answerConfig.measurementKind) === 'lvSimpsonEF' || cleanString(answerConfig.measurementKind) === 'laVolumeBiplane') ? 'Replace gold answer with calculated result' : 'Replace gold answer with selected measurement'
-                  : (cleanString(answerConfig.measurementKind) === 'lvSimpsonEF' || cleanString(answerConfig.measurementKind) === 'laVolumeBiplane') ? 'Use calculated result as gold answer' : 'Use selected measurement as gold answer'}
+                  : (cleanString(answerConfig.measurementKind) === 'lvSimpsonEF' || cleanString(answerConfig.measurementKind) === 'laVolumeBiplane') ? 'Use calculated result as gold answer' : bowelSet ? 'Add selected gold BWT caliper' : 'Use selected measurement as gold answer'}
             </button>
 
             {(answerConfig.goldValue !== null &&
@@ -5335,14 +5335,32 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                 onClick={event => {
                   event.preventDefault();
                   event.stopPropagation();
-                  void clearAuthoringGoldMeasurement(question);
+                  if (bowelSet) {
+                    updateAuthoringQuestion(question.questionKey, current => {
+                      const cfg = plainObject(current.answerConfig);
+                      return {
+                        ...current,
+                        answerConfig: {
+                          ...cfg, goldMeasurements: [], goldMeasurement: null,
+                          goldValue: null, measurementType: '',
+                          measurementSet: {
+                            ...plainObject(cfg.measurementSet),
+                            measurementTarget: '', referenceTarget: null,
+                            longitudinalAxisWorld: null, lumenCenterWorld: null,
+                          },
+                        },
+                      };
+                    });
+                  } else {
+                    void clearAuthoringGoldMeasurement(question);
+                  }
                 }}
               >
-                Clear gold answer
+                {bowelSet ? 'Clear BWT measurement set' : 'Clear gold answer'}
               </button>
             ) : null}
 
-            {answerConfig.goldValue !== null &&
+            {!bowelSet && (answerConfig.goldValue !== null &&
             typeof answerConfig.goldValue !== 'undefined' &&
             answerConfig.goldValue !== '' ? (
               <div className="bg-green-950/30 mt-2 rounded border border-green-700 px-2 py-1 text-xs text-green-100">
@@ -5355,7 +5373,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                   ? 'Complete all required contours, then capture the calculated result as the gold answer. No annotation selection is required.'
                   : 'Select a measurement annotation in the viewport, then capture it as the gold answer.'}
               </div>
-            )}
+            ))}
 
             <label className="mt-2 block text-xs font-semibold text-gray-200">
               {(cleanString(answerConfig.measurementKind) === 'lvSimpsonEF' || cleanString(answerConfig.measurementKind) === 'laVolumeBiplane')
