@@ -60,10 +60,20 @@ export function appendBowelMeasurementSetAnswer(
   if (expectedFrame && expectedFrame !== sourceFrame) {
     return { ok: false, reason: 'Measurements must be on the same identified image/frame for spatial scoring.' };
   }
-  const annotation = obj(obj(answer.reviewPayload).annotation || answer.annotation);
-  const points = annotation.points;
-  if (!Array.isArray(points) || points.length !== 2 || points.some(p => !vector(p))) {
-    return { ok: false, reason: 'Calibrated world-coordinate caliper endpoints were not captured.' };
+  const evidence = obj(answer.quizSpatialEvidence);
+  const physicalPoints = evidence.physicalPoints;
+  if (evidence.source !== 'dicom-calibrated-image-index-v1' ||
+      !Array.isArray(physicalPoints) || physicalPoints.length !== 2 ||
+      physicalPoints.some(p => !vector(p))) {
+    return { ok: false, reason: 'Calibrated image-index caliper positions were not captured.' };
+  }
+  const priorEvidence = obj(prior[0]?.quizSpatialEvidence);
+  if (priorEvidence.source && (
+      priorEvidence.calibrationSource !== evidence.calibrationSource ||
+      priorEvidence.pixelSpacing?.row !== evidence.pixelSpacing?.row ||
+      priorEvidence.pixelSpacing?.column !== evidence.pixelSpacing?.column
+  )) {
+    return { ok: false, reason: 'The BWT calipers use inconsistent image calibration.' };
   }
   const entry = {
     sourceAnnotationId: id,
@@ -73,12 +83,12 @@ export function appendBowelMeasurementSetAnswer(
     measurementType: label,
     orientation,
     viewerTarget: target,
-    annotation: { points },
+    quizSpatialEvidence: evidence,
   };
   const entries = [...prior, entry];
   const centers = entries.map(m => {
-    const a = m.annotation.points[0];
-    const b = m.annotation.points[1];
+    const a = m.quizSpatialEvidence.physicalPoints[0];
+    const b = m.quizSpatialEvidence.physicalPoints[1];
     return a.map((v: number, i: number) => (v + b[i]) / 2);
   });
   const a = centers[0];
