@@ -34,6 +34,17 @@ import {
 const AR_QUIZ_MEASUREMENT_ADDED_EVENT = 'ar-learning:quiz-measurement-added';
 const AR_LV_SIMPSON_CAPTURE_REQUESTED_EVENT = 'ar-measurements:lv-simpson-capture-requested';
 const AR_VIEWER_QUIZ_AUTHORING_SAVED_EVENT = 'ar:viewer-quiz-authoring-saved';
+function reportEducationChange(source: string) {
+  window.dispatchEvent(new CustomEvent('ar:education-work-changed', { detail: { source } }));
+}
+function reportEducationSaveStart(source: string, requestId: string) {
+  window.dispatchEvent(new CustomEvent('ar:education-work-save-start', { detail: { source, requestId } }));
+}
+function reportEducationSaveResult(source: string, requestId: string, succeeded: boolean) {
+  window.dispatchEvent(new CustomEvent('ar:education-work-save-result', {
+    detail: { source, requestId, succeeded },
+  }));
+}
 
 // EF uses one guided measurement question, but each of its four contours can
 // optionally have a different authored DICOM instance/frame.
@@ -1633,6 +1644,9 @@ function getQuizAuthoringReturnUrl() {
 }
 
 function finishQuizAuthoring() {
+  if (!window.dispatchEvent(new CustomEvent('ar:education-request-leave', {
+    cancelable: true,
+  }))) return;
   const returnUrl = getQuizAuthoringReturnUrl();
 
   if (returnUrl) {
@@ -1828,6 +1842,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     (initialSessionState?.authoringQuestions as QuizQuestion[]) || []
   );
   const [authoringSaving, setAuthoringSaving] = useState(false);
+  const educationSaveRequestCounter = useRef(0);
+  const restoredSessionDirtyCheckedRef = useRef(false);
+  const nextEducationSaveRequestId = () => String(++educationSaveRequestCounter.current);
   const [capturingAuthoringKey, setCapturingAuthoringKey] = useState('');
   const [authoringMeasurementDomain, setAuthoringMeasurementDomain] = useState('');
 
@@ -1896,6 +1913,13 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
           ? (sessionState.authoringQuestions as QuizQuestion[])
           : nextQuestions;
 
+      // Restored session edits are still unsaved until FormAPI confirms a save.
+      if (!restoredSessionDirtyCheckedRef.current) {
+        restoredSessionDirtyCheckedRef.current = true;
+        if (authoringMode && JSON.stringify(questionsToUse) !== JSON.stringify(nextQuestions)) {
+          reportEducationChange('authoring');
+        }
+      }
       setAuthoringPayload(nextPayload);
       setAuthoringDefinition(selectedDefinition);
       setAuthoringMeasurementDomain(selectedMeasurementDomain);
@@ -1941,6 +1965,18 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
           ? mergeQuizAnswers(persistedAnswers, sessionState.answersByQuizKey || {})
           : persistedAnswers;
 
+      // The session cache preserves drafts after refresh; it is not proof of
+      // server persistence. Re-arm the guard for any locally restored changes.
+      if (!restoredSessionDirtyCheckedRef.current) {
+        restoredSessionDirtyCheckedRef.current = true;
+        nextQuizzes.forEach(quiz => {
+          const quizKey = quiz.quizKey;
+          if (JSON.stringify(answersToUse[quizKey] || {}) !==
+              JSON.stringify(persistedAnswers[quizKey] || {})) {
+            reportEducationChange(`quiz:${quizKey}`);
+          }
+        });
+      }
       setPayload(nextPayload);
       setAnswersByQuizKey(answersToUse);
       writeViewerQuizSessionState(sessionStateKey, {
@@ -1988,6 +2024,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
   }, [authoringDefinition, authoringMode, authoringQuestions, sessionStateKey]);
 
   function setAnswer(quizKey: string, question: QuizQuestion, value: any) {
+    reportEducationChange(`quiz:${quizKey}`);
     setAnswersByQuizKey(current => ({
       ...current,
       [quizKey]: {
@@ -1998,6 +2035,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
   }
 
   function toggleMultiSelectAnswer(quizKey: string, question: QuizQuestion, value: string) {
+    reportEducationChange(`quiz:${quizKey}`);
     setAnswersByQuizKey(current => {
       const quizAnswers = current[quizKey] || {};
       const existing = Array.isArray(quizAnswers[question.questionKey])
@@ -2920,12 +2958,23 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       if (deferredReportScoring && quiz.questions.some(q => q.type === 'measurementNumeric')) {
         await confirmReportOwnedMeasurementSave();
       }
-      const result = await saveViewerQuizResponseForActiveStudy({
-        quizKey: quiz.quizKey,
-        quizVersion: Number(quiz.quizVersion) || 1,
-        status,
-        answers: buildAnswerPayload(quiz, quizAnswers),
-      });
+      const saveSource = `quiz:${quiz.quizKey}`;
+      const saveRequestId = nextEducationSaveRequestId();
+      reportEducationSaveStart(saveSource, saveRequestId);
+      let result;
+      try {
+        result = await saveViewerQuizResponseForActiveStudy({
+          quizKey: quiz.quizKey,
+          quizVersion: Number(quiz.quizVersion) || 1,
+          status,
+          answers: buildAnswerPayload(quiz, quizAnswers),
+        });
+        // Scoring is a separate operation from answer persistence.
+        reportEducationSaveResult(saveSource, saveRequestId, true);
+      } catch (saveError) {
+        reportEducationSaveResult(saveSource, saveRequestId, false);
+        throw saveError;
+      }
 
       let scoredPayload: any = null;
 
@@ -3032,6 +3081,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     questionKey: string,
     updater: (question: QuizQuestion) => QuizQuestion
   ) {
+    reportEducationChange('authoring');
     setAuthoringQuestions(current => {
       const nextQuestions = current.map(question =>
         question.questionKey === questionKey ? updater(question) : question
@@ -3368,6 +3418,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         currentQuestion.questionKey === question.questionKey ? nextQuestion : currentQuestion
       );
       authoringQuestionsRef.current = nextQuestions;
+      reportEducationChange('authoring');
       setAuthoringQuestions(nextQuestions);
 
       await runViewerCommand(commandsManager, 'showViewerQuizMarkerOptions', {
@@ -3429,6 +3480,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     );
 
     authoringQuestionsRef.current = nextQuestions;
+    reportEducationChange('authoring');
     setAuthoringQuestions(nextQuestions);
 
     await runViewerCommand(commandsManager, 'clearViewerQuizMarkerOptions', {});
@@ -3639,7 +3691,12 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         throw new Error('Capture all four EF contour instance/frame targets before saving guided EF navigation.');
       }
 
-      const result = await saveViewerQuizAuthoringDraft({
+      const saveSource = 'authoring';
+      const saveRequestId = nextEducationSaveRequestId();
+      reportEducationSaveStart(saveSource, saveRequestId);
+      let result;
+      try {
+        result = await saveViewerQuizAuthoringDraft({
         definitionId,
         title: authoringDefinition.title || '',
         description: authoringDefinition.description || '',
@@ -3650,7 +3707,12 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         questions: questionsToSave,
         rubricId: getRubricId(authoringRubric),
         rubricItems: buildAuthoringRubricItems(questionsToSave),
-      });
+        });
+        reportEducationSaveResult(saveSource, saveRequestId, true);
+      } catch (saveError) {
+        reportEducationSaveResult(saveSource, saveRequestId, false);
+        throw saveError;
+      }
 
       const savedDefinition = result?.definition || result?.quizDefinition || null;
       const savedQuestions = Array.isArray(savedDefinition?.questions)

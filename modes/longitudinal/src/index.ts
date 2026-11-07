@@ -7,6 +7,9 @@ import {
 import { id } from './id';
 import initToolGroups from './initToolGroups';
 import toolbarButtons from './toolbarButtons';
+import { createEducationUnsavedWorkGuard } from './educationUnsavedWorkGuard';
+import { installEducationUnsavedNavigation } from './educationUnsavedNavigation';
+import { installEducationUnsavedWorkEvents } from './educationUnsavedWorkEvents';
 
 const ECHO_LENGTH_MEASUREMENT_LABELS_CONFIG = {
   id: 'echoLengthMeasurementLabels',
@@ -150,6 +153,17 @@ function isEditableVirtualCoachingMeasurementWorkflowFromUrl() {
     isVirtualCoachingWorkflowFromUrl() &&
     normalizeViewerUrlToken(params.get('arSaveTarget')) === 'reviewworkflowmeasurements' &&
     normalizeViewerUrlToken(params.get('arMeasurementAccess')) === 'edit'
+  );
+}
+
+function shouldProtectEducationMeasurementsFromUrl() {
+  const params = getViewerUrlSearchParams();
+  const target = normalizeViewerUrlToken(params.get('arSaveTarget'));
+  // An explicit writable education persistence target is required; clinical
+  // reporting, research, and read-only reviewer sessions are unaffected.
+  return (
+    !isViewerMeasurementReadOnlyFromUrl() &&
+    ['learnercopyonsave', 'reviewworkflowmeasurements'].includes(target)
   );
 }
 
@@ -978,6 +992,9 @@ function modeFactory({ modeConfiguration }) {
   let _annotationModifiedHandler: null | ((event: Event) => void) = null;
   let _directionalMeasurementRefreshTimer: number | null = null;
   const _handledCompletedAnnotationIds = new Set<string>();
+  let _educationUnsavedGuard: ReturnType<typeof createEducationUnsavedWorkGuard> | null = null;
+  let _educationNavigationCleanup: null | (() => void) = null;
+  let _educationWorkEventsCleanup: null | (() => void) = null;
   let restoreConsoleWarn: null | (() => void) = null;
   let removeARUSRegionPixelSpacingProvider: null | (() => void) = null;
 
@@ -991,6 +1008,12 @@ function modeFactory({ modeConfiguration }) {
      * Lifecycle hooks
      */
     onModeEnter: function ({ servicesManager, extensionManager, commandsManager }: withAppTypes) {
+      if (shouldProtectEducationMeasurementsFromUrl()) {
+        _educationUnsavedGuard = createEducationUnsavedWorkGuard(window);
+        _educationNavigationCleanup = installEducationUnsavedNavigation(window, _educationUnsavedGuard);
+        _educationWorkEventsCleanup = installEducationUnsavedWorkEvents(window, _educationUnsavedGuard);
+      }
+
       // Suppress repeated per-frame US region calibration warning
       const _origWarn = console.warn.bind(console);
       let _usRegionWarnSuppressed = false;
@@ -1082,6 +1105,10 @@ function modeFactory({ modeConfiguration }) {
         );
 
         if (annotationId && isPersistedMeasurementEdit) {
+          if (!sourceAnnotation?.data?.arMeasurementReadOnly &&
+              !isViewerMeasurementReadOnlyFromUrl()) {
+            _educationUnsavedGuard?.markChanged();
+          }
           commandsManager.runCommand('markViewerMeasurementModifiedInSession', {
             uid: annotationId,
           });
@@ -1134,6 +1161,7 @@ function modeFactory({ modeConfiguration }) {
 
         if (completedToolName === ULTRASOUND_DIRECTIONAL_TOOL_NAME) {
           _handledCompletedAnnotationIds.add(annotationId);
+          _educationUnsavedGuard?.markChanged();
 
           commandsManager.runCommand('markViewerMeasurementCreatedInSession', {
             uid: annotationId,
@@ -1168,6 +1196,7 @@ function modeFactory({ modeConfiguration }) {
         }
 
         _handledCompletedAnnotationIds.add(annotationId);
+        _educationUnsavedGuard?.markChanged();
 
         commandsManager.runCommand('markViewerMeasurementCreatedInSession', {
           uid: annotationId,
@@ -1359,6 +1388,13 @@ function modeFactory({ modeConfiguration }) {
       // ];
     },
     onModeExit: ({ servicesManager }: withAppTypes) => {
+      // Route navigation is confirmed by the guard before mode teardown.
+      _educationNavigationCleanup?.();
+      _educationNavigationCleanup = null;
+      _educationWorkEventsCleanup?.();
+      _educationWorkEventsCleanup = null;
+      _educationUnsavedGuard?.dispose();
+      _educationUnsavedGuard = null;
       const {
         toolGroupService,
         syncGroupService,
@@ -1510,3 +1546,6 @@ const mode = {
 
 export default mode;
 export { initToolGroups, toolbarButtons };
+export { createEducationUnsavedWorkGuard } from './educationUnsavedWorkGuard';
+export { installEducationUnsavedNavigation, requestEducationViewerExit } from './educationUnsavedNavigation';
+export { installEducationUnsavedWorkEvents, emitEducationWorkChange, emitEducationWorkSaveStart, emitEducationWorkSaveResult } from './educationUnsavedWorkEvents';
