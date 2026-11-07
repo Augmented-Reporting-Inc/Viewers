@@ -50,6 +50,16 @@ export function installEducationUnsavedNavigation(
       return;
     }
     if (destination === lastUrl) return;
+    const previous = new URL(lastUrl);
+    const next = new URL(destination);
+    if (previous.origin === next.origin &&
+        previous.pathname === next.pathname &&
+        previous.search === next.search) {
+      // Hash-only changes are viewport/navigation state, not study exit.
+      lastUrl = destination;
+      lastHistoryIndex = nextIndex;
+      return;
+    }
     if (!guard.confirmExit()) {
       // The browser has already changed history position. Roll back before
       // React Router's bubble-phase popstate listener receives this event.
