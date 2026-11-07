@@ -34,11 +34,33 @@ describe('education unsaved work guard', () => {
     const event = w.fireBeforeUnload();
     expect(event.preventDefault).toHaveBeenCalled();
     const snapshot = guard.beginSave();
-    guard.acknowledgeSave(snapshot, false);
+    guard.acknowledgeSave('measurements', snapshot, false);
     expect(guard.hasUnsavedChanges()).toBe(true);
-    guard.acknowledgeSave(snapshot, true);
+    guard.acknowledgeSave('measurements', snapshot, true);
     expect(guard.hasUnsavedChanges()).toBe(false);
     expect(w.count()).toBe(0);
+  });
+
+  it('does not let a measurement save clear unsaved quiz edits', () => {
+    const w = mockWindow();
+    const guard = createEducationUnsavedWorkGuard(w.win);
+    guard.markChanged('measurements');
+    guard.markChanged('quiz');
+    const measurementSnapshot = guard.beginSave('measurements');
+    guard.acknowledgeSave('measurements', measurementSnapshot, true);
+    expect(guard.hasUnsavedChanges()).toBe(true);
+    guard.acknowledgeSave('quiz', guard.beginSave('quiz'), true);
+    expect(guard.hasUnsavedChanges()).toBe(false);
+    guard.dispose();
+  });
+
+  it('rejects an unacknowledged or invalid snapshot', () => {
+    const w = mockWindow();
+    const guard = createEducationUnsavedWorkGuard(w.win);
+    guard.markChanged();
+    guard.acknowledgeSave('measurements', Number.NaN, true);
+    expect(guard.hasUnsavedChanges()).toBe(true);
+    guard.dispose();
   });
 
   it('retains changes created during a save', () => {
@@ -47,7 +69,7 @@ describe('education unsaved work guard', () => {
     guard.markChanged();
     const snapshot = guard.beginSave();
     guard.markChanged();
-    guard.acknowledgeSave(snapshot, true);
+    guard.acknowledgeSave('measurements', snapshot, true);
     expect(guard.hasUnsavedChanges()).toBe(true);
     guard.dispose();
     expect(w.count()).toBe(0);
