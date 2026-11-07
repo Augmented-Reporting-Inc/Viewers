@@ -26,6 +26,11 @@ import {
 } from '../utils/quizCompositeCaptureIntent';
 import { composeIVCRapRVSP, isIVCReviewCurrent, RAP_CHOICES_MMHG } from '../utils/ivcRapRvsp';
 import {
+  isBowelMeasurementSetQuestion,
+  getBowelMeasurementSetEntries,
+  appendBowelMeasurementSetAnswer,
+} from '../utils/bowelQuizMeasurementSet';
+import {
   COMPOSITE_FRAME_SLOTS,
   getCompleteCompositeFrameTargets,
   matchesConfiguredCompositeFrame,
@@ -2672,6 +2677,25 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       }
 
       const currentAnswer = answersByQuizKey[quiz.quizKey]?.[question.questionKey];
+      if (isBowelMeasurementSetQuestion(question)) {
+        const currentEntries = getBowelMeasurementSetEntries(plainObject(currentAnswer).measurements);
+        const appended = appendBowelMeasurementSetAnswer(question, currentEntries, result.answer);
+        if (!appended.ok) {
+          if (!options.silent) uiNotificationService.show({
+            title: 'Bowel measurement set',
+            message: appended.reason || 'Cannot add measurement.',
+            type: 'warning', duration: 4500,
+          });
+          return;
+        }
+        setAnswer(quiz.quizKey, question, { measurements: appended.entries });
+        if (!options.silent) uiNotificationService.show({
+          title: 'Bowel measurement set',
+          message: `Captured ${appended.entries?.length} / ${question.answerConfig?.measurementSet?.requiredCount} measurements.`,
+          type: 'success', duration: 3000,
+        });
+        return;
+      }
 
       setAnswer(quiz.quizKey, question, setObjectAnswerPart(currentAnswer, result.answer));
 
@@ -3570,6 +3594,48 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       }
 
       const answer = result.answer;
+      if (isBowelMeasurementSetQuestion(question)) {
+        const latest = authoringQuestionsRef.current.find(
+          item => item.questionKey === question.questionKey
+        ) || question;
+        const latestConfig = plainObject(latest.answerConfig);
+        const previous = getBowelMeasurementSetEntries(latestConfig.goldMeasurements);
+        const appended = appendBowelMeasurementSetAnswer(latest, previous, answer);
+        if (!appended.ok) throw new Error(appended.reason || 'Cannot add BWT gold measurement.');
+        const set = plainObject(latestConfig.measurementSet);
+        const nextSet = {
+          ...set,
+          referenceTarget: appended.referenceTarget,
+          measurementTarget: cleanString(set.measurementTarget || answer.measurementType),
+          ...(set.orientation === 'longitudinal' && appended.axis
+            ? { longitudinalAxisWorld: appended.axis }
+            : {}),
+        };
+        updateAuthoringQuestion(question.questionKey, current => ({
+          ...current,
+          viewerTarget: appended.referenceTarget,
+          answerConfig: {
+            ...plainObject(current.answerConfig),
+            goldMeasurements: appended.entries,
+            goldMeasurement: appended.entries[0],
+            goldValue: appended.entries[0]?.value,
+            measurementType: nextSet.measurementTarget,
+            unit: 'mm',
+            measurementSet: nextSet,
+          },
+          scoringConfig: {
+            ...plainObject(current.scoringConfig),
+            absoluteTolerance: plainObject(current.scoringConfig).absoluteTolerance ?? '',
+            toleranceUnit: 'mm',
+          },
+        }));
+        if (!options.silent) uiNotificationService.show({
+          title: 'Bowel gold measurements',
+          message: `Captured ${appended.entries?.length} / ${set.requiredCount} reference calipers.`,
+          type: 'success', duration: 3000,
+        });
+        return;
+      }
       // Quiz metadata must never stand in for the actual measurement label.
       if (!cleanString(answer.reviewPayload?.label)) {
         throw new Error('Label the measurement in the viewer before capturing a gold answer.');
