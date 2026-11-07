@@ -991,8 +991,9 @@ function modeFactory({ modeConfiguration }) {
   let _directionalMeasurementRefreshTimer: number | null = null;
   const _handledCompletedAnnotationIds = new Set<string>();
   let _educationUnsavedGuard: ReturnType<typeof createEducationUnsavedWorkGuard> | null = null;
-  let _educationSaveSnapshot: number | null = null;
-  let _educationSaveStartHandler: null | (() => void) = null;
+  const _educationSaveSnapshots = new Map<string, number>();
+  let _educationSaveStartHandler: null | ((event: Event) => void) = null;
+  let _educationMeasurementDeletedHandler: null | (() => void) = null;
   let _educationSaveResultHandler: null | ((event: Event) => void) = null;
   let restoreConsoleWarn: null | (() => void) = null;
   let removeARUSRegionPixelSpacingProvider: null | (() => void) = null;
@@ -1009,18 +1010,26 @@ function modeFactory({ modeConfiguration }) {
     onModeEnter: function ({ servicesManager, extensionManager, commandsManager }: withAppTypes) {
       if (shouldProtectEducationMeasurementsFromUrl()) {
         _educationUnsavedGuard = createEducationUnsavedWorkGuard(window);
-        _educationSaveStartHandler = () => {
-          _educationSaveSnapshot = _educationUnsavedGuard?.beginSave() ?? null;
+        _educationMeasurementDeletedHandler = () => _educationUnsavedGuard?.markChanged('measurements');
+        _educationSaveStartHandler = (event: Event) => {
+          const { requestId, source } = (event as CustomEvent)?.detail || {};
+          if (typeof requestId !== 'string' || source !== 'measurements') return;
+          _educationSaveSnapshots.set(requestId, _educationUnsavedGuard?.beginSave(source) ?? 0);
         };
         _educationSaveResultHandler = (event: Event) => {
-          const succeeded = (event as CustomEvent)?.detail?.succeeded === true;
-          if (_educationSaveSnapshot !== null) {
-            _educationUnsavedGuard?.acknowledgeSave(_educationSaveSnapshot, succeeded);
+          const { requestId, source, succeeded } = (event as CustomEvent)?.detail || {};
+          if (typeof requestId !== 'string' || source !== 'measurements') return;
+          const snapshot = _educationSaveSnapshots.get(requestId);
+          _educationSaveSnapshots.delete(requestId);
+          if (snapshot !== undefined) {
+            _educationUnsavedGuard?.acknowledgeSave(source, snapshot, succeeded === true);
           }
-          _educationSaveSnapshot = null;
         };
         window.addEventListener('ar:education-measurements-save-start', _educationSaveStartHandler);
         window.addEventListener('ar:education-measurements-save-result', _educationSaveResultHandler);
+        // Deletions originate in the AR Measurements panel, not Cornerstone
+        // annotation-completed or annotation-modified events.
+        window.addEventListener('ar:education-measurement-deleted', _educationMeasurementDeletedHandler);
       }
 
       // Suppress repeated per-frame US region calibration warning
@@ -1114,8 +1123,8 @@ function modeFactory({ modeConfiguration }) {
         );
 
         if (annotationId && isPersistedMeasurementEdit) {
-          if (!isHydratedSavedWorkflowAnnotation(annotationId, sourceAnnotation) ||
-              !sourceAnnotation?.data?.arMeasurementReadOnly) {
+          if (!sourceAnnotation?.data?.arMeasurementReadOnly &&
+              !isViewerMeasurementReadOnlyFromUrl()) {
             _educationUnsavedGuard?.markChanged();
           }
           commandsManager.runCommand('markViewerMeasurementModifiedInSession', {
@@ -1400,7 +1409,11 @@ function modeFactory({ modeConfiguration }) {
       // Cleanup must precede other mode teardown, including failed transitions.
       _educationUnsavedGuard?.dispose();
       _educationUnsavedGuard = null;
-      _educationSaveSnapshot = null;
+      _educationSaveSnapshots.clear();
+      if (_educationMeasurementDeletedHandler) {
+        window.removeEventListener('ar:education-measurement-deleted', _educationMeasurementDeletedHandler);
+        _educationMeasurementDeletedHandler = null;
+      }
       if (_educationSaveStartHandler) {
         window.removeEventListener('ar:education-measurements-save-start', _educationSaveStartHandler);
         _educationSaveStartHandler = null;
