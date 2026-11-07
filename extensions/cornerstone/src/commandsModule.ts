@@ -15018,6 +15018,53 @@ function commandsModule({
         answer,
       };
     },
+    captureBowelQuizLumenCenter: async () => {
+      actions.releaseViewerQuizDrawingTool();
+      const activeViewportId = viewportGridService.getActiveViewportId();
+      const viewport = cornerstoneViewportService.getCornerstoneViewport(activeViewportId);
+      if (!viewport) return { ok: false, reason: 'viewport-not-found' };
+      const displaySet = getActiveViewportDisplaySet({
+        viewportGridService, displaySetService, viewportId: activeViewportId,
+      });
+      const captured = await captureNextViewerClickPoint({
+        viewport, displaySet, viewportId: activeViewportId,
+      });
+      if (!captured?.ok || captured?.answer?.point?.coordinateSpace !== 'world') {
+        return captured?.ok
+          ? { ok: false, reason: 'no-calibrated-world-position' }
+          : captured;
+      }
+      const target = captured.answer.viewerTarget || {};
+      const imageId = getCurrentViewportImageInfo(viewport).imageId;
+      if (!imageId || imageId !== target.referencedImageId) {
+        return { ok: false, reason: 'frame-changed-during-capture' };
+      }
+      const point = captured.answer.point;
+      const pseudoMeasurement = {
+        referencedImageId: imageId,
+        SOPInstanceUID: target.sopInstanceUID,
+        referenceSeriesUID: target.seriesInstanceUID,
+        displaySetInstanceUID: target.displaySetInstanceUID,
+      };
+      const evidence = getBowelQuizCalibratedPointContext({
+        viewport, displaySetService, measurement: pseudoMeasurement,
+        points: [[point.x, point.y, point.z]],
+      });
+      if (!evidence || evidence.physicalPoints.length !== 1) {
+        return { ok: false, reason: 'lumen-centre-physical-calibration-unavailable' };
+      }
+      return {
+        ok: true,
+        answer: {
+          ...captured.answer,
+          physicalPoint: evidence.physicalPoints[0],
+          spatialCalibration: {
+            pixelSpacing: evidence.pixelSpacing,
+            calibrationSource: evidence.calibrationSource,
+          },
+        },
+      };
+    },
     captureViewerQuizPointAnswer: async () => {
       actions.releaseViewerQuizDrawingTool();
 
@@ -16546,6 +16593,9 @@ function commandsModule({
     },
     getCurrentViewerQuizFrameAnswer: {
       commandFn: actions.getCurrentViewerQuizFrameAnswer,
+    },
+    captureBowelQuizLumenCenter: {
+      commandFn: actions.captureBowelQuizLumenCenter,
     },
     captureViewerQuizPointAnswer: {
       commandFn: actions.captureViewerQuizPointAnswer,
