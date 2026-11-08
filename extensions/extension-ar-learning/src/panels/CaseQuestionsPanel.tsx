@@ -2753,6 +2753,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         // Composite results require several contours; the explicit result
         // action captures the finished calculation, not intermediate drawings.
         const measurementKind = cleanString(plainObject(question.answerConfig).measurementKind);
+        // Bowel-set calipers are captured explicitly after they are labelled.
+        // The annotation-added event can run before measurement state settles.
+        if (isBowelMeasurementSetQuestion(question)) return;
         if (isGuidedQuizCompositeKind(measurementKind)) {
           // Never bind an incomplete contour/trace during annotation-created.
           // The educator explicitly accepts the completed derived result.
@@ -2773,7 +2776,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       if (!quiz || !question || question.type !== 'measurementNumeric') {
         return;
       }
-      if (isGuidedQuizCompositeKind(
+      if (isBowelMeasurementSetQuestion(question) || isGuidedQuizCompositeKind(
         cleanString(plainObject(question.answerConfig).measurementKind)
       )) {
         // Wait for an explicit completed composite/trace capture. A single
@@ -3754,7 +3757,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       if (options.silent) {
         console.warn('[CaseQuestionsPanel] automatic gold measurement capture failed:', error);
       }
-      // Automatic captures need educator-visible feedback too, not just a console warning.
+      // Bowel sets use the explicit capture button; do not surface a
+      // stale annotation-added event as an educator failure toast.
+      if (options.silent && isBowelMeasurementSetQuestion(question)) return;
       uiNotificationService.show({
         title: 'Quiz Authoring',
         message: `Measurement capture failed: ${error?.message || error}`,
@@ -5313,7 +5318,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                 <div className="font-semibold">
                   Bowel gold calipers: {goldBowelMeasurements.length} / {bowelSettings.requiredCount || 2}
                 </div>
-                <div className="mt-1">Capture separately labelled BWT calipers on one DICOM frame.</div>
+                <div className="mt-1">Draw a BWT Length caliper inside the ultrasound image region, label it, select it, then click “Add selected gold BWT caliper”. Add each caliper explicitly.</div>
                 {goldBowelMeasurements.map((entry, index) => (
                   <div key={entry.sourceAnnotationId || index} className="mt-1">
                     #{index + 1}: {entry.value} {entry.unit} · {entry.measurementType}
@@ -5321,7 +5326,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                 ))}
                 {bowelSettings.orientation === 'longitudinal' ? (
                   <div className="mt-1">
-                    Axis: {Array.isArray(bowelSettings.longitudinalAxisWorld)
+                    Axis: {Array.isArray(bowelSettings.longitudinalAxisPhysical)
                       ? 'derived from gold caliper positions' : 'capture two distinct gold calipers'}
                   </div>
                 ) : (
@@ -5334,10 +5339,10 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                         event.stopPropagation();
                         void captureBowelQuizLumenCenter(question);
                       }}>
-                      {Array.isArray(bowelSettings.lumenCenterWorld)
+                      {Array.isArray(bowelSettings.lumenCenterPhysical)
                         ? 'Replace lumen centre' : 'Capture lumen centre'}
                     </button>
-                    <span>{Array.isArray(bowelSettings.lumenCenterWorld)
+                    <span>{Array.isArray(bowelSettings.lumenCenterPhysical)
                       ? 'Centre captured' : 'Centre required for angular scoring'}</span>
                   </div>
                 )}
@@ -5388,6 +5393,8 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                 ? 'Capturing measurement…'
                 : cleanString(answerConfig.measurementKind) === 'ivcRapRvsp'
                   ? 'Accept IVC / RAP / RVSP gold answer'
+                : bowelSet
+                  ? 'Add selected gold BWT caliper'
                 : answerConfig.goldValue != null && answerConfig.goldValue !== ''
                   ? (cleanString(answerConfig.measurementKind) === 'lvSimpsonEF' || cleanString(answerConfig.measurementKind) === 'laVolumeBiplane') ? 'Replace gold answer with calculated result' : 'Replace gold answer with selected measurement'
                   : (cleanString(answerConfig.measurementKind) === 'lvSimpsonEF' || cleanString(answerConfig.measurementKind) === 'laVolumeBiplane') ? 'Use calculated result as gold answer' : bowelSet ? 'Add selected gold BWT caliper' : 'Use selected measurement as gold answer'}
