@@ -432,6 +432,32 @@ function plainObject(value: any) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
 }
 
+/** Minimum pairwise radial separation (degrees), matching FormAPI geometry. */
+function getBowelGoldAngularSeparation(entries: any[], lumenCenter: any): number | null {
+  if (!Array.isArray(lumenCenter) || lumenCenter.length !== 3 ||
+      !lumenCenter.every(Number.isFinite) || entries.length < 2) return null;
+  const vectors = entries.map(entry => {
+    const points = plainObject(entry.quizSpatialEvidence).physicalPoints;
+    if (!Array.isArray(points) || points.length !== 2 ||
+        points.some(point => !Array.isArray(point) || point.length !== 3 ||
+          !point.every(Number.isFinite))) return null;
+    return lumenCenter.map((center, i) => (points[0][i] + points[1][i]) / 2 - center);
+  });
+  if (vectors.some(vector => !vector)) return null;
+  let separation = Infinity;
+  for (let i = 0; i < vectors.length; i++) {
+    for (let j = i + 1; j < vectors.length; j++) {
+      const a = vectors[i], b = vectors[j];
+      const normA = Math.hypot(...a), normB = Math.hypot(...b);
+      if (!normA || !normB) return null;
+      const dot = a.reduce((total, v, k) => total + v * b[k], 0);
+      const angle = Math.acos(Math.min(1, Math.max(-1, dot / (normA * normB)))) * 180 / Math.PI;
+      separation = Math.min(separation, angle);
+    }
+  }
+  return Number.isFinite(separation) ? separation : null;
+}
+
 function getNestedViewerTarget(value: any) {
   const source = plainObject(value);
   const placedMarker = plainObject(source.placedMarker);
@@ -5414,6 +5440,13 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                       : !goldBowelMeasurements.length
                         ? 'Record at least one gold BWT caliper first; centre capture is currently disabled.'
                         : 'Click, then select the centre in the image; press Esc to cancel.'}</span>
+                    {getBowelGoldAngularSeparation(goldBowelMeasurements, bowelSettings.lumenCenterPhysical) !== null ? (
+                      <span className="text-purple-100">
+                        Minimum gold radial-angle separation: {getBowelGoldAngularSeparation(
+                          goldBowelMeasurements, bowelSettings.lumenCenterPhysical
+                        )?.toFixed(1)}° (required: {bowelSettings.minimumSeparationDegrees || 90}°)
+                      </span>
+                    ) : null}
                   </div>
                 )}
               </div>
