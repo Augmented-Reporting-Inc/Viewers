@@ -16151,7 +16151,8 @@ function commandsModule({
           // This guard is narrowly scoped to the opt-in quiz-caliper save path.
           if (quizSpatialEvidenceByAnnotationId !== null &&
               (!seriesDoc?._id || seriesDoc.isLearnerCopy !== true ||
-                !isLearnerCopyOnSaveTarget(saveTarget) ||
+                (saveTarget.baseSeriesId &&
+                  String(seriesDoc._id) === String(saveTarget.baseSeriesId)) ||
                 (saveTarget.learnerSeriesId &&
                   String(seriesDoc._id) !== String(saveTarget.learnerSeriesId)))) {
             throw new Error('BWT quiz measurements must be saved to the learner\'s Series copy.');
