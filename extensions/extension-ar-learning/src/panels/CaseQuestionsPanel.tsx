@@ -37,6 +37,7 @@ import {
 } from '../utils/compositeFrameTargets';
 
 const AR_QUIZ_MEASUREMENT_ADDED_EVENT = 'ar-learning:quiz-measurement-added';
+const AR_QUIZ_MEASUREMENT_LABELLED_EVENT = 'ar-learning:quiz-measurement-labelled';
 const AR_LV_SIMPSON_CAPTURE_REQUESTED_EVENT = 'ar-measurements:lv-simpson-capture-requested';
 const AR_VIEWER_QUIZ_AUTHORING_SAVED_EVENT = 'ar:viewer-quiz-authoring-saved';
 function reportEducationChange(source: string) {
@@ -2758,6 +2759,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     function handleQuizMeasurementAdded(event: Event) {
       const detail = (event as CustomEvent)?.detail || {};
       const measurementId = cleanString(detail.measurementId);
+      const labelCompleted = event.type === AR_QUIZ_MEASUREMENT_LABELLED_EVENT;
 
       if (!measurementId || !activeQuestionKey) {
         return;
@@ -2818,6 +2820,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
             .then(captureQueuedCaliper, captureQueuedCaliper);
           return;
         }
+        if (labelCompleted) return;
         if (isGuidedQuizCompositeKind(measurementKind)) {
           // Never bind an incomplete contour/trace during annotation-created.
           // The educator explicitly accepts the completed derived result.
@@ -2831,6 +2834,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         return;
       }
 
+      if (labelCompleted) return;
       const [quizKey, questionKey] = activeQuestionKey.split(':');
       const quiz = payload?.quizzes?.find(item => item.quizKey === quizKey);
       const question = quiz?.questions?.find(item => item.questionKey === questionKey);
@@ -2853,9 +2857,11 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     }
 
     window.addEventListener(AR_QUIZ_MEASUREMENT_ADDED_EVENT, handleQuizMeasurementAdded);
+    window.addEventListener(AR_QUIZ_MEASUREMENT_LABELLED_EVENT, handleQuizMeasurementAdded);
 
     return () => {
       window.removeEventListener(AR_QUIZ_MEASUREMENT_ADDED_EVENT, handleQuizMeasurementAdded);
+      window.removeEventListener(AR_QUIZ_MEASUREMENT_LABELLED_EVENT, handleQuizMeasurementAdded);
     };
   }, [activeQuestionKey, authoringMode, authoringDefinition, authoringSaving, payload, answersByQuizKey]);
 
