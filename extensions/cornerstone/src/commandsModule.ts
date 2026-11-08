@@ -14960,18 +14960,22 @@ function commandsModule({
 
       const { learnerSeriesDoc, baseSeriesDoc } = await getViewerQuizMeasurementSeriesDocs();
 
-      const learnerAnnotation =
-        findViewerQuizMeasurementAnnotationInSeriesDocs(learnerMeasurement, [
-          learnerSeriesDoc,
-          baseSeriesDoc,
-        ]) || getViewerQuizMeasurementAnnotationFromService(learnerMeasurement);
-      // BWT gold belongs to the quiz definition, never the Series document.
-      // The generic comparison remains available for other measurement types.
-      const embeddedGoldAnnotation = buildViewerQuizGoldBwtDisplaySource(rubricMeasurement);
+      // Opt-in BWT comparisons use two separate authorities: learner-copy
+      // Series for learner evidence and versioned quiz JSON for educator gold.
       const isBowelGoldReference =
         String(rubricMeasurement?.measurementKind || '') === 'length' &&
         /BWT/i.test(String(rubricMeasurement?.measurementType || '')) &&
         !!rubricMeasurement?.quizSpatialEvidence;
+      const learnerAnnotation = isBowelGoldReference
+        ? (learnerSeriesDoc?.isLearnerCopy === true
+          ? findViewerQuizMeasurementAnnotationInSeriesDocs(
+              learnerMeasurement, [learnerSeriesDoc]
+            )
+          : null)
+        : findViewerQuizMeasurementAnnotationInSeriesDocs(learnerMeasurement, [
+            learnerSeriesDoc, baseSeriesDoc,
+          ]) || getViewerQuizMeasurementAnnotationFromService(learnerMeasurement);
+      const embeddedGoldAnnotation = buildViewerQuizGoldBwtDisplaySource(rubricMeasurement);
       const persistedRubricAnnotation = isBowelGoldReference ? null :
         findViewerQuizMeasurementAnnotationInSeriesDocs(rubricMeasurement, [
           baseSeriesDoc,
