@@ -1970,6 +1970,55 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
   const [capturingAuthoringKey, setCapturingAuthoringKey] = useState('');
   const [authoringMeasurementDomain, setAuthoringMeasurementDomain] = useState('');
 
+  // Notify only on validation state transitions, never on every pointer move.
+  const bowelGoldValidationStatusRef = useRef<Record<string, string>>({});
+  useEffect(() => {
+    if (!authoringDefinition) {
+      bowelGoldValidationStatusRef.current = {};
+      return;
+    }
+    const nextStatuses: Record<string, string> = {};
+    for (const question of authoringQuestions) {
+      if (!isBowelMeasurementSetQuestion(question)) continue;
+      const validation = getBowelGoldValidation(question);
+      const key = question.questionKey;
+      nextStatuses[key] = validation.status;
+      const previous = bowelGoldValidationStatusRef.current[key];
+      if (validation.status === 'invalid' && previous !== 'invalid') {
+        uiNotificationService.show({
+          title: 'Invalid gold BWT measurements',
+          message: validation.message,
+          type: 'warning', duration: 5500,
+        });
+      } else if (validation.status === 'valid' && previous === 'invalid') {
+        uiNotificationService.show({
+          title: 'Gold BWT measurements valid',
+          message: validation.message,
+          type: 'success', duration: 3500,
+        });
+      }
+    }
+    bowelGoldValidationStatusRef.current = nextStatuses;
+  }, [authoringDefinition, authoringQuestions, uiNotificationService]);
+
+  function finishValidatedQuizAuthoring() {
+    const invalidQuestion = authoringQuestionsRef.current.find(question =>
+      isBowelMeasurementSetQuestion(question) &&
+      getBowelGoldValidation(question).status !== 'valid'
+    );
+    if (invalidQuestion) {
+      const validation = getBowelGoldValidation(invalidQuestion);
+      uiNotificationService.show({
+        title: 'Complete gold BWT measurements',
+        message: validation.message,
+        type: 'warning', duration: 5500,
+      });
+      return;
+    }
+    finishQuizAuthoring();
+  }
+
+
   const quizzes: QuizDefinition[] = useMemo(() => {
     return Array.isArray(payload?.quizzes) ? payload.quizzes : [];
   }, [payload]);
@@ -5977,7 +6026,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               type="button"
               className="rounded border border-gray-600 px-3 py-2 text-sm font-semibold text-gray-100 disabled:opacity-50"
               disabled={authoringSaving}
-              onClick={finishQuizAuthoring}
+              onClick={finishValidatedQuizAuthoring}
             >
               Finish / close
             </button>
