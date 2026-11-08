@@ -7192,6 +7192,20 @@ function buildViewerQuizGoldBwtDisplaySource(reference: any = {}) {
   };
 }
 
+/**
+ * Multi-BWT review must read verified learner evidence from the learner copy,
+ * not from a client-supplied annotation snapshot or the source teaching case.
+ */
+function findViewerQuizBowelLearnerAnnotation(reference: any, learnerSeriesDoc: any) {
+  if (learnerSeriesDoc?.isLearnerCopy !== true) return null;
+  const sourceId = getViewerQuizMeasurementSourceAnnotationId(reference);
+  if (!sourceId) return null;
+  const matches = getRequestedWorkflowAnnotations(
+    learnerSeriesDoc.MeasurementAnnotations
+  ).filter(item => getMeasurementAnnotationId(item) === sourceId);
+  return matches.length === 1 ? matches[0] : null;
+}
+
 function getViewerQuizMeasurementReferenceTarget(
   reference: any = {},
   annotationSnapshot: any = {}
@@ -14967,11 +14981,7 @@ function commandsModule({
         /BWT/i.test(String(rubricMeasurement?.measurementType || '')) &&
         !!rubricMeasurement?.quizSpatialEvidence;
       const learnerAnnotation = isBowelGoldReference
-        ? (learnerSeriesDoc?.isLearnerCopy === true
-          ? findViewerQuizMeasurementAnnotationInSeriesDocs(
-              learnerMeasurement, [learnerSeriesDoc]
-            )
-          : null)
+        ? findViewerQuizBowelLearnerAnnotation(learnerMeasurement, learnerSeriesDoc)
         : findViewerQuizMeasurementAnnotationInSeriesDocs(learnerMeasurement, [
             learnerSeriesDoc, baseSeriesDoc,
           ]) || getViewerQuizMeasurementAnnotationFromService(learnerMeasurement);
