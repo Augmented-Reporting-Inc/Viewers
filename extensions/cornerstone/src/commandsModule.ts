@@ -2188,6 +2188,14 @@ function hasViewerMeasurementSemanticLabel(measurement) {
 }
 
 function isPersistableViewerMeasurement(measurement) {
+  const identifier = getMeasurementAnnotationId(measurement);
+  // Temporary gold/comparison overlays must never enter Series annotations,
+  // even if a later save captures a Cornerstone/MeasurementService snapshot.
+  if (identifier.startsWith('ar-viewer-quiz-') ||
+      measurement?.workflow === 'viewerQuizGoldDisplay' ||
+      measurement?.metadata?.arMeasurementWorkflow === 'viewerQuizGoldDisplay') {
+    return false;
+  }
   return !!(
     measurement?.toolName === 'Length' ||
     isUltrasoundDirectionalViewerMeasurement(measurement) ||
