@@ -656,7 +656,7 @@ function getQuestionSelectionViewerTarget(
   viewerTarget: any,
   revealExactFrame = false
 ) {
-  if (question.type !== 'frameSelection' || revealExactFrame) {
+  if (question.type !== 'frameSelection' || revealExactFrame || !viewerTarget) {
     return viewerTarget;
   }
 
