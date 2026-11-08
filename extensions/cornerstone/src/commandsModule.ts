@@ -125,7 +125,7 @@ import { calculateLVSimpson } from '../../extension-ar-measurements/src/utils/lv
 import { getEchoAreaSlot } from '../../extension-ar-measurements/src/utils/echoAreaMeasurements';
 import { resolveViewerQuizCompositeResult, resolveViewerQuizLVSimpsonForStudy, isViewerQuizCompositeReviewCurrent } from '../../extension-ar-measurements/src/utils/viewerQuizCompositeResults';
 import { createGuidedMouseToolOwnership } from './utils/guidedMouseToolOwnership';
-import { calibrateUSContourPoints } from './utils/usRegionLengthCalibration';
+import { calibrateUSContourPoints, worldToImageIndex } from './utils/usRegionLengthCalibration';
 
 const { DefaultHistoryMemo } = csUtils.HistoryMemo;
 const toggleSyncFunctions = {
@@ -3310,30 +3310,51 @@ function getBowelQuizCalibratedPointContext({ viewport, displaySetService, measu
   if (!imageData || !Array.isArray(points) || !points.length ||
       points.some(p => !Array.isArray(p) || p.length !== 3 ||
         p.some(n => !Number.isFinite(Number(n))))) return reject('caliper-world-endpoints-missing');
-  let indexPoints;
+  // Try the viewport's native mapping, including the affine basis. Certain
+  // ultrasound StackViewports expose imageData without the vtk transform API;
+  // their BWT Length tool already uses worldToImageIndex from the DICOM
+  // imagePlaneModule for this same coordinate conversion.
+  const basis = [[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]];
+  const worldSamples = [...points, ...basis];
+  const toFiniteIndex = value =>
+    value && typeof value.length === 'number' && value.length >= 2 &&
+      [Number(value[0]), Number(value[1])].every(Number.isFinite)
+      ? [Number(value[0]), Number(value[1])] : null;
+  let transformed = null;
   try {
-    indexPoints = points.map(point =>
-      csUtils.transformWorldToIndex(imageData, point).map(Number)
+    const native = worldSamples.map(point =>
+      toFiniteIndex(csUtils.transformWorldToIndex(imageData, point))
     );
-  } catch { return reject('world-to-image-conversion-failed'); }
-  if (indexPoints.some(point => !Array.isArray(point) || point.length < 2 ||
-      !Number.isFinite(point[0]) || !Number.isFinite(point[1]) ||
-      (point[2] != null && !Number.isFinite(point[2])))) return reject('invalid-image-index-points');
-  // Record the exact world-to-image affine mapping used to link these
-  // physical indices to the saved caliper's world-space endpoints.
-  let affine;
-  try {
-    const samples = [[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]].map(world =>
-      csUtils.transformWorldToIndex(imageData, world)
+    if (native.every(Boolean)) transformed = native;
+  } catch {
+    // Use the same image-plane conversion as the existing native BWT
+    // calibration utility, not unscaled world coordinates.
+  }
+  if (!transformed) {
+    const plane = metaData.get?.('imagePlaneModule', imageInfo.imageId);
+    const validVector = value =>
+      value && typeof value.length === 'number' && value.length === 3 &&
+      Array.from(value).every(n => Number.isFinite(Number(n)));
+    if (!plane || !validVector(plane.imagePositionPatient) ||
+        !validVector(plane.rowCosines) || !validVector(plane.columnCosines)) {
+      return reject('world-to-image-conversion-failed-no-dicom-image-plane');
+    }
+    transformed = worldSamples.map(point =>
+      toFiniteIndex(worldToImageIndex(plane, point))
     );
-    const base = samples[0];
-    affine = [0, 1].map(axis => [
-      Number(samples[1][axis] - base[axis]),
-      Number(samples[2][axis] - base[axis]),
-      Number(samples[3][axis] - base[axis]),
-      Number(base[axis]),
-    ]);
-  } catch { return reject('world-to-image-transform-unavailable'); }
+    if (transformed.some(point => !point)) {
+      return reject('world-to-image-conversion-failed-invalid-image-plane');
+    }
+  }
+  const indexPoints = transformed.slice(0, points.length);
+  const samples = transformed.slice(points.length);
+  const base = samples[0];
+  const affine = [0, 1].map(axis => [
+    samples[1][axis] - base[axis],
+    samples[2][axis] - base[axis],
+    samples[3][axis] - base[axis],
+    base[axis],
+  ]);
   if (affine.some(row => row.some(n => !Number.isFinite(n))) ||
       points.some((point, index) => affine.some((row, axis) =>
         Math.abs(row[0] * point[0] + row[1] * point[1] +
