@@ -7130,6 +7130,60 @@ function findViewerQuizMeasurementAnnotationInSeriesDocs(
   return bestMatch?.candidate || null;
 }
 
+/**
+ * The quiz definition exclusively owns educator multi-BWT gold geometry.
+ * Reconstruct a display-only Length annotation from that JSON, independently
+ * of any Series MeasurementAnnotations. No scoring/persistence uses this.
+ */
+function buildViewerQuizGoldBwtDisplaySource(reference: any = {}) {
+  const clean = (value: any) => String(value ?? '').trim();
+  const target = asViewerQuizPlainObject(reference?.viewerTarget);
+  const evidence = asViewerQuizPlainObject(reference?.quizSpatialEvidence);
+  const validPoint = (p: any) =>
+    Array.isArray(p) && p.length === 3 && p.every((n: any) =>
+      typeof n === 'number' && Number.isFinite(n));
+  const sourceAnnotationId = getViewerQuizMeasurementSourceAnnotationId(reference);
+  const points = evidence.worldPoints;
+  const frame = Number(target.frameNumber);
+  const value = Number(reference.value);
+  if (!sourceAnnotationId || reference.measurementKind !== 'length' ||
+      !/BWT/i.test(clean(reference.measurementType)) ||
+      clean(reference.unit).toLowerCase() !== 'mm' ||
+      !Number.isFinite(value) || value <= 0 ||
+      evidence.source !== 'dicom-calibrated-image-index-v1' ||
+      !Array.isArray(points) || points.length !== 2 ||
+      !points.every(validPoint) ||
+      !clean(target.studyInstanceUID) ||
+      !clean(target.seriesInstanceUID) ||
+      !clean(target.sopInstanceUID) ||
+      !clean(target.referencedImageId) ||
+      !Number.isSafeInteger(frame) || frame < 1) {
+    return null;
+  }
+  return {
+    annotationId: sourceAnnotationId,
+    uid: sourceAnnotationId,
+    // Explicitly a temporary display overlay, never a persisted measurement.
+    workflow: 'viewerQuizGoldDisplay',
+    toolName: 'Length',
+    label: clean(reference.measurementType),
+    measurementRole: clean(reference.measurementType),
+    StudyInstanceUID: clean(target.studyInstanceUID),
+    SeriesInstanceUID: clean(target.seriesInstanceUID),
+    SOPInstanceUID: clean(target.sopInstanceUID),
+    referencedImageId: clean(target.referencedImageId),
+    frameNumber: frame,
+    points: points.map((point: number[]) => [...point]),
+    measurements: {
+      value,
+      length: value,
+      unit: 'mm',
+      lengthUnit: 'mm',
+    },
+    isLocked: true,
+  };
+}
+
 function getViewerQuizMeasurementReferenceTarget(
   reference: any = {},
   annotationSnapshot: any = {}
@@ -14781,61 +14835,21 @@ function commandsModule({
           learnerSeriesDoc,
           baseSeriesDoc,
         ]) || getViewerQuizMeasurementAnnotationFromService(learnerMeasurement);
-      const persistedRubricAnnotation =
+      // BWT gold belongs to the quiz definition, never the Series document.
+      // The generic comparison remains available for other measurement types.
+      const embeddedGoldAnnotation = buildViewerQuizGoldBwtDisplaySource(rubricMeasurement);
+      const isBowelGoldReference =
+        String(rubricMeasurement?.measurementKind || '') === 'length' &&
+        /BWT/i.test(String(rubricMeasurement?.measurementType || '')) &&
+        !!rubricMeasurement?.quizSpatialEvidence;
+      const persistedRubricAnnotation = isBowelGoldReference ? null :
         findViewerQuizMeasurementAnnotationInSeriesDocs(rubricMeasurement, [
           baseSeriesDoc,
           learnerSeriesDoc,
         ]) || getViewerQuizMeasurementAnnotationFromService(rubricMeasurement);
-      // Multi-BWT educator gold entries retain their exact calibrated endpoint
-      // geometry in the quiz definition. A teaching-case Series document may not
-      // carry MeasurementAnnotations, so display a READ-ONLY gold overlay from
-      // this evidence if the canonical annotation is unavailable. Never use
-      // this reconstruction as learner scoring evidence or rewrite saved data.
-      const goldSpatialEvidence = asViewerQuizPlainObject(rubricMeasurement?.quizSpatialEvidence);
-      const goldWorldPoints = goldSpatialEvidence.worldPoints;
-      const goldTarget = asViewerQuizPlainObject(rubricMeasurement?.viewerTarget);
-      const validGoldPoint = (point: any) =>
-        Array.isArray(point) && point.length === 3 &&
-        point.every((value: any) => typeof value === 'number' && Number.isFinite(value));
-      const validGoldFrame = !!(
-        String(goldTarget.studyInstanceUID || '').trim() &&
-        String(goldTarget.seriesInstanceUID || '').trim() &&
-        String(goldTarget.sopInstanceUID || '').trim() &&
-        Number.isSafeInteger(Number(goldTarget.frameNumber)) &&
-        Number(goldTarget.frameNumber) >= 1
-      );
-      const goldImageReference = String(goldTarget.referencedImageId || '').trim();
+      const rubricAnnotation = isBowelGoldReference
+        ? embeddedGoldAnnotation : persistedRubricAnnotation;
       const goldSourceId = getViewerQuizMeasurementSourceAnnotationId(rubricMeasurement);
-      const isEmbeddedBowelGold = !!(
-        goldSourceId && validGoldFrame && goldImageReference &&
-        String(rubricMeasurement?.measurementKind || '') === 'length' &&
-        /BWT/i.test(String(rubricMeasurement?.measurementType || '')) &&
-        goldSpatialEvidence.source === 'dicom-calibrated-image-index-v1' &&
-        Array.isArray(goldWorldPoints) && goldWorldPoints.length === 2 &&
-        goldWorldPoints.every(validGoldPoint)
-      );
-      const embeddedGoldAnnotation = isEmbeddedBowelGold ? {
-        annotationId: goldSourceId,
-        uid: goldSourceId,
-        workflow: VIEWER_MEASUREMENTS_WORKFLOW,
-        toolName: 'Length',
-        label: String(rubricMeasurement.measurementType),
-        measurementRole: String(rubricMeasurement.measurementType),
-        StudyInstanceUID: String(goldTarget.studyInstanceUID),
-        SeriesInstanceUID: String(goldTarget.seriesInstanceUID),
-        SOPInstanceUID: String(goldTarget.sopInstanceUID),
-        referencedImageId: goldImageReference,
-        frameNumber: Number(goldTarget.frameNumber),
-        points: goldWorldPoints,
-        measurements: {
-          value: rubricMeasurement.value,
-          length: rubricMeasurement.value,
-          unit: 'mm',
-          lengthUnit: 'mm',
-        },
-        isLocked: true,
-      } : null;
-      const rubricAnnotation = persistedRubricAnnotation || embeddedGoldAnnotation;
 
       // Composite answers retain several source contour IDs rather than a
       // single drawable annotation. Resolve each exact persisted contour and
@@ -14933,8 +14947,7 @@ function commandsModule({
           questionKey,
           hasSourceId: !!goldSourceId,
           hasCalibratedGeometry: !!embeddedGoldAnnotation,
-          hasGoldFrame: validGoldFrame,
-          hasGoldImageReference: !!goldImageReference,
+          isBowelGoldReference,
           hasSeriesAnnotations: !!(learnerSeriesDoc?.MeasurementAnnotations || baseSeriesDoc?.MeasurementAnnotations),
         });
         return {
@@ -16001,6 +16014,17 @@ function commandsModule({
             (seriesDoc?.isLearnerCopy === true || seriesDoc?._id)
           ) {
             rememberArLearnerSeriesId(seriesDoc._id);
+          }
+
+          // Multi-BWT learner evidence is always owned by the learner's
+          // independent Series copy. Never allow fallback to the teaching case.
+          // This guard is narrowly scoped to the opt-in quiz-caliper save path.
+          if (quizSpatialEvidenceByAnnotationId !== null &&
+              (!seriesDoc?._id || seriesDoc.isLearnerCopy !== true ||
+                !isLearnerCopyOnSaveTarget(saveTarget) ||
+                (saveTarget.learnerSeriesId &&
+                  String(seriesDoc._id) !== String(saveTarget.learnerSeriesId)))) {
+            throw new Error('BWT quiz measurements must be saved to the learner\'s Series copy.');
           }
 
           const domain = inferDomainFromSeriesDoc(seriesDoc, explicitDomain);
