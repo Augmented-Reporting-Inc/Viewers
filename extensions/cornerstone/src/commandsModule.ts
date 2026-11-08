@@ -125,7 +125,7 @@ import { calculateLVSimpson } from '../../extension-ar-measurements/src/utils/lv
 import { getEchoAreaSlot } from '../../extension-ar-measurements/src/utils/echoAreaMeasurements';
 import { resolveViewerQuizCompositeResult, resolveViewerQuizLVSimpsonForStudy, isViewerQuizCompositeReviewCurrent } from '../../extension-ar-measurements/src/utils/viewerQuizCompositeResults';
 import { createGuidedMouseToolOwnership } from './utils/guidedMouseToolOwnership';
-import { calibrateUSContourPoints } from './utils/usRegionLengthCalibration';
+import { calibrateUSContourPoints, worldToImageIndex } from './utils/usRegionLengthCalibration';
 
 const { DefaultHistoryMemo } = csUtils.HistoryMemo;
 const toggleSyncFunctions = {
@@ -2188,6 +2188,14 @@ function hasViewerMeasurementSemanticLabel(measurement) {
 }
 
 function isPersistableViewerMeasurement(measurement) {
+  const identifier = getMeasurementAnnotationId(measurement);
+  // Temporary gold/comparison overlays must never enter Series annotations,
+  // even if a later save captures a Cornerstone/MeasurementService snapshot.
+  if (identifier.startsWith('ar-viewer-quiz-') ||
+      measurement?.workflow === 'viewerQuizGoldDisplay' ||
+      measurement?.metadata?.arMeasurementWorkflow === 'viewerQuizGoldDisplay') {
+    return false;
+  }
   return !!(
     measurement?.toolName === 'Length' ||
     isUltrasoundDirectionalViewerMeasurement(measurement) ||
@@ -3263,6 +3271,148 @@ function buildViewerQuizTargetFromMeasurement(measurement, displaySetService = n
       measurement?.referencedImageId || measurement?.metadata?.referencedImageId || '',
     frameNumber,
     frameIndex: frameNumber > 0 ? frameNumber - 1 : undefined,
+  };
+}
+
+/**
+ * Physical locations for bowel quiz calipers. Cornerstone world coordinates
+ * are NOT assumed to be millimetres. Transform them into image indices, then
+ * apply DICOM ultrasound-region / pixel calibration for that exact image.
+ * Return null if any part of that provenance is unavailable.
+ */
+function getBowelQuizCalibratedPointContext({ viewport, displaySetService, measurement, points, onFailure }) {
+  const reject = reason => {
+    onFailure?.(reason);
+    return null;
+  };
+  const imageInfo = getCurrentViewportImageInfo(viewport);
+  const sourceImageId = String(
+    measurement?.referencedImageId || measurement?.metadata?.referencedImageId || ''
+  );
+  if (!imageInfo.imageId) return reject('active-image-unavailable');
+  if (sourceImageId && imageInfo.imageId !== sourceImageId) {
+    // Loader URI equality is not DICOM identity. Match the same SOP/frame.
+    const currentSop = String(getSopInstanceIdFromImageId(imageInfo.imageId) || '');
+    const sourceSop = String(
+      measurement?.SOPInstanceUID || measurement?.metadata?.SOPInstanceUID ||
+      getSopInstanceIdFromImageId(sourceImageId) || ''
+    );
+    const sourceFrame = getFrameNumberFromReferencedImageId(sourceImageId);
+    const currentFrame = getFrameNumberFromReferencedImageId(imageInfo.imageId);
+    if (!currentSop || !sourceSop || currentSop !== sourceSop ||
+        !Number.isInteger(sourceFrame) || sourceFrame !== currentFrame) {
+      return reject('selected-caliper-is-not-on-the-active-dicom-frame');
+    }
+  } else if (!sourceImageId) {
+    const currentSop = String(getSopInstanceIdFromImageId(imageInfo.imageId) || '');
+    const measurementSop = String(
+      measurement?.SOPInstanceUID || measurement?.metadata?.SOPInstanceUID || ''
+    );
+    const measurementFrame = Number(measurement?.frameNumber || 1);
+    if (!currentSop || !measurementSop || currentSop !== measurementSop ||
+        measurementFrame !== getFrameNumberFromReferencedImageId(imageInfo.imageId)) {
+      return reject('selected-caliper-source-image-not-identified');
+    }
+  }
+  const imageData = viewport?.getImageData?.();
+  if (!imageData || !Array.isArray(points) || !points.length ||
+      points.some(p => !Array.isArray(p) || p.length !== 3 ||
+        p.some(n => !Number.isFinite(Number(n))))) return reject('caliper-world-endpoints-missing');
+  // Try the viewport's native mapping, including the affine basis. Certain
+  // ultrasound StackViewports expose imageData without the vtk transform API;
+  // their BWT Length tool already uses worldToImageIndex from the DICOM
+  // imagePlaneModule for this same coordinate conversion.
+  const basis = [[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]];
+  const worldSamples = [...points, ...basis];
+  const toFiniteIndex = value =>
+    value && typeof value.length === 'number' && value.length >= 2 &&
+      [Number(value[0]), Number(value[1])].every(Number.isFinite)
+      ? [Number(value[0]), Number(value[1])] : null;
+  let transformed = null;
+  try {
+    const native = worldSamples.map(point =>
+      toFiniteIndex(csUtils.transformWorldToIndex(imageData, point))
+    );
+    if (native.every(Boolean)) transformed = native;
+  } catch {
+    // Use the same image-plane conversion as the existing native BWT
+    // calibration utility, not unscaled world coordinates.
+  }
+  if (!transformed) {
+    const plane = metaData.get?.('imagePlaneModule', imageInfo.imageId);
+    const validVector = value =>
+      value && typeof value.length === 'number' && value.length === 3 &&
+      Array.from(value).every(n => Number.isFinite(Number(n)));
+    if (!plane || !validVector(plane.imagePositionPatient) ||
+        !validVector(plane.rowCosines) || !validVector(plane.columnCosines)) {
+      return reject('world-to-image-conversion-failed-no-dicom-image-plane');
+    }
+    transformed = worldSamples.map(point =>
+      toFiniteIndex(worldToImageIndex(plane, point))
+    );
+    if (transformed.some(point => !point)) {
+      return reject('world-to-image-conversion-failed-invalid-image-plane');
+    }
+  }
+  const indexPoints = transformed.slice(0, points.length);
+  const samples = transformed.slice(points.length);
+  const base = samples[0];
+  const affine = [0, 1].map(axis => [
+    samples[1][axis] - base[axis],
+    samples[2][axis] - base[axis],
+    samples[3][axis] - base[axis],
+    base[axis],
+  ]);
+  if (affine.some(row => row.some(n => !Number.isFinite(n))) ||
+      points.some((point, index) => affine.some((row, axis) =>
+        Math.abs(row[0] * point[0] + row[1] * point[1] +
+          row[2] * point[2] + row[3] - indexPoints[index][axis]) > 0.1
+      ))) return reject('world-to-image-transform-inconsistent');
+  const instance = getInstanceForViewerMeasurement(displaySetService, measurement);
+  const requestedSopInstance = String(measurement?.SOPInstanceUID || '').trim();
+  if (instance && requestedSopInstance &&
+      String(getSopInstanceIdFromSource(instance) || '').trim() !== requestedSopInstance) {
+    // Existing general-purpose lookup can fall back to the first instance.
+    // Physical quiz scoring must never inherit calibration from that fallback.
+    return reject('dicom-instance-calibration-mismatch');
+  }
+  const rawRegions = getUltrasoundRegionsFromSource(instance);
+  const regions = rawRegions.map(normalizeUltrasoundRegion).filter(Boolean);
+  // If the DICOM declares ultrasound regions but none are physically valid,
+  // never silently fall back to generic pixel spacing.
+  if (rawRegions.length && !regions.length) return reject('dicom-ultrasound-region-has-no-physical-calibration');
+  let spacing;
+  if (regions.length) {
+    // All points must be unambiguously located in the same calibrated region.
+    const candidates = regions.filter(region =>
+      [region.minX, region.maxX, region.minY, region.maxY].every(Number.isFinite) &&
+      indexPoints.every(point =>
+        point[0] >= region.minX && point[0] <= region.maxX &&
+        point[1] >= region.minY && point[1] <= region.maxY
+      )
+    );
+    if (candidates.length !== 1) return reject(
+      candidates.length === 0 ? 'caliper-outside-dicom-calibrated-ultrasound-region' :
+      'overlapping-dicom-ultrasound-calibration-regions'
+    );
+    spacing = candidates[0];
+  } else {
+    spacing = getCornerstonePixelSpacingMM(imageInfo.imageId);
+  }
+  if (!spacing || !(spacing.column > 0) || !(spacing.row > 0) ||
+      !Number.isFinite(spacing.column) || !Number.isFinite(spacing.row)) {
+    return reject('physical-pixel-spacing-unavailable');
+  }
+  return {
+    source: 'dicom-calibrated-image-index-v1',
+    calibrationSource: spacing.source,
+    pixelSpacing: { row: spacing.row, column: spacing.column },
+    worldPoints: points.map(point => [...point]),
+    worldToImageAffine: affine,
+    indexPoints: indexPoints.map(point => [point[0], point[1], 0]),
+    physicalPoints: indexPoints.map(point => [
+      point[0] * spacing.column, point[1] * spacing.row, 0,
+    ]),
   };
 }
 
@@ -6621,6 +6771,101 @@ function appendViewerQuizToleranceCircle({ viewport, point, radius, radiusUnit =
   return true;
 }
 
+/**
+ * Educator-only reference-location circle for multiple BWT gold calipers.
+ * `radiusMm` is calibrated millimetres, not Cornerstone world coordinates.
+ * Derive a true circle in image-physical space from the saved 2x4
+ * world-to-image affine and DICOM pixel spacing. Project each point to the
+ * current viewport; this handles unequal row/column spacing and rotation.
+ * This visual guide does NOT participate in multi-BWT scoring.
+ */
+function appendViewerQuizBowelGoldRadiusOutline({
+  viewport, quizSpatialEvidence, radiusMm, focused = false,
+}: {
+  viewport: any;
+  quizSpatialEvidence: any;
+  radiusMm: number;
+  focused?: boolean;
+}) {
+  const element = viewport?.element;
+  const evidence = quizSpatialEvidence;
+  const worldPoints = evidence?.worldPoints;
+  const affine = evidence?.worldToImageAffine;
+  const spacing = evidence?.pixelSpacing;
+  const rowMm = Number(spacing?.row);
+  const columnMm = Number(spacing?.column);
+  const radius = Number(radiusMm);
+  const point3 = (p: any) =>
+    Array.isArray(p) && p.length === 3 &&
+    p.every((v: any) => typeof v === 'number' && Number.isFinite(v));
+  if (!element || typeof viewport.worldToCanvas !== 'function' ||
+      !(radius > 0) || !Number.isFinite(radius) ||
+      !Number.isFinite(rowMm) || !Number.isFinite(columnMm) ||
+      !(rowMm > 0) || !(columnMm > 0) ||
+      !Array.isArray(worldPoints) || worldPoints.length !== 2 ||
+      !worldPoints.every(point3) ||
+      !Array.isArray(affine) || affine.length !== 2 ||
+      affine.some((row: any) => !Array.isArray(row) || row.length !== 4 ||
+        row.some((v: any) => typeof v !== 'number' || !Number.isFinite(v)))) {
+    return false;
+  }
+  const axisI = affine[0].slice(0, 3);
+  const axisJ = affine[1].slice(0, 3);
+  const dot3 = (a: number[], b: number[]) =>
+    a.reduce((sum, value, i) => sum + value * b[i], 0);
+  const aa = dot3(axisI, axisI);
+  const ab = dot3(axisI, axisJ);
+  const bb = dot3(axisJ, axisJ);
+  const determinant = aa * bb - ab * ab;
+  if (!Number.isFinite(determinant) || determinant <= 1e-12) return false;
+  const midpoint = worldPoints[0].map((value: number, i: number) =>
+    (value + worldPoints[1][i]) / 2);
+  const canvasPoints: Array<[number, number]> = [];
+  for (let step = 0; step < 64; step++) {
+    const theta = 2 * Math.PI * step / 64;
+    const dx = radius * Math.cos(theta) / columnMm;
+    const dy = radius * Math.sin(theta) / rowMm;
+    const a = (bb * dx - ab * dy) / determinant;
+    const b = (aa * dy - ab * dx) / determinant;
+    const world = midpoint.map((value: number, i: number) =>
+      value + a * axisI[i] + b * axisJ[i]);
+    let canvas: number[];
+    try { canvas = viewport.worldToCanvas(world); } catch { return false; }
+    if (!Array.isArray(canvas) || canvas.length < 2 ||
+        !Number.isFinite(canvas[0]) || !Number.isFinite(canvas[1])) {
+      return false;
+    }
+    canvasPoints.push([canvas[0], canvas[1]]);
+  }
+  const previousPosition = element.style.position;
+  if (!previousPosition || previousPosition === 'static') {
+    element.style.position = 'relative';
+  }
+  const ns = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(ns, 'svg');
+  svg.classList.add(VIEWER_QUIZ_MARKER_OVERLAY_CLASS);
+  svg.dataset.reviewState = 'bowel-gold-reference-radius';
+  svg.setAttribute('width', String(element.clientWidth));
+  svg.setAttribute('height', String(element.clientHeight));
+  svg.setAttribute('viewBox', `0 0 ${element.clientWidth} ${element.clientHeight}`);
+  svg.setAttribute('aria-label', `Gold BWT reference radius ${radius} mm, visual guide only`);
+  svg.style.position = 'absolute';
+  svg.style.left = '0';
+  svg.style.top = '0';
+  svg.style.pointerEvents = 'none';
+  svg.style.zIndex = '29';
+  const outline = document.createElementNS(ns, 'path');
+  outline.setAttribute('d', canvasPoints.map((p, i) =>
+    `${i === 0 ? 'M' : 'L'}${p[0].toFixed(2)} ${p[1].toFixed(2)}`).join(' ') + ' Z');
+  outline.setAttribute('stroke', focused ? '#fbbf24' : '#c084fc');
+  outline.setAttribute('stroke-width', focused ? '2.5' : '2');
+  outline.setAttribute('stroke-dasharray', '5 3');
+  outline.setAttribute('fill', focused ? 'rgba(251, 191, 36, 0.09)' : 'rgba(192, 132, 252, 0.06)');
+  svg.appendChild(outline);
+  element.appendChild(svg);
+  return true;
+}
+
 function getViewerQuizMeasurementPoints(value = {}) {
   const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
   const reviewPayload =
@@ -6988,6 +7233,74 @@ function findViewerQuizMeasurementAnnotationInSeriesDocs(
   return bestMatch?.candidate || null;
 }
 
+/**
+ * The quiz definition exclusively owns educator multi-BWT gold geometry.
+ * Reconstruct a display-only Length annotation from that JSON, independently
+ * of any Series MeasurementAnnotations. No scoring/persistence uses this.
+ */
+function buildViewerQuizGoldBwtDisplaySource(reference: any = {}) {
+  const clean = (value: any) => String(value ?? '').trim();
+  const target = asViewerQuizPlainObject(reference?.viewerTarget);
+  const evidence = asViewerQuizPlainObject(reference?.quizSpatialEvidence);
+  const validPoint = (p: any) =>
+    Array.isArray(p) && p.length === 3 && p.every((n: any) =>
+      typeof n === 'number' && Number.isFinite(n));
+  const sourceAnnotationId = getViewerQuizMeasurementSourceAnnotationId(reference);
+  const points = evidence.worldPoints;
+  const frame = Number(target.frameNumber);
+  const value = Number(reference.value);
+  if (!sourceAnnotationId || reference.measurementKind !== 'length' ||
+      !/BWT/i.test(clean(reference.measurementType)) ||
+      clean(reference.unit).toLowerCase() !== 'mm' ||
+      !Number.isFinite(value) || value <= 0 ||
+      evidence.source !== 'dicom-calibrated-image-index-v1' ||
+      !Array.isArray(points) || points.length !== 2 ||
+      !points.every(validPoint) ||
+      !clean(target.studyInstanceUID) ||
+      !clean(target.seriesInstanceUID) ||
+      !clean(target.sopInstanceUID) ||
+      !clean(target.referencedImageId) ||
+      !Number.isSafeInteger(frame) || frame < 1) {
+    return null;
+  }
+  return {
+    annotationId: sourceAnnotationId,
+    uid: sourceAnnotationId,
+    // Explicitly a temporary display overlay, never a persisted measurement.
+    workflow: 'viewerQuizGoldDisplay',
+    toolName: 'Length',
+    label: clean(reference.measurementType),
+    measurementRole: clean(reference.measurementType),
+    StudyInstanceUID: clean(target.studyInstanceUID),
+    SeriesInstanceUID: clean(target.seriesInstanceUID),
+    SOPInstanceUID: clean(target.sopInstanceUID),
+    referencedImageId: clean(target.referencedImageId),
+    frameNumber: frame,
+    points: points.map((point: number[]) => [...point]),
+    measurements: {
+      value,
+      length: value,
+      unit: 'mm',
+      lengthUnit: 'mm',
+    },
+    isLocked: true,
+  };
+}
+
+/**
+ * Multi-BWT review must read verified learner evidence from the learner copy,
+ * not from a client-supplied annotation snapshot or the source teaching case.
+ */
+function findViewerQuizBowelLearnerAnnotation(reference: any, learnerSeriesDoc: any) {
+  if (learnerSeriesDoc?.isLearnerCopy !== true) return null;
+  const sourceId = getViewerQuizMeasurementSourceAnnotationId(reference);
+  if (!sourceId) return null;
+  const matches = getRequestedWorkflowAnnotations(
+    learnerSeriesDoc.MeasurementAnnotations
+  ).filter(item => getMeasurementAnnotationId(item) === sourceId);
+  return matches.length === 1 ? matches[0] : null;
+}
+
 function getViewerQuizMeasurementReferenceTarget(
   reference: any = {},
   annotationSnapshot: any = {}
@@ -7073,6 +7386,10 @@ const VIEWER_QUIZ_MEASUREMENT_COMPARISON_STYLES = Object.freeze({
     color: 'rgb(192, 132, 252)',
     background: 'rgba(59, 7, 100, 0.9)',
     lineDash: '5,3',
+  }),
+  rubricFocused: buildViewerQuizMeasurementStateStyle({
+    color: 'rgb(251, 191, 36)',
+    background: 'rgba(92, 53, 5, 0.9)',
   }),
 });
 
@@ -8616,6 +8933,11 @@ function commandsModule({
           const nextLabel = options.normalizeLabel ? options.normalizeLabel(label) : label;
           finishPendingLength();
           measurementService.update(uid, { ...measurement, label: nextLabel }, true);
+          if (measurement?.toolName === 'Length' && String(nextLabel).trim()) {
+            window.dispatchEvent(new CustomEvent('ar-learning:quiz-measurement-labelled', {
+              detail: { measurementId: uid },
+            }));
+          }
           return nextLabel;
         }
         discardPendingLength();
@@ -8634,6 +8956,11 @@ function commandsModule({
         const nextLabel = options.normalizeLabel ? options.normalizeLabel(val) : val;
         finishPendingLength();
         measurementService.update(uid, { ...measurement, label: nextLabel }, true);
+        if (measurement?.toolName === 'Length' && String(nextLabel).trim()) {
+          window.dispatchEvent(new CustomEvent('ar-learning:quiz-measurement-labelled', {
+            detail: { measurementId: uid },
+          }));
+        }
         return nextLabel;
       }
 
@@ -14611,6 +14938,192 @@ function commandsModule({
         ok: true,
       };
     },
+    // Educator multi-BWT authoring: the quiz definition is the ONLY gold
+    // source. Do not fetch or write a Series document in this display path.
+    // Quiz-authored multiple BWT gold is a self-contained, read-only display
+    // source. Display the full set together; selection only changes emphasis.
+    // Never fetch Series annotations or persist these temporary overlays.
+    showViewerQuizAuthoringGoldCaliper: async ({
+      goldMeasurements = [],
+      goldMeasurement = null,
+      highlightedSourceAnnotationId = '',
+      referenceRadiusMm = null,
+      questionKey = '',
+    } = {}) => {
+      const quizAuthoringFlag = String(getViewerUrlSearchParams().get('arQuizAuthoring') || '').toLowerCase();
+      if (!['1', 'true', 'yes', 'y'].includes(quizAuthoringFlag)) {
+        return { ok: false, rubricRendered: false, reason: 'gold-authoring-only' };
+      }
+      clearViewerQuizMeasurementComparisonAnnotations();
+      clearAllViewerQuizMarkerOverlays();
+
+      const saved = Array.isArray(goldMeasurements) && goldMeasurements.length
+        ? goldMeasurements
+        : goldMeasurement ? [goldMeasurement] : [];
+      if (!saved.length) {
+        return { ok: false, rubricRendered: false, reason: 'no-quiz-gold-calipers' };
+      }
+      const sources = saved.map(buildViewerQuizGoldBwtDisplaySource);
+      if (sources.some(item => !item)) {
+        console.warn('[ViewerQuiz] quiz gold set has incomplete saved geometry', {
+          questionKey,
+          count: saved.length,
+          missingGeometryIndices: sources.flatMap((item, i) => item ? [] : [i + 1]),
+        });
+        return { ok: false, rubricRendered: false, reason: 'quiz-gold-geometry-incomplete' };
+      }
+      // A multi-BWT question must use one identified SOP/frame. Fail closed
+      // instead of placing an overlay on a different image.
+      const frameKey = (source: any) => [
+        source.StudyInstanceUID,
+        source.SeriesInstanceUID,
+        source.SOPInstanceUID,
+        source.frameNumber,
+      ].join('|');
+      if (new Set(sources.map(frameKey)).size !== 1) {
+        return { ok: false, rubricRendered: false, reason: 'quiz-gold-frame-mismatch' };
+      }
+      const selectedSource = String(highlightedSourceAnnotationId || '').trim();
+      if (selectedSource && !sources.some(source => source.annotationId === selectedSource)) {
+        return { ok: false, rubricRendered: false, reason: 'quiz-gold-caliper-not-in-set' };
+      }
+
+      const navigated = await actions.jumpToViewerQuizTarget({
+        viewerTarget: saved[0].viewerTarget,
+        questionKey,
+      });
+      if (!navigated?.ok) {
+        return {
+          ok: false, rubricRendered: false,
+          reason: navigated?.reason || 'gold-frame-navigation-failed',
+        };
+      }
+      const viewportId = navigated.viewportId || viewportGridService.getActiveViewportId();
+      const viewport = cornerstoneViewportService.getCornerstoneViewport(viewportId);
+      if (!viewport?.element) {
+        return { ok: false, rubricRendered: false, reason: 'gold-viewport-unavailable' };
+      }
+      const imageMatch = await waitForSavedAnnotationImageMatch(viewport, sources[0]);
+      if (imageMatch.index < 0) {
+        return { ok: false, rubricRendered: false, reason: 'gold-image-not-in-viewport' };
+      }
+
+      const frameOfReferenceId =
+        viewport.getFrameOfReferenceUID?.() ||
+        viewport.getImageData?.()?.metadata?.FrameOfReferenceUID || '';
+      const manager = annotation.state.getAnnotationManager?.();
+      const groupKey = manager?.getGroupKey?.(viewport.element);
+      const displayed: string[] = [];
+      const fail = (reason: string) => {
+        // Never leave a partially displayed reference set on the image.
+        for (const overlayId of displayed) {
+          annotation.state.removeAnnotation?.(overlayId);
+          viewerQuizMeasurementComparisonAnnotationIds.delete(overlayId);
+        }
+        return { ok: false, rubricRendered: false, reason, renderedCount: 0 };
+      };
+
+      for (let i = 0; i < sources.length; i++) {
+        const overlay = buildViewerQuizMeasurementComparisonAnnotation({
+          sourceAnnotation: sources[i],
+          variant: 'rubric',
+          questionKey: `${questionKey}-gold-${i + 1}`,
+        });
+        const hydrated = hydrateViewerQuizMeasurementComparisonAnnotation({
+          comparisonAnnotation: overlay,
+          viewport,
+          viewportId,
+          referencedImageIdOverride: imageMatch.imageId,
+          fallbackFrameOfReferenceUID: frameOfReferenceId,
+        });
+        const overlayId = String(hydrated?.annotationUID || hydrated?.uid || '').trim();
+        const indexed = overlayId
+          ? annotation.state.getAnnotation?.(overlayId) || hydrated : null;
+        if (!overlayId || !indexed) {
+          console.warn('[ViewerQuiz] quiz gold set Length hydration failed', {
+            questionKey, caliperIndex: i + 1,
+          });
+          return fail('gold-length-hydration-failed');
+        }
+        // Track before checking registration so cleanup also removes failures.
+        displayed.push(overlayId);
+        viewerQuizMeasurementComparisonAnnotationIds.add(overlayId);
+        const visibleInViewport = () =>
+          (annotation.state.getAnnotations?.('Length', viewport.element) || []).some(
+            item => item.annotationUID === overlayId
+          );
+        if (!visibleInViewport() && manager?.addAnnotation && groupKey != null) {
+          annotation.state.removeAnnotation?.(overlayId);
+          indexed.metadata = {
+            ...(indexed.metadata || {}),
+            FrameOfReferenceUID: groupKey,
+          };
+          manager.addAnnotation(indexed, groupKey);
+        }
+        if (!visibleInViewport()) {
+          console.warn('[ViewerQuiz] quiz gold set caliper not indexed', {
+            questionKey, caliperIndex: i + 1,
+          });
+          return fail('gold-length-not-indexed');
+        }
+        indexed.isLocked = true;
+        indexed.isVisible = true;
+        indexed.metadata = {
+          ...(indexed.metadata || {}),
+          arMeasurementWorkflow: 'viewerQuizGoldDisplay',
+          arMeasurementReadOnly: true,
+        };
+        indexed.data = {
+          ...(indexed.data || {}),
+          // Helpful when both reference calipers are visible together.
+          label: `Gold BWT #${i + 1}`,
+          arMeasurementWorkflow: 'viewerQuizGoldDisplay',
+          arMeasurementReadOnly: true,
+        };
+        const focused = !!selectedSource && sources[i].annotationId === selectedSource;
+        annotation.config.style.setAnnotationStyles(
+          overlayId,
+          focused
+            ? VIEWER_QUIZ_MEASUREMENT_COMPARISON_STYLES.rubricFocused
+            : VIEWER_QUIZ_MEASUREMENT_COMPARISON_STYLES.rubric
+        );
+        cornerstoneTools.annotation.selection.setAnnotationSelected?.(overlayId, focused);
+      }
+      const radius = Number(referenceRadiusMm);
+      let referenceRadiusCount = 0;
+      if (referenceRadiusMm !== null && referenceRadiusMm !== '' &&
+          Number.isFinite(radius) && radius > 0) {
+        for (let i = 0; i < saved.length; i++) {
+          // Show the focused reference radius on Highlight. "Show all"
+          // displays the guide around every captured gold caliper.
+          const isFocused = !!selectedSource && sources[i].annotationId === selectedSource;
+          if (selectedSource && !isFocused) continue;
+          const rendered = appendViewerQuizBowelGoldRadiusOutline({
+            viewport,
+            quizSpatialEvidence: saved[i].quizSpatialEvidence,
+            radiusMm: radius,
+            focused: isFocused,
+          });
+          if (rendered) referenceRadiusCount++;
+          else console.warn('[ViewerQuiz] calibrated BWT reference radius unavailable', {
+            questionKey, caliperIndex: i + 1, radiusMm: radius,
+          });
+        }
+      }
+      try {
+        const { triggerAnnotationRenderForViewportIds } = await import(
+          '@cornerstonejs/tools/utilities'
+        );
+        triggerAnnotationRenderForViewportIds([viewportId]);
+      } catch (error) {
+        console.warn('[ViewerQuiz] quiz gold set annotation render trigger failed', error);
+      }
+      viewport.render?.();
+      return {
+        ok: true, rubricRendered: true, renderedCount: displayed.length,
+        referenceRadiusCount,
+      };
+    },
     showViewerQuizMeasurementComparison: async ({
       learnerMeasurement = {},
       rubricMeasurement = {},
@@ -14624,16 +15137,26 @@ function commandsModule({
 
       const { learnerSeriesDoc, baseSeriesDoc } = await getViewerQuizMeasurementSeriesDocs();
 
-      const learnerAnnotation =
-        findViewerQuizMeasurementAnnotationInSeriesDocs(learnerMeasurement, [
-          learnerSeriesDoc,
-          baseSeriesDoc,
-        ]) || getViewerQuizMeasurementAnnotationFromService(learnerMeasurement);
-      const rubricAnnotation =
+      // Opt-in BWT comparisons use two separate authorities: learner-copy
+      // Series for learner evidence and versioned quiz JSON for educator gold.
+      const isBowelGoldReference =
+        String(rubricMeasurement?.measurementKind || '') === 'length' &&
+        /BWT/i.test(String(rubricMeasurement?.measurementType || '')) &&
+        !!rubricMeasurement?.quizSpatialEvidence;
+      const learnerAnnotation = isBowelGoldReference
+        ? findViewerQuizBowelLearnerAnnotation(learnerMeasurement, learnerSeriesDoc)
+        : findViewerQuizMeasurementAnnotationInSeriesDocs(learnerMeasurement, [
+            learnerSeriesDoc, baseSeriesDoc,
+          ]) || getViewerQuizMeasurementAnnotationFromService(learnerMeasurement);
+      const embeddedGoldAnnotation = buildViewerQuizGoldBwtDisplaySource(rubricMeasurement);
+      const persistedRubricAnnotation = isBowelGoldReference ? null :
         findViewerQuizMeasurementAnnotationInSeriesDocs(rubricMeasurement, [
           baseSeriesDoc,
           learnerSeriesDoc,
         ]) || getViewerQuizMeasurementAnnotationFromService(rubricMeasurement);
+      const rubricAnnotation = isBowelGoldReference
+        ? embeddedGoldAnnotation : persistedRubricAnnotation;
+      const goldSourceId = getViewerQuizMeasurementSourceAnnotationId(rubricMeasurement);
 
       // Composite answers retain several source contour IDs rather than a
       // single drawable annotation. Resolve each exact persisted contour and
@@ -14727,6 +15250,13 @@ function commandsModule({
       }
 
       if (!learnerAnnotation && !rubricAnnotation && resolvedRubricContours.length === 0) {
+        console.warn('[ViewerQuiz] no source annotation available for highlight', {
+          questionKey,
+          hasSourceId: !!goldSourceId,
+          hasCalibratedGeometry: !!embeddedGoldAnnotation,
+          isBowelGoldReference,
+          hasSeriesAnnotations: !!(learnerSeriesDoc?.MeasurementAnnotations || baseSeriesDoc?.MeasurementAnnotations),
+        });
         return {
           ok: false,
           reason: compositeRubric ? 'composite-source-contours-not-found' : 'measurement-annotations-not-found',
@@ -14757,6 +15287,37 @@ function commandsModule({
           reason: 'viewport-not-found',
           renderedCount: 0,
         };
+      }
+
+      // Authoring gold calipers already loaded in Cornerstone should be selected
+      // directly. Reconstructing a temporary comparison overlay can fail when
+      // the saved source annotation has not yet been rehydrated into this viewport.
+      if (goldSourceId && !getViewerQuizMeasurementSourceAnnotationId(learnerMeasurement)) {
+        const liveGold = annotation.state.getAnnotation?.(goldSourceId);
+        const goldTarget = getViewerQuizMeasurementReferenceTarget(rubricMeasurement, rubricAnnotation);
+        const expectedImage = normalizeImageIdForCompare(
+          goldTarget?.referencedImageId || ''
+        );
+        const liveImage = normalizeImageIdForCompare(
+          liveGold?.metadata?.referencedImageId || ''
+        );
+        if (liveGold && (!expectedImage || (liveImage && expectedImage === liveImage))) {
+          liveGold.isVisible = true;
+          cornerstoneTools.annotation.selection.setAnnotationSelected?.(goldSourceId, true);
+          try {
+            const { triggerAnnotationRenderForViewportIds } = await import(
+              '@cornerstonejs/tools/utilities'
+            );
+            triggerAnnotationRenderForViewportIds([comparisonViewportId]);
+          } catch {}
+          viewport.render?.();
+          return {
+            ok: true, reason: '', renderedCount: 1,
+            learnerRendered: false, rubricRendered: true,
+            compositeContoursExpected: 0, compositeContoursResolved: 0,
+            toleranceCircleRendered: false,
+          };
+        }
       }
 
       const frameOfReferenceId =
@@ -14826,6 +15387,14 @@ function commandsModule({
           : null;
 
         if (!comparisonAnnotationId || !hydratedAnnotation) {
+          console.warn('[ViewerQuiz] gold comparison overlay hydration failed', {
+            questionKey,
+            sourceIdPresent: !!getViewerQuizMeasurementSourceAnnotationId(rubricMeasurement),
+            usedEmbeddedGeometry: entry.variant === 'rubric' && !!embeddedGoldAnnotation && !persistedRubricAnnotation,
+            hasReferencedImageId: !!comparisonAnnotation.referencedImageId,
+            hasPoints: Array.isArray(comparisonAnnotation.points) && comparisonAnnotation.points.length === 2,
+            hasMatchedImage: !!match.imageId,
+          });
           continue;
         }
 
@@ -14833,7 +15402,7 @@ function commandsModule({
         // the contour in the active stack viewport's annotation group.
         // Quiz overlays are temporary, so re-register only these composite
         // gold contours under the viewport element when necessary.
-        if (entry.slot && viewport.element) {
+        if ((entry.slot || (entry.variant === 'rubric' && !!embeddedGoldAnnotation && !persistedRubricAnnotation)) && viewport.element) {
           const toolName = String(hydratedAnnotation.metadata?.toolName || '');
           const visibleInViewport = () =>
             (annotation.state.getAnnotations?.(toolName, viewport.element) || []).some(
@@ -14963,6 +15532,53 @@ function commandsModule({
       return {
         ok: true,
         answer,
+      };
+    },
+    captureBowelQuizLumenCenter: async () => {
+      actions.releaseViewerQuizDrawingTool();
+      const activeViewportId = viewportGridService.getActiveViewportId();
+      const viewport = cornerstoneViewportService.getCornerstoneViewport(activeViewportId);
+      if (!viewport) return { ok: false, reason: 'viewport-not-found' };
+      const displaySet = getActiveViewportDisplaySet({
+        viewportGridService, displaySetService, viewportId: activeViewportId,
+      });
+      const captured = await captureNextViewerClickPoint({
+        viewport, displaySet, viewportId: activeViewportId,
+      });
+      if (!captured?.ok || captured?.answer?.point?.coordinateSpace !== 'world') {
+        return captured?.ok
+          ? { ok: false, reason: 'no-calibrated-world-position' }
+          : captured;
+      }
+      const target = captured.answer.viewerTarget || {};
+      const imageId = getCurrentViewportImageInfo(viewport).imageId;
+      if (!imageId || imageId !== target.referencedImageId) {
+        return { ok: false, reason: 'frame-changed-during-capture' };
+      }
+      const point = captured.answer.point;
+      const pseudoMeasurement = {
+        referencedImageId: imageId,
+        SOPInstanceUID: target.sopInstanceUID,
+        referenceSeriesUID: target.seriesInstanceUID,
+        displaySetInstanceUID: target.displaySetInstanceUID,
+      };
+      const evidence = getBowelQuizCalibratedPointContext({
+        viewport, displaySetService, measurement: pseudoMeasurement,
+        points: [[point.x, point.y, point.z]],
+      });
+      if (!evidence || evidence.physicalPoints.length !== 1) {
+        return { ok: false, reason: 'lumen-centre-physical-calibration-unavailable' };
+      }
+      return {
+        ok: true,
+        answer: {
+          ...captured.answer,
+          physicalPoint: evidence.physicalPoints[0],
+          spatialCalibration: {
+            pixelSpacing: evidence.pixelSpacing,
+            calibrationSource: evidence.calibrationSource,
+          },
+        },
       };
     },
     captureViewerQuizPointAnswer: async () => {
@@ -15190,6 +15806,26 @@ function commandsModule({
           reason: 'selected-measurement-has-no-numeric-value',
           selectedMeasurementId,
         };
+      }
+
+      if (question?.answerConfig?.measurementSet?.enabled === true) {
+        const activeViewportId = viewportGridService.getActiveViewportId();
+        const activeViewport = cornerstoneViewportService.getCornerstoneViewport(activeViewportId);
+        const points = getViewerQuizMeasurementPoints(measurement);
+        let failure = '';
+        const evidence = getBowelQuizCalibratedPointContext({
+          viewport: activeViewport, displaySetService, measurement, points,
+          onFailure: reason => { failure = reason; },
+        });
+        if (!evidence || evidence.physicalPoints.length !== 2) {
+          return {
+            ok: false,
+            reason: 'bwt-spatial-calibration-unavailable (' +
+              (failure || 'exactly-two-caliper-endpoints-required') +
+              '): select a calibrated BWT Length caliper from this DICOM frame',
+          };
+        }
+        answer.quizSpatialEvidence = evidence;
       }
 
       return {
@@ -15583,6 +16219,7 @@ function commandsModule({
         educationAttemptIntent,
         deleteAnnotationIds = [],
         measurementIds = null,
+        quizSpatialEvidenceByAnnotationId = null,
         previewOnly = false,
         reportFieldNames = null,
         suppressSuccessNotification = false,
@@ -15684,6 +16321,18 @@ function commandsModule({
             (seriesDoc?.isLearnerCopy === true || seriesDoc?._id)
           ) {
             rememberArLearnerSeriesId(seriesDoc._id);
+          }
+
+          // Multi-BWT learner evidence is always owned by the learner's
+          // independent Series copy. Never allow fallback to the teaching case.
+          // This guard is narrowly scoped to the opt-in quiz-caliper save path.
+          if (quizSpatialEvidenceByAnnotationId !== null &&
+              (!seriesDoc?._id || seriesDoc.isLearnerCopy !== true ||
+                (saveTarget.baseSeriesId &&
+                  String(seriesDoc._id) === String(saveTarget.baseSeriesId)) ||
+                (saveTarget.learnerSeriesId &&
+                  String(seriesDoc._id) !== String(saveTarget.learnerSeriesId)))) {
+            throw new Error('BWT quiz measurements must be saved to the learner\'s Series copy.');
           }
 
           const domain = inferDomainFromSeriesDoc(seriesDoc, explicitDomain);
@@ -15820,10 +16469,24 @@ function commandsModule({
               // MeasurementService object that drives the panel. This keeps contour
               // points in parity with the panel while saved guided geometry remains
               // authoritative through serializeViewerMeasurement().
-              return serializeViewerMeasurement(sourceMeasurement, domain, existingAnnotation, {
+              const annotation = serializeViewerMeasurement(sourceMeasurement, domain, existingAnnotation, {
                 displaySetService,
                 workflow: targetWorkflow,
               });
+              if (domain === 'bowel' &&
+                  quizSpatialEvidenceByAnnotationId &&
+                  Object.prototype.hasOwnProperty.call(quizSpatialEvidenceByAnnotationId, measurementId)) {
+                const evidence = quizSpatialEvidenceByAnnotationId[measurementId];
+                // Only this opt-in quiz save path persists physical reference
+                // evidence; do not add it to unrelated clinical annotations.
+                if (evidence?.source !== 'dicom-calibrated-image-index-v1' ||
+                    !Array.isArray(evidence.physicalPoints) ||
+                    evidence.physicalPoints.length !== 2) {
+                  throw new Error('Bowel quiz source calibration evidence is incomplete.');
+                }
+                annotation.quizSpatialEvidence = evidence;
+              }
+              return annotation;
             })
             .map(annotation =>
               isReviewWorkflowSave
@@ -16457,11 +17120,17 @@ function commandsModule({
     clearViewerQuizMeasurementComparison: {
       commandFn: actions.clearViewerQuizMeasurementComparison,
     },
+    showViewerQuizAuthoringGoldCaliper: {
+      commandFn: actions.showViewerQuizAuthoringGoldCaliper,
+    },
     showViewerQuizMeasurementComparison: {
       commandFn: actions.showViewerQuizMeasurementComparison,
     },
     getCurrentViewerQuizFrameAnswer: {
       commandFn: actions.getCurrentViewerQuizFrameAnswer,
+    },
+    captureBowelQuizLumenCenter: {
+      commandFn: actions.captureBowelQuizLumenCenter,
     },
     captureViewerQuizPointAnswer: {
       commandFn: actions.captureViewerQuizPointAnswer,

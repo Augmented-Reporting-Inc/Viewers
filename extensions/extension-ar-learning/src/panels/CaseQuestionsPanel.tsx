@@ -26,12 +26,18 @@ import {
 } from '../utils/quizCompositeCaptureIntent';
 import { composeIVCRapRVSP, isIVCReviewCurrent, RAP_CHOICES_MMHG } from '../utils/ivcRapRvsp';
 import {
+  isBowelMeasurementSetQuestion,
+  getBowelMeasurementSetEntries,
+  appendBowelMeasurementSetAnswer,
+} from '../utils/bowelQuizMeasurementSet';
+import {
   COMPOSITE_FRAME_SLOTS,
   getCompleteCompositeFrameTargets,
   matchesConfiguredCompositeFrame,
 } from '../utils/compositeFrameTargets';
 
 const AR_QUIZ_MEASUREMENT_ADDED_EVENT = 'ar-learning:quiz-measurement-added';
+const AR_QUIZ_MEASUREMENT_LABELLED_EVENT = 'ar-learning:quiz-measurement-labelled';
 const AR_LV_SIMPSON_CAPTURE_REQUESTED_EVENT = 'ar-measurements:lv-simpson-capture-requested';
 const AR_VIEWER_QUIZ_AUTHORING_SAVED_EVENT = 'ar:viewer-quiz-authoring-saved';
 function reportEducationChange(source: string) {
@@ -264,6 +270,9 @@ function isAnswerEmpty(value: any): boolean {
   }
 
   if (value && typeof value === 'object') {
+    if (Object.prototype.hasOwnProperty.call(value, 'measurements')) {
+      return !Array.isArray(value.measurements) || value.measurements.length === 0;
+    }
     if (Object.prototype.hasOwnProperty.call(value, 'value')) {
       return value.value === null || value.value === undefined || cleanString(value.value) === '';
     }
@@ -422,6 +431,114 @@ function setObjectAnswerPart(currentValue: any, patch: Record<string, any>) {
 
 function plainObject(value: any) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+}
+
+/** Minimum pairwise radial separation (degrees), matching FormAPI geometry. */
+function getBowelGoldAngularSeparation(entries: any[], lumenCenter: any): number | null {
+  if (!Array.isArray(lumenCenter) || lumenCenter.length !== 3 ||
+      !lumenCenter.every(Number.isFinite) || entries.length < 2) return null;
+  const vectors: Array<number[] | null> = entries.map(entry => {
+    const points = plainObject(entry.quizSpatialEvidence).physicalPoints;
+    if (!Array.isArray(points) || points.length !== 2 ||
+        points.some(point => !Array.isArray(point) || point.length !== 3 ||
+          !point.every(Number.isFinite))) return null;
+    return lumenCenter.map((center, i) => (points[0][i] + points[1][i]) / 2 - center);
+  });
+  if (vectors.some(vector => !vector)) return null;
+  let separation = Infinity;
+  for (let i = 0; i < vectors.length; i++) {
+    for (let j = i + 1; j < vectors.length; j++) {
+      const a = vectors[i] as number[], b = vectors[j] as number[];
+      const normA = Math.hypot(...a), normB = Math.hypot(...b);
+      if (!normA || !normB) return null;
+      const dot = a.reduce((total, v, k) => total + v * b[k], 0);
+      const angle = Math.acos(Math.min(1, Math.max(-1, dot / (normA * normB)))) * 180 / Math.PI;
+      separation = Math.min(separation, angle);
+    }
+  }
+  return Number.isFinite(separation) ? separation : null;
+}
+
+/** Validate completed educator gold sets in the Viewer, where the calipers can be corrected. */
+function getBowelGoldValidation(question: any) {
+  const config = plainObject(question?.answerConfig);
+  const set = plainObject(config.measurementSet);
+  if (set.enabled !== true) return { status: 'not-applicable', message: '', observed: null as number | null, required: 0 };
+  const entries = getBowelMeasurementSetEntries(config.goldMeasurements);
+  const count = Number(set.requiredCount) || 2;
+  const incomplete = (message: string) => ({ status: 'incomplete', message, observed: null as number | null, required: 0 });
+  const invalid = (message: string, observed: number | null = null, required = 0) =>
+    ({ status: 'invalid', message, observed, required });
+  if (entries.length !== count) return incomplete(`Capture ${count} distinct gold BWT calipers (${entries.length} recorded).`);
+  const ids = entries.map((entry: any) => cleanString(entry.sourceAnnotationId));
+  if (ids.some((id: string) => !id) || new Set(ids).size !== count) {
+    return invalid('Gold calipers must have distinct saved source annotation IDs.');
+  }
+  const frameKey = (target: any) => {
+    const t = plainObject(target);
+    const ids = ['studyInstanceUID', 'seriesInstanceUID', 'sopInstanceUID'].map(key => cleanString(t[key]));
+    const number = Number(t.frameNumber);
+    return ids.every(Boolean) && Number.isInteger(number) && number >= 1 ? [...ids, number].join('|') : '';
+  };
+  const frame = frameKey(set.referenceTarget);
+  if (!frame || entries.some((entry: any) => frameKey(entry.viewerTarget) !== frame)) {
+    return invalid('All gold calipers must reference the same identified DICOM frame.');
+  }
+  const label = cleanString(set.measurementTarget);
+  if (!label || entries.some((entry: any) => cleanString(entry.measurementType) !== label)) {
+    return invalid('All gold calipers must use the same bowel segment label.');
+  }
+  const evidence = entries.map((entry: any) => plainObject(entry.quizSpatialEvidence));
+  const validPoint = (point: any) => Array.isArray(point) && point.length === 3 &&
+    point.every((value: any) => typeof value === 'number' && Number.isFinite(value));
+  if (evidence.some((item: any) => !Array.isArray(item.physicalPoints) ||
+      item.physicalPoints.length !== 2 || item.physicalPoints.some((point: any) => !validPoint(point)) ||
+      !['SequenceOfUltrasoundRegions', 'cornerstonePixelSpacing'].includes(item.calibrationSource) ||
+      !Number.isFinite(item.pixelSpacing?.row) || !Number.isFinite(item.pixelSpacing?.column) ||
+      item.pixelSpacing.row <= 0 || item.pixelSpacing.column <= 0)) {
+    return invalid('Calibrated DICOM geometry is missing. Re-capture the affected BWT caliper.');
+  }
+  const first = evidence[0];
+  if (evidence.some((item: any) => item.calibrationSource !== first.calibrationSource ||
+      item.pixelSpacing.row !== first.pixelSpacing.row ||
+      item.pixelSpacing.column !== first.pixelSpacing.column)) {
+    return invalid('Gold calipers use inconsistent physical calibration.');
+  }
+  const centers = evidence.map((item: any) =>
+    item.physicalPoints[0].map((value: number, index: number) =>
+      (value + item.physicalPoints[1][index]) / 2));
+  const orientation = cleanString(set.orientation);
+  const required = Number(orientation === 'longitudinal'
+    ? set.minimumSeparationMm : set.minimumSeparationDegrees);
+  if (!Number.isFinite(required) || required <= 0) return invalid('Configure a valid spatial separation threshold.');
+  let observed: number | null = null;
+  if (orientation === 'longitudinal') {
+    const axis = set.longitudinalAxisPhysical;
+    if (!validPoint(axis) || Math.hypot(...axis) <= 0) {
+      return invalid('Longitudinal bowel axis is missing; re-capture the gold calipers.');
+    }
+    const axisLength = Math.hypot(...axis);
+    observed = Infinity;
+    for (let i = 0; i < centers.length; i++) for (let j = i + 1; j < centers.length; j++) {
+      const projection = Math.abs(centers[i].reduce((sum: number, value: number, k: number) =>
+        sum + (value - centers[j][k]) * axis[k], 0)) / axisLength;
+      observed = Math.min(observed, projection);
+    }
+  } else if (orientation === 'crossSection') {
+    if (!validPoint(set.lumenCenterPhysical)) return incomplete('Capture the lumen centre to validate radial separation.');
+    if (set.lumenCenterCalibration?.calibrationSource !== first.calibrationSource ||
+        set.lumenCenterCalibration?.pixelSpacing?.row !== first.pixelSpacing.row ||
+        set.lumenCenterCalibration?.pixelSpacing?.column !== first.pixelSpacing.column) {
+      return invalid('Lumen centre and gold calipers use different physical calibration.');
+    }
+    observed = getBowelGoldAngularSeparation(entries, set.lumenCenterPhysical);
+  } else return invalid('Unknown bowel measurement orientation.');
+  if (observed === null || !Number.isFinite(observed)) return invalid('Spatial separation could not be calculated.');
+  const unit = orientation === 'longitudinal' ? 'mm' : '°';
+  const message = `Gold caliper separation ${observed.toFixed(2)}${unit}; minimum ${required.toFixed(2)}${unit}.`;
+  return observed + 1e-8 >= required
+    ? { status: 'valid', message, observed, required }
+    : invalid(`${message} Adjust the calipers in the Viewer.`, observed, required);
 }
 
 function getNestedViewerTarget(value: any) {
@@ -1824,6 +1941,11 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
   // synchronously rather than relying on a pending React state update.
   const lastActivatedQuestionRef = useRef('');
   const efCaptureInFlightRef = useRef(false);
+  // Only newly captured BWT calipers need an annotation save before quiz save.
+  const pendingBowelQuizMeasurementIdsRef = useRef(new Set<string>());
+  const autoBowelGoldCaptureInFlightRef = useRef(new Set<string>());
+  // Serialize source-ID captures so two calipers cannot race a gold-set update.
+  const autoBowelGoldCaptureQueueRef = useRef<Promise<void>>(Promise.resolve());
   const [capturingMeasurementKey, setCapturingMeasurementKey] = useState('');
   // Explicit educator/learner interpretation only. No default RAP is selected.
   const [rapSelectionsByQuestionKey, setRapSelectionsByQuestionKey] =
@@ -1847,6 +1969,55 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
   const nextEducationSaveRequestId = () => String(++educationSaveRequestCounter.current);
   const [capturingAuthoringKey, setCapturingAuthoringKey] = useState('');
   const [authoringMeasurementDomain, setAuthoringMeasurementDomain] = useState('');
+
+  // Notify only on validation state transitions, never on every pointer move.
+  const bowelGoldValidationStatusRef = useRef<Record<string, string>>({});
+  useEffect(() => {
+    if (!authoringDefinition) {
+      bowelGoldValidationStatusRef.current = {};
+      return;
+    }
+    const nextStatuses: Record<string, string> = {};
+    for (const question of authoringQuestions) {
+      if (!isBowelMeasurementSetQuestion(question)) continue;
+      const validation = getBowelGoldValidation(question);
+      const key = question.questionKey;
+      nextStatuses[key] = validation.status;
+      const previous = bowelGoldValidationStatusRef.current[key];
+      if (validation.status === 'invalid' && previous !== 'invalid') {
+        uiNotificationService.show({
+          title: 'Invalid gold BWT measurements',
+          message: validation.message,
+          type: 'warning', duration: 5500,
+        });
+      } else if (validation.status === 'valid' && previous === 'invalid') {
+        uiNotificationService.show({
+          title: 'Gold BWT measurements valid',
+          message: validation.message,
+          type: 'success', duration: 3500,
+        });
+      }
+    }
+    bowelGoldValidationStatusRef.current = nextStatuses;
+  }, [authoringDefinition, authoringQuestions, uiNotificationService]);
+
+  function finishValidatedQuizAuthoring() {
+    const invalidQuestion = authoringQuestionsRef.current.find(question =>
+      isBowelMeasurementSetQuestion(question) &&
+      getBowelGoldValidation(question).status !== 'valid'
+    );
+    if (invalidQuestion) {
+      const validation = getBowelGoldValidation(invalidQuestion);
+      uiNotificationService.show({
+        title: 'Complete gold BWT measurements',
+        message: validation.message,
+        type: 'warning', duration: 5500,
+      });
+      return;
+    }
+    finishQuizAuthoring();
+  }
+
 
   const quizzes: QuizDefinition[] = useMemo(() => {
     return Array.isArray(payload?.quizzes) ? payload.quizzes : [];
@@ -2170,19 +2341,28 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
 
     const answerConfig = plainObject(question.answerConfig);
     const scoringConfig = plainObject(question.scoringConfig);
-    const goldMeasurement = plainObject(answerConfig.goldMeasurement);
+    const isBowelGoldSet = isBowelMeasurementSetQuestion(question);
+    const goldMeasurement = isBowelGoldSet
+      ? getBowelMeasurementSetEntries(answerConfig.goldMeasurements)[0] || null
+      : plainObject(answerConfig.goldMeasurement);
 
-    if (!hasMeasurementComparisonReference(goldMeasurement)) {
+    if (isBowelGoldSet ? !goldMeasurement : !hasMeasurementComparisonReference(goldMeasurement)) {
       return null;
     }
 
-    const result = await runViewerCommand(commandsManager, 'showViewerQuizMeasurementComparison', {
-      rubricMeasurement: goldMeasurement,
-      viewerTarget: getNestedViewerTarget(goldMeasurement) || getQuestionViewerTarget(question),
-      questionKey: question.questionKey,
-      radius: scoringConfig.radius,
-      radiusUnit: cleanString(scoringConfig.radiusUnit) || 'world',
-    });
+    const result = isBowelGoldSet
+      ? await runViewerCommand(commandsManager, 'showViewerQuizAuthoringGoldCaliper', {
+          goldMeasurements: getBowelMeasurementSetEntries(answerConfig.goldMeasurements),
+          referenceRadiusMm: scoringConfig.radius,
+          questionKey: question.questionKey,
+        })
+      : await runViewerCommand(commandsManager, 'showViewerQuizMeasurementComparison', {
+          rubricMeasurement: goldMeasurement,
+          viewerTarget: getNestedViewerTarget(goldMeasurement) || getQuestionViewerTarget(question),
+          questionKey: question.questionKey,
+          radius: scoringConfig.radius,
+          radiusUnit: cleanString(scoringConfig.radiusUnit) || 'world',
+        });
 
     if (result?.rubricRendered !== true) {
       console.warn('[CaseQuestionsPanel] authoring gold measurement was not displayed', {
@@ -2672,6 +2852,26 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       }
 
       const currentAnswer = answersByQuizKey[quiz.quizKey]?.[question.questionKey];
+      if (isBowelMeasurementSetQuestion(question)) {
+        const currentEntries = getBowelMeasurementSetEntries(plainObject(currentAnswer).measurements);
+        const appended = appendBowelMeasurementSetAnswer(question, currentEntries, result.answer);
+        if (!appended.ok) {
+          if (!options.silent) uiNotificationService.show({
+            title: 'Bowel measurement set',
+            message: appended.reason || 'Cannot add measurement.',
+            type: 'warning', duration: 4500,
+          });
+          return;
+        }
+        setAnswer(quiz.quizKey, question, { measurements: appended.entries });
+        pendingBowelQuizMeasurementIdsRef.current.add(String(result.answer.sourceAnnotationId));
+        if (!options.silent) uiNotificationService.show({
+          title: 'Bowel measurement set',
+          message: `Captured ${appended.entries?.length} / ${question.answerConfig?.measurementSet?.requiredCount} measurements.`,
+          type: 'success', duration: 3000,
+        });
+        return;
+      }
 
       setAnswer(quiz.quizKey, question, setObjectAnswerPart(currentAnswer, result.answer));
 
@@ -2699,6 +2899,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     function handleQuizMeasurementAdded(event: Event) {
       const detail = (event as CustomEvent)?.detail || {};
       const measurementId = cleanString(detail.measurementId);
+      const labelCompleted = event.type === AR_QUIZ_MEASUREMENT_LABELLED_EVENT;
 
       if (!measurementId || !activeQuestionKey) {
         return;
@@ -2723,6 +2924,43 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         // Composite results require several contours; the explicit result
         // action captures the finished calculation, not intermediate drawings.
         const measurementKind = cleanString(plainObject(question.answerConfig).measurementKind);
+        if (isBowelMeasurementSetQuestion(question)) {
+          // Auto-bind the completed annotation rather than requiring the educator
+          // to click Add. Annotation-created may precede label/measurement state:
+          // retry silently, by the exact source ID, without selecting another
+          // annotation or overwriting a previously captured gold entry.
+          if (authoringSaving || !isDraftDefinition(authoringDefinition)) return;
+          const captureId = `${questionKey}:${measurementId}`;
+          if (autoBowelGoldCaptureInFlightRef.current.has(captureId)) return;
+          autoBowelGoldCaptureInFlightRef.current.add(captureId);
+          const captureQueuedCaliper = async () => {
+            try {
+              for (const delayMs of [250, 750, 1600, 3000]) {
+                await new Promise(resolve => window.setTimeout(resolve, delayMs));
+                if (lastActivatedQuestionRef.current !== `authoring:${questionKey}`) return;
+                const latest = authoringQuestionsRef.current.find(item => item.questionKey === questionKey);
+                if (!latest || !isBowelMeasurementSetQuestion(latest)) return;
+                const previous = getBowelMeasurementSetEntries(
+                  plainObject(latest.answerConfig).goldMeasurements
+                );
+                if (previous.some(entry => cleanString(entry.sourceAnnotationId) === measurementId)) return;
+                if (previous.length >= Number(
+                  plainObject(plainObject(latest.answerConfig).measurementSet).requiredCount || 2
+                )) return;
+                const captured = await captureAuthoringMeasurement(latest, {
+                  measurementId, silent: true,
+                });
+                if (captured === true) return;
+              }
+            } finally {
+              autoBowelGoldCaptureInFlightRef.current.delete(captureId);
+            }
+          };
+          autoBowelGoldCaptureQueueRef.current = autoBowelGoldCaptureQueueRef.current
+            .then(captureQueuedCaliper, captureQueuedCaliper);
+          return;
+        }
+        if (labelCompleted) return;
         if (isGuidedQuizCompositeKind(measurementKind)) {
           // Never bind an incomplete contour/trace during annotation-created.
           // The educator explicitly accepts the completed derived result.
@@ -2736,6 +2974,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         return;
       }
 
+      if (labelCompleted) return;
       const [quizKey, questionKey] = activeQuestionKey.split(':');
       const quiz = payload?.quizzes?.find(item => item.quizKey === quizKey);
       const question = quiz?.questions?.find(item => item.questionKey === questionKey);
@@ -2743,7 +2982,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       if (!quiz || !question || question.type !== 'measurementNumeric') {
         return;
       }
-      if (isGuidedQuizCompositeKind(
+      if (isBowelMeasurementSetQuestion(question) || isGuidedQuizCompositeKind(
         cleanString(plainObject(question.answerConfig).measurementKind)
       )) {
         // Wait for an explicit completed composite/trace capture. A single
@@ -2758,11 +2997,13 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     }
 
     window.addEventListener(AR_QUIZ_MEASUREMENT_ADDED_EVENT, handleQuizMeasurementAdded);
+    window.addEventListener(AR_QUIZ_MEASUREMENT_LABELLED_EVENT, handleQuizMeasurementAdded);
 
     return () => {
       window.removeEventListener(AR_QUIZ_MEASUREMENT_ADDED_EVENT, handleQuizMeasurementAdded);
+      window.removeEventListener(AR_QUIZ_MEASUREMENT_LABELLED_EVENT, handleQuizMeasurementAdded);
     };
-  }, [activeQuestionKey, authoringMode, payload, answersByQuizKey]);
+  }, [activeQuestionKey, authoringMode, authoringDefinition, authoringSaving, payload, answersByQuizKey]);
 
   // Both the EF progress-panel button and fourth-contour completion reuse
   // the normal quiz measurement capture command. Never synthesize an EF from
@@ -2953,6 +3194,38 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     }
 
     try {
+      // Bowel quiz answers require persisted canonical calipers. Save newly
+      // captured measurements on the learner copy before saving quiz JSON.
+      const pendingIds = Array.from(new Set((quiz.questions || [])
+        .filter(isBowelMeasurementSetQuestion)
+        .flatMap(question => getBowelMeasurementSetEntries(
+          plainObject(quizAnswers[question.questionKey]).measurements
+        ))
+        .map(entry => String(entry.sourceAnnotationId || ''))
+        .filter(id => id && pendingBowelQuizMeasurementIdsRef.current.has(id))));
+      if (pendingIds.length) {
+        const persisted = await Promise.resolve(commandsManager.runCommand(
+          'saveViewerMeasurementsForActiveStudy', {
+            domain: 'bowel', measurementIds: pendingIds,
+            quizSpatialEvidenceByAnnotationId: Object.fromEntries(
+              (quiz.questions || []).filter(isBowelMeasurementSetQuestion)
+                .flatMap(question => getBowelMeasurementSetEntries(
+                  plainObject(quizAnswers[question.questionKey]).measurements
+                ))
+                .filter(entry => pendingIds.includes(String(entry.sourceAnnotationId)))
+                .map(entry => [String(entry.sourceAnnotationId), entry.quizSpatialEvidence])
+            ),
+            scoringIntent: 'draft', educationAttemptIntent: 'draft',
+            suppressSuccessNotification: true,
+          }
+        ));
+        const savedIds = new Set((persisted?.annotations || [])
+          .map(annotation => String(annotation?.uid || annotation?.annotationId || '')));
+        if (!persisted?.seriesDoc?._id || pendingIds.some(id => !savedIds.has(id))) {
+          throw new Error('BWT caliper persistence failed; quiz answers were not saved.');
+        }
+        pendingIds.forEach(id => pendingBowelQuizMeasurementIdsRef.current.delete(id));
+      }
       // Combined report assessment: measurement review and persistence precede quiz answer save.
       // Ordinary imaging quizzes retain their existing independent save/score workflow.
       if (deferredReportScoring && quiz.questions.some(q => q.type === 'measurementNumeric')) {
@@ -3570,6 +3843,48 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       }
 
       const answer = result.answer;
+      if (isBowelMeasurementSetQuestion(question)) {
+        const latest = authoringQuestionsRef.current.find(
+          item => item.questionKey === question.questionKey
+        ) || question;
+        const latestConfig = plainObject(latest.answerConfig);
+        const previous = getBowelMeasurementSetEntries(latestConfig.goldMeasurements);
+        const appended = appendBowelMeasurementSetAnswer(latest, previous, answer);
+        if (!appended.ok) throw new Error(appended.reason || 'Cannot add BWT gold measurement.');
+        const set = plainObject(latestConfig.measurementSet);
+        const nextSet = {
+          ...set,
+          referenceTarget: appended.referenceTarget,
+          measurementTarget: cleanString(set.measurementTarget || answer.measurementType),
+          ...(set.orientation === 'longitudinal' && appended.axis
+            ? { longitudinalAxisPhysical: appended.axis }
+            : {}),
+        };
+        updateAuthoringQuestion(question.questionKey, current => ({
+          ...current,
+          viewerTarget: appended.referenceTarget,
+          answerConfig: {
+            ...plainObject(current.answerConfig),
+            goldMeasurements: appended.entries,
+            goldMeasurement: appended.entries[0],
+            goldValue: appended.entries[0]?.value,
+            measurementType: nextSet.measurementTarget,
+            unit: 'mm',
+            measurementSet: nextSet,
+          },
+          scoringConfig: {
+            ...plainObject(current.scoringConfig),
+            absoluteTolerance: plainObject(current.scoringConfig).absoluteTolerance ?? '',
+            toleranceUnit: 'mm',
+          },
+        }));
+        if (!options.silent) uiNotificationService.show({
+          title: 'Bowel gold measurements',
+          message: `Captured ${appended.entries?.length} / ${set.requiredCount} reference calipers.`,
+          type: 'success', duration: 3000,
+        });
+        return true;
+      }
       // Quiz metadata must never stand in for the actual measurement label.
       if (!cleanString(answer.reviewPayload?.label)) {
         throw new Error('Label the measurement in the viewer before capturing a gold answer.');
@@ -3650,12 +3965,80 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       if (options.silent) {
         console.warn('[CaseQuestionsPanel] automatic gold measurement capture failed:', error);
       }
-      // Automatic captures need educator-visible feedback too, not just a console warning.
+      // Bowel sets use the explicit capture button; do not surface a
+      // stale annotation-added event as an educator failure toast.
+      if (options.silent && isBowelMeasurementSetQuestion(question)) return false;
       uiNotificationService.show({
         title: 'Quiz Authoring',
         message: `Measurement capture failed: ${error?.message || error}`,
         type: 'error',
         duration: 6000,
+      });
+    } finally {
+      setCapturingAuthoringKey('');
+    }
+  }
+
+  async function captureBowelQuizLumenCenter(question: QuizQuestion) {
+    const current = authoringQuestionsRef.current.find(
+      item => item.questionKey === question.questionKey
+    ) || question;
+    const config = plainObject(current.answerConfig);
+    const settings = plainObject(config.measurementSet);
+    const referenceTarget = plainObject(settings.referenceTarget);
+    if (!isBowelMeasurementSetQuestion(current) || settings.orientation !== 'crossSection' ||
+        !cleanString(referenceTarget.sopInstanceUID)) {
+      uiNotificationService.show({
+        title: 'Bowel measurement set',
+        message: 'Capture a gold cross-sectional BWT caliper first.',
+        type: 'warning', duration: 4000,
+      });
+      return;
+    }
+    setCapturingAuthoringKey(`bowel-center:${question.questionKey}`);
+    try {
+      const response = await runViewerCommand(commandsManager, 'captureBowelQuizLumenCenter');
+      if (!response?.ok) {
+        if (response?.reason !== 'cancelled') throw new Error(response?.reason || 'lumen centre not captured');
+        return;
+      }
+      const point = plainObject(response.answer?.point);
+      const target = plainObject(response.answer?.viewerTarget);
+      const fields = ['studyInstanceUID', 'seriesInstanceUID', 'sopInstanceUID', 'frameNumber'];
+      if (point.coordinateSpace !== 'world' ||
+          !Array.isArray(response.answer?.physicalPoint) ||
+          response.answer.physicalPoint.length !== 3 ||
+          !response.answer.physicalPoint.every(Number.isFinite) ||
+          fields.some(field => String(target[field] ?? '') !== String(referenceTarget[field] ?? ''))) {
+        throw new Error('Select the lumen centre on the same DICOM frame as the captured gold BWT measurements.');
+      }
+      const sourceCalibration = plainObject(
+        getBowelMeasurementSetEntries(config.goldMeasurements)[0]?.quizSpatialEvidence
+      );
+      const capturedCalibration = plainObject(response.answer.spatialCalibration);
+      if (!sourceCalibration.pixelSpacing ||
+          sourceCalibration.calibrationSource !== capturedCalibration.calibrationSource ||
+          sourceCalibration.pixelSpacing.row !== capturedCalibration.pixelSpacing?.row ||
+          sourceCalibration.pixelSpacing.column !== capturedCalibration.pixelSpacing?.column) {
+        throw new Error('The lumen centre and BWT calipers have different physical calibration.');
+      }
+      patchAuthoringAnswerConfig(current, {
+        measurementSet: {
+          ...settings,
+          lumenCenterPhysical: response.answer.physicalPoint,
+          lumenCenterCalibration: capturedCalibration,
+        },
+      });
+      uiNotificationService.show({
+        title: 'Bowel measurement set',
+        message: 'Lumen centre captured for angular separation scoring.',
+        type: 'success', duration: 3000,
+      });
+    } catch (error) {
+      uiNotificationService.show({
+        title: 'Bowel measurement set',
+        message: error?.message || String(error),
+        type: 'warning', duration: 5000,
       });
     } finally {
       setCapturingAuthoringKey('');
@@ -4350,6 +4733,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       const captureKey = `${quiz.quizKey}:${question.questionKey}`;
       const captureInProgress = capturingMeasurementKey === captureKey;
       const linkedRVSP = cleanString(plainObject(question.answerConfig).measurementKind) === 'ivcRapRvsp';
+      const bowelSet = isBowelMeasurementSetQuestion(question);
+      const bowelEntries = getBowelMeasurementSetEntries(plainObject(value).measurements);
+      const bowelCount = Number(plainObject(plainObject(question.answerConfig).measurementSet).requiredCount) || 2;
 
       return (
         <div className="mt-2 w-full min-w-0 max-w-full space-y-2 overflow-hidden">
@@ -4363,7 +4749,28 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
           {cleanString(plainObject(question.answerConfig).measurementKind) === 'rvFAC'
             ? renderRVFACContourControls(quiz, question, disabled)
             : null}
-          {linkedRVSP
+          {bowelSet ? (
+            <div className="rounded border border-blue-700 bg-blue-950/20 p-2 text-xs text-gray-200">
+              <div className="font-semibold">Bowel measurements: {bowelEntries.length} / {bowelCount}</div>
+              <div className="mt-1 text-gray-400">
+                Capture distinct labelled BWT calipers on the same DICOM frame.
+              </div>
+              {bowelEntries.map((measurement, index) => (
+                <div key={measurement.sourceAnnotationId || index}
+                  className="mt-1 flex items-center justify-between gap-2">
+                  <span>#{index + 1}: {measurement.value} {measurement.unit}</span>
+                  <button type="button" className="text-red-300 underline disabled:opacity-50"
+                    disabled={disabled}
+                    onClick={event => {
+                      event.stopPropagation();
+                      setAnswer(quiz.quizKey, question, {
+                        measurements: bowelEntries.filter((_, i) => i !== index),
+                      });
+                    }}>Remove</button>
+                </div>
+              ))}
+            </div>
+          ) : linkedRVSP
             ? renderIVCRapRVSPControls(quiz.quizKey, question, value, disabled)
             : (
                         <div className="flex w-full min-w-0 max-w-full items-center gap-2 overflow-hidden">
@@ -4411,7 +4818,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               : cleanString(plainObject(question.answerConfig).measurementKind) === 'lvSimpsonEF' ||
                   cleanString(plainObject(question.answerConfig).measurementKind) === 'laVolumeBiplane'
                 ? 'Capture calculated measurement'
-                : 'Recapture selected measurement'}
+                : bowelSet ? 'Add selected BWT caliper' : 'Recapture selected measurement'}
           </button>
 
           {cleanString(
@@ -4576,6 +4983,23 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         </div>
 
         {question.type === 'measurementNumeric' ? (
+          reviewDetails.mode === 'bowelMeasurementSet' ? (
+            <div className="mt-2 space-y-1 text-gray-200">
+              <div className="font-semibold">Bowel measurement set</div>
+              <div>Captured: {reviewDetails.submittedCount ?? 0} / {reviewDetails.requiredCount ?? '—'}</div>
+              <div>Within numeric tolerance: {reviewDetails.numericMatches ?? 0} / {reviewDetails.requiredCount ?? '—'}</div>
+              <div>
+                Spatial separation: {reviewDetails.spatial?.matched === true ? 'met' : 'not met'}
+                {Number.isFinite(reviewDetails.spatial?.observed)
+                  ? ` · ${Number(reviewDetails.spatial.observed).toFixed(1)} ${reviewDetails.spatial.unit || ''}`
+                  : ''}
+                {Number.isFinite(reviewDetails.spatial?.threshold)
+                  ? ` (minimum ${reviewDetails.spatial.threshold} ${reviewDetails.spatial.unit || ''})`
+                  : ''}
+              </div>
+              {reviewDetails.reason ? <div className="text-amber-200">{reviewDetails.reason.replace(/_/g, ' ')}</div> : null}
+            </div>
+          ) : (
           <>
             <div className="mt-2">
               <div className="font-semibold">Your answer</div>
@@ -4599,6 +5023,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               </div>
             ) : null}
           </>
+          )
         ) : (
           <>
             <div className="mt-2">
@@ -4767,6 +5192,10 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
 
   function renderAuthoringQuestion(question: QuizQuestion, index: number) {
     const answerConfig = plainObject(question.answerConfig);
+    const bowelSet = isBowelMeasurementSetQuestion(question);
+    const bowelSettings = plainObject(answerConfig.measurementSet);
+    const goldBowelMeasurements = getBowelMeasurementSetEntries(answerConfig.goldMeasurements);
+    const bowelValidation = bowelSet ? getBowelGoldValidation(question) : null;
     const markerOptions = normalizeMarkerOptions(answerConfig.markerOptions);
     const correctMarkerIds = getCorrectMarkerIdsFromAnswerConfig(answerConfig);
     const viewerTarget = getQuestionViewerTarget(question);
@@ -5093,6 +5522,122 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
 
         {question.type === 'measurementNumeric' ? (
           <div className="mt-2 rounded border border-gray-700 p-2">
+            {bowelSet ? (
+              <div className="mb-3 rounded border border-blue-700 bg-blue-950/30 p-2 text-xs text-blue-100">
+                <div className="font-semibold">
+                  Bowel gold calipers: {goldBowelMeasurements.length} / {bowelSettings.requiredCount || 2}
+                </div>
+                <div className="mt-1 text-gray-300">Question: {question.prompt || 'No question prompt set — specify the bowel segment in Quiz Authoring before capturing.'}</div>
+                {!isDraftDefinition(authoringDefinition) ? (
+                  <div className="mt-1 text-amber-200" role="status">Gold capture is disabled: open an editable draft of this quiz.</div>
+                ) : authoringSaving ? (
+                  <div className="mt-1 text-amber-200" role="status">Gold capture is disabled while the quiz is saving.</div>
+                ) : isCapturing ? (
+                  <div className="mt-1 text-amber-200" role="status">Another measurement or lumen-centre capture is currently active.</div>
+                ) : null}
+                {bowelValidation && bowelValidation.status !== 'valid' ? (
+                  <div className={`mt-2 rounded border p-2 ${bowelValidation.status === 'invalid'
+                    ? 'border-amber-500 bg-amber-950/40 text-amber-100' : 'border-slate-600 text-slate-200'}`}
+                    role="alert">
+                    {bowelValidation.message}
+                  </div>
+                ) : bowelValidation?.status === 'valid' ? (
+                  <div className="mt-2 text-emerald-200" role="status">
+                    Spatial separation valid: {bowelValidation.message}
+                  </div>
+                ) : null}
+                {goldBowelMeasurements.length > 1 ? (
+                  <button
+                    type="button"
+                    className="mt-2 rounded border border-purple-400 px-2 py-1 text-xs text-purple-100 hover:bg-purple-900/40"
+                    onClick={event => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      void runViewerCommand(commandsManager, 'showViewerQuizAuthoringGoldCaliper', {
+                        goldMeasurements: goldBowelMeasurements,
+                        referenceRadiusMm: plainObject(question.scoringConfig).radius,
+                        questionKey: question.questionKey,
+                      }).then(result => {
+                        if (result?.rubricRendered !== true) uiNotificationService.show({
+                          title: 'Bowel gold calipers',
+                          message: `Could not show all gold calipers: ${cleanString(result?.reason) || 'unknown error'}.`,
+                          type: 'warning', duration: 4500,
+                        });
+                      }).catch(error => uiNotificationService.show({
+                        title: 'Bowel gold calipers',
+                        message: String(error?.message || error),
+                        type: 'warning', duration: 4500,
+                      }));
+                    }}
+                  >
+                    Show all gold calipers
+                  </button>
+                ) : null}
+                {goldBowelMeasurements.map((entry, index) => (
+                  <button
+                    key={entry.sourceAnnotationId || index}
+                    type="button"
+                    className="mt-1 flex w-full min-w-0 flex-wrap items-center justify-between gap-x-2 gap-y-1 rounded border border-blue-700/70 px-2 py-1 text-left text-blue-100 hover:bg-blue-900/40 focus:outline focus:outline-2 focus:outline-purple-400"
+                    title="Click to highlight this gold caliper in the Viewer"
+                    onClick={event => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      void runViewerCommand(commandsManager, 'showViewerQuizAuthoringGoldCaliper', {
+                        goldMeasurements: goldBowelMeasurements,
+                        highlightedSourceAnnotationId: entry.sourceAnnotationId,
+                        referenceRadiusMm: plainObject(question.scoringConfig).radius,
+                        questionKey: question.questionKey,
+                      }).then(result => {
+                        if (result?.rubricRendered !== true) uiNotificationService.show({
+                          title: 'Bowel gold caliper',
+                          message: `Could not display saved gold caliper: ${cleanString(result?.reason) || 'unknown error'}.`,
+                          type: 'warning', duration: 4500,
+                        });
+                      }).catch(error => uiNotificationService.show({
+                        title: 'Bowel gold caliper',
+                        message: String(error?.message || error),
+                        type: 'warning', duration: 4500,
+                      }));
+                    }}
+                  >
+                    <span className="min-w-0 break-words">#{index + 1}: {entry.value} {entry.unit} · {entry.measurementType}</span>
+                    <span className="shrink-0 text-xs text-purple-200">Highlight</span>
+                  </button>
+                ))}
+                {bowelSettings.orientation === 'longitudinal' ? (
+                  <div className="mt-1">
+                    {Array.isArray(bowelSettings.longitudinalAxisPhysical)
+                      ? 'Bowel axis: defined' : 'Bowel axis: not captured'}
+                  </div>
+                ) : (
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <button type="button" className="rounded border border-blue-400 px-2 py-1"
+                      disabled={!goldBowelMeasurements.length || isCapturing || authoringSaving ||
+                        !isDraftDefinition(authoringDefinition)}
+                      onClick={event => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        void captureBowelQuizLumenCenter(question);
+                      }}>
+                      {Array.isArray(bowelSettings.lumenCenterPhysical)
+                        ? 'Replace lumen centre' : 'Capture lumen centre'}
+                    </button>
+                    <span>{Array.isArray(bowelSettings.lumenCenterPhysical)
+                      ? 'Lumen centre: defined'
+                      : !goldBowelMeasurements.length
+                        ? 'Record at least one gold BWT caliper first; centre capture is currently disabled.'
+                        : 'Click, then select the centre in the image; press Esc to cancel.'}</span>
+                    {getBowelGoldAngularSeparation(goldBowelMeasurements, bowelSettings.lumenCenterPhysical) !== null ? (
+                      <span className="text-purple-100">
+                        Minimum gold radial-angle separation: {getBowelGoldAngularSeparation(
+                          goldBowelMeasurements, bowelSettings.lumenCenterPhysical
+                        )?.toFixed(1)}° (required: {bowelSettings.minimumSeparationDegrees || 90}°)
+                      </span>
+                    ) : null}
+                  </div>
+                )}
+              </div>
+            ) : null}
             {renderCompositePhaseNavigation(
               question,
               isCapturing || authoringSaving || !isDraftDefinition(authoringDefinition)
@@ -5126,6 +5671,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
             ) : null}
             <button
               type="button"
+              title={bowelSet && (isCapturing || authoringSaving || !isDraftDefinition(authoringDefinition))
+                ? 'Gold BWT capture is unavailable while a capture/save is in progress or when the quiz is not an editable draft.'
+                : undefined}
               className="rounded border border-green-600 px-2 py-1 text-xs font-semibold text-green-100 disabled:opacity-50"
               disabled={isCapturing || authoringSaving || !isDraftDefinition(authoringDefinition)}
               onClick={event => {
@@ -5138,9 +5686,11 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                 ? 'Capturing measurement…'
                 : cleanString(answerConfig.measurementKind) === 'ivcRapRvsp'
                   ? 'Accept IVC / RAP / RVSP gold answer'
+                : bowelSet
+                  ? 'Add selected gold BWT caliper'
                 : answerConfig.goldValue != null && answerConfig.goldValue !== ''
                   ? (cleanString(answerConfig.measurementKind) === 'lvSimpsonEF' || cleanString(answerConfig.measurementKind) === 'laVolumeBiplane') ? 'Replace gold answer with calculated result' : 'Replace gold answer with selected measurement'
-                  : (cleanString(answerConfig.measurementKind) === 'lvSimpsonEF' || cleanString(answerConfig.measurementKind) === 'laVolumeBiplane') ? 'Use calculated result as gold answer' : 'Use selected measurement as gold answer'}
+                  : (cleanString(answerConfig.measurementKind) === 'lvSimpsonEF' || cleanString(answerConfig.measurementKind) === 'laVolumeBiplane') ? 'Use calculated result as gold answer' : bowelSet ? 'Add selected gold BWT caliper' : 'Use selected measurement as gold answer'}
             </button>
 
             {(answerConfig.goldValue !== null &&
@@ -5154,14 +5704,33 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                 onClick={event => {
                   event.preventDefault();
                   event.stopPropagation();
-                  void clearAuthoringGoldMeasurement(question);
+                  if (bowelSet) {
+                    updateAuthoringQuestion(question.questionKey, current => {
+                      const cfg = plainObject(current.answerConfig);
+                      return {
+                        ...current,
+                        answerConfig: {
+                          ...cfg, goldMeasurements: [], goldMeasurement: null,
+                          goldValue: null, measurementType: '',
+                          measurementSet: {
+                            ...plainObject(cfg.measurementSet),
+                            measurementTarget: '', referenceTarget: null,
+                            longitudinalAxisPhysical: null, lumenCenterPhysical: null,
+                            lumenCenterCalibration: null,
+                          },
+                        },
+                      };
+                    });
+                  } else {
+                    void clearAuthoringGoldMeasurement(question);
+                  }
                 }}
               >
-                Clear gold answer
+                {bowelSet ? 'Clear BWT measurement set' : 'Clear gold answer'}
               </button>
             ) : null}
 
-            {answerConfig.goldValue !== null &&
+            {!bowelSet && (answerConfig.goldValue !== null &&
             typeof answerConfig.goldValue !== 'undefined' &&
             answerConfig.goldValue !== '' ? (
               <div className="bg-green-950/30 mt-2 rounded border border-green-700 px-2 py-1 text-xs text-green-100">
@@ -5174,7 +5743,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                   ? 'Complete all required contours, then capture the calculated result as the gold answer. No annotation selection is required.'
                   : 'Select a measurement annotation in the viewport, then capture it as the gold answer.'}
               </div>
-            )}
+            ))}
 
             <label className="mt-2 block text-xs font-semibold text-gray-200">
               {(cleanString(answerConfig.measurementKind) === 'lvSimpsonEF' || cleanString(answerConfig.measurementKind) === 'laVolumeBiplane')
@@ -5248,7 +5817,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
             {cleanString(answerConfig.measurementKind) !== 'lvSimpsonEF' && cleanString(answerConfig.measurementKind) !== 'laVolumeBiplane' ? (
               <>
             <label className="mt-3 block text-xs font-semibold text-gray-200">
-              Position radius tolerance
+              {bowelSet ? 'Reference location radius (mm; visual guide)' : 'Position radius tolerance'}
             </label>
             <input
               className="mt-1 w-36 rounded border border-gray-700 bg-black px-2 py-1 text-sm text-white"
@@ -5262,15 +5831,17 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                   scoringConfig: {
                     ...plainObject(question.scoringConfig),
                     radius: event.target.value,
-                    radiusUnit: plainObject(question.scoringConfig).radiusUnit || 'world',
+                    radiusUnit: bowelSet ? 'mm' :
+                      plainObject(question.scoringConfig).radiusUnit || 'world',
                   },
                 })
               }
             />
 
             <div className="mt-1 text-[11px] text-gray-400">
-              The learner measurement must be within both the allowed length difference and this
-              radius from the center of the correct measurement.
+              {bowelSet
+                ? 'Displayed around the selected gold BWT caliper, or around every gold caliper with Show all. This is a teaching guide only: multi-BWT scoring uses numeric accuracy and axial/angular separation, not a midpoint-radius threshold.'
+                : 'The learner measurement must be within both the allowed length difference and this radius from the center of the correct measurement.'}
             </div>
               </>
             ) : (
@@ -5494,7 +6065,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               type="button"
               className="rounded border border-gray-600 px-3 py-2 text-sm font-semibold text-gray-100 disabled:opacity-50"
               disabled={authoringSaving}
-              onClick={finishQuizAuthoring}
+              onClick={finishValidatedQuizAuthoring}
             >
               Finish / close
             </button>
