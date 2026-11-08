@@ -1834,6 +1834,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
   const efCaptureInFlightRef = useRef(false);
   // Only newly captured BWT calipers need an annotation save before quiz save.
   const pendingBowelQuizMeasurementIdsRef = useRef(new Set<string>());
+  const autoBowelGoldCaptureInFlightRef = useRef(new Set<string>());
   const [capturingMeasurementKey, setCapturingMeasurementKey] = useState('');
   // Explicit educator/learner interpretation only. No default RAP is selected.
   const [rapSelectionsByQuestionKey, setRapSelectionsByQuestionKey] =
@@ -2753,9 +2754,40 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         // Composite results require several contours; the explicit result
         // action captures the finished calculation, not intermediate drawings.
         const measurementKind = cleanString(plainObject(question.answerConfig).measurementKind);
-        // Bowel-set calipers are captured explicitly after they are labelled.
-        // The annotation-added event can run before measurement state settles.
-        if (isBowelMeasurementSetQuestion(question)) return;
+        if (isBowelMeasurementSetQuestion(question)) {
+          // Auto-bind the completed annotation rather than requiring the educator
+          // to click Add. Annotation-created may precede label/measurement state:
+          // retry silently, by the exact source ID, without selecting another
+          // annotation or overwriting a previously captured gold entry.
+          if (authoringSaving || !isDraftDefinition(authoringDefinition)) return;
+          const captureId = `${questionKey}:${measurementId}`;
+          if (autoBowelGoldCaptureInFlightRef.current.has(captureId)) return;
+          autoBowelGoldCaptureInFlightRef.current.add(captureId);
+          void (async () => {
+            try {
+              for (const delayMs of [250, 750, 1600, 3000]) {
+                await new Promise(resolve => window.setTimeout(resolve, delayMs));
+                if (lastActivatedQuestionRef.current !== `authoring:${questionKey}`) return;
+                const latest = authoringQuestionsRef.current.find(item => item.questionKey === questionKey);
+                if (!latest || !isBowelMeasurementSetQuestion(latest)) return;
+                const previous = getBowelMeasurementSetEntries(
+                  plainObject(latest.answerConfig).goldMeasurements
+                );
+                if (previous.some(entry => cleanString(entry.sourceAnnotationId) === measurementId)) return;
+                if (previous.length >= Number(
+                  plainObject(plainObject(latest.answerConfig).measurementSet).requiredCount || 2
+                )) return;
+                const captured = await captureAuthoringMeasurement(latest, {
+                  measurementId, silent: true,
+                });
+                if (captured === true) return;
+              }
+            } finally {
+              autoBowelGoldCaptureInFlightRef.current.delete(captureId);
+            }
+          })();
+          return;
+        }
         if (isGuidedQuizCompositeKind(measurementKind)) {
           // Never bind an incomplete contour/trace during annotation-created.
           // The educator explicitly accepts the completed derived result.
@@ -2795,7 +2827,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     return () => {
       window.removeEventListener(AR_QUIZ_MEASUREMENT_ADDED_EVENT, handleQuizMeasurementAdded);
     };
-  }, [activeQuestionKey, authoringMode, payload, answersByQuizKey]);
+  }, [activeQuestionKey, authoringMode, authoringDefinition, authoringSaving, payload, answersByQuizKey]);
 
   // Both the EF progress-panel button and fourth-contour completion reuse
   // the normal quiz measurement capture command. Never synthesize an EF from
@@ -3675,7 +3707,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
           message: `Captured ${appended.entries?.length} / ${set.requiredCount} reference calipers.`,
           type: 'success', duration: 3000,
         });
-        return;
+        return true;
       }
       // Quiz metadata must never stand in for the actual measurement label.
       if (!cleanString(answer.reviewPayload?.label)) {
@@ -3759,7 +3791,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       }
       // Bowel sets use the explicit capture button; do not surface a
       // stale annotation-added event as an educator failure toast.
-      if (options.silent && isBowelMeasurementSetQuestion(question)) return;
+      if (options.silent && isBowelMeasurementSetQuestion(question)) return false;
       uiNotificationService.show({
         title: 'Quiz Authoring',
         message: `Measurement capture failed: ${error?.message || error}`,
@@ -5318,7 +5350,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                 <div className="font-semibold">
                   Bowel gold calipers: {goldBowelMeasurements.length} / {bowelSettings.requiredCount || 2}
                 </div>
-                <div className="mt-1">Draw and label a BWT Length caliper, select it, and click “Add selected gold BWT caliper”. Each successful capture increments the counter.</div>
+                <div className="mt-1">Draw and label each BWT Length caliper in the Viewer. Completed calipers are added automatically; use “Add selected gold BWT caliper” only if a caliper was missed.</div>
+                <div className="mt-1 text-amber-200">Specify the exact bowel segment in the question prompt and use that same segment label for every gold caliper.</div>
+                <div className="mt-1 text-gray-300">Question: {question.prompt || 'No question prompt set — specify the bowel segment in Quiz Authoring before capturing.'}</div>
                 {!isDraftDefinition(authoringDefinition) ? (
                   <div className="mt-1 text-amber-200" role="status">Gold capture is disabled: open an editable draft of this quiz.</div>
                 ) : authoringSaving ? (
@@ -5327,14 +5361,40 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                   <div className="mt-1 text-amber-200" role="status">Another measurement or lumen-centre capture is currently active.</div>
                 ) : null}
                 {goldBowelMeasurements.map((entry, index) => (
-                  <div key={entry.sourceAnnotationId || index} className="mt-1">
+                  <button
+                    key={entry.sourceAnnotationId || index}
+                    type="button"
+                    className="mt-1 block w-full rounded border border-blue-700/70 px-2 py-1 text-left text-blue-100 hover:bg-blue-900/40 focus:outline focus:outline-2 focus:outline-purple-400"
+                    title="Click to highlight this gold caliper in the Viewer"
+                    onClick={event => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      void runViewerCommand(commandsManager, 'showViewerQuizMeasurementComparison', {
+                        rubricMeasurement: entry,
+                        viewerTarget: entry.viewerTarget,
+                        questionKey: question.questionKey,
+                      }).then(result => {
+                        if (result?.rubricRendered !== true) uiNotificationService.show({
+                          title: 'Bowel gold caliper',
+                          message: 'Could not highlight this caliper; verify its saved source annotation.',
+                          type: 'warning', duration: 4500,
+                        });
+                      }).catch(error => uiNotificationService.show({
+                        title: 'Bowel gold caliper',
+                        message: String(error?.message || error),
+                        type: 'warning', duration: 4500,
+                      }));
+                    }}
+                  >
                     #{index + 1}: {entry.value} {entry.unit} · {entry.measurementType}
-                  </div>
+                    <span className="ml-2 text-xs text-purple-200">Highlight in Viewer</span>
+                  </button>
                 ))}
                 {bowelSettings.orientation === 'longitudinal' ? (
                   <div className="mt-1">
-                    Axis: {Array.isArray(bowelSettings.longitudinalAxisPhysical)
-                      ? 'derived from gold caliper positions' : 'capture two distinct gold calipers'}
+                    Longitudinal axis (physical mm): {Array.isArray(bowelSettings.longitudinalAxisPhysical)
+                      ? bowelSettings.longitudinalAxisPhysical.map(v => Number(v).toFixed(2)).join(', ')
+                      : 'Capture two distinct gold calipers'}
                   </div>
                 ) : (
                   <div className="mt-2 flex flex-wrap items-center gap-2">
@@ -5350,7 +5410,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                         ? 'Replace lumen centre' : 'Capture lumen centre'}
                     </button>
                     <span>{Array.isArray(bowelSettings.lumenCenterPhysical)
-                      ? 'Centre captured'
+                      ? `Lumen centre (image physical mm): ${bowelSettings.lumenCenterPhysical.map(v => Number(v).toFixed(2)).join(', ')}`
                       : !goldBowelMeasurements.length
                         ? 'Record at least one gold BWT caliper first; centre capture is currently disabled.'
                         : 'Click, then select the centre in the image; press Esc to cancel.'}</span>
