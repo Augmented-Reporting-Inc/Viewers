@@ -436,7 +436,7 @@ function plainObject(value: any) {
 function getBowelGoldAngularSeparation(entries: any[], lumenCenter: any): number | null {
   if (!Array.isArray(lumenCenter) || lumenCenter.length !== 3 ||
       !lumenCenter.every(Number.isFinite) || entries.length < 2) return null;
-  const vectors = entries.map(entry => {
+  const vectors: Array<number[] | null> = entries.map(entry => {
     const points = plainObject(entry.quizSpatialEvidence).physicalPoints;
     if (!Array.isArray(points) || points.length !== 2 ||
         points.some(point => !Array.isArray(point) || point.length !== 3 ||
@@ -447,7 +447,7 @@ function getBowelGoldAngularSeparation(entries: any[], lumenCenter: any): number
   let separation = Infinity;
   for (let i = 0; i < vectors.length; i++) {
     for (let j = i + 1; j < vectors.length; j++) {
-      const a = vectors[i], b = vectors[j];
+      const a = vectors[i] as number[], b = vectors[j] as number[];
       const normA = Math.hypot(...a), normB = Math.hypot(...b);
       if (!normA || !normB) return null;
       const dot = a.reduce((total, v, k) => total + v * b[k], 0);
