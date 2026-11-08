@@ -14817,6 +14817,128 @@ function commandsModule({
         ok: true,
       };
     },
+    // Educator multi-BWT authoring: the quiz definition is the ONLY gold
+    // source. Do not fetch or write a Series document in this display path.
+    showViewerQuizAuthoringGoldCaliper: async ({
+      goldMeasurement = {},
+      questionKey = '',
+    } = {}) => {
+      clearViewerQuizMeasurementComparisonAnnotations();
+      clearAllViewerQuizMarkerOverlays();
+      const goldSource = buildViewerQuizGoldBwtDisplaySource(goldMeasurement);
+      if (!goldSource) {
+        console.warn('[ViewerQuiz] quiz gold caliper has incomplete saved geometry', {
+          questionKey,
+          hasSavedSourceId: !!getViewerQuizMeasurementSourceAnnotationId(goldMeasurement),
+          hasWorldPoints: Array.isArray(goldMeasurement?.quizSpatialEvidence?.worldPoints),
+          hasImageReference: !!goldMeasurement?.viewerTarget?.referencedImageId,
+        });
+        return { ok: false, rubricRendered: false, reason: 'quiz-gold-geometry-incomplete' };
+      }
+
+      const navigated = await actions.jumpToViewerQuizTarget({
+        viewerTarget: goldMeasurement.viewerTarget,
+        questionKey,
+      });
+      if (!navigated?.ok) {
+        return {
+          ok: false, rubricRendered: false,
+          reason: navigated?.reason || 'gold-frame-navigation-failed',
+        };
+      }
+      const viewportId = navigated.viewportId || viewportGridService.getActiveViewportId();
+      const viewport = cornerstoneViewportService.getCornerstoneViewport(viewportId);
+      if (!viewport?.element) {
+        return { ok: false, rubricRendered: false, reason: 'gold-viewport-unavailable' };
+      }
+
+      // Confirm the exact saved image/frame is in the active stack, rather
+      // than silently painting on an unrelated frame after a failed jump.
+      const imageMatch = await waitForSavedAnnotationImageMatch(viewport, goldSource);
+      if (imageMatch.index < 0) {
+        return { ok: false, rubricRendered: false, reason: 'gold-image-not-in-viewport' };
+      }
+      const overlay = buildViewerQuizMeasurementComparisonAnnotation({
+        sourceAnnotation: goldSource,
+        variant: 'rubric',
+        questionKey,
+      });
+      const frameOfReferenceId =
+        viewport.getFrameOfReferenceUID?.() ||
+        viewport.getImageData?.()?.metadata?.FrameOfReferenceUID || '';
+      const hydrated = hydrateViewerQuizMeasurementComparisonAnnotation({
+        comparisonAnnotation: overlay,
+        viewport,
+        viewportId,
+        referencedImageIdOverride: imageMatch.imageId,
+        fallbackFrameOfReferenceUID: frameOfReferenceId,
+      });
+      const overlayId = String(hydrated?.annotationUID || hydrated?.uid || '').trim();
+      const indexed = overlayId
+        ? annotation.state.getAnnotation?.(overlayId) || hydrated : null;
+      if (!overlayId || !indexed) {
+        console.warn('[ViewerQuiz] quiz gold Length hydration failed', {
+          questionKey,
+          hasImageMatch: true,
+          hasGoldWorldPoints: true,
+        });
+        return { ok: false, rubricRendered: false, reason: 'gold-length-hydration-failed' };
+      }
+      const visibleInViewport = () =>
+        (annotation.state.getAnnotations?.('Length', viewport.element) || []).some(
+          item => item.annotationUID === overlayId
+        );
+      if (!visibleInViewport()) {
+        const manager = annotation.state.getAnnotationManager?.();
+        if (manager?.getGroupKey && manager?.addAnnotation) {
+          const groupKey = manager.getGroupKey(viewport.element);
+          annotation.state.removeAnnotation?.(overlayId);
+          indexed.metadata = {
+            ...(indexed.metadata || {}),
+            FrameOfReferenceUID: groupKey,
+          };
+          manager.addAnnotation(indexed, groupKey);
+        }
+      }
+      if (!visibleInViewport()) {
+        console.warn('[ViewerQuiz] quiz gold Length not indexed in active viewport', {
+          questionKey,
+          hasMatchedImage: true,
+          hasViewportElement: true,
+        });
+        annotation.state.removeAnnotation?.(overlayId);
+        return { ok: false, rubricRendered: false, reason: 'gold-length-not-indexed' };
+      }
+
+      indexed.isLocked = true;
+      indexed.isVisible = true;
+      // Mark the temporary annotation non-persistable in its own workflow.
+      indexed.metadata = {
+        ...(indexed.metadata || {}),
+        arMeasurementWorkflow: 'viewerQuizGoldDisplay',
+        arMeasurementReadOnly: true,
+      };
+      indexed.data = {
+        ...(indexed.data || {}),
+        arMeasurementWorkflow: 'viewerQuizGoldDisplay',
+        arMeasurementReadOnly: true,
+      };
+      annotation.config.style.setAnnotationStyles(
+        overlayId, VIEWER_QUIZ_MEASUREMENT_COMPARISON_STYLES.rubric
+      );
+      cornerstoneTools.annotation.selection.setAnnotationSelected?.(overlayId, true);
+      viewerQuizMeasurementComparisonAnnotationIds.add(overlayId);
+      try {
+        const { triggerAnnotationRenderForViewportIds } = await import(
+          '@cornerstonejs/tools/utilities'
+        );
+        triggerAnnotationRenderForViewportIds([viewportId]);
+      } catch (error) {
+        console.warn('[ViewerQuiz] quiz gold annotation render trigger failed', error);
+      }
+      viewport.render?.();
+      return { ok: true, rubricRendered: true, renderedCount: 1 };
+    },
     showViewerQuizMeasurementComparison: async ({
       learnerMeasurement = {},
       rubricMeasurement = {},
@@ -16811,6 +16933,9 @@ function commandsModule({
     },
     clearViewerQuizMeasurementComparison: {
       commandFn: actions.clearViewerQuizMeasurementComparison,
+    },
+    showViewerQuizAuthoringGoldCaliper: {
+      commandFn: actions.showViewerQuizAuthoringGoldCaliper,
     },
     showViewerQuizMeasurementComparison: {
       commandFn: actions.showViewerQuizMeasurementComparison,
