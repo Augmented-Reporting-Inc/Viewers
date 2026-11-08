@@ -14854,6 +14854,10 @@ function commandsModule({
       highlightedSourceAnnotationId = '',
       questionKey = '',
     } = {}) => {
+      const quizAuthoringFlag = String(getViewerUrlSearchParams().get('arQuizAuthoring') || '').toLowerCase();
+      if (!['1', 'true', 'yes', 'y'].includes(quizAuthoringFlag)) {
+        return { ok: false, rubricRendered: false, reason: 'gold-authoring-only' };
+      }
       clearViewerQuizMeasurementComparisonAnnotations();
       clearAllViewerQuizMarkerOverlays();
 
