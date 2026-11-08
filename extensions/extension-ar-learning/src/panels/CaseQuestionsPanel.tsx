@@ -2353,6 +2353,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     const result = isBowelGoldSet
       ? await runViewerCommand(commandsManager, 'showViewerQuizAuthoringGoldCaliper', {
           goldMeasurements: getBowelMeasurementSetEntries(answerConfig.goldMeasurements),
+          referenceRadiusMm: scoringConfig.radius,
           questionKey: question.questionKey,
         })
       : await runViewerCommand(commandsManager, 'showViewerQuizMeasurementComparison', {
@@ -5554,6 +5555,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                       event.stopPropagation();
                       void runViewerCommand(commandsManager, 'showViewerQuizAuthoringGoldCaliper', {
                         goldMeasurements: goldBowelMeasurements,
+                        referenceRadiusMm: plainObject(question.scoringConfig).radius,
                         questionKey: question.questionKey,
                       }).then(result => {
                         if (result?.rubricRendered !== true) uiNotificationService.show({
@@ -5583,6 +5585,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                       void runViewerCommand(commandsManager, 'showViewerQuizAuthoringGoldCaliper', {
                         goldMeasurements: goldBowelMeasurements,
                         highlightedSourceAnnotationId: entry.sourceAnnotationId,
+                        referenceRadiusMm: plainObject(question.scoringConfig).radius,
                         questionKey: question.questionKey,
                       }).then(result => {
                         if (result?.rubricRendered !== true) uiNotificationService.show({
@@ -5814,7 +5817,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
             {cleanString(answerConfig.measurementKind) !== 'lvSimpsonEF' && cleanString(answerConfig.measurementKind) !== 'laVolumeBiplane' ? (
               <>
             <label className="mt-3 block text-xs font-semibold text-gray-200">
-              Position radius tolerance
+              {bowelSet ? 'Reference location radius (mm; visual guide)' : 'Position radius tolerance'}
             </label>
             <input
               className="mt-1 w-36 rounded border border-gray-700 bg-black px-2 py-1 text-sm text-white"
@@ -5828,15 +5831,17 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                   scoringConfig: {
                     ...plainObject(question.scoringConfig),
                     radius: event.target.value,
-                    radiusUnit: plainObject(question.scoringConfig).radiusUnit || 'world',
+                    radiusUnit: bowelSet ? 'mm' :
+                      plainObject(question.scoringConfig).radiusUnit || 'world',
                   },
                 })
               }
             />
 
             <div className="mt-1 text-[11px] text-gray-400">
-              The learner measurement must be within both the allowed length difference and this
-              radius from the center of the correct measurement.
+              {bowelSet
+                ? 'Displayed around the selected gold BWT caliper, or around every gold caliper with Show all. This is a teaching guide only: multi-BWT scoring uses numeric accuracy and axial/angular separation, not a midpoint-radius threshold.'
+                : 'The learner measurement must be within both the allowed length difference and this radius from the center of the correct measurement.'}
             </div>
               </>
             ) : (
