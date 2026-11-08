@@ -2352,7 +2352,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
 
     const result = isBowelGoldSet
       ? await runViewerCommand(commandsManager, 'showViewerQuizAuthoringGoldCaliper', {
-          goldMeasurement,
+          goldMeasurements: getBowelMeasurementSetEntries(answerConfig.goldMeasurements),
           questionKey: question.questionKey,
         })
       : await runViewerCommand(commandsManager, 'showViewerQuizMeasurementComparison', {
@@ -5545,6 +5545,32 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                     Spatial separation valid: {bowelValidation.message}
                   </div>
                 ) : null}
+                {goldBowelMeasurements.length > 1 ? (
+                  <button
+                    type="button"
+                    className="mt-2 rounded border border-purple-400 px-2 py-1 text-xs text-purple-100 hover:bg-purple-900/40"
+                    onClick={event => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      void runViewerCommand(commandsManager, 'showViewerQuizAuthoringGoldCaliper', {
+                        goldMeasurements: goldBowelMeasurements,
+                        questionKey: question.questionKey,
+                      }).then(result => {
+                        if (result?.rubricRendered !== true) uiNotificationService.show({
+                          title: 'Bowel gold calipers',
+                          message: `Could not show all gold calipers: ${cleanString(result?.reason) || 'unknown error'}.`,
+                          type: 'warning', duration: 4500,
+                        });
+                      }).catch(error => uiNotificationService.show({
+                        title: 'Bowel gold calipers',
+                        message: String(error?.message || error),
+                        type: 'warning', duration: 4500,
+                      }));
+                    }}
+                  >
+                    Show all gold calipers
+                  </button>
+                ) : null}
                 {goldBowelMeasurements.map((entry, index) => (
                   <button
                     key={entry.sourceAnnotationId || index}
@@ -5555,7 +5581,8 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                       event.preventDefault();
                       event.stopPropagation();
                       void runViewerCommand(commandsManager, 'showViewerQuizAuthoringGoldCaliper', {
-                        goldMeasurement: entry,
+                        goldMeasurements: goldBowelMeasurements,
+                        highlightedSourceAnnotationId: entry.sourceAnnotationId,
                         questionKey: question.questionKey,
                       }).then(result => {
                         if (result?.rubricRendered !== true) uiNotificationService.show({
