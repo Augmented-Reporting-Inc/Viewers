@@ -1861,6 +1861,8 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
   // Only newly captured BWT calipers need an annotation save before quiz save.
   const pendingBowelQuizMeasurementIdsRef = useRef(new Set<string>());
   const autoBowelGoldCaptureInFlightRef = useRef(new Set<string>());
+  // Serialize source-ID captures so two calipers cannot race a gold-set update.
+  const autoBowelGoldCaptureQueueRef = useRef<Promise<void>>(Promise.resolve());
   const [capturingMeasurementKey, setCapturingMeasurementKey] = useState('');
   // Explicit educator/learner interpretation only. No default RAP is selected.
   const [rapSelectionsByQuestionKey, setRapSelectionsByQuestionKey] =
@@ -2789,7 +2791,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
           const captureId = `${questionKey}:${measurementId}`;
           if (autoBowelGoldCaptureInFlightRef.current.has(captureId)) return;
           autoBowelGoldCaptureInFlightRef.current.add(captureId);
-          void (async () => {
+          const captureQueuedCaliper = async () => {
             try {
               for (const delayMs of [250, 750, 1600, 3000]) {
                 await new Promise(resolve => window.setTimeout(resolve, delayMs));
@@ -2811,7 +2813,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
             } finally {
               autoBowelGoldCaptureInFlightRef.current.delete(captureId);
             }
-          })();
+          };
+          autoBowelGoldCaptureQueueRef.current = autoBowelGoldCaptureQueueRef.current
+            .then(captureQueuedCaliper, captureQueuedCaliper);
           return;
         }
         if (isGuidedQuizCompositeKind(measurementKind)) {
