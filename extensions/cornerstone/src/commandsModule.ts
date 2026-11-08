@@ -3272,23 +3272,53 @@ function buildViewerQuizTargetFromMeasurement(measurement, displaySetService = n
  * apply DICOM ultrasound-region / pixel calibration for that exact image.
  * Return null if any part of that provenance is unavailable.
  */
-function getBowelQuizCalibratedPointContext({ viewport, displaySetService, measurement, points }) {
+function getBowelQuizCalibratedPointContext({ viewport, displaySetService, measurement, points, onFailure }) {
+  const reject = reason => {
+    onFailure?.(reason);
+    return null;
+  };
   const imageInfo = getCurrentViewportImageInfo(viewport);
-  const sourceImageId = String(measurement?.referencedImageId || '');
-  if (!imageInfo.imageId || !sourceImageId || imageInfo.imageId !== sourceImageId) return null;
+  const sourceImageId = String(
+    measurement?.referencedImageId || measurement?.metadata?.referencedImageId || ''
+  );
+  if (!imageInfo.imageId) return reject('active-image-unavailable');
+  if (sourceImageId && imageInfo.imageId !== sourceImageId) {
+    // Loader URI equality is not DICOM identity. Match the same SOP/frame.
+    const currentSop = String(getSopInstanceIdFromImageId(imageInfo.imageId) || '');
+    const sourceSop = String(
+      measurement?.SOPInstanceUID || measurement?.metadata?.SOPInstanceUID ||
+      getSopInstanceIdFromImageId(sourceImageId) || ''
+    );
+    const sourceFrame = getFrameNumberFromReferencedImageId(sourceImageId);
+    const currentFrame = getFrameNumberFromReferencedImageId(imageInfo.imageId);
+    if (!currentSop || !sourceSop || currentSop !== sourceSop ||
+        !Number.isInteger(sourceFrame) || sourceFrame !== currentFrame) {
+      return reject('selected-caliper-is-not-on-the-active-dicom-frame');
+    }
+  } else if (!sourceImageId) {
+    const currentSop = String(getSopInstanceIdFromImageId(imageInfo.imageId) || '');
+    const measurementSop = String(
+      measurement?.SOPInstanceUID || measurement?.metadata?.SOPInstanceUID || ''
+    );
+    const measurementFrame = Number(measurement?.frameNumber || 1);
+    if (!currentSop || !measurementSop || currentSop !== measurementSop ||
+        measurementFrame !== getFrameNumberFromReferencedImageId(imageInfo.imageId)) {
+      return reject('selected-caliper-source-image-not-identified');
+    }
+  }
   const imageData = viewport?.getImageData?.();
   if (!imageData || !Array.isArray(points) || !points.length ||
       points.some(p => !Array.isArray(p) || p.length !== 3 ||
-        p.some(n => !Number.isFinite(Number(n))))) return null;
+        p.some(n => !Number.isFinite(Number(n))))) return reject('caliper-world-endpoints-missing');
   let indexPoints;
   try {
     indexPoints = points.map(point =>
       csUtils.transformWorldToIndex(imageData, point).map(Number)
     );
-  } catch { return null; }
+  } catch { return reject('world-to-image-conversion-failed'); }
   if (indexPoints.some(point => !Array.isArray(point) || point.length < 2 ||
       !Number.isFinite(point[0]) || !Number.isFinite(point[1]) ||
-      (point[2] != null && !Number.isFinite(point[2])))) return null;
+      (point[2] != null && !Number.isFinite(point[2])))) return reject('invalid-image-index-points');
   // Record the exact world-to-image affine mapping used to link these
   // physical indices to the saved caliper's world-space endpoints.
   let affine;
@@ -3303,25 +3333,25 @@ function getBowelQuizCalibratedPointContext({ viewport, displaySetService, measu
       Number(samples[3][axis] - base[axis]),
       Number(base[axis]),
     ]);
-  } catch { return null; }
+  } catch { return reject('world-to-image-transform-unavailable'); }
   if (affine.some(row => row.some(n => !Number.isFinite(n))) ||
       points.some((point, index) => affine.some((row, axis) =>
         Math.abs(row[0] * point[0] + row[1] * point[1] +
           row[2] * point[2] + row[3] - indexPoints[index][axis]) > 0.1
-      ))) return null;
+      ))) return reject('world-to-image-transform-inconsistent');
   const instance = getInstanceForViewerMeasurement(displaySetService, measurement);
   const requestedSopInstance = String(measurement?.SOPInstanceUID || '').trim();
   if (instance && requestedSopInstance &&
       String(getSopInstanceIdFromSource(instance) || '').trim() !== requestedSopInstance) {
     // Existing general-purpose lookup can fall back to the first instance.
     // Physical quiz scoring must never inherit calibration from that fallback.
-    return null;
+    return reject('dicom-instance-calibration-mismatch');
   }
   const rawRegions = getUltrasoundRegionsFromSource(instance);
   const regions = rawRegions.map(normalizeUltrasoundRegion).filter(Boolean);
   // If the DICOM declares ultrasound regions but none are physically valid,
   // never silently fall back to generic pixel spacing.
-  if (rawRegions.length && !regions.length) return null;
+  if (rawRegions.length && !regions.length) return reject('dicom-ultrasound-region-has-no-physical-calibration');
   let spacing;
   if (regions.length) {
     // All points must be unambiguously located in the same calibrated region.
@@ -3332,13 +3362,18 @@ function getBowelQuizCalibratedPointContext({ viewport, displaySetService, measu
         point[1] >= region.minY && point[1] <= region.maxY
       )
     );
-    if (candidates.length !== 1) return null;
+    if (candidates.length !== 1) return reject(
+      candidates.length === 0 ? 'caliper-outside-dicom-calibrated-ultrasound-region' :
+      'overlapping-dicom-ultrasound-calibration-regions'
+    );
     spacing = candidates[0];
   } else {
     spacing = getCornerstonePixelSpacingMM(imageInfo.imageId);
   }
   if (!spacing || !(spacing.column > 0) || !(spacing.row > 0) ||
-      !Number.isFinite(spacing.column) || !Number.isFinite(spacing.row)) return null;
+      !Number.isFinite(spacing.column) || !Number.isFinite(spacing.row)) {
+    return reject('physical-pixel-spacing-unavailable');
+  }
   return {
     source: 'dicom-calibrated-image-index-v1',
     calibrationSource: spacing.source,
@@ -15328,14 +15363,18 @@ function commandsModule({
       if (question?.answerConfig?.measurementSet?.enabled === true) {
         const activeViewportId = viewportGridService.getActiveViewportId();
         const activeViewport = cornerstoneViewportService.getCornerstoneViewport(activeViewportId);
-        const points = measurement?.points;
+        const points = getViewerQuizMeasurementPoints(measurement);
+        let failure = '';
         const evidence = getBowelQuizCalibratedPointContext({
           viewport: activeViewport, displaySetService, measurement, points,
+          onFailure: reason => { failure = reason; },
         });
         if (!evidence || evidence.physicalPoints.length !== 2) {
           return {
             ok: false,
-            reason: 'bwt-spatial-calibration-unavailable: select a BWT caliper on the current image with verifiable DICOM physical spacing',
+            reason: 'bwt-spatial-calibration-unavailable (' +
+              (failure || 'exactly-two-caliper-endpoints-required') +
+              '): select a calibrated BWT Length caliper from this DICOM frame',
           };
         }
         answer.quizSpatialEvidence = evidence;
