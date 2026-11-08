@@ -15082,7 +15082,7 @@ function commandsModule({
         // the contour in the active stack viewport's annotation group.
         // Quiz overlays are temporary, so re-register only these composite
         // gold contours under the viewport element when necessary.
-        if (entry.slot && viewport.element) {
+        if ((entry.slot || (entry.variant === 'rubric' && !!embeddedGoldAnnotation && !persistedRubricAnnotation)) && viewport.element) {
           const toolName = String(hydratedAnnotation.metadata?.toolName || '');
           const visibleInViewport = () =>
             (annotation.state.getAnnotations?.(toolName, viewport.element) || []).some(
