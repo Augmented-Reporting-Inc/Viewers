@@ -14781,11 +14781,61 @@ function commandsModule({
           learnerSeriesDoc,
           baseSeriesDoc,
         ]) || getViewerQuizMeasurementAnnotationFromService(learnerMeasurement);
-      const rubricAnnotation =
+      const persistedRubricAnnotation =
         findViewerQuizMeasurementAnnotationInSeriesDocs(rubricMeasurement, [
           baseSeriesDoc,
           learnerSeriesDoc,
         ]) || getViewerQuizMeasurementAnnotationFromService(rubricMeasurement);
+      // Multi-BWT educator gold entries retain their exact calibrated endpoint
+      // geometry in the quiz definition. A teaching-case Series document may not
+      // carry MeasurementAnnotations, so display a READ-ONLY gold overlay from
+      // this evidence if the canonical annotation is unavailable. Never use
+      // this reconstruction as learner scoring evidence or rewrite saved data.
+      const goldSpatialEvidence = asViewerQuizPlainObject(rubricMeasurement?.quizSpatialEvidence);
+      const goldWorldPoints = goldSpatialEvidence.worldPoints;
+      const goldTarget = asViewerQuizPlainObject(rubricMeasurement?.viewerTarget);
+      const validGoldPoint = (point: any) =>
+        Array.isArray(point) && point.length === 3 &&
+        point.every((value: any) => typeof value === 'number' && Number.isFinite(value));
+      const validGoldFrame = !!(
+        String(goldTarget.studyInstanceUID || '').trim() &&
+        String(goldTarget.seriesInstanceUID || '').trim() &&
+        String(goldTarget.sopInstanceUID || '').trim() &&
+        Number.isSafeInteger(Number(goldTarget.frameNumber)) &&
+        Number(goldTarget.frameNumber) >= 1
+      );
+      const goldImageReference = String(goldTarget.referencedImageId || '').trim();
+      const goldSourceId = getViewerQuizMeasurementSourceAnnotationId(rubricMeasurement);
+      const isEmbeddedBowelGold = !!(
+        goldSourceId && validGoldFrame && goldImageReference &&
+        String(rubricMeasurement?.measurementKind || '') === 'length' &&
+        /BWT/i.test(String(rubricMeasurement?.measurementType || '')) &&
+        goldSpatialEvidence.source === 'dicom-calibrated-image-index-v1' &&
+        Array.isArray(goldWorldPoints) && goldWorldPoints.length === 2 &&
+        goldWorldPoints.every(validGoldPoint)
+      );
+      const embeddedGoldAnnotation = isEmbeddedBowelGold ? {
+        annotationId: goldSourceId,
+        uid: goldSourceId,
+        workflow: VIEWER_MEASUREMENTS_WORKFLOW,
+        toolName: 'Length',
+        label: String(rubricMeasurement.measurementType),
+        measurementRole: String(rubricMeasurement.measurementType),
+        StudyInstanceUID: String(goldTarget.studyInstanceUID),
+        SeriesInstanceUID: String(goldTarget.seriesInstanceUID),
+        SOPInstanceUID: String(goldTarget.sopInstanceUID),
+        referencedImageId: goldImageReference,
+        frameNumber: Number(goldTarget.frameNumber),
+        points: goldWorldPoints,
+        measurements: {
+          value: rubricMeasurement.value,
+          length: rubricMeasurement.value,
+          unit: 'mm',
+          lengthUnit: 'mm',
+        },
+        isLocked: true,
+      } : null;
+      const rubricAnnotation = persistedRubricAnnotation || embeddedGoldAnnotation;
 
       // Composite answers retain several source contour IDs rather than a
       // single drawable annotation. Resolve each exact persisted contour and
@@ -14879,6 +14929,14 @@ function commandsModule({
       }
 
       if (!learnerAnnotation && !rubricAnnotation && resolvedRubricContours.length === 0) {
+        console.warn('[ViewerQuiz] no source annotation available for highlight', {
+          questionKey,
+          hasSourceId: !!goldSourceId,
+          hasCalibratedGeometry: !!embeddedGoldAnnotation,
+          hasGoldFrame: validGoldFrame,
+          hasGoldImageReference: !!goldImageReference,
+          hasSeriesAnnotations: !!(learnerSeriesDoc?.MeasurementAnnotations || baseSeriesDoc?.MeasurementAnnotations),
+        });
         return {
           ok: false,
           reason: compositeRubric ? 'composite-source-contours-not-found' : 'measurement-annotations-not-found',
@@ -14914,7 +14972,6 @@ function commandsModule({
       // Authoring gold calipers already loaded in Cornerstone should be selected
       // directly. Reconstructing a temporary comparison overlay can fail when
       // the saved source annotation has not yet been rehydrated into this viewport.
-      const goldSourceId = getViewerQuizMeasurementSourceAnnotationId(rubricMeasurement);
       if (goldSourceId && !getViewerQuizMeasurementSourceAnnotationId(learnerMeasurement)) {
         const liveGold = annotation.state.getAnnotation?.(goldSourceId);
         const goldTarget = getViewerQuizMeasurementReferenceTarget(rubricMeasurement, rubricAnnotation);
@@ -15010,6 +15067,14 @@ function commandsModule({
           : null;
 
         if (!comparisonAnnotationId || !hydratedAnnotation) {
+          console.warn('[ViewerQuiz] gold comparison overlay hydration failed', {
+            questionKey,
+            sourceIdPresent: !!getViewerQuizMeasurementSourceAnnotationId(rubricMeasurement),
+            usedEmbeddedGeometry: entry.variant === 'rubric' && !!embeddedGoldAnnotation && !persistedRubricAnnotation,
+            hasReferencedImageId: !!comparisonAnnotation.referencedImageId,
+            hasPoints: Array.isArray(comparisonAnnotation.points) && comparisonAnnotation.points.length === 2,
+            hasMatchedImage: !!match.imageId,
+          });
           continue;
         }
 
