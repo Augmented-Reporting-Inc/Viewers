@@ -5318,7 +5318,14 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                 <div className="font-semibold">
                   Bowel gold calipers: {goldBowelMeasurements.length} / {bowelSettings.requiredCount || 2}
                 </div>
-                <div className="mt-1">Draw a BWT Length caliper inside the ultrasound image region, label it, select it, then click “Add selected gold BWT caliper”. Add each caliper explicitly.</div>
+                <div className="mt-1">Draw and label a BWT Length caliper, select it, and click “Add selected gold BWT caliper”. Each successful capture increments the counter.</div>
+                {!isDraftDefinition(authoringDefinition) ? (
+                  <div className="mt-1 text-amber-200" role="status">Gold capture is disabled: open an editable draft of this quiz.</div>
+                ) : authoringSaving ? (
+                  <div className="mt-1 text-amber-200" role="status">Gold capture is disabled while the quiz is saving.</div>
+                ) : isCapturing ? (
+                  <div className="mt-1 text-amber-200" role="status">Another measurement or lumen-centre capture is currently active.</div>
+                ) : null}
                 {goldBowelMeasurements.map((entry, index) => (
                   <div key={entry.sourceAnnotationId || index} className="mt-1">
                     #{index + 1}: {entry.value} {entry.unit} · {entry.measurementType}
@@ -5343,7 +5350,10 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                         ? 'Replace lumen centre' : 'Capture lumen centre'}
                     </button>
                     <span>{Array.isArray(bowelSettings.lumenCenterPhysical)
-                      ? 'Centre captured' : 'Centre required for angular scoring'}</span>
+                      ? 'Centre captured'
+                      : !goldBowelMeasurements.length
+                        ? 'Record at least one gold BWT caliper first; centre capture is currently disabled.'
+                        : 'Click, then select the centre in the image; press Esc to cancel.'}</span>
                   </div>
                 )}
               </div>
@@ -5381,6 +5391,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
             ) : null}
             <button
               type="button"
+              title={bowelSet && (isCapturing || authoringSaving || !isDraftDefinition(authoringDefinition))
+                ? 'Gold BWT capture is unavailable while a capture/save is in progress or when the quiz is not an editable draft.'
+                : undefined}
               className="rounded border border-green-600 px-2 py-1 text-xs font-semibold text-green-100 disabled:opacity-50"
               disabled={isCapturing || authoringSaving || !isDraftDefinition(authoringDefinition)}
               onClick={event => {
