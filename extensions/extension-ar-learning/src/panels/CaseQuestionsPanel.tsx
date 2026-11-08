@@ -644,6 +644,13 @@ function getQuestionViewerTarget(question: QuizQuestion) {
   return candidates.find(targetHasNavigationIdentity) || null;
 }
 
+// Omitted mode is the historic behavior: open the instance but leave the
+// learner to select the frame. Explicit instance-and-frame mode starts from
+// the learner's current navigation rather than revealing the gold instance.
+function shouldGuideFrameSelectionToInstance(question: QuizQuestion) {
+  return plainObject(question?.answerConfig).frameSelectionMode !== 'instance_and_frame';
+}
+
 function getQuestionSelectionViewerTarget(
   question: QuizQuestion,
   viewerTarget: any,
@@ -2529,7 +2536,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     if (hasViewerTargetOverride) {
       resolvedViewerTarget = options.viewerTarget;
     } else if (question.type === 'frameSelection' && !authoringMode) {
-      resolvedViewerTarget = configuredFrameTarget;
+      resolvedViewerTarget = shouldGuideFrameSelectionToInstance(question)
+        ? configuredFrameTarget
+        : null;
     } else {
       resolvedViewerTarget =
         learnerFrameTarget ||
@@ -4622,7 +4631,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
             </div>
           ) : (
             <div className="text-xs text-gray-400">
-              Scroll or cine to the desired frame, then capture the current frame.
+              {shouldGuideFrameSelectionToInstance(question)
+                ? 'Scroll or cine to the desired frame, then capture the current frame.'
+                : 'Find the correct instance and frame in the study, then capture the current frame.'}
             </div>
           )}
         </div>
@@ -5321,7 +5332,22 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
 
         {question.type === 'frameSelection' ? (
           <div className="mt-2 rounded border border-gray-700 p-2">
-            <label className="block text-xs font-semibold text-gray-200">Frame tolerance</label>
+            <label className="block text-xs font-semibold text-gray-200">Learner task</label>
+            <select
+              className="mt-1 w-full rounded border border-gray-700 bg-black px-2 py-1 text-xs text-white"
+              value={answerConfig.frameSelectionMode === 'instance_and_frame' ? 'instance_and_frame' : 'frame_only'}
+              disabled={authoringSaving || !isDraftDefinition(authoringDefinition)}
+              onChange={event => patchAuthoringAnswerConfig(question, {
+                frameSelectionMode: event.target.value,
+              })}
+            >
+              <option value="frame_only">Find the correct frame (instance opens automatically)</option>
+              <option value="instance_and_frame">Find the correct instance and frame</option>
+            </select>
+            <div className="mt-1 text-[11px] text-gray-400">
+              The correct frame is never revealed when the learner opens the question.
+            </div>
+            <label className="mt-3 block text-xs font-semibold text-gray-200">Frame tolerance</label>
             <input
               className="mt-1 w-32 rounded border border-gray-700 bg-black px-2 py-1 text-sm text-white"
               type="number"
