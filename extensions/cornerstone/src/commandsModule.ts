@@ -6771,6 +6771,101 @@ function appendViewerQuizToleranceCircle({ viewport, point, radius, radiusUnit =
   return true;
 }
 
+/**
+ * Educator-only reference-location circle for multiple BWT gold calipers.
+ * `radiusMm` is calibrated millimetres, not Cornerstone world coordinates.
+ * Derive a true circle in image-physical space from the saved 2x4
+ * world-to-image affine and DICOM pixel spacing. Project each point to the
+ * current viewport; this handles unequal row/column spacing and rotation.
+ * This visual guide does NOT participate in multi-BWT scoring.
+ */
+function appendViewerQuizBowelGoldRadiusOutline({
+  viewport, quizSpatialEvidence, radiusMm, focused = false,
+}: {
+  viewport: any;
+  quizSpatialEvidence: any;
+  radiusMm: number;
+  focused?: boolean;
+}) {
+  const element = viewport?.element;
+  const evidence = quizSpatialEvidence;
+  const worldPoints = evidence?.worldPoints;
+  const affine = evidence?.worldToImageAffine;
+  const spacing = evidence?.pixelSpacing;
+  const rowMm = Number(spacing?.row);
+  const columnMm = Number(spacing?.column);
+  const radius = Number(radiusMm);
+  const point3 = (p: any) =>
+    Array.isArray(p) && p.length === 3 &&
+    p.every((v: any) => typeof v === 'number' && Number.isFinite(v));
+  if (!element || typeof viewport.worldToCanvas !== 'function' ||
+      !(radius > 0) || !Number.isFinite(radius) ||
+      !Number.isFinite(rowMm) || !Number.isFinite(columnMm) ||
+      !(rowMm > 0) || !(columnMm > 0) ||
+      !Array.isArray(worldPoints) || worldPoints.length !== 2 ||
+      !worldPoints.every(point3) ||
+      !Array.isArray(affine) || affine.length !== 2 ||
+      affine.some((row: any) => !Array.isArray(row) || row.length !== 4 ||
+        row.some((v: any) => typeof v !== 'number' || !Number.isFinite(v)))) {
+    return false;
+  }
+  const axisI = affine[0].slice(0, 3);
+  const axisJ = affine[1].slice(0, 3);
+  const dot3 = (a: number[], b: number[]) =>
+    a.reduce((sum, value, i) => sum + value * b[i], 0);
+  const aa = dot3(axisI, axisI);
+  const ab = dot3(axisI, axisJ);
+  const bb = dot3(axisJ, axisJ);
+  const determinant = aa * bb - ab * ab;
+  if (!Number.isFinite(determinant) || determinant <= 1e-12) return false;
+  const midpoint = worldPoints[0].map((value: number, i: number) =>
+    (value + worldPoints[1][i]) / 2);
+  const canvasPoints: Array<[number, number]> = [];
+  for (let step = 0; step < 64; step++) {
+    const theta = 2 * Math.PI * step / 64;
+    const dx = radius * Math.cos(theta) / columnMm;
+    const dy = radius * Math.sin(theta) / rowMm;
+    const a = (bb * dx - ab * dy) / determinant;
+    const b = (aa * dy - ab * dx) / determinant;
+    const world = midpoint.map((value: number, i: number) =>
+      value + a * axisI[i] + b * axisJ[i]);
+    let canvas: number[];
+    try { canvas = viewport.worldToCanvas(world); } catch { return false; }
+    if (!Array.isArray(canvas) || canvas.length < 2 ||
+        !Number.isFinite(canvas[0]) || !Number.isFinite(canvas[1])) {
+      return false;
+    }
+    canvasPoints.push([canvas[0], canvas[1]]);
+  }
+  const previousPosition = element.style.position;
+  if (!previousPosition || previousPosition === 'static') {
+    element.style.position = 'relative';
+  }
+  const ns = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(ns, 'svg');
+  svg.classList.add(VIEWER_QUIZ_MARKER_OVERLAY_CLASS);
+  svg.dataset.reviewState = 'bowel-gold-reference-radius';
+  svg.setAttribute('width', String(element.clientWidth));
+  svg.setAttribute('height', String(element.clientHeight));
+  svg.setAttribute('viewBox', `0 0 ${element.clientWidth} ${element.clientHeight}`);
+  svg.setAttribute('aria-label', `Gold BWT reference radius ${radius} mm, visual guide only`);
+  svg.style.position = 'absolute';
+  svg.style.left = '0';
+  svg.style.top = '0';
+  svg.style.pointerEvents = 'none';
+  svg.style.zIndex = '29';
+  const outline = document.createElementNS(ns, 'path');
+  outline.setAttribute('d', canvasPoints.map((p, i) =>
+    `${i === 0 ? 'M' : 'L'}${p[0].toFixed(2)} ${p[1].toFixed(2)}`).join(' ') + ' Z');
+  outline.setAttribute('stroke', focused ? '#fbbf24' : '#c084fc');
+  outline.setAttribute('stroke-width', focused ? '2.5' : '2');
+  outline.setAttribute('stroke-dasharray', '5 3');
+  outline.setAttribute('fill', focused ? 'rgba(251, 191, 36, 0.09)' : 'rgba(192, 132, 252, 0.06)');
+  svg.appendChild(outline);
+  element.appendChild(svg);
+  return true;
+}
+
 function getViewerQuizMeasurementPoints(value = {}) {
   const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
   const reviewPayload =
@@ -14852,6 +14947,7 @@ function commandsModule({
       goldMeasurements = [],
       goldMeasurement = null,
       highlightedSourceAnnotationId = '',
+      referenceRadiusMm = null,
       questionKey = '',
     } = {}) => {
       const quizAuthoringFlag = String(getViewerUrlSearchParams().get('arQuizAuthoring') || '').toLowerCase();
@@ -14993,6 +15089,27 @@ function commandsModule({
         );
         cornerstoneTools.annotation.selection.setAnnotationSelected?.(overlayId, focused);
       }
+      const radius = Number(referenceRadiusMm);
+      let referenceRadiusCount = 0;
+      if (referenceRadiusMm !== null && referenceRadiusMm !== '' &&
+          Number.isFinite(radius) && radius > 0) {
+        for (let i = 0; i < saved.length; i++) {
+          // Show the focused reference radius on Highlight. "Show all"
+          // displays the guide around every captured gold caliper.
+          const isFocused = !!selectedSource && sources[i].annotationId === selectedSource;
+          if (selectedSource && !isFocused) continue;
+          const rendered = appendViewerQuizBowelGoldRadiusOutline({
+            viewport,
+            quizSpatialEvidence: saved[i].quizSpatialEvidence,
+            radiusMm: radius,
+            focused: isFocused,
+          });
+          if (rendered) referenceRadiusCount++;
+          else console.warn('[ViewerQuiz] calibrated BWT reference radius unavailable', {
+            questionKey, caliperIndex: i + 1, radiusMm: radius,
+          });
+        }
+      }
       try {
         const { triggerAnnotationRenderForViewportIds } = await import(
           '@cornerstonejs/tools/utilities'
@@ -15002,7 +15119,10 @@ function commandsModule({
         console.warn('[ViewerQuiz] quiz gold set annotation render trigger failed', error);
       }
       viewport.render?.();
-      return { ok: true, rubricRendered: true, renderedCount: displayed.length };
+      return {
+        ok: true, rubricRendered: true, renderedCount: displayed.length,
+        referenceRadiusCount,
+      };
     },
     showViewerQuizMeasurementComparison: async ({
       learnerMeasurement = {},
