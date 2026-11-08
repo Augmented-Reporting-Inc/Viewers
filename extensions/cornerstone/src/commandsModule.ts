@@ -14911,6 +14911,38 @@ function commandsModule({
         };
       }
 
+      // Authoring gold calipers already loaded in Cornerstone should be selected
+      // directly. Reconstructing a temporary comparison overlay can fail when
+      // the saved source annotation has not yet been rehydrated into this viewport.
+      const goldSourceId = getViewerQuizMeasurementSourceAnnotationId(rubricMeasurement);
+      if (goldSourceId && !getViewerQuizMeasurementSourceAnnotationId(learnerMeasurement)) {
+        const liveGold = annotation.state.getAnnotation?.(goldSourceId);
+        const goldTarget = getViewerQuizMeasurementReferenceTarget(rubricMeasurement, rubricAnnotation);
+        const expectedImage = normalizeImageIdForCompare(
+          goldTarget?.referencedImageId || ''
+        );
+        const liveImage = normalizeImageIdForCompare(
+          liveGold?.metadata?.referencedImageId || ''
+        );
+        if (liveGold && (!expectedImage || (liveImage && expectedImage === liveImage))) {
+          liveGold.isVisible = true;
+          cornerstoneTools.annotation.selection.setAnnotationSelected?.(goldSourceId, true);
+          try {
+            const { triggerAnnotationRenderForViewportIds } = await import(
+              '@cornerstonejs/tools/utilities'
+            );
+            triggerAnnotationRenderForViewportIds([comparisonViewportId]);
+          } catch {}
+          viewport.render?.();
+          return {
+            ok: true, reason: '', renderedCount: 1,
+            learnerRendered: false, rubricRendered: true,
+            compositeContoursExpected: 0, compositeContoursResolved: 0,
+            toleranceCircleRendered: false,
+          };
+        }
+      }
+
       const frameOfReferenceId =
         viewport?.getFrameOfReferenceUID?.() ||
         viewport?.getImageData?.()?.metadata?.FrameOfReferenceUID ||
