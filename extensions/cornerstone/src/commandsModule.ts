@@ -8758,6 +8758,11 @@ function commandsModule({
           const nextLabel = options.normalizeLabel ? options.normalizeLabel(label) : label;
           finishPendingLength();
           measurementService.update(uid, { ...measurement, label: nextLabel }, true);
+          if (measurement?.toolName === 'Length' && String(nextLabel).trim()) {
+            window.dispatchEvent(new CustomEvent('ar-learning:quiz-measurement-labelled', {
+              detail: { measurementId: uid },
+            }));
+          }
           return nextLabel;
         }
         discardPendingLength();
@@ -8776,6 +8781,11 @@ function commandsModule({
         const nextLabel = options.normalizeLabel ? options.normalizeLabel(val) : val;
         finishPendingLength();
         measurementService.update(uid, { ...measurement, label: nextLabel }, true);
+        if (measurement?.toolName === 'Length' && String(nextLabel).trim()) {
+          window.dispatchEvent(new CustomEvent('ar-learning:quiz-measurement-labelled', {
+            detail: { measurementId: uid },
+          }));
+        }
         return nextLabel;
       }
 
