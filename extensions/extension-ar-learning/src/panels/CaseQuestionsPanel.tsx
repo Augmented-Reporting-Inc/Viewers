@@ -2341,19 +2341,27 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
 
     const answerConfig = plainObject(question.answerConfig);
     const scoringConfig = plainObject(question.scoringConfig);
-    const goldMeasurement = plainObject(answerConfig.goldMeasurement);
+    const isBowelGoldSet = isBowelMeasurementSetQuestion(question);
+    const goldMeasurement = isBowelGoldSet
+      ? getBowelMeasurementSetEntries(answerConfig.goldMeasurements)[0] || null
+      : plainObject(answerConfig.goldMeasurement);
 
-    if (!hasMeasurementComparisonReference(goldMeasurement)) {
+    if (isBowelGoldSet ? !goldMeasurement : !hasMeasurementComparisonReference(goldMeasurement)) {
       return null;
     }
 
-    const result = await runViewerCommand(commandsManager, 'showViewerQuizMeasurementComparison', {
-      rubricMeasurement: goldMeasurement,
-      viewerTarget: getNestedViewerTarget(goldMeasurement) || getQuestionViewerTarget(question),
-      questionKey: question.questionKey,
-      radius: scoringConfig.radius,
-      radiusUnit: cleanString(scoringConfig.radiusUnit) || 'world',
-    });
+    const result = isBowelGoldSet
+      ? await runViewerCommand(commandsManager, 'showViewerQuizAuthoringGoldCaliper', {
+          goldMeasurement,
+          questionKey: question.questionKey,
+        })
+      : await runViewerCommand(commandsManager, 'showViewerQuizMeasurementComparison', {
+          rubricMeasurement: goldMeasurement,
+          viewerTarget: getNestedViewerTarget(goldMeasurement) || getQuestionViewerTarget(question),
+          questionKey: question.questionKey,
+          radius: scoringConfig.radius,
+          radiusUnit: cleanString(scoringConfig.radiusUnit) || 'world',
+        });
 
     if (result?.rubricRendered !== true) {
       console.warn('[CaseQuestionsPanel] authoring gold measurement was not displayed', {
@@ -5546,14 +5554,13 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                     onClick={event => {
                       event.preventDefault();
                       event.stopPropagation();
-                      void runViewerCommand(commandsManager, 'showViewerQuizMeasurementComparison', {
-                        rubricMeasurement: entry,
-                        viewerTarget: entry.viewerTarget,
+                      void runViewerCommand(commandsManager, 'showViewerQuizAuthoringGoldCaliper', {
+                        goldMeasurement: entry,
                         questionKey: question.questionKey,
                       }).then(result => {
                         if (result?.rubricRendered !== true) uiNotificationService.show({
                           title: 'Bowel gold caliper',
-                          message: 'Could not highlight this caliper; verify its saved source annotation.',
+                          message: `Could not display saved gold caliper: ${cleanString(result?.reason) || 'unknown error'}.`,
                           type: 'warning', duration: 4500,
                         });
                       }).catch(error => uiNotificationService.show({
