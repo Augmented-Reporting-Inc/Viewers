@@ -8,10 +8,11 @@ const panelSource = fs.readFileSync(
   'utf8'
 );
 
-test('only explicit frame-only questions guide learners to the correct instance', () => {
+test('legacy and explicit frame-only questions open the assigned instance without its frame', () => {
   assert.match(panelSource, /function shouldGuideFrameSelectionToInstance\(question: QuizQuestion\)/);
-  assert.match(panelSource, /frameSelectionMode === 'frame_only'/);
+  assert.match(panelSource, /mode === '' \|\| mode === 'frame_only'/);
   assert.match(panelSource, /shouldGuideFrameSelectionToInstance\(question\)\s*\? configuredFrameTarget\s*: null/);
+  assert.match(panelSource, /Mode: Legacy — viewer opens the assigned instance/);
 });
 
 test('instance-and-frame questions do not jump to the correct instance', () => {
@@ -114,6 +115,12 @@ test('measurement label wraps and longitudinal caliper spacing uses learner cali
   assert.match(panelSource, /getLearnerBwtCaptureFailureMessage\(reason\)/);
 });
 
+
+test('learner cross-sectional BWT displays a live estimated angle without gold centre data', () => {
+  assert.match(panelSource, /getBowelMeasurementSetEstimatedRadialAngleDegrees\(bowelEntries\)/);
+  assert.match(panelSource, /Estimated radial angle: \{estimatedRadialAngle\.toFixed\(1\)\}°/);
+  assert.match(panelSource, /official scored angle uses the educator-defined lumen centre/);
+});
 
 test('frame-only navigation selects a matching SOP display set rather than first-in-series', () => {
   const vm = require('node:vm');
