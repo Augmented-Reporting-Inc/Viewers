@@ -58,7 +58,8 @@ test('learner measurement domain prefers the authorized quiz before URL fallback
     portion.indexOf('normalizeQuizMeasurementDomain(quiz?.domain)') <
       portion.indexOf('getQuizAuthoringMeasurementDomainFromUrl()')
   );
-  assert.match(panelSource, /getLearnerQuizMeasurementDomain\(quiz, payload\)/);
+  assert.match(panelSource, /getQuizQuestionMeasurementDomain\(quiz, question, payload\)/);
+  assert.match(panelSource, /isBowelMeasurementSetQuestion\(question\) \? 'bowel'/);
 });
 
 
@@ -76,7 +77,7 @@ test('restored active learner question re-broadcasts the Bowel domain before lab
   const effect = panelSource.slice(start, end);
   assert.ok(start >= 0 && end > start);
   assert.match(effect, /activeQuestionKey\.split\(':\'\)/);
-  assert.match(effect, /getLearnerQuizMeasurementDomain\(quiz, payload\)/);
+  assert.match(effect, /getQuizQuestionMeasurementDomain\(quiz, question, payload\)/);
   assert.match(effect, /syncQuizMeasurementDomainToUrl\(domain, \{ overwrite: true \}\)/);
   assert.match(effect, /getLearnerQuizMeasurementDomain\(item, payload\)/);
   assert.match(effect, /if \(domains\.length === 1\) domain = domains\[0\]/);
