@@ -97,3 +97,29 @@ export function appendBowelMeasurementSetAnswer(
   return { ok: true, entries, referenceTarget: prior[0]?.viewerTarget || target,
     ...(axis && Math.hypot(...axis) > 0 ? { axis } : {}) };
 }
+
+/**
+ * Informational learner spacing, measured between caliper midpoints in the
+ * same DICOM-calibrated physical coordinate system. Unlike longitudinal
+ * scoring this is Euclidean separation, not projection on the gold axis.
+ * Never use the educator's gold geometry to compute learner feedback.
+ */
+export function getBowelMeasurementSetMidpointSpacingMm(entries: MeasurementAnswer[]): number | null {
+  if (!Array.isArray(entries) || entries.length !== 2) return null;
+  const points = entries.map(entry => obj(entry.quizSpatialEvidence).physicalPoints);
+  if (points.some(value => !Array.isArray(value) || value.length !== 2 ||
+      value.some((point: any) => !vector(point)))) return null;
+  const frameKeys = entries.map(entry => frame(entry.viewerTarget));
+  if (!frameKeys[0] || frameKeys[0] !== frameKeys[1]) return null;
+  const calibrations = entries.map(entry => obj(entry.quizSpatialEvidence));
+  if (calibrations.some(value => value.source !== 'dicom-calibrated-image-index-v1')) return null;
+  if (calibrations[0].calibrationSource !== calibrations[1].calibrationSource ||
+      calibrations[0].pixelSpacing?.row !== calibrations[1].pixelSpacing?.row ||
+      calibrations[0].pixelSpacing?.column !== calibrations[1].pixelSpacing?.column) return null;
+  const midpoint = (pair: number[][]) =>
+    pair[0].map((value, index) => (value + pair[1][index]) / 2);
+  const a = midpoint(points[0]);
+  const b = midpoint(points[1]);
+  const spacing = Math.hypot(...a.map((value, index) => value - b[index]));
+  return Number.isFinite(spacing) ? spacing : null;
+}
