@@ -165,6 +165,17 @@ function isViewerQuizMeasurementCaptureMode() {
   return ['selected', 'manual', 'quiz'].includes(captureMode) || isViewerQuizWorkflowFromUrl();
 }
 
+// Only explicit URL configuration may act as a quiz-domain fallback. The
+// generic /rviewer/ path is NOT proof that a bowel quiz uses Echo labels.
+function getExplicitQuizMeasurementDomainFromUrl() {
+  if (getLearningUrlParam('arIntegration') === 'iuscan') return 'bowel';
+  return normalizeQuizMeasurementDomain(
+    getLearningUrlParam('arMeasurementDomain') ||
+    getLearningUrlParam('arViewerDomain') ||
+    getLearningUrlParam('viewerDomain')
+  );
+}
+
 const AR_QUIZ_MEASUREMENT_ADDED_EVENT = 'ar-learning:quiz-measurement-added';
 
 function dispatchViewerQuizMeasurementAdded(measurement) {
@@ -739,8 +750,7 @@ async function getLabelConfigForMeasurement(
   const viewerQuizMeasurementWorkflow = isViewerQuizMeasurementCaptureMode();
   const resolvedStudyDomain = viewerQuizMeasurementWorkflow
     ? normalizeQuizMeasurementDomain(quizMeasurementDomain) ||
-      normalizeQuizMeasurementDomain(getViewerMeasurementDomainFromPath()) ||
-      normalizeQuizMeasurementDomain(await resolveViewerMeasurementDomain(commandsManager))
+      getExplicitQuizMeasurementDomainFromUrl()
     : await resolveViewerMeasurementDomain(commandsManager);
   const domain = resolvedStudyDomain === 'iuscan' ? 'bowel' : resolvedStudyDomain;
 
@@ -1110,9 +1120,9 @@ function modeFactory({ modeConfiguration }) {
         );
       }
 
-      _quizMeasurementDomain = normalizeQuizMeasurementDomain(
-        getViewerMeasurementDomainFromPath()
-      );
+      _quizMeasurementDomain = isViewerQuizMeasurementCaptureMode()
+        ? getExplicitQuizMeasurementDomainFromUrl()
+        : normalizeQuizMeasurementDomain(getViewerMeasurementDomainFromPath());
 
       _quizMeasurementDomainHandler = (event: Event) => {
         const nextDomain = normalizeQuizMeasurementDomain(
