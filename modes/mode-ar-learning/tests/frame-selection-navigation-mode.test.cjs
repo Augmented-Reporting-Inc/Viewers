@@ -226,3 +226,11 @@ test('multiple-BWT post-score review shows each gold length and scoring rules', 
   assert.match(panelSource, /current rubric does not require/);
   assert.match(panelSource, /reviewDetails\.spatial\.observed/);
 });
+
+
+test('review buttons cannot re-trigger question-open navigation on focus', () => {
+  assert.match(panelSource, /data-quiz-review-action="learner"/);
+  assert.match(panelSource, /data-quiz-review-action="correct"/);
+  assert.match(panelSource, /closest\?\.\('\[data-quiz-review-action\]'\)/);
+  assert.match(panelSource, /revealExactFrame: question\.type === 'frameSelection'/);
+});
