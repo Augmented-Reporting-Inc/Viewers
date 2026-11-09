@@ -19,6 +19,18 @@ export const isBowelMeasurementSetQuestion = (question: QuestionLike): boolean =
 export function getBowelMeasurementSetEntries(value: any): MeasurementAnswer[] {
   return Array.isArray(value) ? value : [];
 }
+
+/** Human-readable display for the existing canonical BWT measurement labels. */
+export function formatBowelBwtMeasurementLabel(value: unknown): string {
+  const label = clean(value);
+  const match = label.match(/^Bowel([A-Za-z]+)BWT$/);
+  if (!match) return label;
+  const anatomicalName = match[1]
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .toLowerCase()
+    .replace(/^neo terminal/, 'neo-terminal');
+  return anatomicalName.charAt(0).toUpperCase() + anatomicalName.slice(1) + ' BWT';
+}
 export function appendBowelMeasurementSetAnswer(
   question: QuestionLike,
   existing: MeasurementAnswer[],
@@ -41,9 +53,14 @@ export function appendBowelMeasurementSetAnswer(
   }
   const label = clean(answer.measurementType || obj(answer.reviewPayload).label);
   const requiredLabel = clean(settings.measurementTarget);
-  if (!label || !/BWT/i.test(label) ||
-      (requiredLabel && label !== requiredLabel)) {
-    return { ok: false, reason: 'Select a bowel wall-thickness caliper with the expected anatomical label.' };
+  if (!label || !/BWT/i.test(label)) {
+    return { ok: false, reason: requiredLabel
+      ? `Select a bowel wall-thickness caliper with the expected anatomical label: ${formatBowelBwtMeasurementLabel(requiredLabel)}.`
+      : 'Select a labelled bowel wall-thickness caliper.' };
+  }
+  if (requiredLabel && label !== requiredLabel) {
+    return { ok: false,
+      reason: `Select a bowel wall-thickness caliper with the expected anatomical label: ${formatBowelBwtMeasurementLabel(requiredLabel)} (selected: ${formatBowelBwtMeasurementLabel(label)}).` };
   }
   const id = clean(answer.sourceAnnotationId);
   const target = obj(answer.viewerTarget);
