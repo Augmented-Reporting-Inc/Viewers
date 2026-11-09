@@ -1192,6 +1192,7 @@ function modeFactory({ modeConfiguration }) {
         // learner begins a new Length drawing. Do not suppress that genuine
         // Cornerstone completion; hydrated saved annotations are excluded below.
         const freshDrawingCompleted =
+          quizMeasurementWorkflow &&
           source === 'cornerstone-annotation-completed' && !!sourceAnnotation;
 
         if (
