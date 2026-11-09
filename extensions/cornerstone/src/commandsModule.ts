@@ -4778,23 +4778,23 @@ function getDisplaySetForViewerQuizTarget(displaySetService, target = {}) {
     return null;
   }
 
-  if (target.displaySetInstanceId && displaySetService.getDisplaySetByUID) {
-    const displaySet = displaySetService.getDisplaySetByUID(target.displaySetInstanceId);
-
-    if (displaySet) {
-      return displaySet;
-    }
-  }
-
+  // DICOM SOP identity wins over a display-set hint: the saved hint can
+  // become stale when the same cine series is regrouped by OHIF.
   if (target.sopInstanceId && displaySetService.getDisplaySetForSOPInstanceUID) {
     const displaySet = displaySetService.getDisplaySetForSOPInstanceUID(
-      target.sopInstanceId,
-      target.seriesInstanceId
+      target.sopInstanceId, target.seriesInstanceId
     );
+    if (displaySet && displaySetContainsSavedAnnotation(displaySet, {
+      SOPInstanceUID: target.sopInstanceId,
+    })) return displaySet;
+  }
 
-    if (displaySet) {
-      return displaySet;
-    }
+  if (target.displaySetInstanceId && displaySetService.getDisplaySetByUID) {
+    const displaySet = displaySetService.getDisplaySetByUID(target.displaySetInstanceId);
+    if (displaySet && (!target.sopInstanceId ||
+        displaySetContainsSavedAnnotation(displaySet, {
+          SOPInstanceUID: target.sopInstanceId,
+        }))) return displaySet;
   }
 
   const seriesDisplaySets =
