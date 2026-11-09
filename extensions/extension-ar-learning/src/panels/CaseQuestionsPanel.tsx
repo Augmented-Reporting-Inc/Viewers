@@ -5301,6 +5301,10 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                   selectQuestion(quiz, question, {
                     force: true,
                     viewerTarget: learnerTarget,
+                    // Reviewing one's own captured frame is an explicit,
+                    // authorized action. The initial question-click filter
+                    // must not strip the learner's selected frame here.
+                    revealExactFrame: question.type === 'frameSelection',
                     markerOptions: isPlaceMarkerQuestionType(question)
                       ? getPlacedAnswerMarkerOptions(learnerAnswer)
                       : [],
