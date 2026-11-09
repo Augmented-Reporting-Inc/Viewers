@@ -4900,29 +4900,40 @@ function findImageIdIndexForViewerQuizTarget(viewport, target = {}) {
   };
 }
 
-async function waitForViewerQuizTargetImageMatch(viewport, target = {}, attempts = 20) {
+async function waitForViewerQuizTargetImageMatch(
+  viewport, target = {}, attempts = 20, resolveViewport = null
+) {
   let lastMatch = {
     index: -1,
     imageId: '',
     imageIds: [],
     source: 'not-started',
   };
+  let latestViewport = viewport;
 
   for (let attempt = 0; attempt < attempts; attempt += 1) {
-    lastMatch = findImageIdIndexForViewerQuizTarget(viewport, target);
+    // A display-set update can recreate the viewport; retry against the
+    // current instance instead of a stale previous image stack.
+    const resolved = typeof resolveViewport === 'function' ? resolveViewport() : null;
+    latestViewport = resolved || latestViewport;
+    lastMatch = findImageIdIndexForViewerQuizTarget(latestViewport, target);
 
     if (lastMatch.index >= 0) {
-      return lastMatch;
+      return { ...lastMatch, viewport: latestViewport };
     }
 
     await sleep(100);
   }
 
-  return lastMatch;
+  return { ...lastMatch, viewport: latestViewport };
 }
 
-async function jumpViewportToViewerQuizTargetImage(viewport, target = {}) {
-  const match = await waitForViewerQuizTargetImageMatch(viewport, target);
+async function jumpViewportToViewerQuizTargetImage(viewport, target = {}, resolveViewport = null) {
+  // Instance-only quiz guidance has no gold frame and may require an
+  // asynchronous cine display-set transition.
+  const attempts = target.sopInstanceId && !Number.isFinite(target.frameNumber) ? 70 : 20;
+  const { viewport: latestViewport, ...match } =
+    await waitForViewerQuizTargetImageMatch(viewport, target, attempts, resolveViewport);
 
   if (match.index < 0) {
     console.warn('[ViewerQuiz] could not find target image in viewport stack', {
@@ -4941,15 +4952,16 @@ async function jumpViewportToViewerQuizTargetImage(viewport, target = {}) {
   }
 
   try {
-    if (viewport.setImageIdIndex) {
-      await viewport.setImageIdIndex(match.index);
-    } else if (viewport.element) {
-      csUtils.jumpToSlice(viewport.element, {
+    const targetViewport = latestViewport || viewport;
+    if (targetViewport.setImageIdIndex) {
+      await targetViewport.setImageIdIndex(match.index);
+    } else if (targetViewport.element) {
+      csUtils.jumpToSlice(targetViewport.element, {
         imageIndex: match.index,
       });
     }
 
-    viewport.render?.();
+    targetViewport.render?.();
 
     console.info('[ViewerQuiz] jumped to target image', {
       imageIndex: match.index,
@@ -14804,16 +14816,17 @@ function commandsModule({
         });
 
         if (viewportsToUpdate.length) {
-          actions.setDisplaySetsForViewports({ viewportsToUpdate });
+          await Promise.resolve(actions.setDisplaySetsForViewports({ viewportsToUpdate }));
           await sleep(300);
         }
       }
 
-      const viewport =
+      const resolveTargetViewport = () =>
         cornerstoneViewportService.getCornerstoneViewport(targetViewportId) ||
         cornerstoneViewportService.getCornerstoneViewport(
           viewportGridService.getActiveViewportId()
         );
+      const viewport = resolveTargetViewport();
 
       if (!viewport) {
         console.warn('[ViewerQuiz] no viewport available for target navigation', {
@@ -14827,7 +14840,9 @@ function commandsModule({
         };
       }
 
-      const jumpResult = await jumpViewportToViewerQuizTargetImage(viewport, target);
+      const jumpResult = await jumpViewportToViewerQuizTargetImage(
+        viewport, target, resolveTargetViewport
+      );
 
       return {
         ...jumpResult,
