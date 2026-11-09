@@ -14999,7 +14999,61 @@ function commandsModule({
           renderedCount,
         };
       }
-      return { ...displayed, ok: true, renderedCount, learnerRendered: true };
+
+      // Length hydration can return a Cornerstone annotation object without
+      // indexing it under the active stack viewport's actual annotation group.
+      // Confirm real viewport registration, not only the hydration count.
+      const viewportId = displayed.viewportId || viewportGridService.getActiveViewportId();
+      const viewport = cornerstoneViewportService.getCornerstoneViewport(viewportId);
+      if (!viewport?.element) {
+        return { ok: false, reason: 'learner-bwt-viewport-unavailable', renderedCount: 0 };
+      }
+      const manager = annotation.state.getAnnotationManager?.();
+      const groupKey = manager?.getGroupKey?.(viewport.element);
+      const visibleOnViewport = (annotationId: string) =>
+        (annotation.state.getAnnotations?.('Length', viewport.element) || []).some(
+          item => getAnnotationId(item) === annotationId
+        );
+
+      let indexedCount = 0;
+      for (const source of sourcesToDisplay) {
+        const annotationId = getAnnotationId(source);
+        const live = annotation.state.getAnnotation?.(annotationId);
+        if (!live) continue;
+        if (!visibleOnViewport(annotationId) && manager?.addAnnotation && groupKey != null) {
+          annotation.state.removeAnnotation?.(annotationId);
+          live.metadata = {
+            ...(live.metadata || {}),
+            FrameOfReferenceUID: groupKey,
+          };
+          manager.addAnnotation(live, groupKey);
+        }
+        if (visibleOnViewport(annotationId)) {
+          live.isVisible = true;
+          cornerstoneTools.annotation.selection.setAnnotationSelected?.(
+            annotationId, annotationId === ids[selectedIndex]
+          );
+          indexedCount += 1;
+        }
+      }
+      try {
+        const { triggerAnnotationRenderForViewportIds } = await import(
+          '@cornerstonejs/tools/utilities'
+        );
+        triggerAnnotationRenderForViewportIds([viewport.id || viewportId]);
+      } catch {}
+      viewport.render?.();
+      if (indexedCount !== verified.length) {
+        console.warn('[ViewerQuiz] BWT annotations not indexed in viewport', {
+          questionKey, expectedCount: verified.length, indexedCount,
+        });
+        return {
+          ...displayed, ok: false, reason: 'learner-bwt-viewport-registration-failed',
+          renderedCount: indexedCount,
+        };
+      }
+
+      return { ...displayed, ok: true, renderedCount: indexedCount, learnerRendered: true };
     },
 
     showViewerQuizLearnerMeasurement: async ({
