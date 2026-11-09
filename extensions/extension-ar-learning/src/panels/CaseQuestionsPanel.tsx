@@ -1985,6 +1985,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
   const autoBowelLearnerCaptureQueueRef = useRef<Promise<void>>(Promise.resolve());
   const bowelCaptureFailureReasonRef = useRef<Record<string, string>>({});
   const [bowelCaptureErrors, setBowelCaptureErrors] = useState<Record<string, string>>({});
+  const [frameNavigationErrors, setFrameNavigationErrors] = useState<Record<string, string>>({});
   // Preserve the newest quiz answers while several labelled calipers complete
   // before React renders the preceding capture.
   const latestLearnerAnswersRef = useRef(answersByQuizKey);
@@ -2446,6 +2447,14 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       return;
     }
     lastActivatedQuestionRef.current = nextActiveQuestionKey;
+    if (question.type === 'frameSelection') {
+      setFrameNavigationErrors(current => {
+        if (!current[nextActiveQuestionKey]) return current;
+        const next = { ...current };
+        delete next[nextActiveQuestionKey];
+        return next;
+      });
+    }
     // Change the question binding synchronously, but start guided EF/LA
     // only after navigation has reached the question's image/viewport.
     setActiveQuestionKey(nextActiveQuestionKey);
@@ -2639,6 +2648,17 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     }
 
     if (!viewerTarget) {
+      if (question.type === 'frameSelection' && !authoringMode &&
+          shouldGuideFrameSelectionToInstance(question)) {
+        const message = 'This quiz version has no assigned instance to open. Ask the educator to verify the gold target and activate the updated quiz version.';
+        console.warn('[CaseQuestionsPanel] guided frame question missing learner navigation hint', {
+          quizKey: quiz.quizKey,
+          quizVersion: quiz.quizVersion,
+          questionKey: question.questionKey,
+          frameSelectionMode: plainObject(question.answerConfig).frameSelectionMode,
+        });
+        setFrameNavigationErrors(current => ({ ...current, [nextActiveQuestionKey]: message }));
+      }
       if (overlayMarkers.length) {
         await runViewerCommand(commandsManager, 'showViewerQuizMarkerOptions', {
           viewerTarget: null,
@@ -2657,10 +2677,17 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         questionKey: question.questionKey,
       });
 
+      if (question.type === 'frameSelection' && !authoringMode &&
+          shouldGuideFrameSelectionToInstance(question) && result?.ok !== true) {
+        const message = 'The viewer could not open the assigned instance. Select the question again; if the problem persists, contact the educator.';
+        setFrameNavigationErrors(current => ({ ...current, [nextActiveQuestionKey]: message }));
+      }
       if (result && result.ok === false && result.reason !== 'empty-target') {
         console.warn('[CaseQuestionsPanel] viewer quiz navigation did not complete', {
           questionKey: question.questionKey,
-          result,
+          reason: result.reason,
+          source: result.source,
+          frameSelectionMode: plainObject(question.answerConfig).frameSelectionMode,
         });
       }
 
@@ -2676,6 +2703,13 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       }
     } catch (error) {
       console.warn('[CaseQuestionsPanel] viewer quiz navigation failed:', error);
+      if (question.type === 'frameSelection' && !authoringMode &&
+          shouldGuideFrameSelectionToInstance(question)) {
+        setFrameNavigationErrors(current => ({
+          ...current,
+          [nextActiveQuestionKey]: 'The assigned instance could not be opened. Please retry or contact the educator.',
+        }));
+      }
     }
     } finally {
       await activateGuidedAfterNavigation();
@@ -4723,10 +4757,16 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     if (question.type === 'frameSelection') {
       const captureKey = `${quiz.quizKey}:${question.questionKey}`;
       const captureInProgress = capturingFrameKey === captureKey;
+      const frameNavigationError = frameNavigationErrors[captureKey] || '';
       const selectedTarget = plainObject(value?.selectedTarget);
 
       return (
         <div className="mt-2 space-y-2">
+          {frameNavigationError ? (
+            <div className="rounded border border-amber-700 bg-amber-950/30 p-2 text-xs text-amber-100" role="alert">
+              {frameNavigationError}
+            </div>
+          ) : null}
           <button
             type="button"
             className="hover:bg-blue-950 rounded border border-blue-500 px-2 py-1 text-xs font-semibold text-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
