@@ -43,6 +43,24 @@ test('learner bowel measurements bind automatically, without a second capture bu
   assert.doesNotMatch(panelSource, /Add selected BWT caliper/);
 });
 
+test('viewer authoring retains full quiz ordinals while skipping non-viewer questions', () => {
+  const start = panelSource.indexOf('if (authoringMode) {', panelSource.indexOf('function renderAuthoringQuestion('));
+  const end = panelSource.indexOf('const hasLearnerQuizContent', start);
+  assert.ok(start > 0 && end > start, 'Missing viewer quiz authoring panel');
+  const authoringPanel = panelSource.slice(start, end);
+  assert.ok(authoringPanel.includes('authoringQuestions.map((question, index) =>'));
+  assert.ok(authoringPanel.includes(
+    'isViewerNativeQuestion(question) ? renderAuthoringQuestion(question, index) : null'
+  ));
+  assert.ok(!authoringPanel.includes('authoringQuestions.filter(isViewerNativeQuestion).map'));
+  assert.ok(panelSource.includes(
+    '{index + 1}. {question.title || question.prompt || question.questionKey}'
+  ));
+  const questions = [true, true, false, true, false, true, true, true];
+  const numbers = questions.flatMap((needsViewer, index) => needsViewer ? [index + 1] : []);
+  assert.deepEqual(numbers, [1, 2, 4, 6, 7, 8]);
+});
+
 test('learner cards display an explicit active question status', () => {
   assert.match(panelSource, /isActiveQuestion \? \(\s*<div[^>]*>[\s\S]*?Active Question/);
 });
