@@ -3037,7 +3037,13 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
           try {
             for (const delayMs of [100, 350, 850, 1800]) {
               await new Promise(resolve => window.setTimeout(resolve, delayMs));
-              if (lastActivatedQuestionRef.current !== activationKey) return;
+              // A reopened quiz can restore its highlighted active question
+              // without a fresh card click. The ref is then empty, but the
+              // persisted activeQuestionKey is still a valid learner binding.
+              const lastActivated = lastActivatedQuestionRef.current;
+              if (lastActivated
+                ? lastActivated !== activationKey
+                : activeQuestionKey !== activationKey) return;
               const currentEntries = getBowelMeasurementSetEntries(
                 plainObject(latestLearnerAnswersRef.current[quizKey]?.[questionKey]).measurements
               );
@@ -3047,7 +3053,10 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               });
               if (captured === true) return;
             }
-            if (lastActivatedQuestionRef.current !== activationKey) return;
+            const lastActivated = lastActivatedQuestionRef.current;
+            if (lastActivated
+              ? lastActivated !== activationKey
+              : activeQuestionKey !== activationKey) return;
             const reason = bowelCaptureFailureReasonRef.current[activationKey] || 'measurement-not-ready';
             console.warn('[CaseQuestionsPanel] learner BWT caliper not captured', {
               quizKey, questionKey, measurementId, reason,
