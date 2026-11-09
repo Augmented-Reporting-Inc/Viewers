@@ -1217,8 +1217,9 @@ function modeFactory({ modeConfiguration }) {
             return false;
           }
 
-          _handledCompletedAnnotationIds.add(id);
-
+          // Do not mark this annotation as handled until the quiz's label is
+          // confirmed. The Length dialog and MeasurementService update may
+          // finish on different ticks; otherwise failed captures cannot retry.
           commandsManager.runCommand('markViewerMeasurementCreatedInSession', {
             uid: id,
           });
@@ -1266,18 +1267,28 @@ function modeFactory({ modeConfiguration }) {
             }
           }
 
-          const completedMeasurement =
+          let completedMeasurement =
             measurementService.getMeasurement?.(id) || currentMeasurement;
 
-          // A canceled or failed label dialog must not bind an unlabeled gold answer.
-          // Read the service entry again: label updates happen inside the dialog command.
+          // The labelling dialog can resolve before its MeasurementService
+          // update is readable. Check the exact source ID before declaring
+          // this completion handled; the subsequent quiz capture needs the label.
           if (quizMeasurementWorkflow && !String(completedMeasurement?.label || '').trim()) {
-            console.info('[AR Measurements] skipped unlabeled quiz measurement', {
+            for (let attempt = 0; attempt < 8; attempt += 1) {
+              await new Promise(resolve => window.setTimeout(resolve, 50));
+              completedMeasurement = measurementService.getMeasurement?.(id) || completedMeasurement;
+              if (String(completedMeasurement?.label || '').trim()) break;
+            }
+          }
+
+          if (quizMeasurementWorkflow && !String(completedMeasurement?.label || '').trim()) {
+            console.warn('[AR Measurements] quiz caliper not labelled; capture deferred', {
               annotationId: id,
             });
             return false;
           }
 
+          _handledCompletedAnnotationIds.add(id);
           dispatchViewerQuizMeasurementAdded(completedMeasurement);
 
           if (!isViewerQuizMeasurementCaptureMode()) {
