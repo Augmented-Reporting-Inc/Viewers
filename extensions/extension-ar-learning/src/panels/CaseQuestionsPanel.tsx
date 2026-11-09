@@ -4814,7 +4814,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
             <div className="rounded border border-blue-700 bg-blue-950/20 p-2 text-xs text-gray-200">
               <div className="font-semibold">Bowel measurements: {bowelEntries.length} / {bowelCount}</div>
               <div className="mt-1 text-gray-400">
-                Capture distinct labelled BWT calipers on the same DICOM frame.
+                Draw and label each BWT caliper on the same DICOM frame. Completed calipers are added automatically.
               </div>
               {bowelEntries.map((measurement, index) => (
                 <div key={measurement.sourceAnnotationId || index}
@@ -4862,7 +4862,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                         </div>
             )}
 
-          <button
+          {!bowelSet ? <button
             type="button"
             className="rounded border border-gray-600 px-2 py-1 text-[11px] text-gray-300 hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-50"
             disabled={disabled || captureInProgress}
@@ -4879,8 +4879,8 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               : cleanString(plainObject(question.answerConfig).measurementKind) === 'lvSimpsonEF' ||
                   cleanString(plainObject(question.answerConfig).measurementKind) === 'laVolumeBiplane'
                 ? 'Capture calculated measurement'
-                : bowelSet ? 'Add selected BWT caliper' : 'Recapture selected measurement'}
-          </button>
+                : 'Recapture selected measurement'}
+          </button> : null}
 
           {cleanString(
             plainObject(value?.reviewPayload).label ||
@@ -6240,15 +6240,17 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                   ) : null}
 
                   <div className="bg-blue-950/30 mt-3 min-w-0 max-w-full rounded border border-blue-700 p-2 text-xs text-blue-100">
-                    Click each question before answering. Questions marked “Opens question image”
-                    will move the viewer to the image/frame for that question.
+                    Click each question before answering. Questions marked “Opens target”
+                    navigate to the assigned image or instance without revealing the correct frame.
                   </div>
 
                   <div className="mt-3 space-y-4">
                     {questions.map((question, index) => {
                       const questionSelectionKey = `${quiz.quizKey}:${question.questionKey}`;
                       const isActiveQuestion = activeQuestionKey === questionSelectionKey;
-                      const hasViewerTarget = !!getQuestionViewerTarget(question);
+                      const hasViewerTarget = !!getQuestionViewerTarget(question) &&
+                        !(question.type === 'frameSelection' &&
+                          !shouldGuideFrameSelectionToInstance(question));
 
                       return (
                         <div
@@ -6263,6 +6265,11 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                           onClick={() => selectQuestion(quiz, question)}
                           onFocusCapture={() => selectQuestion(quiz, question)}
                         >
+                          {isActiveQuestion ? (
+                            <div className="mb-1 inline-flex rounded bg-blue-600 px-2 py-0.5 text-[11px] font-semibold text-white">
+                              Active Question
+                            </div>
+                          ) : null}
                           <div
                             className="min-w-0 max-w-full text-sm font-semibold"
                             style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}
@@ -6273,7 +6280,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
 
                           {hasViewerTarget ? (
                             <div className="mt-1 text-[11px] uppercase tracking-wide text-blue-300">
-                              Opens question image
+                              {question.type === 'frameSelection' ? 'Opens target instance' : 'Opens target'}
                             </div>
                           ) : null}
 
