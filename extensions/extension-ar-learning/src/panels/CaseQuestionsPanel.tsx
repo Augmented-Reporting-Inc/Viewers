@@ -1955,6 +1955,8 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
   const autoBowelGoldCaptureQueueRef = useRef<Promise<void>>(Promise.resolve());
   const autoBowelLearnerCaptureInFlightRef = useRef(new Set<string>());
   const autoBowelLearnerCaptureQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const bowelCaptureFailureReasonRef = useRef<Record<string, string>>({});
+  const [bowelCaptureErrors, setBowelCaptureErrors] = useState<Record<string, string>>({});
   // Preserve the newest quiz answers while several labelled calipers complete
   // before React renders the preceding capture.
   const latestLearnerAnswersRef = useRef(answersByQuizKey);
@@ -2852,6 +2854,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
 
       if (!result?.ok || !result?.answer) {
         const reason = cleanString(result?.reason || 'No selected measurement found.');
+        if (isBowelMeasurementSetQuestion(question)) {
+          bowelCaptureFailureReasonRef.current[captureKey] = reason;
+        }
 
         if (!options.silent) {
           uiNotificationService.show({
@@ -2873,6 +2878,8 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         const currentEntries = getBowelMeasurementSetEntries(plainObject(currentAnswer).measurements);
         const appended = appendBowelMeasurementSetAnswer(question, currentEntries, result.answer);
         if (!appended.ok) {
+          bowelCaptureFailureReasonRef.current[captureKey] =
+            cleanString(appended.reason || 'caliper-validation-failed');
           if (!options.silent) uiNotificationService.show({
             title: 'Bowel measurement set',
             message: appended.reason || 'Cannot add measurement.',
@@ -2890,6 +2897,13 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         };
         setAnswer(quiz.quizKey, question, nextAnswer);
         pendingBowelQuizMeasurementIdsRef.current.add(String(result.answer.sourceAnnotationId));
+        delete bowelCaptureFailureReasonRef.current[captureKey];
+        setBowelCaptureErrors(current => {
+          if (!current[captureKey]) return current;
+          const next = { ...current };
+          delete next[captureKey];
+          return next;
+        });
         if (!options.silent) uiNotificationService.show({
           title: 'Bowel measurement set',
           message: `Captured ${appended.entries?.length} / ${question.answerConfig?.measurementSet?.requiredCount} measurements.`,
@@ -2910,6 +2924,10 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       }
       return true;
     } catch (error) {
+      if (isBowelMeasurementSetQuestion(question)) {
+        bowelCaptureFailureReasonRef.current[captureKey] =
+          cleanString(error?.message || error);
+      }
       if (!options.silent) uiNotificationService.show({
         title: 'Case Questions',
         message: `Measurement capture failed: ${error?.message || error}`,
@@ -3029,10 +3047,19 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               });
               if (captured === true) return;
             }
+            if (lastActivatedQuestionRef.current !== activationKey) return;
+            const reason = bowelCaptureFailureReasonRef.current[activationKey] || 'measurement-not-ready';
+            console.warn('[CaseQuestionsPanel] learner BWT caliper not captured', {
+              quizKey, questionKey, measurementId, reason,
+            });
+            setBowelCaptureErrors(current => ({
+              ...current,
+              [activationKey]: 'Caliper not recorded. Check its label, frame and calibration.',
+            }));
             uiNotificationService.show({
               title: 'Bowel measurement set',
-              message: 'The labelled BWT caliper could not be recorded. Check the bowel segment and frame, then draw another caliper.',
-              type: 'warning', duration: 5000,
+              message: 'The BWT caliper could not be recorded.',
+              type: 'warning', duration: 4500,
             });
           } finally {
             autoBowelLearnerCaptureInFlightRef.current.delete(captureId);
@@ -4812,10 +4839,15 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
             : null}
           {bowelSet ? (
             <div className="rounded border border-blue-700 bg-blue-950/20 p-2 text-xs text-gray-200">
-              <div className="font-semibold">Bowel measurements: {bowelEntries.length} / {bowelCount}</div>
+              <div className="font-semibold" aria-live="polite">Bowel measurements: {bowelEntries.length} / {bowelCount}</div>
               <div className="mt-1 text-gray-400">
-                Draw and label each BWT caliper on the same DICOM frame. Completed calipers are added automatically.
+                Draw and label each BWT caliper on the same DICOM frame.
               </div>
+              {bowelCaptureErrors[`${quiz.quizKey}:${question.questionKey}`] ? (
+                <div className="mt-1 text-amber-300" role="alert">
+                  {bowelCaptureErrors[`${quiz.quizKey}:${question.questionKey}`]}
+                </div>
+              ) : null}
               {bowelEntries.map((measurement, index) => (
                 <div key={measurement.sourceAnnotationId || index}
                   className="mt-1 flex items-center justify-between gap-2">
