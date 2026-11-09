@@ -6429,7 +6429,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
           <div className="text-base font-semibold">Quiz Authoring</div>
           <div className="mt-1 text-xs text-gray-400">
             Use this panel only for viewer-authored answers: frames, markers, gold points, and
-            measurements.
+            measurements. Question numbers match Manage Quiz; other question types are omitted here.
           </div>
         </div>
 
@@ -6468,8 +6468,8 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               </div>
 
               <div className="space-y-3">
-                {authoringQuestions.filter(isViewerNativeQuestion).map((question, index) =>
-                  renderAuthoringQuestion(question, index)
+                {authoringQuestions.map((question, index) =>
+                  isViewerNativeQuestion(question) ? renderAuthoringQuestion(question, index) : null
                 )}
               </div>
             </div>
