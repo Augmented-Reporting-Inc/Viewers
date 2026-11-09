@@ -191,6 +191,17 @@ function getLearnerQuizMeasurementDomain(quiz: QuizDefinition | undefined, sourc
     getQuizAuthoringMeasurementDomainFromUrl();
 }
 
+function getQuizQuestionMeasurementDomain(
+  quiz: QuizDefinition | undefined,
+  question: QuizQuestion | undefined,
+  source: any
+): string {
+  // A configured multiple-BWT question is unambiguously a Bowel measurement
+  // workflow, even when legacy study or URL metadata is absent or stale.
+  return isBowelMeasurementSetQuestion(question) ? 'bowel' :
+    getLearnerQuizMeasurementDomain(quiz, source);
+}
+
 function resolveQuizAuthoringMeasurementDomain(
   definition: QuizDefinition | null | undefined
 ): string {
@@ -2104,7 +2115,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     const quiz = quizzes.find(item => item.quizKey === quizKey);
     const question = quiz?.questions?.find(item => item.questionKey === questionKey);
     let domain = question?.type === 'measurementNumeric'
-      ? getLearnerQuizMeasurementDomain(quiz, payload) : '';
+      ? getQuizQuestionMeasurementDomain(quiz, question, payload) : '';
     if (!domain && quizzes.length) {
       // A reopened viewer may have no saved active question. Only fall back to
       // the quiz domain when every loaded quiz agrees on the specialty.
@@ -2561,7 +2572,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     if (question.type === 'measurementNumeric') {
       const quizMeasurementDomain = authoringMode
         ? authoringMeasurementDomain || resolveQuizAuthoringMeasurementDomain(authoringDefinition)
-        : getLearnerQuizMeasurementDomain(quiz, payload);
+        : getQuizQuestionMeasurementDomain(quiz, question, payload);
 
       syncQuizMeasurementDomainToUrl(quizMeasurementDomain, { overwrite: true });
 
@@ -5064,7 +5075,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                       lastActivatedQuestionRef.current = key;
                       setActiveQuestionKey(key);
                       syncQuizMeasurementDomainToUrl(
-                        getLearnerQuizMeasurementDomain(quiz, payload), { overwrite: true }
+                        getQuizQuestionMeasurementDomain(quiz, question, payload), { overwrite: true }
                       );
                       try {
                         await showLearnerBowelMeasurements(
