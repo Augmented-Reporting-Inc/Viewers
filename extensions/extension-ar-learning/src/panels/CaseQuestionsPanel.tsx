@@ -183,7 +183,7 @@ function inferLegacyQuizMeasurementDomain(
   return '';
 }
 
-function getLearnerQuizMeasurementDomain(quiz: QuizDefinition, source: any): string {
+function getLearnerQuizMeasurementDomain(quiz: QuizDefinition | undefined, source: any): string {
   return normalizeQuizMeasurementDomain(quiz?.domain) ||
     normalizeQuizMeasurementDomain(source?.seriesDoc?.measurementDomain) ||
     normalizeQuizMeasurementDomain(source?.measurementDomain) ||
