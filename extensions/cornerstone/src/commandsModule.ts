@@ -14917,10 +14917,16 @@ function commandsModule({
       // base study. Persisted data comes from the identified learner copy only.
       // Newly captured, not-yet-saved calipers can come from the live service.
       const { learnerSeriesDoc } = await getViewerQuizMeasurementSeriesDocs();
-      const annotations = references.map(reference =>
-        findViewerQuizBowelLearnerAnnotation(reference, learnerSeriesDoc) ||
-        getViewerQuizMeasurementAnnotationFromService(reference)
-      );
+      const annotations = references.map(reference => {
+        const saved = findViewerQuizBowelLearnerAnnotation(reference, learnerSeriesDoc);
+        if (saved) return saved;
+        const sourceId = getViewerQuizMeasurementSourceAnnotationId(reference);
+        // Only this viewer session's newly drawn calipers may use a live
+        // MeasurementService fallback. Never resolve an educator/base annotation.
+        return viewerMeasurementsCreatedInSession.has(sourceId)
+          ? getViewerQuizMeasurementAnnotationFromService(reference)
+          : null;
+      });
       if (annotations.some(item => !item)) {
         console.warn('[ViewerQuiz] learner BWT source annotations missing', {
           questionKey,
