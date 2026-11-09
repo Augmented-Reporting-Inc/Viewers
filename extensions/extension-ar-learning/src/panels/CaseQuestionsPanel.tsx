@@ -5076,6 +5076,11 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       ...plainObject(scoreItem.scoringDetails),
       ...plainObject(scoreItem.reviewDetails),
     };
+    const bowelReference = plainObject(scoreItem.correctAnswer);
+    const bowelGoldLengths = correctAnswerVisible && bowelReference.mode === 'bowelMeasurementSet'
+      ? (Array.isArray(bowelReference.goldMeasurements) ? bowelReference.goldMeasurements : [])
+      : [];
+    const learnerBowelLengths = getBowelMeasurementSetEntries(plainObject(learnerAnswer).measurements);
     const markerDistanceDisplay = getReviewDistanceDisplay(reviewDetails, 'distance', 'distanceMm');
     const markerRadiusDisplay = getReviewDistanceDisplay(reviewDetails, 'radius', 'radiusMm');
     const learnerMeasurement = mergeReviewReferenceValues(
@@ -5168,6 +5173,21 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               <div className="font-semibold">Bowel measurement set</div>
               <div>Captured: {reviewDetails.submittedCount ?? 0} / {reviewDetails.requiredCount ?? '—'}</div>
               <div>Within numeric tolerance: {reviewDetails.numericMatches ?? 0} / {reviewDetails.requiredCount ?? '—'}</div>
+              {learnerBowelLengths.length > 0 ? (
+                <div className="mt-1">
+                  Your BWT lengths: {learnerBowelLengths.map((entry, i) =>
+                    `#${i + 1} ${Number(entry.value).toFixed(2)} ${cleanString(entry.unit) || 'mm'}`
+                  ).join(' · ')}
+                </div>
+              ) : null}
+              {bowelGoldLengths.length > 0 ? (
+                <div className="mt-1">
+                  <span className="font-semibold">Correct reference lengths ({bowelGoldLengths.length}):</span>{' '}
+                  {bowelGoldLengths.map((entry, i) =>
+                    `#${i + 1} ${Number(entry.value).toFixed(2)} ${cleanString(entry.unit) || 'mm'}`
+                  ).join(' · ')}
+                </div>
+              ) : null}
               <div>
                 Spatial separation: {reviewDetails.spatial?.matched === true ? 'met' : 'not met'}
                 {Number.isFinite(reviewDetails.spatial?.observed)
@@ -5177,6 +5197,16 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                   ? ` (minimum ${reviewDetails.spatial.threshold} ${reviewDetails.spatial.unit || ''})`
                   : ''}
               </div>
+              {bowelGoldLengths.length > 0 ? (
+                <div className="mt-1 text-gray-300">
+                  Scoring rule: match each captured length to a distinct reference within ±
+                  {formatReviewNumber(bowelReference.numericTolerance, 2)} mm, then meet the
+                  minimum {bowelReference.orientation === 'crossSection'
+                    ? 'angular separation around the educator-defined lumen centre'
+                    : 'axial separation along the bowel'}. The current rubric does not require
+                  each learner caliper to be within a location radius of a gold caliper.
+                </div>
+              ) : null}
               {reviewDetails.reason ? <div className="text-amber-200">{reviewDetails.reason.replace(/_/g, ' ')}</div> : null}
             </div>
           ) : (
