@@ -1188,11 +1188,16 @@ function modeFactory({ modeConfiguration }) {
         source = 'measurement-service',
       } = {}) => {
         const id = String(annotationId || '').trim();
+        // Startup hydration may still be fetching saved calipers while the
+        // learner begins a new Length drawing. Do not suppress that genuine
+        // Cornerstone completion; hydrated saved annotations are excluded below.
+        const freshDrawingCompleted =
+          source === 'cornerstone-annotation-completed' && !!sourceAnnotation;
 
         if (
           !completionAwareMeasurementWorkflow ||
           measurementToolsReadOnly ||
-          _suppressLabelPrompt ||
+          (_suppressLabelPrompt && !freshDrawingCompleted) ||
           !id ||
           _handledCompletedAnnotationIds.has(id) ||
           inFlightCompletedAnnotationIds.has(id)
