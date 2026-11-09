@@ -120,8 +120,14 @@ test('learner quiz domain is retained in URL when the mode event was missed', ()
     },
     URL,
   };
+  // This contract is TypeScript source; remove only its parameter types
+  // when running the existing plain-JavaScript helper under node:vm.
+  const syncSource = panelSource.slice(start, end).replace(
+    /value: unknown,\s*\{ overwrite = false \}: \{ overwrite\?: boolean \} = \{\}/,
+    'value, { overwrite = false } = {}'
+  );
   const sync = vm.runInNewContext([
-    panelSource.slice(start, end),
+    syncSource,
     'syncQuizMeasurementDomainToUrl',
   ].join('\n'), runtime);
   sync('bowel', { overwrite: true });
