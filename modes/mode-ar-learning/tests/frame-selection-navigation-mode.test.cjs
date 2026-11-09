@@ -169,3 +169,33 @@ test('instance-only target finds requested cine SOP without gold frame informati
   assert.equal(match.index, 1, 'opens the requested SOP at its first available frame');
   assert.equal(match.source, 'sop', 'the gold frame must not select the starting image');
 });
+
+
+test('async instance navigation refreshes a replaced viewport before matching', async () => {
+  const vm = require('node:vm');
+  const commandsSource = fs.readFileSync(
+    path.join(__dirname, '..', '..', '..', 'extensions', 'cornerstone', 'src', 'commandsModule.ts'),
+    'utf8'
+  );
+  const start = commandsSource.indexOf('async function waitForViewerQuizTargetImageMatch(');
+  const end = commandsSource.indexOf('async function jumpViewportToViewerQuizTargetImage(', start);
+  assert.ok(start >= 0 && end > start);
+  const waitForMatch = vm.runInNewContext([
+    'const sleep = async () => {};',
+    'const findImageIdIndexForViewerQuizTarget = viewport => viewport.hasSop',
+    '  ? { index: 2, imageId: "requested-sop", imageIds: ["other", "another", "requested-sop"], source: "sop" }',
+    '  : { index: -1, imageId: "", imageIds: ["other"], source: "not-found" };',
+    commandsSource.slice(start, end),
+    'waitForViewerQuizTargetImageMatch',
+  ].join('\n'));
+  const originalViewport = { hasSop: false };
+  const currentViewport = { hasSop: true };
+  let resolves = 0;
+  const match = await waitForMatch(originalViewport, {}, 3, () => {
+    resolves += 1;
+    return resolves >= 2 ? currentViewport : originalViewport;
+  });
+  assert.equal(match.index, 2);
+  assert.equal(match.viewport, currentViewport);
+  assert.ok(resolves >= 2);
+});
