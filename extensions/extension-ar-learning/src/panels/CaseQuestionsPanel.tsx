@@ -30,6 +30,7 @@ import {
   getBowelMeasurementSetEntries,
   appendBowelMeasurementSetAnswer,
   getBowelMeasurementSetMidpointSpacingMm,
+  getBowelMeasurementSetEstimatedRadialAngleDegrees,
 } from '../utils/bowelQuizMeasurementSet';
 import {
   COMPOSITE_FRAME_SLOTS,
@@ -645,11 +646,12 @@ function getQuestionViewerTarget(question: QuizQuestion) {
   return candidates.find(targetHasNavigationIdentity) || null;
 }
 
-// Omitted mode is the historic behavior: open the instance but leave the
-// learner to select the frame. Explicit instance-and-frame mode starts from
-// the learner's current navigation rather than revealing the gold instance.
+// Legacy/unconfigured and explicit frame-only questions open only the SOP;
+// instance_and_frame requires the learner to find the correct SOP unaided.
+// Never jump to the educator's correct frame during question activation.
 function shouldGuideFrameSelectionToInstance(question: QuizQuestion) {
-  return plainObject(question?.answerConfig).frameSelectionMode === 'frame_only';
+  const mode = cleanString(plainObject(question?.answerConfig).frameSelectionMode);
+  return mode === '' || mode === 'frame_only';
 }
 
 function getLearnerBwtCaptureFailureMessage(reason: string): string {
@@ -2579,7 +2581,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         ? getQuestionViewerTarget(question)
         : null;
     if (question.type === 'frameSelection' && !authoringMode) {
-      const mode = cleanString(plainObject(question.answerConfig).frameSelectionMode) || 'instance_and_frame';
+      const mode = cleanString(plainObject(question.answerConfig).frameSelectionMode) || 'legacy';
       // Safe diagnostics only: no DICOM identifiers, gold frame or answer
       // geometry are logged. If the active version lacks frame_only, the
       // published quiz must be reactivated with that configuration.
@@ -4794,9 +4796,11 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
           </button>
 
           <div className="text-[11px] text-blue-200">
-            {shouldGuideFrameSelectionToInstance(question)
-              ? 'Mode: Find frame only — viewer opens the assigned instance'
-              : 'Mode: Find instance and frame — no automatic instance navigation'}
+            {cleanString(plainObject(question.answerConfig).frameSelectionMode) === ''
+              ? 'Mode: Legacy — viewer opens the assigned instance; instance and frame are both graded'
+              : shouldGuideFrameSelectionToInstance(question)
+                ? 'Mode: Find frame only — viewer opens the assigned instance'
+                : 'Mode: Find instance and frame — no automatic instance navigation'}
           </div>
           {targetHasNavigationIdentity(selectedTarget) ? (
             <div className="bg-green-950/30 rounded border border-green-700 px-2 py-1 text-xs text-green-100">
@@ -4924,6 +4928,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       const midpointSpacingMm = bowelSettings.orientation === 'longitudinal'
         ? getBowelMeasurementSetMidpointSpacingMm(bowelEntries)
         : null;
+      const estimatedRadialAngle = bowelSettings.orientation === 'crossSection'
+        ? getBowelMeasurementSetEstimatedRadialAngleDegrees(bowelEntries)
+        : null;
 
       return (
         <div className="mt-2 w-full min-w-0 max-w-full space-y-2 overflow-hidden">
@@ -4951,6 +4958,16 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               {midpointSpacingMm !== null ? (
                 <div className="mt-1 text-blue-200">
                   Caliper midpoint spacing: {midpointSpacingMm.toFixed(1)} mm (informational; not scored)
+                </div>
+              ) : null}
+              {estimatedRadialAngle !== null ? (
+                <div className="mt-1 text-blue-200" aria-live="polite">
+                  Estimated radial angle: {estimatedRadialAngle.toFixed(1)}°
+                  {' '}(from your BWT caliper axes; the official scored angle uses the educator-defined lumen centre)
+                </div>
+              ) : bowelSettings.orientation === 'crossSection' && bowelEntries.length >= 2 ? (
+                <div className="mt-1 text-amber-200">
+                  A live angle estimate is unavailable for these calipers. Check their DICOM calibration and radial alignment.
                 </div>
               ) : null}
               {bowelEntries.map((measurement, index) => (
