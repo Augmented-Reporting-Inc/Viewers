@@ -213,15 +213,15 @@ function dispatchQuizMeasurementDomain(domain: string) {
   } catch {}
 }
 
-function syncQuizAuthoringMeasurementDomainToUrl(
+function syncQuizMeasurementDomainToUrl(
   value: unknown,
   { overwrite = false }: { overwrite?: boolean } = {}
 ) {
   const domain = normalizeQuizMeasurementDomain(value);
 
-  // The Learning mode consumes this synchronous event as the source of truth
-  // for authoring labels. URL synchronization is retained for inspectability and
-  // reloads, but label behavior no longer depends on history/router propagation.
+  // Broadcast immediately for the active viewer, and persist the confirmed
+  // quiz domain in the URL so a late listener or reopened viewer can recover
+  // it before the Length label dialog opens.
   dispatchQuizMeasurementDomain(domain);
 
   try {
@@ -2096,7 +2096,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         ? activeQuestionKey.slice('authoring:'.length) : '';
       const active = authoringQuestions.find(item => item.questionKey === questionKey);
       if (active?.type === 'measurementNumeric' && authoringMeasurementDomain) {
-        dispatchQuizMeasurementDomain(authoringMeasurementDomain);
+        syncQuizMeasurementDomainToUrl(authoringMeasurementDomain, { overwrite: true });
       }
       return;
     }
@@ -2113,7 +2113,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       if (domains.length === 1) domain = domains[0];
     }
     // Clear any stale prior quiz domain when definitions disagree.
-    dispatchQuizMeasurementDomain(domain);
+    syncQuizMeasurementDomainToUrl(domain, { overwrite: true });
   }, [activeQuestionKey, quizzes, payload, authoringMode, authoringMeasurementDomain, authoringQuestions]);
 
   async function refreshScoringPayload() {
@@ -2144,7 +2144,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       const rubrics = Array.isArray(nextPayload?.rubrics) ? nextPayload.rubrics : [];
       const selectedDefinition = pickAuthoringDefinition(definitions, preferredDefinitionId);
       const selectedMeasurementDomain = resolveQuizAuthoringMeasurementDomain(selectedDefinition);
-      syncQuizAuthoringMeasurementDomainToUrl(selectedMeasurementDomain);
+      syncQuizMeasurementDomainToUrl(selectedMeasurementDomain);
       const selectedRubric = findRubricForDefinition(rubrics, selectedDefinition);
       const nextQuestions = Array.isArray(selectedDefinition?.questions)
         ? selectedDefinition.questions
@@ -2535,7 +2535,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         ? authoringMeasurementDomain || resolveQuizAuthoringMeasurementDomain(authoringDefinition)
         : getLearnerQuizMeasurementDomain(quiz, payload);
 
-      dispatchQuizMeasurementDomain(quizMeasurementDomain);
+      syncQuizMeasurementDomainToUrl(quizMeasurementDomain, { overwrite: true });
 
       // Length still activates immediately. Guided workflows are deferred
       // until the saved question target has been navigated into view.
@@ -3602,7 +3602,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
           throw new Error('Measurement domain is missing from the educational asset. Configure Echo or Bowel before opening the viewer.');
         }
 
-        syncQuizAuthoringMeasurementDomainToUrl(authoringMeasurementDomain, { overwrite: true });
+        syncQuizMeasurementDomainToUrl(authoringMeasurementDomain, { overwrite: true });
 
         // Capturing the target frame for a composite must not interrupt its
         // guided EF/LA workflow or activate Length over the pending drag.
