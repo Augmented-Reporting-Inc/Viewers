@@ -8217,7 +8217,7 @@ function commandsModule({
     };
   }
 
-  async function getViewerQuizMeasurementSeriesDocs() {
+  async function getViewerQuizMeasurementSeriesDocs({ includeBaseSeries = true } = {}) {
     const saveTarget = getArViewerSaveTargetFromUrl();
     const learnerSeriesId = saveTarget.learnerSeriesId || saveTarget.seriesId;
     let learnerSeriesDoc = null;
@@ -8238,7 +8238,7 @@ function commandsModule({
         ''
     ).trim();
 
-    if (baseSeriesId && baseSeriesId !== String(learnerSeriesDoc?._id || '')) {
+    if (includeBaseSeries && baseSeriesId && baseSeriesId !== String(learnerSeriesDoc?._id || '')) {
       try {
         baseSeriesDoc = await fetchSeriesDocById(baseSeriesId);
       } catch (error) {
@@ -14916,7 +14916,7 @@ function commandsModule({
       // A learner quiz must never retrieve a BWT annotation from the educator
       // base study. Persisted data comes from the identified learner copy only.
       // Newly captured, not-yet-saved calipers can come from the live service.
-      const { learnerSeriesDoc } = await getViewerQuizMeasurementSeriesDocs();
+      const { learnerSeriesDoc } = await getViewerQuizMeasurementSeriesDocs({ includeBaseSeries: false });
       const annotations = references.map(reference => {
         const saved = findViewerQuizBowelLearnerAnnotation(reference, learnerSeriesDoc);
         if (saved) return saved;
@@ -14967,6 +14967,21 @@ function commandsModule({
         return { ok: false, reason: 'learner-bwt-annotation-target-mismatch', renderedCount: 0 };
       }
 
+      // Quiz responses intentionally omit geometric evidence. Recover it only
+      // from exact, verified learner-owned persisted annotations (never quiz
+      // JSON or educator/base study snapshots). The panel uses this for
+      // informational spacing and angle, not for scoring or quiz persistence.
+      const trustedSpatialEvidence = verified.map((source, index) => {
+        const evidence = findViewerQuizBowelLearnerAnnotation(
+          references[index], learnerSeriesDoc
+        )?.quizSpatialEvidence;
+        return {
+          sourceAnnotationId: ids[index],
+          ...(evidence?.source === 'dicom-calibrated-image-index-v1'
+            ? { quizSpatialEvidence: evidence } : {}),
+        };
+      });
+
       const selectedIndex = selectedId ? ids.indexOf(selectedId) : 0;
       // All BWT answer targets have passed SOP/frame verification. Normalize
       // their saved image aliases for the shared same-image group renderer,
@@ -15010,9 +15025,12 @@ function commandsModule({
       }
       const manager = annotation.state.getAnnotationManager?.();
       const groupKey = manager?.getGroupKey?.(viewport.element);
+      // Cornerstone uses annotationUID; saved AR rows use uid/annotationId.
+      // Comparing them with getAnnotationId() falsely reports zero overlays
+      // even when the calipers are visibly registered on the viewport.
       const visibleOnViewport = (annotationId: string) =>
         (annotation.state.getAnnotations?.('Length', viewport.element) || []).some(
-          item => getAnnotationId(item) === annotationId
+          item => getMeasurementAnnotationId(item) === annotationId
         );
 
       let indexedCount = 0;
@@ -15050,10 +15068,14 @@ function commandsModule({
         return {
           ...displayed, ok: false, reason: 'learner-bwt-viewport-registration-failed',
           renderedCount: indexedCount,
+          trustedSpatialEvidence,
         };
       }
 
-      return { ...displayed, ok: true, renderedCount: indexedCount, learnerRendered: true };
+      return {
+        ...displayed, ok: true, renderedCount: indexedCount,
+        learnerRendered: true, trustedSpatialEvidence,
+      };
     },
 
     showViewerQuizLearnerMeasurement: async ({
