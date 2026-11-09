@@ -36,7 +36,7 @@ test('learner bowel measurements bind automatically, without a second capture bu
   assert.match(panelSource, /measurementId, silent: true/);
   assert.match(panelSource, /getBowelMeasurementSetEntries\(\s*plainObject\(latestLearnerAnswersRef/);
   assert.match(panelSource, /Bowel measurements: \{bowelEntries\.length\} \/ \{bowelCount\}/);
-  assert.match(panelSource, /Caliper not recorded\. Check its label, frame and calibration\./);
+  assert.match(panelSource, /getLearnerBwtCaptureFailureMessage\(reason\)/);
   assert.doesNotMatch(panelSource, /Completed calipers are added automatically/);
   assert.match(panelSource, /!bowelSet \? <button/);
   assert.doesNotMatch(panelSource, /Add selected BWT caliper/);
