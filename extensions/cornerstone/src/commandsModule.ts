@@ -14896,6 +14896,94 @@ function commandsModule({
         markerOptions,
       });
     },
+    // Saved multi-BWT answers contain a collection of annotation IDs, not one
+    // top-level measurement reference. Resolve exactly those learner calipers
+    // and render them together on their captured DICOM frame.
+    showViewerQuizLearnerBwtMeasurementSet: async ({
+      learnerMeasurements = [],
+      selectedSourceAnnotationId = '',
+      questionKey = '',
+    } = {}) => {
+      const references = Array.isArray(learnerMeasurements) ? learnerMeasurements : [];
+      const ids = references.map(item => getViewerQuizMeasurementSourceAnnotationId(item));
+      const selectedId = String(selectedSourceAnnotationId || '').trim();
+      if (!references.length || references.length > 4 || ids.some(id => !id) ||
+          new Set(ids).size !== ids.length ||
+          (selectedId && !ids.includes(selectedId))) {
+        return { ok: false, reason: 'invalid-learner-bwt-reference', renderedCount: 0 };
+      }
+
+      // A learner quiz must never retrieve a BWT annotation from the educator
+      // base study. Persisted data comes from the identified learner copy only.
+      // Newly captured, not-yet-saved calipers can come from the live service.
+      const { learnerSeriesDoc } = await getViewerQuizMeasurementSeriesDocs();
+      const annotations = references.map(reference =>
+        findViewerQuizBowelLearnerAnnotation(reference, learnerSeriesDoc) ||
+        getViewerQuizMeasurementAnnotationFromService(reference)
+      );
+      if (annotations.some(item => !item)) {
+        console.warn('[ViewerQuiz] learner BWT source annotations missing', {
+          questionKey,
+          requestedCount: references.length,
+          resolvedCount: annotations.filter(Boolean).length,
+        });
+        return { ok: false, reason: 'learner-bwt-source-annotation-not-found', renderedCount: 0 };
+      }
+
+      // Check captured SOP/frame identity before handing anything to a
+      // viewport hydration command. Never substitute a similar gold annotation.
+      const frameKey = (target: any) => [
+        String(target?.studyInstanceUID || '').trim(),
+        String(target?.seriesInstanceUID || '').trim(),
+        String(target?.sopInstanceUID || '').trim(),
+        Number(target?.frameNumber || 0),
+      ].join('|');
+      const expectedFrame = frameKey(references[0]?.viewerTarget);
+      if (!expectedFrame || references.some(item => frameKey(item.viewerTarget) !== expectedFrame)) {
+        return { ok: false, reason: 'learner-bwt-frame-mismatch', renderedCount: 0 };
+      }
+      const verified = annotations.map((saved, index) => {
+        const target = references[index]?.viewerTarget || {};
+        const expectedSop = String(target.sopInstanceUID || '').trim();
+        const actualSop = String(saved?.SOPInstanceUID || '').trim();
+        const expectedFrameNumber = Number(target.frameNumber || 0);
+        const actualFrameNumber = getFrameNumberForAnnotation(saved);
+        if (!expectedSop || expectedFrameNumber < 1 ||
+            (actualSop && actualSop !== expectedSop) ||
+            (actualFrameNumber > 0 && actualFrameNumber !== expectedFrameNumber)) {
+          return null;
+        }
+        return saved;
+      });
+      if (verified.some(item => !item)) {
+        return { ok: false, reason: 'learner-bwt-annotation-target-mismatch', renderedCount: 0 };
+      }
+
+      const selectedIndex = selectedId ? ids.indexOf(selectedId) : 0;
+      const selected = verified[selectedIndex];
+      const displayed = await actions.showSavedViewerAnnotationsForSameImage({
+        annotations: verified,
+        referenceAnnotation: selected,
+        selectReferenceAnnotation: true,
+      });
+      const renderedCount = Number(displayed?.hydratedCount || 0);
+      if (displayed?.ok !== true || renderedCount !== verified.length) {
+        console.warn('[ViewerQuiz] learner BWT set not fully displayed', {
+          questionKey,
+          reason: displayed?.reason || 'incomplete-bwt-hydration',
+          expectedCount: verified.length,
+          renderedCount,
+        });
+        return {
+          ...displayed,
+          ok: false,
+          reason: displayed?.reason || 'incomplete-bwt-hydration',
+          renderedCount,
+        };
+      }
+      return { ...displayed, ok: true, renderedCount, learnerRendered: true };
+    },
+
     showViewerQuizLearnerMeasurement: async ({
       learnerMeasurement = {},
       viewerTarget = null,
@@ -17138,6 +17226,9 @@ function commandsModule({
     },
     clearViewerQuizMarkerOptions: {
       commandFn: actions.clearViewerQuizMarkerOptions,
+    },
+    showViewerQuizLearnerBwtMeasurementSet: {
+      commandFn: actions.showViewerQuizLearnerBwtMeasurementSet,
     },
     showViewerQuizLearnerMeasurement: {
       commandFn: actions.showViewerQuizLearnerMeasurement,
