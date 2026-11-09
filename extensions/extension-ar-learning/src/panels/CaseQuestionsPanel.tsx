@@ -5345,6 +5345,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
             {canShowLearnerAnswerButton ? (
               <button
                 type="button"
+                data-quiz-review-action="learner"
                 className="hover:bg-blue-950 rounded border border-blue-500 px-2 py-1 font-semibold text-blue-100"
                 onClick={event => {
                   event.preventDefault();
@@ -5369,6 +5370,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
             {canShowComparison ? (
               <button
                 type="button"
+                data-quiz-review-action="correct"
                 className="rounded border border-gray-500 px-2 py-1 font-semibold text-gray-100 hover:bg-gray-800"
                 onClick={async event => {
                   event.preventDefault();
@@ -6437,7 +6439,14 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                                 : 'border-gray-800'
                           }`}
                           onClick={() => selectQuestion(quiz, question)}
-                          onFocusCapture={() => selectQuestion(quiz, question)}
+                          onFocusCapture={event => {
+                            // Review buttons navigate explicitly to the exact
+                            // learner/gold frame. Focus must not start a second
+                            // background "open question" navigation that can
+                            // race and reset the viewport to the instance.
+                            if ((event.target as HTMLElement)?.closest?.('[data-quiz-review-action]')) return;
+                            selectQuestion(quiz, question);
+                          }}
                         >
                           {isActiveQuestion ? (
                             <div className="mb-1 inline-flex rounded bg-blue-600 px-2 py-0.5 text-[11px] font-semibold text-white">
