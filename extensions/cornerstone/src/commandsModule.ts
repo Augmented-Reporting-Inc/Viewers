@@ -4802,6 +4802,16 @@ function getDisplaySetForViewerQuizTarget(displaySetService, target = {}) {
       ? displaySetService.getDisplaySetsForSeries(target.seriesInstanceId) || []
       : [];
 
+  // A series can contain multiple separately rendered cine instances. Do not
+  // default to its first display set if another contains the authored SOP.
+  if (target.sopInstanceId) {
+    const exact = seriesDisplaySets.find(displaySet =>
+      displaySetContainsSavedAnnotation(displaySet, { SOPInstanceUID: target.sopInstanceId })
+    );
+    if (exact) return exact;
+    if (seriesDisplaySets.length > 1) return null;
+  }
+
   return seriesDisplaySets[0] || null;
 }
 
