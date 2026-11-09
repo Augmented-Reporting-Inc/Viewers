@@ -48,11 +48,14 @@ test('viewer authoring retains full quiz ordinals while skipping non-viewer ques
   const end = panelSource.indexOf('const hasLearnerQuizContent', start);
   assert.ok(start > 0 && end > start, 'Missing viewer quiz authoring panel');
   const authoringPanel = panelSource.slice(start, end);
-  assert.match(authoringPanel,
-    /authoringQuestions\\.map\\(\\(question, index\\) =>\\s*isViewerNativeQuestion\\(question\\) \\? renderAuthoringQuestion\\(question, index\\) : null/
-  );
-  assert.doesNotMatch(authoringPanel, /authoringQuestions\\.filter\\(isViewerNativeQuestion\\)\\.map/);
-  assert.match(panelSource, /\\{index \\+ 1\\}\\. \\{question\\.title \\|\\| question\\.prompt \\|\\| question\\.questionKey\\}/);
+  assert.ok(authoringPanel.includes('authoringQuestions.map((question, index) =>'));
+  assert.ok(authoringPanel.includes(
+    'isViewerNativeQuestion(question) ? renderAuthoringQuestion(question, index) : null'
+  ));
+  assert.ok(!authoringPanel.includes('authoringQuestions.filter(isViewerNativeQuestion).map'));
+  assert.ok(panelSource.includes(
+    '{index + 1}. {question.title || question.prompt || question.questionKey}'
+  ));
   const questions = [true, true, false, true, false, true, true, true];
   const numbers = questions.flatMap((needsViewer, index) => needsViewer ? [index + 1] : []);
   assert.deepEqual(numbers, [1, 2, 4, 6, 7, 8]);
