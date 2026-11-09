@@ -1,6 +1,7 @@
 import {
   appendBowelMeasurementSetAnswer,
   getBowelMeasurementSetEntries,
+  formatBowelBwtMeasurementLabel,
   getBowelMeasurementSetMidpointSpacingMm,
   getBowelMeasurementSetEstimatedRadialAngleDegrees,
 } from './bowelQuizMeasurementSet';
@@ -51,6 +52,22 @@ describe('learner multiple-BWT capture', () => {
     expect(second.entries?.map(item => item.sourceAnnotationId)).toEqual(['a', 'b']);
     expect(second.axis).toEqual([5, 0, 0]);
     expect(getBowelMeasurementSetMidpointSpacingMm(second.entries || [])).toBe(5);
+  });
+
+  it('shows human-readable BWT labels and rejects the wrong bowel segment', () => {
+    expect(formatBowelBwtMeasurementLabel('BowelSigmoidColonBWT')).toBe('Sigmoid colon BWT');
+    expect(formatBowelBwtMeasurementLabel('BowelTerminalIleumBWT')).toBe('Terminal ileum BWT');
+    expect(formatBowelBwtMeasurementLabel('BowelNeoTerminalIleumBWT')).toBe('Neo-terminal ileum BWT');
+    expect(formatBowelBwtMeasurementLabel('BowelIleocolicAnastomosisBWT')).toBe('Ileocolic anastomosis BWT');
+    expect(formatBowelBwtMeasurementLabel('')).toBe('');
+    const wrongSegment = appendBowelMeasurementSetAnswer(question, [],
+      caliper('wrong', 0, { measurementType: 'BowelTerminalIleumBWT' }));
+    expect(wrongSegment.ok).toBe(false);
+    expect(wrongSegment.reason).toContain('Cecum BWT');
+    expect(wrongSegment.reason).toContain('Terminal ileum BWT');
+    const rightSegment = appendBowelMeasurementSetAnswer(question, [], caliper('right', 0));
+    expect(rightSegment.ok).toBe(true);
+    expect(rightSegment.entries?.[0].measurementType).toBe('BowelCecumBWT');
   });
 
   it('does not duplicate a caliper from two completion notifications', () => {
