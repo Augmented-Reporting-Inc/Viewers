@@ -93,6 +93,32 @@ test('restored active learner question re-broadcasts the Bowel domain before lab
     'quiz branches must not inherit unverified study labels');
 });
 
+test('quiz measurement labels use restored specialty, never generic /rviewer/ Echo fallback', async () => {
+  const vm = require('node:vm');
+  const modeSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'index.tsx'), 'utf8');
+  const start = modeSource.indexOf('async function getLabelConfigForMeasurement(');
+  const end = modeSource.indexOf('async function waitForViewerMeasurementServiceEntry(', start);
+  assert.ok(start >= 0 && end > start);
+  const getLabelConfig = vm.runInNewContext([
+    'const isViewerQuizMeasurementCaptureMode = () => true;',
+    'const normalizeQuizMeasurementDomain = v => ["bowel", "echo"].includes(v) ? v : "";',
+    'const getExplicitQuizMeasurementDomainFromUrl = () => "";',
+    'const resolveViewerMeasurementDomain = async () => "echo";',
+    'const getViewerMeasurementDomainFromPath = () => "echo";',
+    'const BOWEL_LENGTH_MEASUREMENT_LABELS_CONFIG = { id: "bowel" };',
+    'const ECHO_LENGTH_MEASUREMENT_LABELS_CONFIG = { id: "echo" };',
+    modeSource.slice(start, end),
+    'getLabelConfigForMeasurement',
+  ].join('\n'), { console });
+  const bowel = await getLabelConfig({ toolName: 'Length' }, {}, {
+    quizMeasurementDomain: 'bowel',
+  });
+  assert.equal(bowel.title, 'Set Bowel Measurement');
+  assert.equal(bowel.labelConfigOverride.id, 'bowel');
+  const missing = await getLabelConfig({ toolName: 'Length' }, {}, {});
+  assert.equal(missing, null, 'a quiz without a verified domain cannot silently open an Echo label dialog');
+});
+
 test('quiz Length completion remains retryable until the label is available', () => {
   const fs = require('node:fs');
   const path = require('node:path');
