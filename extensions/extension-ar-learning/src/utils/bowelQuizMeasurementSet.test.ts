@@ -2,6 +2,7 @@ import {
   appendBowelMeasurementSetAnswer,
   getBowelMeasurementSetEntries,
   getBowelMeasurementSetMidpointSpacingMm,
+  getBowelMeasurementSetEstimatedRadialAngleDegrees,
 } from './bowelQuizMeasurementSet';
 
 const question = {
@@ -81,5 +82,58 @@ describe('learner multiple-BWT capture', () => {
       caliper('c', 5, { quizSpatialEvidence: {} }));
     expect(noEvidence.ok).toBe(false);
     expect(noEvidence.reason).toMatch(/Calibrated image-index/);
+  });
+});
+
+
+describe('learner cross-sectional BWT live angle estimate', () => {
+  const radialCaliper = (id: string, angleDegrees: number) => {
+    const angle = angleDegrees * Math.PI / 180;
+    const direction = [Math.cos(angle), Math.sin(angle)];
+    return caliper(id, 0, {
+      quizSpatialEvidence: {
+        source: 'dicom-calibrated-image-index-v1',
+        calibrationSource: 'ultrasound-region',
+        pixelSpacing: { row: 0.1, column: 0.1 },
+        physicalPoints: [
+          [direction[0] * 4, direction[1] * 4, 0],
+          [direction[0] * 5, direction[1] * 5, 0],
+        ],
+      },
+    });
+  };
+
+  it('calculates perpendicular and obtuse learner-caliper angles without gold geometry', () => {
+    expect(getBowelMeasurementSetEstimatedRadialAngleDegrees([
+      radialCaliper('a', 0), radialCaliper('b', 90),
+    ])).toBeCloseTo(90, 5);
+    expect(getBowelMeasurementSetEstimatedRadialAngleDegrees([
+      radialCaliper('a', 0), radialCaliper('b', 120),
+    ])).toBeCloseTo(120, 5);
+  });
+
+  it('uses minimum pairwise separation for a three-caliper set', () => {
+    expect(getBowelMeasurementSetEstimatedRadialAngleDegrees([
+      radialCaliper('a', 0), radialCaliper('b', 90), radialCaliper('c', 170),
+    ])).toBeCloseTo(80, 5);
+  });
+
+  it('never guesses angle for uncalibrated, mismatched or parallel axes', () => {
+    const a = radialCaliper('a', 0);
+    const b = radialCaliper('b', 90);
+    expect(getBowelMeasurementSetEstimatedRadialAngleDegrees([a])).toBeNull();
+    expect(getBowelMeasurementSetEstimatedRadialAngleDegrees([
+      a, { ...b, viewerTarget: { ...target, frameNumber: 7 } },
+    ])).toBeNull();
+    expect(getBowelMeasurementSetEstimatedRadialAngleDegrees([
+      a, { ...b, quizSpatialEvidence: { physicalPoints: b.quizSpatialEvidence.physicalPoints } },
+    ])).toBeNull();
+    expect(getBowelMeasurementSetEstimatedRadialAngleDegrees([
+      a, { ...b, quizSpatialEvidence: { ...b.quizSpatialEvidence,
+        pixelSpacing: { row: 0.2, column: 0.1 } } },
+    ])).toBeNull();
+    expect(getBowelMeasurementSetEstimatedRadialAngleDegrees([
+      radialCaliper('a', 0), radialCaliper('b', 0),
+    ])).toBeNull();
   });
 });
