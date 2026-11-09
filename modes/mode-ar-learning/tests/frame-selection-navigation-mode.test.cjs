@@ -77,7 +77,7 @@ test('restored active learner question re-broadcasts the Bowel domain before lab
   assert.ok(start >= 0 && end > start);
   assert.match(effect, /activeQuestionKey\.split\(':\'\)/);
   assert.match(effect, /getLearnerQuizMeasurementDomain\(quiz, payload\)/);
-  assert.match(effect, /dispatchQuizMeasurementDomain\(domain\)/);
+  assert.match(effect, /syncQuizMeasurementDomainToUrl\(domain, \{ overwrite: true \}\)/);
   assert.match(effect, /getLearnerQuizMeasurementDomain\(item, payload\)/);
   assert.match(effect, /if \(domains\.length === 1\) domain = domains\[0\]/);
   assert.match(effect, /\[activeQuestionKey, quizzes, payload, authoringMode, authoringMeasurementDomain, authoringQuestions\]/);
@@ -95,6 +95,66 @@ test('restored active learner question re-broadcasts the Bowel domain before lab
     'a generic /rviewer/ location must never default a bowel quiz to Echo');
   assert.doesNotMatch(labelConfig, /resolveViewerMeasurementDomain\(commandsManager\)\)\s*:\s*await/,
     'quiz branches must not inherit unverified study labels');
+});
+
+test('learner quiz domain is retained in URL when the mode event was missed', () => {
+  const vm = require('node:vm');
+  const start = panelSource.indexOf('function syncQuizMeasurementDomainToUrl(');
+  const end = panelSource.indexOf('function looksLikeInternalQuizLabel(', start);
+  assert.ok(start >= 0 && end > start, 'quiz domain must have a shared URL synchronization helper');
+  let url = 'https://example.test/rviewer/learning?arMeasurementDomain=echo';
+  const dispatched = [];
+  const runtime = {
+    normalizeQuizMeasurementDomain: value => ['bowel', 'echo'].includes(value) ? value : '',
+    dispatchQuizMeasurementDomain: value => dispatched.push(value),
+    window: {
+      location: { href: url },
+      history: {
+        state: null,
+        replaceState(_state, _title, next) {
+          url = next;
+          runtime.window.location.href = next;
+        },
+      },
+    },
+    URL,
+  };
+  const sync = vm.runInNewContext([
+    panelSource.slice(start, end),
+    'syncQuizMeasurementDomainToUrl',
+  ].join('\n'), runtime);
+  sync('bowel', { overwrite: true });
+  assert.equal(new URL(url).searchParams.get('arMeasurementDomain'), 'bowel',
+    'the next Length label prompt should recover Bowel even if it missed the event');
+  assert.deepEqual(dispatched, ['bowel']);
+  sync('', { overwrite: true });
+  assert.equal(new URL(url).searchParams.has('arMeasurementDomain'), false);
+});
+
+test('multi-BWT opens its complete saved learner annotation set, never the gold set', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const source = fs.readFileSync(
+    path.join(__dirname, '..', '..', '..', 'extensions', 'cornerstone', 'src', 'commandsModule.ts'),
+    'utf8'
+  );
+  const start = source.indexOf('showViewerQuizLearnerBwtMeasurementSet: async');
+  const end = source.indexOf('showViewerQuizLearnerMeasurement: async', start);
+  assert.ok(start >= 0 && end > start, 'missing dedicated multi-BWT learner display command');
+  const command = source.slice(start, end);
+  assert.match(command, /findViewerQuizBowelLearnerAnnotation\(reference, learnerSeriesDoc\)/);
+  assert.match(command, /viewerMeasurementsCreatedInSession\.has\(sourceId\)/);
+  assert.doesNotMatch(command, /baseSeriesDoc/, 'never display source-study gold annotations');
+  assert.match(command, /getFrameNumberForAnnotation\(saved\)/);
+  assert.match(command, /actions\.showSavedViewerAnnotationsForSameImage\(/);
+  assert.match(command, /renderedCount !== verified\.length/);
+  assert.match(source, /commandFn: actions\.showViewerQuizLearnerBwtMeasurementSet/);
+  const selectStart = panelSource.indexOf('async function selectQuestion(');
+  const selectEnd = panelSource.indexOf('async function captureCurrentFrameAnswer(', selectStart);
+  const selection = panelSource.slice(selectStart, selectEnd);
+  assert.match(selection, /getBowelMeasurementSetEntries\(plainObject\(questionAnswer\)\.measurements\)/);
+  assert.match(selection, /showLearnerBowelMeasurements\(quiz, question, savedBowelMeasurements\)/);
+  assert.match(panelSource, /data-quiz-review-action="learner"[\s\S]*?\>View<\/button\>/);
 });
 
 test('quiz measurement labels use restored specialty, never generic /rviewer/ Echo fallback', async () => {
