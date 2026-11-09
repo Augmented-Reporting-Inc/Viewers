@@ -138,6 +138,13 @@ test('frame-only navigation selects a matching SOP display set rather than first
   };
   const resolved = getter(service, { seriesInstanceId: 'series-a', sopInstanceId: 'gold-sop' });
   assert.equal(resolved.displaySetInstanceUID, 'set-2');
+  service.getDisplaySetByUID = () => wrong;
+  const staleHint = getter(service, {
+    seriesInstanceId: 'series-a', sopInstanceId: 'gold-sop',
+    displaySetInstanceId: 'set-1',
+  });
+  assert.equal(staleHint.displaySetInstanceUID, 'set-2',
+    'a stale display-set hint must not override the authored SOP identity');
   assert.equal(getter(service, { seriesInstanceId: 'series-a', sopInstanceId: 'unknown' }), null);
 });
 
