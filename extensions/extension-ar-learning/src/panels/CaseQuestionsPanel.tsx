@@ -2578,6 +2578,19 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       question.type === 'frameSelection'
         ? getQuestionViewerTarget(question)
         : null;
+    if (question.type === 'frameSelection' && !authoringMode) {
+      const mode = cleanString(plainObject(question.answerConfig).frameSelectionMode) || 'instance_and_frame';
+      // Safe diagnostics only: no DICOM identifiers, gold frame or answer
+      // geometry are logged. If the active version lacks frame_only, the
+      // published quiz must be reactivated with that configuration.
+      console.info('[CaseQuestionsPanel] frame-selection configuration', {
+        quizKey: quiz.quizKey,
+        quizVersion: quiz.quizVersion,
+        questionKey: question.questionKey,
+        mode,
+        safeInstanceHintAvailable: !!configuredFrameTarget,
+      });
+    }
     let resolvedViewerTarget;
 
     if (hasViewerTargetOverride) {
@@ -4780,6 +4793,11 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
             {captureInProgress ? 'Capturing frame…' : 'Use current frame as answer'}
           </button>
 
+          <div className="text-[11px] text-blue-200">
+            {shouldGuideFrameSelectionToInstance(question)
+              ? 'Mode: Find frame only — viewer opens the assigned instance'
+              : 'Mode: Find instance and frame — no automatic instance navigation'}
+          </div>
           {targetHasNavigationIdentity(selectedTarget) ? (
             <div className="bg-green-950/30 rounded border border-green-700 px-2 py-1 text-xs text-green-100">
               Captured {getViewerTargetSummary(selectedTarget)}
