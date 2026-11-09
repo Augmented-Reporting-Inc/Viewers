@@ -35,7 +35,9 @@ test('learner bowel measurements bind automatically, without a second capture bu
   assert.match(panelSource, /autoBowelLearnerCaptureQueueRef\.current\.then\(captureQueuedCaliper, captureQueuedCaliper\)/);
   assert.match(panelSource, /measurementId, silent: true/);
   assert.match(panelSource, /getBowelMeasurementSetEntries\(\s*plainObject\(latestLearnerAnswersRef/);
-  assert.match(panelSource, /Completed calipers are added automatically/);
+  assert.match(panelSource, /Bowel measurements: \{bowelEntries\.length\} \/ \{bowelCount\}/);
+  assert.match(panelSource, /Caliper not recorded\. Check its label, frame and calibration\./);
+  assert.doesNotMatch(panelSource, /Completed calipers are added automatically/);
   assert.match(panelSource, /!bowelSet \? <button/);
   assert.doesNotMatch(panelSource, /Add selected BWT caliper/);
 });
@@ -54,4 +56,29 @@ test('learner measurement domain prefers the authorized quiz before URL fallback
     portion.indexOf('normalizeQuizMeasurementDomain(quiz?.domain)') <
       portion.indexOf('getQuizAuthoringMeasurementDomainFromUrl()')
   );
+});
+
+
+test('quiz Length completion remains retryable until the label is available', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const modeSource = fs.readFileSync(
+    path.join(__dirname, '..', 'src', 'index.tsx'), 'utf8'
+  );
+  const start = modeSource.indexOf('const handleCompletedViewerMeasurement = async');
+  const end = modeSource.indexOf('const sweepCompletedViewerMeasurements = async', start);
+  assert.ok(start >= 0 && end > start, 'missing completion processing path');
+  const completion = modeSource.slice(start, end);
+  const labelGate = completion.indexOf("quizMeasurementWorkflow && !String(completedMeasurement?.label || '').trim()");
+  const handledMark = completion.indexOf('_handledCompletedAnnotationIds.add(id)');
+  assert.ok(labelGate >= 0, 'capture must require a completed label');
+  assert.ok(handledMark > labelGate, 'unlabelled calipers must not be permanently marked handled');
+  assert.match(completion, /dispatchViewerQuizMeasurementAdded\(completedMeasurement\)/);
+});
+
+test('learner BWT capture retains the last failure cause and clears it on success', () => {
+  assert.match(panelSource, /bowelCaptureFailureReasonRef\.current\[captureKey\] = reason/);
+  assert.match(panelSource, /setBowelCaptureErrors\(current => \(\{/);
+  assert.match(panelSource, /delete bowelCaptureFailureReasonRef\.current\[captureKey\]/);
+  assert.match(panelSource, /aria-live="polite">Bowel measurements:/);
 });
