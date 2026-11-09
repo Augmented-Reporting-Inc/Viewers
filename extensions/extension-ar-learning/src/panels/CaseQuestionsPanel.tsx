@@ -28,6 +28,7 @@ import { composeIVCRapRVSP, isIVCReviewCurrent, RAP_CHOICES_MMHG } from '../util
 import {
   isBowelMeasurementSetQuestion,
   getBowelMeasurementSetEntries,
+  restoreBowelMeasurementSetDisplayEvidence,
   formatBowelBwtMeasurementLabel,
   appendBowelMeasurementSetAnswer,
   getBowelMeasurementSetMidpointSpacingMm,
@@ -5033,13 +5034,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       // The backend deliberately strips client-provided geometry from saved
       // answers. Use authoritative persisted learner annotation evidence only
       // when the local answer does not already hold fresh capture evidence.
-      const bowelGeometryEntries = bowelEntries.map(entry => ({
-        ...entry,
-        quizSpatialEvidence: plainObject(entry.quizSpatialEvidence).source ===
-          'dicom-calibrated-image-index-v1'
-          ? entry.quizSpatialEvidence
-          : verifiedSpatial[cleanString(entry.sourceAnnotationId)],
-      }));
+      const bowelGeometryEntries = restoreBowelMeasurementSetDisplayEvidence(
+        bowelEntries, verifiedSpatial
+      );
       const bowelSettings = plainObject(plainObject(question.answerConfig).measurementSet);
       const bowelCount = Number(bowelSettings.requiredCount) || 2;
       const requiredBowelLabel = formatBowelBwtMeasurementLabel(bowelSettings.measurementTarget);
