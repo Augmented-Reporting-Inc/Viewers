@@ -123,3 +123,84 @@ export function getBowelMeasurementSetMidpointSpacingMm(entries: MeasurementAnsw
   const spacing = Math.hypot(...a.map((value, index) => value - b[index]));
   return Number.isFinite(spacing) ? spacing : null;
 }
+
+
+/**
+ * Live learner-only estimate of minimum radial-angle separation. The BWT
+ * Length axes should point toward the lumen centre, so their intersection
+ * provides a candidate centre without ever accessing educator gold geometry.
+ * Unlike FormAPI's official angle (educator-centred), this is instructional,
+ * not an assessment result; near-parallel or uncalibrated axes fail closed.
+ */
+export function getBowelMeasurementSetEstimatedRadialAngleDegrees(
+  entries: MeasurementAnswer[]
+): number | null {
+  if (!Array.isArray(entries) || entries.length < 2 || entries.length > 4) return null;
+  const expectedFrame = frame(entries[0]?.viewerTarget);
+  if (!expectedFrame || entries.some(entry => frame(entry?.viewerTarget) !== expectedFrame)) {
+    return null;
+  }
+  const firstCalibration = obj(entries[0]?.quizSpatialEvidence);
+  const pixel = obj(firstCalibration.pixelSpacing);
+  if (firstCalibration.source !== 'dicom-calibrated-image-index-v1' ||
+      !clean(firstCalibration.calibrationSource) ||
+      !Number.isFinite(pixel.row) || pixel.row <= 0 ||
+      !Number.isFinite(pixel.column) || pixel.column <= 0) return null;
+
+  const measurements = entries.map(entry => {
+    const evidence = obj(entry?.quizSpatialEvidence);
+    const points = evidence.physicalPoints;
+    if (evidence.source !== firstCalibration.source ||
+        evidence.calibrationSource !== firstCalibration.calibrationSource ||
+        evidence.pixelSpacing?.row !== pixel.row ||
+        evidence.pixelSpacing?.column !== pixel.column ||
+        !Array.isArray(points) || points.length !== 2 ||
+        points.some((point: any) => !vector(point))) return null;
+    const dx = points[1][0] - points[0][0];
+    const dy = points[1][1] - points[0][1];
+    const length = Math.hypot(dx, dy);
+    if (!(length > 1e-6) || Math.abs(points[1][2] - points[0][2]) > 1e-4) return null;
+    return {
+      midpoint: [(points[0][0] + points[1][0]) / 2,
+        (points[0][1] + points[1][1]) / 2],
+      normal: [-dy / length, dx / length],
+    };
+  });
+  if (measurements.some(value => !value)) return null;
+
+  // Least-squares intersection of the learner's own caliper axes.
+  let xx = 0, xy = 0, yy = 0, bx = 0, by = 0;
+  for (const value of measurements) {
+    const { midpoint, normal } = value!;
+    const [nx, ny] = normal;
+    const projected = nx * midpoint[0] + ny * midpoint[1];
+    xx += nx * nx;
+    xy += nx * ny;
+    yy += ny * ny;
+    bx += nx * projected;
+    by += ny * projected;
+  }
+  const determinant = xx * yy - xy * xy;
+  // Nearly parallel axes cannot identify a stable lumen centre.
+  if (!(determinant > 1e-3)) return null;
+  const center = [(bx * yy - by * xy) / determinant,
+    (xx * by - xy * bx) / determinant];
+  if (center.some(value => !Number.isFinite(value))) return null;
+  const rays = measurements.map(value => {
+    const [mx, my] = value!.midpoint;
+    return [mx - center[0], my - center[1]];
+  });
+  if (rays.some(ray => Math.hypot(...ray) <= 1e-4)) return null;
+
+  let minimum = Infinity;
+  for (let i = 0; i < rays.length; i++) {
+    for (let j = i + 1; j < rays.length; j++) {
+      const a = rays[i], b = rays[j];
+      const cosine = (a[0] * b[0] + a[1] * b[1]) /
+        (Math.hypot(...a) * Math.hypot(...b));
+      const angle = Math.acos(Math.max(-1, Math.min(1, cosine))) * 180 / Math.PI;
+      minimum = Math.min(minimum, angle);
+    }
+  }
+  return Number.isFinite(minimum) ? minimum : null;
+}
