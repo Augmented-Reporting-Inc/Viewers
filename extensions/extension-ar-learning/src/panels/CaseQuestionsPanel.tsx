@@ -5270,13 +5270,16 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
 
         {reviewDetails.mode === 'frameSelection' ? (
           <div className="mt-1 text-gray-300">
-            Instance match:{' '}
-            {compareViewerTargetInstances(
-              reviewDetails.learnerTarget || scoreItem?.learnerResponse,
-              reviewDetails.goldTarget || scoreItem?.correctAnswer
-            ) === false
-              ? 'No'
-              : 'Yes'}
+            {reviewDetails.frameSelectionMode === 'frame_only'
+              ? 'Answer on assigned instance'
+              : 'Instance match'}:{' '}
+            {reviewDetails.frameSelectionMode === 'frame_only' &&
+              typeof reviewDetails.guidedInstanceEligible === 'boolean'
+              ? (reviewDetails.guidedInstanceEligible ? 'Yes' : 'No')
+              : compareViewerTargetInstances(
+                  reviewDetails.learnerTarget || scoreItem?.learnerResponse,
+                  reviewDetails.goldTarget || scoreItem?.correctAnswer
+                ) === false ? 'No' : 'Yes'}
             ; frame difference: {formatReviewNumber(reviewDetails.frameDelta)}; accepted tolerance:{' '}
             {formatReviewNumber(reviewDetails.toleranceFrames)} frame(s).
           </div>
