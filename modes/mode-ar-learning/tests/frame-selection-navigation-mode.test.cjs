@@ -203,6 +203,9 @@ test('quiz Length completion remains retryable until the label is available', ()
   assert.ok(labelGate >= 0, 'capture must require a completed label');
   assert.ok(handledMark > labelGate, 'unlabelled calipers must not be permanently marked handled');
   assert.match(completion, /dispatchViewerQuizMeasurementAdded\(completedMeasurement\)/);
+  assert.match(completion, /source === 'cornerstone-annotation-completed' && !!sourceAnnotation/);
+  assert.match(completion, /\(_suppressLabelPrompt && !freshDrawingCompleted\)/);
+  assert.match(completion, /isHydratedSavedWorkflowAnnotation\(id, resolvedAnnotation\)/);
 });
 
 test('learner BWT capture retains the last failure cause and clears it on success', () => {
