@@ -1953,6 +1953,12 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
   const autoBowelGoldCaptureInFlightRef = useRef(new Set<string>());
   // Serialize source-ID captures so two calipers cannot race a gold-set update.
   const autoBowelGoldCaptureQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const autoBowelLearnerCaptureInFlightRef = useRef(new Set<string>());
+  const autoBowelLearnerCaptureQueueRef = useRef<Promise<void>>(Promise.resolve());
+  // Preserve the newest quiz answers while several labelled calipers complete
+  // before React renders the preceding capture.
+  const latestLearnerAnswersRef = useRef(answersByQuizKey);
+  useEffect(() => { latestLearnerAnswersRef.current = answersByQuizKey; }, [answersByQuizKey]);
   const [capturingMeasurementKey, setCapturingMeasurementKey] = useState('');
   // Explicit educator/learner interpretation only. No default RAP is selected.
   const [rapSelectionsByQuestionKey, setRapSelectionsByQuestionKey] =
@@ -2449,6 +2455,8 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       const quizMeasurementDomain = authoringMode
         ? authoringMeasurementDomain || resolveQuizAuthoringMeasurementDomain(authoringDefinition)
         : normalizeQuizMeasurementDomain(quiz?.domain) ||
+          normalizeQuizMeasurementDomain(payload?.seriesDoc?.measurementDomain) ||
+          normalizeQuizMeasurementDomain(payload?.measurementDomain) ||
           inferLegacyQuizMeasurementDomain(quiz) ||
           getQuizAuthoringMeasurementDomainFromUrl();
 
@@ -2857,10 +2865,10 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
           });
         }
 
-        return;
+        return false;
       }
 
-      const currentAnswer = answersByQuizKey[quiz.quizKey]?.[question.questionKey];
+      const currentAnswer = latestLearnerAnswersRef.current[quiz.quizKey]?.[question.questionKey];
       if (isBowelMeasurementSetQuestion(question)) {
         const currentEntries = getBowelMeasurementSetEntries(plainObject(currentAnswer).measurements);
         const appended = appendBowelMeasurementSetAnswer(question, currentEntries, result.answer);
@@ -2870,16 +2878,24 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
             message: appended.reason || 'Cannot add measurement.',
             type: 'warning', duration: 4500,
           });
-          return;
+          return false;
         }
-        setAnswer(quiz.quizKey, question, { measurements: appended.entries });
+        const nextAnswer = { measurements: appended.entries };
+        latestLearnerAnswersRef.current = {
+          ...latestLearnerAnswersRef.current,
+          [quiz.quizKey]: {
+            ...(latestLearnerAnswersRef.current[quiz.quizKey] || {}),
+            [question.questionKey]: nextAnswer,
+          },
+        };
+        setAnswer(quiz.quizKey, question, nextAnswer);
         pendingBowelQuizMeasurementIdsRef.current.add(String(result.answer.sourceAnnotationId));
         if (!options.silent) uiNotificationService.show({
           title: 'Bowel measurement set',
           message: `Captured ${appended.entries?.length} / ${question.answerConfig?.measurementSet?.requiredCount} measurements.`,
           type: 'success', duration: 3000,
         });
-        return;
+        return true;
       }
 
       setAnswer(quiz.quizKey, question, setObjectAnswerPart(currentAnswer, result.answer));
@@ -2892,13 +2908,15 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
           duration: 3000,
         });
       }
+      return true;
     } catch (error) {
-      uiNotificationService.show({
+      if (!options.silent) uiNotificationService.show({
         title: 'Case Questions',
         message: `Measurement capture failed: ${error?.message || error}`,
         type: 'error',
         duration: 6000,
       });
+      return false;
     } finally {
       setCapturingMeasurementKey('');
     }
@@ -2983,7 +3001,6 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         return;
       }
 
-      if (labelCompleted) return;
       const [quizKey, questionKey] = activeQuestionKey.split(':');
       const quiz = payload?.quizzes?.find(item => item.quizKey === quizKey);
       const question = quiz?.questions?.find(item => item.questionKey === questionKey);
@@ -2991,11 +3008,44 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       if (!quiz || !question || question.type !== 'measurementNumeric') {
         return;
       }
-      if (isBowelMeasurementSetQuestion(question) || isGuidedQuizCompositeKind(
+      if (isBowelMeasurementSetQuestion(question)) {
+        // Bind the completed, labelled caliper by exact annotation ID.
+        // Serialize captures to preserve both calipers in rapid succession.
+        const activationKey = `${quizKey}:${questionKey}`;
+        const captureId = `${activationKey}:${measurementId}`;
+        if (autoBowelLearnerCaptureInFlightRef.current.has(captureId)) return;
+        autoBowelLearnerCaptureInFlightRef.current.add(captureId);
+        const captureQueuedCaliper = async () => {
+          try {
+            for (const delayMs of [100, 350, 850, 1800]) {
+              await new Promise(resolve => window.setTimeout(resolve, delayMs));
+              if (lastActivatedQuestionRef.current !== activationKey) return;
+              const currentEntries = getBowelMeasurementSetEntries(
+                plainObject(latestLearnerAnswersRef.current[quizKey]?.[questionKey]).measurements
+              );
+              if (currentEntries.some(entry => cleanString(entry.sourceAnnotationId) === measurementId)) return;
+              const captured = await captureSelectedMeasurementAnswer(quiz, question, {
+                measurementId, silent: true,
+              });
+              if (captured === true) return;
+            }
+            uiNotificationService.show({
+              title: 'Bowel measurement set',
+              message: 'The labelled BWT caliper could not be recorded. Check the bowel segment and frame, then draw another caliper.',
+              type: 'warning', duration: 5000,
+            });
+          } finally {
+            autoBowelLearnerCaptureInFlightRef.current.delete(captureId);
+          }
+        };
+        autoBowelLearnerCaptureQueueRef.current =
+          autoBowelLearnerCaptureQueueRef.current.then(captureQueuedCaliper, captureQueuedCaliper);
+        return;
+      }
+      if (labelCompleted || isGuidedQuizCompositeKind(
         cleanString(plainObject(question.answerConfig).measurementKind)
       )) {
-        // Wait for an explicit completed composite/trace capture. A single
-        // annotation-added event does not establish a valid final result.
+        // Composite calculations are captured only when complete.
         return;
       }
 
