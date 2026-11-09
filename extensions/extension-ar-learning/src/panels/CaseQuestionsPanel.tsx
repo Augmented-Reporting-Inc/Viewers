@@ -2103,9 +2103,17 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     const [quizKey, questionKey] = activeQuestionKey.split(':');
     const quiz = quizzes.find(item => item.quizKey === quizKey);
     const question = quiz?.questions?.find(item => item.questionKey === questionKey);
-    if (question?.type !== 'measurementNumeric') return;
-    const domain = getLearnerQuizMeasurementDomain(quiz, payload);
-    if (domain) dispatchQuizMeasurementDomain(domain);
+    let domain = question?.type === 'measurementNumeric'
+      ? getLearnerQuizMeasurementDomain(quiz, payload) : '';
+    if (!domain && quizzes.length) {
+      // A reopened viewer may have no saved active question. Only fall back to
+      // the quiz domain when every loaded quiz agrees on the specialty.
+      const domains = [...new Set(quizzes.map(item =>
+        getLearnerQuizMeasurementDomain(item, payload)).filter(Boolean))];
+      if (domains.length === 1) domain = domains[0];
+    }
+    // Clear any stale prior quiz domain when definitions disagree.
+    dispatchQuizMeasurementDomain(domain);
   }, [activeQuestionKey, quizzes, payload, authoringMode, authoringMeasurementDomain, authoringQuestions]);
 
   async function refreshScoringPayload() {
