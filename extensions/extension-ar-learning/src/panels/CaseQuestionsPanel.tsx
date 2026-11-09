@@ -2007,6 +2007,11 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
   const autoBowelLearnerCaptureQueueRef = useRef<Promise<void>>(Promise.resolve());
   const bowelCaptureFailureReasonRef = useRef<Record<string, string>>({});
   const [bowelCaptureErrors, setBowelCaptureErrors] = useState<Record<string, string>>({});
+  // Geometry is intentionally absent from saved quiz responses. This cache
+  // contains only evidence reloaded from the exact learner copy's canonical
+  // MeasurementAnnotations and is never written back into a quiz answer.
+  const [trustedBowelSpatialByQuestion, setTrustedBowelSpatialByQuestion] =
+    useState<Record<string, Record<string, any>>>({});
   const [frameNavigationErrors, setFrameNavigationErrors] = useState<Record<string, string>>({});
   // Preserve the newest quiz answers while several labelled calipers complete
   // before React renders the preceding capture.
@@ -2243,6 +2248,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
           }
         });
       }
+      setTrustedBowelSpatialByQuestion({});
       setPayload(nextPayload);
       setAnswersByQuizKey(answersToUse);
       writeViewerQuizSessionState(sessionStateKey, {
@@ -2492,6 +2498,23 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       selectedSourceAnnotationId,
       questionKey: question.questionKey,
     });
+    const evidence = Array.isArray(result?.trustedSpatialEvidence)
+      ? result.trustedSpatialEvidence : [];
+    if (evidence.length) {
+      const validIds = new Set(measurements.map(item => cleanString(item.sourceAnnotationId)));
+      const trustedById: Record<string, any> = {};
+      evidence.forEach(item => {
+        const id = cleanString(item.sourceAnnotationId);
+        const spatial = plainObject(item.quizSpatialEvidence);
+        if (validIds.has(id) && spatial.source === 'dicom-calibrated-image-index-v1') {
+          trustedById[id] = spatial;
+        }
+      });
+      setTrustedBowelSpatialByQuestion(current => ({
+        ...current,
+        [`${quiz.quizKey}:${question.questionKey}`]: trustedById,
+      }));
+    }
     if (result?.ok === true) return true;
     console.warn('[CaseQuestionsPanel] learner BWT calipers could not be shown', {
       quizKey: quiz.quizKey, questionKey: question.questionKey,
@@ -5006,14 +5029,25 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       const linkedRVSP = cleanString(plainObject(question.answerConfig).measurementKind) === 'ivcRapRvsp';
       const bowelSet = isBowelMeasurementSetQuestion(question);
       const bowelEntries = getBowelMeasurementSetEntries(plainObject(value).measurements);
+      const verifiedSpatial = trustedBowelSpatialByQuestion[`${quiz.quizKey}:${question.questionKey}`] || {};
+      // The backend deliberately strips client-provided geometry from saved
+      // answers. Use authoritative persisted learner annotation evidence only
+      // when the local answer does not already hold fresh capture evidence.
+      const bowelGeometryEntries = bowelEntries.map(entry => ({
+        ...entry,
+        quizSpatialEvidence: plainObject(entry.quizSpatialEvidence).source ===
+          'dicom-calibrated-image-index-v1'
+          ? entry.quizSpatialEvidence
+          : verifiedSpatial[cleanString(entry.sourceAnnotationId)],
+      }));
       const bowelSettings = plainObject(plainObject(question.answerConfig).measurementSet);
       const bowelCount = Number(bowelSettings.requiredCount) || 2;
       const requiredBowelLabel = formatBowelBwtMeasurementLabel(bowelSettings.measurementTarget);
       const midpointSpacingMm = bowelSettings.orientation === 'longitudinal'
-        ? getBowelMeasurementSetMidpointSpacingMm(bowelEntries)
+        ? getBowelMeasurementSetMidpointSpacingMm(bowelGeometryEntries)
         : null;
       const estimatedRadialAngle = bowelSettings.orientation === 'crossSection'
-        ? getBowelMeasurementSetEstimatedRadialAngleDegrees(bowelEntries)
+        ? getBowelMeasurementSetEstimatedRadialAngleDegrees(bowelGeometryEntries)
         : null;
 
       return (
