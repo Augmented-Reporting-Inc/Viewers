@@ -156,6 +156,13 @@ test('multi-BWT opens its complete saved learner annotation set, never the gold 
   assert.match(command, /actions\.showSavedViewerAnnotationsForSameImage\(/);
   assert.match(command, /renderedCount !== verified\.length/);
   assert.match(command, /getAnnotations\?\.\('Length', viewport\.element\)/);
+  assert.match(command, /getMeasurementAnnotationId\(item\) === annotationId/,
+    'Cornerstone Length annotation IDs are annotationUID, not saved annotationId');
+  assert.match(command, /getViewerQuizMeasurementSeriesDocs\(\{ includeBaseSeries: false \}\)/);
+  assert.match(command, /trustedSpatialEvidence/);
+  assert.match(command, /quizSpatialEvidence: evidence/);
+  assert.match(panelSource, /restoreBowelMeasurementSetDisplayEvidence\(/);
+  assert.match(panelSource, /setTrustedBowelSpatialByQuestion\(/);
   assert.match(command, /getGroupKey\?\.\(viewport\.element\)/);
   assert.match(command, /manager\.addAnnotation\(live, groupKey\)/);
   assert.match(command, /indexedCount !== verified\.length/);
