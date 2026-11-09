@@ -1,6 +1,7 @@
 import {
   appendBowelMeasurementSetAnswer,
   getBowelMeasurementSetEntries,
+  restoreBowelMeasurementSetDisplayEvidence,
   formatBowelBwtMeasurementLabel,
   getBowelMeasurementSetMidpointSpacingMm,
   getBowelMeasurementSetEstimatedRadialAngleDegrees,
@@ -152,5 +153,59 @@ describe('learner cross-sectional BWT live angle estimate', () => {
     expect(getBowelMeasurementSetEstimatedRadialAngleDegrees([
       radialCaliper('a', 0), radialCaliper('b', 0),
     ])).toBeNull();
+  });
+});
+
+describe('persisted learner multi-BWT display evidence', () => {
+  it('restores longitudinal spacing from verified learner annotations without changing saved quiz answers', () => {
+    // FormAPI intentionally strips quizSpatialEvidence from viewerQuizResponses.
+    const savedAnswers = [caliper('a', 0), caliper('b', 5)]
+      .map(({ quizSpatialEvidence, ...entry }) => entry);
+    expect(getBowelMeasurementSetMidpointSpacingMm(savedAnswers)).toBeNull();
+    const trusted = {
+      a: caliper('a', 0).quizSpatialEvidence,
+      b: caliper('b', 5).quizSpatialEvidence,
+    };
+    const reconstructed = restoreBowelMeasurementSetDisplayEvidence(savedAnswers, trusted);
+    expect(getBowelMeasurementSetMidpointSpacingMm(reconstructed)).toBe(5);
+    expect(savedAnswers[0]).not.toHaveProperty('quizSpatialEvidence');
+    expect(savedAnswers[1]).not.toHaveProperty('quizSpatialEvidence');
+  });
+
+  it('restores cross-sectional angle only when both source IDs have verified calibration', () => {
+    const radial = (id: string, degrees: number) => {
+      const angle = degrees * Math.PI / 180;
+      return caliper(id, 0, { quizSpatialEvidence: {
+        source: 'dicom-calibrated-image-index-v1',
+        calibrationSource: 'ultrasound-region',
+        pixelSpacing: { row: 0.1, column: 0.1 },
+        physicalPoints: [
+          [4 * Math.cos(angle), 4 * Math.sin(angle), 0],
+          [5 * Math.cos(angle), 5 * Math.sin(angle), 0],
+        ],
+      } });
+    };
+    const a = radial('a', 0);
+    const b = radial('b', 90);
+    const savedAnswers = [a, b].map(({ quizSpatialEvidence, ...entry }) => entry);
+    expect(getBowelMeasurementSetEstimatedRadialAngleDegrees(savedAnswers)).toBeNull();
+    const reconstructed = restoreBowelMeasurementSetDisplayEvidence(savedAnswers, {
+      a: a.quizSpatialEvidence, b: b.quizSpatialEvidence,
+    });
+    expect(getBowelMeasurementSetEstimatedRadialAngleDegrees(reconstructed)).toBeCloseTo(90, 5);
+    expect(getBowelMeasurementSetEstimatedRadialAngleDegrees(
+      restoreBowelMeasurementSetDisplayEvidence(savedAnswers, { a: a.quizSpatialEvidence })
+    )).toBeNull();
+    expect(restoreBowelMeasurementSetDisplayEvidence(savedAnswers, {
+      unknown: b.quizSpatialEvidence,
+    })).toEqual(savedAnswers);
+  });
+
+  it('does not overwrite fresh unsaved caliper geometry with a stale restored annotation', () => {
+    const current = caliper('a', 3);
+    const restored = restoreBowelMeasurementSetDisplayEvidence([current], {
+      a: caliper('a', 9).quizSpatialEvidence,
+    });
+    expect(restored[0].quizSpatialEvidence).toBe(current.quizSpatialEvidence);
   });
 });
