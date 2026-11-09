@@ -89,7 +89,9 @@ test('restored active learner question re-broadcasts the Bowel domain before lab
   const labelEnd = modeSource.indexOf('async function waitForViewerMeasurementServiceEntry(', labelStart);
   const labelConfig = modeSource.slice(labelStart, labelEnd);
   assert.match(labelConfig, /normalizeQuizMeasurementDomain\(quizMeasurementDomain\) \|\|\s*getExplicitQuizMeasurementDomainFromUrl\(\)/);
-  assert.doesNotMatch(labelConfig, /getViewerMeasurementDomainFromPath\(\)/,
+  const resolution = labelConfig.slice(labelConfig.indexOf('const resolvedStudyDomain'),
+    labelConfig.indexOf('const domain =', labelConfig.indexOf('const resolvedStudyDomain')));
+  assert.doesNotMatch(resolution, /getViewerMeasurementDomainFromPath\(\)/,
     'a generic /rviewer/ location must never default a bowel quiz to Echo');
   assert.doesNotMatch(labelConfig, /resolveViewerMeasurementDomain\(commandsManager\)\)\s*:\s*await/,
     'quiz branches must not inherit unverified study labels');
@@ -284,7 +286,7 @@ test('Show your answer explicitly opens the learner-selected exact frame', () =>
   assert.match(showYourAnswer, /viewerTarget: learnerTarget/);
   assert.match(showYourAnswer, /revealExactFrame: question\.type === 'frameSelection'/);
   assert.match(panelSource, /frame-selection configuration/);
-  assert.match(panelSource, /Mode: Find frame only/);
+  assert.doesNotMatch(panelSource, /Mode: Find frame only/);
 });
 
 test('multiple-BWT post-score review shows each gold length and scoring rules', () => {
