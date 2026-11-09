@@ -28,7 +28,11 @@ import { composeIVCRapRVSP, isIVCReviewCurrent, RAP_CHOICES_MMHG } from '../util
 import {
   isBowelMeasurementSetQuestion,
   getBowelMeasurementSetEntries,
+  restoreBowelMeasurementSetDisplayEvidence,
+  formatBowelBwtMeasurementLabel,
   appendBowelMeasurementSetAnswer,
+  getBowelMeasurementSetMidpointSpacingMm,
+  getBowelMeasurementSetEstimatedRadialAngleDegrees,
 } from '../utils/bowelQuizMeasurementSet';
 import {
   COMPOSITE_FRAME_SLOTS,
@@ -180,6 +184,25 @@ function inferLegacyQuizMeasurementDomain(
   return '';
 }
 
+function getLearnerQuizMeasurementDomain(quiz: QuizDefinition | undefined, source: any): string {
+  return normalizeQuizMeasurementDomain(quiz?.domain) ||
+    normalizeQuizMeasurementDomain(source?.seriesDoc?.measurementDomain) ||
+    normalizeQuizMeasurementDomain(source?.measurementDomain) ||
+    inferLegacyQuizMeasurementDomain(quiz) ||
+    getQuizAuthoringMeasurementDomainFromUrl();
+}
+
+function getQuizQuestionMeasurementDomain(
+  quiz: QuizDefinition | undefined,
+  question: QuizQuestion | undefined,
+  source: any
+): string {
+  // A configured multiple-BWT question is unambiguously a Bowel measurement
+  // workflow, even when legacy study or URL metadata is absent or stale.
+  return isBowelMeasurementSetQuestion(question) ? 'bowel' :
+    getLearnerQuizMeasurementDomain(quiz, source);
+}
+
 function resolveQuizAuthoringMeasurementDomain(
   definition: QuizDefinition | null | undefined
 ): string {
@@ -202,15 +225,15 @@ function dispatchQuizMeasurementDomain(domain: string) {
   } catch {}
 }
 
-function syncQuizAuthoringMeasurementDomainToUrl(
+function syncQuizMeasurementDomainToUrl(
   value: unknown,
   { overwrite = false }: { overwrite?: boolean } = {}
 ) {
   const domain = normalizeQuizMeasurementDomain(value);
 
-  // The Learning mode consumes this synchronous event as the source of truth
-  // for authoring labels. URL synchronization is retained for inspectability and
-  // reloads, but label behavior no longer depends on history/router propagation.
+  // Broadcast immediately for the active viewer, and persist the confirmed
+  // quiz domain in the URL so a late listener or reopened viewer can recover
+  // it before the Length label dialog opens.
   dispatchQuizMeasurementDomain(domain);
 
   try {
@@ -644,12 +667,47 @@ function getQuestionViewerTarget(question: QuizQuestion) {
   return candidates.find(targetHasNavigationIdentity) || null;
 }
 
+// Legacy/unconfigured and explicit frame-only questions open only the SOP;
+// instance_and_frame requires the learner to find the correct SOP unaided.
+// Never jump to the educator's correct frame during question activation.
+function shouldGuideFrameSelectionToInstance(question: QuizQuestion) {
+  const mode = cleanString(plainObject(question?.answerConfig).frameSelectionMode);
+  return mode === '' || mode === 'frame_only';
+}
+
+function getLearnerBwtCaptureFailureMessage(reason: string): string {
+  const explanation = cleanString(reason);
+  if (!explanation || explanation === 'measurement-not-ready' ||
+      explanation === 'selected-measurement-not-found') {
+    return 'This caliper was not recorded because its labelled measurement is not available yet.';
+  }
+  if (explanation === 'no-selected-measurement') {
+    return 'The completed caliper could not be identified. Draw and label a new BWT caliper.';
+  }
+  if (explanation.includes('bwt-spatial-calibration-unavailable') ||
+      explanation.includes('Calibrated image-index') ||
+      explanation.includes('physical-pixel-spacing-unavailable') ||
+      explanation.includes('dicom-calibration')) {
+    return 'This caliper could not be recorded because its DICOM image calibration could not be verified.';
+  }
+  if (explanation.includes('expected anatomical label') ||
+      explanation.includes('calibrated Length measurement')) {
+    return explanation;
+  }
+  if (explanation.includes('same identified image/frame') ||
+      explanation.includes('exact DICOM frame') ||
+      explanation.includes('active-dicom-frame')) {
+    return 'All BWT calipers must be measured on the same identified DICOM frame.';
+  }
+  return explanation;
+}
+
 function getQuestionSelectionViewerTarget(
   question: QuizQuestion,
   viewerTarget: any,
   revealExactFrame = false
 ) {
-  if (question.type !== 'frameSelection' || revealExactFrame) {
+  if (question.type !== 'frameSelection' || revealExactFrame || !viewerTarget) {
     return viewerTarget;
   }
 
@@ -1946,6 +2004,20 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
   const autoBowelGoldCaptureInFlightRef = useRef(new Set<string>());
   // Serialize source-ID captures so two calipers cannot race a gold-set update.
   const autoBowelGoldCaptureQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const autoBowelLearnerCaptureInFlightRef = useRef(new Set<string>());
+  const autoBowelLearnerCaptureQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const bowelCaptureFailureReasonRef = useRef<Record<string, string>>({});
+  const [bowelCaptureErrors, setBowelCaptureErrors] = useState<Record<string, string>>({});
+  // Geometry is intentionally absent from saved quiz responses. This cache
+  // contains only evidence reloaded from the exact learner copy's canonical
+  // MeasurementAnnotations and is never written back into a quiz answer.
+  const [trustedBowelSpatialByQuestion, setTrustedBowelSpatialByQuestion] =
+    useState<Record<string, Record<string, any>>>({});
+  const [frameNavigationErrors, setFrameNavigationErrors] = useState<Record<string, string>>({});
+  // Preserve the newest quiz answers while several labelled calipers complete
+  // before React renders the preceding capture.
+  const latestLearnerAnswersRef = useRef(answersByQuizKey);
+  useEffect(() => { latestLearnerAnswersRef.current = answersByQuizKey; }, [answersByQuizKey]);
   const [capturingMeasurementKey, setCapturingMeasurementKey] = useState('');
   // Explicit educator/learner interpretation only. No default RAP is selected.
   const [rapSelectionsByQuestionKey, setRapSelectionsByQuestionKey] =
@@ -2032,6 +2104,35 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     [scoringPayload, deferredReportScoring]
   );
 
+  // The highlighted question is restored from session storage on reopen.
+  // A fresh card click is not required, so restore its clinical domain before
+  // the next Length annotation requests a label (the /rviewer/ path is generic).
+  useEffect(() => {
+    if (authoringMode) {
+      const questionKey = activeQuestionKey.startsWith('authoring:')
+        ? activeQuestionKey.slice('authoring:'.length) : '';
+      const active = authoringQuestions.find(item => item.questionKey === questionKey);
+      if (active?.type === 'measurementNumeric' && authoringMeasurementDomain) {
+        syncQuizMeasurementDomainToUrl(authoringMeasurementDomain, { overwrite: true });
+      }
+      return;
+    }
+    const [quizKey, questionKey] = activeQuestionKey.split(':');
+    const quiz = quizzes.find(item => item.quizKey === quizKey);
+    const question = quiz?.questions?.find(item => item.questionKey === questionKey);
+    let domain = question?.type === 'measurementNumeric'
+      ? getQuizQuestionMeasurementDomain(quiz, question, payload) : '';
+    if (!domain && quizzes.length) {
+      // A reopened viewer may have no saved active question. Only fall back to
+      // the quiz domain when every loaded quiz agrees on the specialty.
+      const domains = [...new Set(quizzes.map(item =>
+        getLearnerQuizMeasurementDomain(item, payload)).filter(Boolean))];
+      if (domains.length === 1) domain = domains[0];
+    }
+    // Clear any stale prior quiz domain when definitions disagree.
+    syncQuizMeasurementDomainToUrl(domain, { overwrite: true });
+  }, [activeQuestionKey, quizzes, payload, authoringMode, authoringMeasurementDomain, authoringQuestions]);
+
   async function refreshScoringPayload() {
     try {
       if (deferredReportScoring) {
@@ -2060,7 +2161,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       const rubrics = Array.isArray(nextPayload?.rubrics) ? nextPayload.rubrics : [];
       const selectedDefinition = pickAuthoringDefinition(definitions, preferredDefinitionId);
       const selectedMeasurementDomain = resolveQuizAuthoringMeasurementDomain(selectedDefinition);
-      syncQuizAuthoringMeasurementDomainToUrl(selectedMeasurementDomain);
+      syncQuizMeasurementDomainToUrl(selectedMeasurementDomain);
       const selectedRubric = findRubricForDefinition(rubrics, selectedDefinition);
       const nextQuestions = Array.isArray(selectedDefinition?.questions)
         ? selectedDefinition.questions
@@ -2148,6 +2249,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
           }
         });
       }
+      setTrustedBowelSpatialByQuestion({});
       setPayload(nextPayload);
       setAnswersByQuizKey(answersToUse);
       writeViewerQuizSessionState(sessionStateKey, {
@@ -2385,6 +2487,51 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     return result;
   }
 
+  async function showLearnerBowelMeasurements(
+    quiz: QuizDefinition,
+    question: QuizQuestion,
+    measurements: any[],
+    selectedSourceAnnotationId = '',
+    notifyOnFailure = false
+  ) {
+    const result = await runViewerCommand(commandsManager, 'showViewerQuizLearnerBwtMeasurementSet', {
+      learnerMeasurements: measurements,
+      selectedSourceAnnotationId,
+      questionKey: question.questionKey,
+    });
+    const evidence = Array.isArray(result?.trustedSpatialEvidence)
+      ? result.trustedSpatialEvidence : [];
+    if (evidence.length) {
+      const validIds = new Set(measurements.map(item => cleanString(item.sourceAnnotationId)));
+      const trustedById: Record<string, any> = {};
+      evidence.forEach(item => {
+        const id = cleanString(item.sourceAnnotationId);
+        const spatial = plainObject(item.quizSpatialEvidence);
+        if (validIds.has(id) && spatial.source === 'dicom-calibrated-image-index-v1') {
+          trustedById[id] = spatial;
+        }
+      });
+      setTrustedBowelSpatialByQuestion(current => ({
+        ...current,
+        [`${quiz.quizKey}:${question.questionKey}`]: trustedById,
+      }));
+    }
+    if (result?.ok === true) return true;
+    console.warn('[CaseQuestionsPanel] learner BWT calipers could not be shown', {
+      quizKey: quiz.quizKey, questionKey: question.questionKey,
+      reason: cleanString(result?.reason) || 'navigation-failed',
+    });
+    if (notifyOnFailure) {
+      uiNotificationService.show({
+        title: 'Bowel measurements',
+        message: 'The saved BWT calipers could not be displayed on their recorded image. Reopen the learner study or check that the measurements were saved.',
+        type: 'warning',
+        duration: 6000,
+      });
+    }
+    return false;
+  }
+
   async function selectQuestion(
     quiz: QuizDefinition,
     question: QuizQuestion,
@@ -2403,6 +2550,14 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       return;
     }
     lastActivatedQuestionRef.current = nextActiveQuestionKey;
+    if (question.type === 'frameSelection') {
+      setFrameNavigationErrors(current => {
+        if (!current[nextActiveQuestionKey]) return current;
+        const next = { ...current };
+        delete next[nextActiveQuestionKey];
+        return next;
+      });
+    }
     // Change the question binding synchronously, but start guided EF/LA
     // only after navigation has reached the question's image/viewport.
     setActiveQuestionKey(nextActiveQuestionKey);
@@ -2441,11 +2596,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     if (question.type === 'measurementNumeric') {
       const quizMeasurementDomain = authoringMode
         ? authoringMeasurementDomain || resolveQuizAuthoringMeasurementDomain(authoringDefinition)
-        : normalizeQuizMeasurementDomain(quiz?.domain) ||
-          inferLegacyQuizMeasurementDomain(quiz) ||
-          getQuizAuthoringMeasurementDomainFromUrl();
+        : getQuizQuestionMeasurementDomain(quiz, question, payload);
 
-      dispatchQuizMeasurementDomain(quizMeasurementDomain);
+      syncQuizMeasurementDomainToUrl(quizMeasurementDomain, { overwrite: true });
 
       // Length still activates immediately. Guided workflows are deferred
       // until the saved question target has been navigated into view.
@@ -2524,12 +2677,27 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       question.type === 'frameSelection'
         ? getQuestionViewerTarget(question)
         : null;
+    if (question.type === 'frameSelection' && !authoringMode) {
+      const mode = cleanString(plainObject(question.answerConfig).frameSelectionMode) || 'legacy';
+      // Safe diagnostics only: no DICOM identifiers, gold frame or answer
+      // geometry are logged. If the active version lacks frame_only, the
+      // published quiz must be reactivated with that configuration.
+      console.info('[CaseQuestionsPanel] frame-selection configuration', {
+        quizKey: quiz.quizKey,
+        quizVersion: quiz.quizVersion,
+        questionKey: question.questionKey,
+        mode,
+        safeInstanceHintAvailable: !!configuredFrameTarget,
+      });
+    }
     let resolvedViewerTarget;
 
     if (hasViewerTargetOverride) {
       resolvedViewerTarget = options.viewerTarget;
     } else if (question.type === 'frameSelection' && !authoringMode) {
-      resolvedViewerTarget = configuredFrameTarget;
+      resolvedViewerTarget = shouldGuideFrameSelectionToInstance(question)
+        ? configuredFrameTarget
+        : null;
     } else {
       resolvedViewerTarget =
         learnerFrameTarget ||
@@ -2558,6 +2726,23 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       : getQuestionOverlayMarkerOptions(quiz, question, reviewQuestionAnswer, {
           reviewMode: 'learner',
         });
+
+    // Multi-BWT answers store an array of learner calipers, not the single
+    // top-level annotation reference expected by the generic review path.
+    // Restore every learner-owned Length overlay, including unscored drafts.
+    const savedBowelMeasurements = !authoringMode && isBowelMeasurementSetQuestion(question)
+      ? getBowelMeasurementSetEntries(plainObject(questionAnswer).measurements) : [];
+    if (savedBowelMeasurements.length > 0) {
+      try {
+        if (await showLearnerBowelMeasurements(quiz, question, savedBowelMeasurements)) {
+          return;
+        }
+      } catch (error) {
+        console.warn('[CaseQuestionsPanel] learner BWT set restoration failed', {
+          questionKey: question.questionKey, error,
+        });
+      }
+    }
 
     if (
       question.type === 'measurementNumeric' &&
@@ -2592,6 +2777,17 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     }
 
     if (!viewerTarget) {
+      if (question.type === 'frameSelection' && !authoringMode &&
+          shouldGuideFrameSelectionToInstance(question)) {
+        const message = 'This quiz version has no assigned instance to open. Ask the educator to verify the gold target and activate the updated quiz version.';
+        console.warn('[CaseQuestionsPanel] guided frame question missing learner navigation hint', {
+          quizKey: quiz.quizKey,
+          quizVersion: quiz.quizVersion,
+          questionKey: question.questionKey,
+          frameSelectionMode: plainObject(question.answerConfig).frameSelectionMode,
+        });
+        setFrameNavigationErrors(current => ({ ...current, [nextActiveQuestionKey]: message }));
+      }
       if (overlayMarkers.length) {
         await runViewerCommand(commandsManager, 'showViewerQuizMarkerOptions', {
           viewerTarget: null,
@@ -2610,10 +2806,17 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         questionKey: question.questionKey,
       });
 
+      if (question.type === 'frameSelection' && !authoringMode &&
+          shouldGuideFrameSelectionToInstance(question) && result?.ok !== true) {
+        const message = 'The viewer could not open the assigned instance. Select the question again; if the problem persists, contact the educator.';
+        setFrameNavigationErrors(current => ({ ...current, [nextActiveQuestionKey]: message }));
+      }
       if (result && result.ok === false && result.reason !== 'empty-target') {
         console.warn('[CaseQuestionsPanel] viewer quiz navigation did not complete', {
           questionKey: question.questionKey,
-          result,
+          reason: result.reason,
+          source: result.source,
+          frameSelectionMode: plainObject(question.answerConfig).frameSelectionMode,
         });
       }
 
@@ -2629,6 +2832,13 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       }
     } catch (error) {
       console.warn('[CaseQuestionsPanel] viewer quiz navigation failed:', error);
+      if (question.type === 'frameSelection' && !authoringMode &&
+          shouldGuideFrameSelectionToInstance(question)) {
+        setFrameNavigationErrors(current => ({
+          ...current,
+          [nextActiveQuestionKey]: 'The assigned instance could not be opened. Please retry or contact the educator.',
+        }));
+      }
     }
     } finally {
       await activateGuidedAfterNavigation();
@@ -2835,6 +3045,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
 
       if (!result?.ok || !result?.answer) {
         const reason = cleanString(result?.reason || 'No selected measurement found.');
+        if (isBowelMeasurementSetQuestion(question)) {
+          bowelCaptureFailureReasonRef.current[captureKey] = reason;
+        }
 
         if (!options.silent) {
           uiNotificationService.show({
@@ -2848,29 +3061,46 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
           });
         }
 
-        return;
+        return false;
       }
 
-      const currentAnswer = answersByQuizKey[quiz.quizKey]?.[question.questionKey];
+      const currentAnswer = latestLearnerAnswersRef.current[quiz.quizKey]?.[question.questionKey];
       if (isBowelMeasurementSetQuestion(question)) {
         const currentEntries = getBowelMeasurementSetEntries(plainObject(currentAnswer).measurements);
         const appended = appendBowelMeasurementSetAnswer(question, currentEntries, result.answer);
         if (!appended.ok) {
+          bowelCaptureFailureReasonRef.current[captureKey] =
+            cleanString(appended.reason || 'caliper-validation-failed');
           if (!options.silent) uiNotificationService.show({
             title: 'Bowel measurement set',
             message: appended.reason || 'Cannot add measurement.',
             type: 'warning', duration: 4500,
           });
-          return;
+          return false;
         }
-        setAnswer(quiz.quizKey, question, { measurements: appended.entries });
+        const nextAnswer = { measurements: appended.entries };
+        latestLearnerAnswersRef.current = {
+          ...latestLearnerAnswersRef.current,
+          [quiz.quizKey]: {
+            ...(latestLearnerAnswersRef.current[quiz.quizKey] || {}),
+            [question.questionKey]: nextAnswer,
+          },
+        };
+        setAnswer(quiz.quizKey, question, nextAnswer);
         pendingBowelQuizMeasurementIdsRef.current.add(String(result.answer.sourceAnnotationId));
+        delete bowelCaptureFailureReasonRef.current[captureKey];
+        setBowelCaptureErrors(current => {
+          if (!current[captureKey]) return current;
+          const next = { ...current };
+          delete next[captureKey];
+          return next;
+        });
         if (!options.silent) uiNotificationService.show({
           title: 'Bowel measurement set',
           message: `Captured ${appended.entries?.length} / ${question.answerConfig?.measurementSet?.requiredCount} measurements.`,
           type: 'success', duration: 3000,
         });
-        return;
+        return true;
       }
 
       setAnswer(quiz.quizKey, question, setObjectAnswerPart(currentAnswer, result.answer));
@@ -2883,13 +3113,19 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
           duration: 3000,
         });
       }
+      return true;
     } catch (error) {
-      uiNotificationService.show({
+      if (isBowelMeasurementSetQuestion(question)) {
+        bowelCaptureFailureReasonRef.current[captureKey] =
+          cleanString(error?.message || error);
+      }
+      if (!options.silent) uiNotificationService.show({
         title: 'Case Questions',
         message: `Measurement capture failed: ${error?.message || error}`,
         type: 'error',
         duration: 6000,
       });
+      return false;
     } finally {
       setCapturingMeasurementKey('');
     }
@@ -2974,7 +3210,6 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         return;
       }
 
-      if (labelCompleted) return;
       const [quizKey, questionKey] = activeQuestionKey.split(':');
       const quiz = payload?.quizzes?.find(item => item.quizKey === quizKey);
       const question = quiz?.questions?.find(item => item.questionKey === questionKey);
@@ -2982,11 +3217,63 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       if (!quiz || !question || question.type !== 'measurementNumeric') {
         return;
       }
-      if (isBowelMeasurementSetQuestion(question) || isGuidedQuizCompositeKind(
+      if (isBowelMeasurementSetQuestion(question)) {
+        // Bind the completed, labelled caliper by exact annotation ID.
+        // Serialize captures to preserve both calipers in rapid succession.
+        const activationKey = `${quizKey}:${questionKey}`;
+        const captureId = `${activationKey}:${measurementId}`;
+        if (autoBowelLearnerCaptureInFlightRef.current.has(captureId)) return;
+        autoBowelLearnerCaptureInFlightRef.current.add(captureId);
+        const captureQueuedCaliper = async () => {
+          try {
+            for (const delayMs of [100, 350, 850, 1800]) {
+              await new Promise(resolve => window.setTimeout(resolve, delayMs));
+              // A reopened quiz can restore its highlighted active question
+              // without a fresh card click. The ref is then empty, but the
+              // persisted activeQuestionKey is still a valid learner binding.
+              const lastActivated = lastActivatedQuestionRef.current;
+              if (lastActivated
+                ? lastActivated !== activationKey
+                : activeQuestionKey !== activationKey) return;
+              const currentEntries = getBowelMeasurementSetEntries(
+                plainObject(latestLearnerAnswersRef.current[quizKey]?.[questionKey]).measurements
+              );
+              if (currentEntries.some(entry => cleanString(entry.sourceAnnotationId) === measurementId)) return;
+              const captured = await captureSelectedMeasurementAnswer(quiz, question, {
+                measurementId, silent: true,
+              });
+              if (captured === true) return;
+            }
+            const lastActivated = lastActivatedQuestionRef.current;
+            if (lastActivated
+              ? lastActivated !== activationKey
+              : activeQuestionKey !== activationKey) return;
+            const reason = bowelCaptureFailureReasonRef.current[activationKey] || 'measurement-not-ready';
+            console.warn('[CaseQuestionsPanel] learner BWT caliper not captured', {
+              quizKey, questionKey, measurementId, reason,
+            });
+            const message = getLearnerBwtCaptureFailureMessage(reason);
+            setBowelCaptureErrors(current => ({
+              ...current,
+              [activationKey]: message,
+            }));
+            uiNotificationService.show({
+              title: 'Bowel measurement set',
+              message,
+              type: 'warning', duration: 5500,
+            });
+          } finally {
+            autoBowelLearnerCaptureInFlightRef.current.delete(captureId);
+          }
+        };
+        autoBowelLearnerCaptureQueueRef.current =
+          autoBowelLearnerCaptureQueueRef.current.then(captureQueuedCaliper, captureQueuedCaliper);
+        return;
+      }
+      if (labelCompleted || isGuidedQuizCompositeKind(
         cleanString(plainObject(question.answerConfig).measurementKind)
       )) {
-        // Wait for an explicit completed composite/trace capture. A single
-        // annotation-added event does not establish a valid final result.
+        // Composite calculations are captured only when complete.
         return;
       }
 
@@ -3395,7 +3682,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
           throw new Error('Measurement domain is missing from the educational asset. Configure Echo or Bowel before opening the viewer.');
         }
 
-        syncQuizAuthoringMeasurementDomainToUrl(authoringMeasurementDomain, { overwrite: true });
+        syncQuizMeasurementDomainToUrl(authoringMeasurementDomain, { overwrite: true });
 
         // Capturing the target frame for a composite must not interrupt its
         // guided EF/LA workflow or activate Length over the pending drag.
@@ -4599,10 +4886,16 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     if (question.type === 'frameSelection') {
       const captureKey = `${quiz.quizKey}:${question.questionKey}`;
       const captureInProgress = capturingFrameKey === captureKey;
+      const frameNavigationError = frameNavigationErrors[captureKey] || '';
       const selectedTarget = plainObject(value?.selectedTarget);
 
       return (
         <div className="mt-2 space-y-2">
+          {frameNavigationError ? (
+            <div className="rounded border border-amber-700 bg-amber-950/30 p-2 text-xs text-amber-100" role="alert">
+              {frameNavigationError}
+            </div>
+          ) : null}
           <button
             type="button"
             className="hover:bg-blue-950 rounded border border-blue-500 px-2 py-1 text-xs font-semibold text-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
@@ -4622,7 +4915,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
             </div>
           ) : (
             <div className="text-xs text-gray-400">
-              Scroll or cine to the desired frame, then capture the current frame.
+              {shouldGuideFrameSelectionToInstance(question)
+                ? 'Scroll or cine to the desired frame, then capture the current frame.'
+                : 'Find the correct instance and frame in the study, then capture the current frame.'}
             </div>
           )}
         </div>
@@ -4735,7 +5030,22 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       const linkedRVSP = cleanString(plainObject(question.answerConfig).measurementKind) === 'ivcRapRvsp';
       const bowelSet = isBowelMeasurementSetQuestion(question);
       const bowelEntries = getBowelMeasurementSetEntries(plainObject(value).measurements);
-      const bowelCount = Number(plainObject(plainObject(question.answerConfig).measurementSet).requiredCount) || 2;
+      const verifiedSpatial = trustedBowelSpatialByQuestion[`${quiz.quizKey}:${question.questionKey}`] || {};
+      // The backend deliberately strips client-provided geometry from saved
+      // answers. Use authoritative persisted learner annotation evidence only
+      // when the local answer does not already hold fresh capture evidence.
+      const bowelGeometryEntries = restoreBowelMeasurementSetDisplayEvidence(
+        bowelEntries, verifiedSpatial
+      );
+      const bowelSettings = plainObject(plainObject(question.answerConfig).measurementSet);
+      const bowelCount = Number(bowelSettings.requiredCount) || 2;
+      const requiredBowelLabel = formatBowelBwtMeasurementLabel(bowelSettings.measurementTarget);
+      const midpointSpacingMm = bowelSettings.orientation === 'longitudinal'
+        ? getBowelMeasurementSetMidpointSpacingMm(bowelGeometryEntries)
+        : null;
+      const estimatedRadialAngle = bowelSettings.orientation === 'crossSection'
+        ? getBowelMeasurementSetEstimatedRadialAngleDegrees(bowelGeometryEntries)
+        : null;
 
       return (
         <div className="mt-2 w-full min-w-0 max-w-full space-y-2 overflow-hidden">
@@ -4751,14 +5061,67 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
             : null}
           {bowelSet ? (
             <div className="rounded border border-blue-700 bg-blue-950/20 p-2 text-xs text-gray-200">
-              <div className="font-semibold">Bowel measurements: {bowelEntries.length} / {bowelCount}</div>
+              <div className="font-semibold" aria-live="polite">Bowel measurements: {bowelEntries.length} / {bowelCount}</div>
               <div className="mt-1 text-gray-400">
-                Capture distinct labelled BWT calipers on the same DICOM frame.
+                Draw and label each BWT caliper on the same DICOM frame.
               </div>
+              {requiredBowelLabel ? (
+                <div className="mt-1 font-semibold text-blue-100">
+                  Required anatomical label: {requiredBowelLabel}
+                </div>
+              ) : null}
+              {bowelCaptureErrors[`${quiz.quizKey}:${question.questionKey}`] ? (
+                <div className="mt-1 break-words text-amber-300" role="alert">
+                  {bowelCaptureErrors[`${quiz.quizKey}:${question.questionKey}`]}
+                </div>
+              ) : null}
+              {midpointSpacingMm !== null ? (
+                <div className="mt-1 text-blue-200">
+                  Caliper midpoint spacing: {midpointSpacingMm.toFixed(1)} mm (informational; not scored)
+                </div>
+              ) : null}
+              {estimatedRadialAngle !== null ? (
+                <div className="mt-1 text-blue-200" aria-live="polite">
+                  Estimated radial angle: {estimatedRadialAngle.toFixed(1)}°
+                  {' '}(from your BWT caliper axes; the official scored angle uses the educator-defined lumen centre)
+                </div>
+              ) : bowelSettings.orientation === 'crossSection' && bowelEntries.length >= 2 ? (
+                <div className="mt-1 text-amber-200">
+                  A live angle estimate is unavailable for these calipers. Check their DICOM calibration and radial alignment.
+                </div>
+              ) : null}
               {bowelEntries.map((measurement, index) => (
                 <div key={measurement.sourceAnnotationId || index}
                   className="mt-1 flex items-center justify-between gap-2">
-                  <span>#{index + 1}: {measurement.value} {measurement.unit}</span>
+                  <span className="min-w-0 whitespace-normal break-words">
+                    #{index + 1}: {formatBowelBwtMeasurementLabel(measurement.measurementType) || 'Unlabelled BWT'}
+                    {' · '}{measurement.value} {measurement.unit}
+                  </span>
+                  <button type="button" data-quiz-review-action="learner"
+                    className="shrink-0 text-blue-200 underline hover:text-white"
+                    onClick={async event => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      const key = `${quiz.quizKey}:${question.questionKey}`;
+                      lastActivatedQuestionRef.current = key;
+                      setActiveQuestionKey(key);
+                      syncQuizMeasurementDomainToUrl(
+                        getQuizQuestionMeasurementDomain(quiz, question, payload), { overwrite: true }
+                      );
+                      try {
+                        await showLearnerBowelMeasurements(
+                          quiz, question, bowelEntries, cleanString(measurement.sourceAnnotationId), true
+                        );
+                      } catch (error) {
+                        console.warn('[CaseQuestionsPanel] BWT view failed', error);
+                        uiNotificationService.show({
+                          title: 'Bowel measurements',
+                          message: 'The saved calipers could not be displayed.',
+                          type: 'warning', duration: 5000,
+                        });
+                      }
+                    }}
+                  >View</button>
                   <button type="button" className="text-red-300 underline disabled:opacity-50"
                     disabled={disabled}
                     onClick={event => {
@@ -4801,7 +5164,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                         </div>
             )}
 
-          <button
+          {!bowelSet ? <button
             type="button"
             className="rounded border border-gray-600 px-2 py-1 text-[11px] text-gray-300 hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-50"
             disabled={disabled || captureInProgress}
@@ -4818,15 +5181,15 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               : cleanString(plainObject(question.answerConfig).measurementKind) === 'lvSimpsonEF' ||
                   cleanString(plainObject(question.answerConfig).measurementKind) === 'laVolumeBiplane'
                 ? 'Capture calculated measurement'
-                : bowelSet ? 'Add selected BWT caliper' : 'Recapture selected measurement'}
-          </button>
+                : 'Recapture selected measurement'}
+          </button> : null}
 
           {cleanString(
             plainObject(value?.reviewPayload).label ||
             value?.measurementLabel ||
             value?.label
           ) ? (
-            <div className="truncate text-xs text-gray-300" title={cleanString(
+            <div className="min-w-0 whitespace-normal break-words text-xs text-gray-300" title={cleanString(
               plainObject(value?.reviewPayload).label ||
               value?.measurementLabel ||
               value?.label
@@ -4896,6 +5259,11 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       ...plainObject(scoreItem.scoringDetails),
       ...plainObject(scoreItem.reviewDetails),
     };
+    const bowelReference = plainObject(scoreItem.correctAnswer);
+    const bowelGoldLengths = correctAnswerVisible && bowelReference.mode === 'bowelMeasurementSet'
+      ? (Array.isArray(bowelReference.goldMeasurements) ? bowelReference.goldMeasurements : [])
+      : [];
+    const learnerBowelLengths = getBowelMeasurementSetEntries(plainObject(learnerAnswer).measurements);
     const markerDistanceDisplay = getReviewDistanceDisplay(reviewDetails, 'distance', 'distanceMm');
     const markerRadiusDisplay = getReviewDistanceDisplay(reviewDetails, 'radius', 'radiusMm');
     const learnerMeasurement = mergeReviewReferenceValues(
@@ -4988,6 +5356,21 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               <div className="font-semibold">Bowel measurement set</div>
               <div>Captured: {reviewDetails.submittedCount ?? 0} / {reviewDetails.requiredCount ?? '—'}</div>
               <div>Within numeric tolerance: {reviewDetails.numericMatches ?? 0} / {reviewDetails.requiredCount ?? '—'}</div>
+              {learnerBowelLengths.length > 0 ? (
+                <div className="mt-1">
+                  Your BWT lengths: {learnerBowelLengths.map((entry, i) =>
+                    `#${i + 1} ${Number(entry.value).toFixed(2)} ${cleanString(entry.unit) || 'mm'}`
+                  ).join(' · ')}
+                </div>
+              ) : null}
+              {bowelGoldLengths.length > 0 ? (
+                <div className="mt-1">
+                  <span className="font-semibold">Correct reference lengths ({bowelGoldLengths.length}):</span>{' '}
+                  {bowelGoldLengths.map((entry, i) =>
+                    `#${i + 1} ${Number(entry.value).toFixed(2)} ${cleanString(entry.unit) || 'mm'}`
+                  ).join(' · ')}
+                </div>
+              ) : null}
               <div>
                 Spatial separation: {reviewDetails.spatial?.matched === true ? 'met' : 'not met'}
                 {Number.isFinite(reviewDetails.spatial?.observed)
@@ -4997,6 +5380,16 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                   ? ` (minimum ${reviewDetails.spatial.threshold} ${reviewDetails.spatial.unit || ''})`
                   : ''}
               </div>
+              {bowelGoldLengths.length > 0 ? (
+                <div className="mt-1 text-gray-300">
+                  Scoring rule: match each captured length to a distinct reference within ±
+                  {formatReviewNumber(bowelReference.numericTolerance, 2)} mm, then meet the
+                  minimum {bowelReference.orientation === 'crossSection'
+                    ? 'angular separation around the educator-defined lumen centre'
+                    : 'axial separation along the bowel'}. The current rubric does not require
+                  each learner caliper to be within a location radius of a gold caliper.
+                </div>
+              ) : null}
               {reviewDetails.reason ? <div className="text-amber-200">{reviewDetails.reason.replace(/_/g, ' ')}</div> : null}
             </div>
           ) : (
@@ -5042,13 +5435,16 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
 
         {reviewDetails.mode === 'frameSelection' ? (
           <div className="mt-1 text-gray-300">
-            Instance match:{' '}
-            {compareViewerTargetInstances(
-              reviewDetails.learnerTarget || scoreItem?.learnerResponse,
-              reviewDetails.goldTarget || scoreItem?.correctAnswer
-            ) === false
-              ? 'No'
-              : 'Yes'}
+            {reviewDetails.frameSelectionMode === 'frame_only'
+              ? 'Answer on assigned instance'
+              : 'Instance match'}:{' '}
+            {reviewDetails.frameSelectionMode === 'frame_only' &&
+              typeof reviewDetails.guidedInstanceEligible === 'boolean'
+              ? (reviewDetails.guidedInstanceEligible ? 'Yes' : 'No')
+              : compareViewerTargetInstances(
+                  reviewDetails.learnerTarget || scoreItem?.learnerResponse,
+                  reviewDetails.goldTarget || scoreItem?.correctAnswer
+                ) === false ? 'No' : 'Yes'}
             ; frame difference: {formatReviewNumber(reviewDetails.frameDelta)}; accepted tolerance:{' '}
             {formatReviewNumber(reviewDetails.toleranceFrames)} frame(s).
           </div>
@@ -5114,6 +5510,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
             {canShowLearnerAnswerButton ? (
               <button
                 type="button"
+                data-quiz-review-action="learner"
                 className="hover:bg-blue-950 rounded border border-blue-500 px-2 py-1 font-semibold text-blue-100"
                 onClick={event => {
                   event.preventDefault();
@@ -5121,6 +5518,10 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                   selectQuestion(quiz, question, {
                     force: true,
                     viewerTarget: learnerTarget,
+                    // Reviewing one's own captured frame is an explicit,
+                    // authorized action. The initial question-click filter
+                    // must not strip the learner's selected frame here.
+                    revealExactFrame: question.type === 'frameSelection',
                     markerOptions: isPlaceMarkerQuestionType(question)
                       ? getPlacedAnswerMarkerOptions(learnerAnswer)
                       : [],
@@ -5134,6 +5535,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
             {canShowComparison ? (
               <button
                 type="button"
+                data-quiz-review-action="correct"
                 className="rounded border border-gray-500 px-2 py-1 font-semibold text-gray-100 hover:bg-gray-800"
                 onClick={async event => {
                   event.preventDefault();
@@ -5321,7 +5723,22 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
 
         {question.type === 'frameSelection' ? (
           <div className="mt-2 rounded border border-gray-700 p-2">
-            <label className="block text-xs font-semibold text-gray-200">Frame tolerance</label>
+            <label className="block text-xs font-semibold text-gray-200">Learner task</label>
+            <select
+              className="mt-1 w-full rounded border border-gray-700 bg-black px-2 py-1 text-xs text-white"
+              value={answerConfig.frameSelectionMode === 'frame_only' ? 'frame_only' : 'instance_and_frame'}
+              disabled={authoringSaving || !isDraftDefinition(authoringDefinition)}
+              onChange={event => patchAuthoringAnswerConfig(question, {
+                frameSelectionMode: event.target.value,
+              })}
+            >
+              <option value="frame_only">Find the correct frame (instance opens automatically)</option>
+              <option value="instance_and_frame">Find the correct instance and frame</option>
+            </select>
+            <div className="mt-1 text-[11px] text-gray-400">
+              The correct frame is never revealed when the learner opens the question.
+            </div>
+            <label className="mt-3 block text-xs font-semibold text-gray-200">Frame tolerance</label>
             <input
               className="mt-1 w-32 rounded border border-gray-700 bg-black px-2 py-1 text-sm text-white"
               type="number"
@@ -6164,15 +6581,17 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                   ) : null}
 
                   <div className="bg-blue-950/30 mt-3 min-w-0 max-w-full rounded border border-blue-700 p-2 text-xs text-blue-100">
-                    Click each question before answering. Questions marked “Opens question image”
-                    will move the viewer to the image/frame for that question.
+                    Click each question before answering. Questions marked “Opens target”
+                    navigate to the assigned image or instance without revealing the correct frame.
                   </div>
 
                   <div className="mt-3 space-y-4">
                     {questions.map((question, index) => {
                       const questionSelectionKey = `${quiz.quizKey}:${question.questionKey}`;
                       const isActiveQuestion = activeQuestionKey === questionSelectionKey;
-                      const hasViewerTarget = !!getQuestionViewerTarget(question);
+                      const hasViewerTarget = !!getQuestionViewerTarget(question) &&
+                        !(question.type === 'frameSelection' &&
+                          !shouldGuideFrameSelectionToInstance(question));
 
                       return (
                         <div
@@ -6185,8 +6604,20 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                                 : 'border-gray-800'
                           }`}
                           onClick={() => selectQuestion(quiz, question)}
-                          onFocusCapture={() => selectQuestion(quiz, question)}
+                          onFocusCapture={event => {
+                            // Review buttons navigate explicitly to the exact
+                            // learner/gold frame. Focus must not start a second
+                            // background "open question" navigation that can
+                            // race and reset the viewport to the instance.
+                            if ((event.target as HTMLElement)?.closest?.('[data-quiz-review-action]')) return;
+                            selectQuestion(quiz, question);
+                          }}
                         >
+                          {isActiveQuestion ? (
+                            <div className="mb-1 inline-flex rounded bg-blue-600 px-2 py-0.5 text-[11px] font-semibold text-white">
+                              Active Question
+                            </div>
+                          ) : null}
                           <div
                             className="min-w-0 max-w-full text-sm font-semibold"
                             style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}
@@ -6197,7 +6628,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
 
                           {hasViewerTarget ? (
                             <div className="mt-1 text-[11px] uppercase tracking-wide text-blue-300">
-                              Opens question image
+                              {question.type === 'frameSelection' ? 'Opens target instance' : 'Opens target'}
                             </div>
                           ) : null}
 

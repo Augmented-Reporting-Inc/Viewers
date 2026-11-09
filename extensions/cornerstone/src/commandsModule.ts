@@ -4778,29 +4778,39 @@ function getDisplaySetForViewerQuizTarget(displaySetService, target = {}) {
     return null;
   }
 
-  if (target.displaySetInstanceId && displaySetService.getDisplaySetByUID) {
-    const displaySet = displaySetService.getDisplaySetByUID(target.displaySetInstanceId);
-
-    if (displaySet) {
-      return displaySet;
-    }
-  }
-
+  // DICOM SOP identity wins over a display-set hint: the saved hint can
+  // become stale when the same cine series is regrouped by OHIF.
   if (target.sopInstanceId && displaySetService.getDisplaySetForSOPInstanceUID) {
     const displaySet = displaySetService.getDisplaySetForSOPInstanceUID(
-      target.sopInstanceId,
-      target.seriesInstanceId
+      target.sopInstanceId, target.seriesInstanceId
     );
+    if (displaySet && displaySetContainsSavedAnnotation(displaySet, {
+      SOPInstanceUID: target.sopInstanceId,
+    })) return displaySet;
+  }
 
-    if (displaySet) {
-      return displaySet;
-    }
+  if (target.displaySetInstanceId && displaySetService.getDisplaySetByUID) {
+    const displaySet = displaySetService.getDisplaySetByUID(target.displaySetInstanceId);
+    if (displaySet && (!target.sopInstanceId ||
+        displaySetContainsSavedAnnotation(displaySet, {
+          SOPInstanceUID: target.sopInstanceId,
+        }))) return displaySet;
   }
 
   const seriesDisplaySets =
     target.seriesInstanceId && displaySetService.getDisplaySetsForSeries
       ? displaySetService.getDisplaySetsForSeries(target.seriesInstanceId) || []
       : [];
+
+  // A series can contain multiple separately rendered cine instances. Do not
+  // default to its first display set if another contains the authored SOP.
+  if (target.sopInstanceId) {
+    const exact = seriesDisplaySets.find(displaySet =>
+      displaySetContainsSavedAnnotation(displaySet, { SOPInstanceUID: target.sopInstanceId })
+    );
+    if (exact) return exact;
+    if (seriesDisplaySets.length > 1) return null;
+  }
 
   return seriesDisplaySets[0] || null;
 }
@@ -4900,29 +4910,40 @@ function findImageIdIndexForViewerQuizTarget(viewport, target = {}) {
   };
 }
 
-async function waitForViewerQuizTargetImageMatch(viewport, target = {}, attempts = 20) {
+async function waitForViewerQuizTargetImageMatch(
+  viewport, target = {}, attempts = 20, resolveViewport = null
+) {
   let lastMatch = {
     index: -1,
     imageId: '',
     imageIds: [],
     source: 'not-started',
   };
+  let latestViewport = viewport;
 
   for (let attempt = 0; attempt < attempts; attempt += 1) {
-    lastMatch = findImageIdIndexForViewerQuizTarget(viewport, target);
+    // A display-set update can recreate the viewport; retry against the
+    // current instance instead of a stale previous image stack.
+    const resolved = typeof resolveViewport === 'function' ? resolveViewport() : null;
+    latestViewport = resolved || latestViewport;
+    lastMatch = findImageIdIndexForViewerQuizTarget(latestViewport, target);
 
     if (lastMatch.index >= 0) {
-      return lastMatch;
+      return { ...lastMatch, viewport: latestViewport };
     }
 
     await sleep(100);
   }
 
-  return lastMatch;
+  return { ...lastMatch, viewport: latestViewport };
 }
 
-async function jumpViewportToViewerQuizTargetImage(viewport, target = {}) {
-  const match = await waitForViewerQuizTargetImageMatch(viewport, target);
+async function jumpViewportToViewerQuizTargetImage(viewport, target = {}, resolveViewport = null) {
+  // Instance-only quiz guidance has no gold frame and may require an
+  // asynchronous cine display-set transition.
+  const attempts = target.sopInstanceId && !Number.isFinite(target.frameNumber) ? 70 : 20;
+  const { viewport: latestViewport, ...match } =
+    await waitForViewerQuizTargetImageMatch(viewport, target, attempts, resolveViewport);
 
   if (match.index < 0) {
     console.warn('[ViewerQuiz] could not find target image in viewport stack', {
@@ -4941,15 +4962,16 @@ async function jumpViewportToViewerQuizTargetImage(viewport, target = {}) {
   }
 
   try {
-    if (viewport.setImageIdIndex) {
-      await viewport.setImageIdIndex(match.index);
-    } else if (viewport.element) {
-      csUtils.jumpToSlice(viewport.element, {
+    const targetViewport = latestViewport || viewport;
+    if (targetViewport.setImageIdIndex) {
+      await targetViewport.setImageIdIndex(match.index);
+    } else if (targetViewport.element) {
+      csUtils.jumpToSlice(targetViewport.element, {
         imageIndex: match.index,
       });
     }
 
-    viewport.render?.();
+    targetViewport.render?.();
 
     console.info('[ViewerQuiz] jumped to target image', {
       imageIndex: match.index,
@@ -8195,7 +8217,7 @@ function commandsModule({
     };
   }
 
-  async function getViewerQuizMeasurementSeriesDocs() {
+  async function getViewerQuizMeasurementSeriesDocs({ includeBaseSeries = true } = {}) {
     const saveTarget = getArViewerSaveTargetFromUrl();
     const learnerSeriesId = saveTarget.learnerSeriesId || saveTarget.seriesId;
     let learnerSeriesDoc = null;
@@ -8216,7 +8238,7 @@ function commandsModule({
         ''
     ).trim();
 
-    if (baseSeriesId && baseSeriesId !== String(learnerSeriesDoc?._id || '')) {
+    if (includeBaseSeries && baseSeriesId && baseSeriesId !== String(learnerSeriesDoc?._id || '')) {
       try {
         baseSeriesDoc = await fetchSeriesDocById(baseSeriesId);
       } catch (error) {
@@ -14804,16 +14826,17 @@ function commandsModule({
         });
 
         if (viewportsToUpdate.length) {
-          actions.setDisplaySetsForViewports({ viewportsToUpdate });
+          await Promise.resolve(actions.setDisplaySetsForViewports({ viewportsToUpdate }));
           await sleep(300);
         }
       }
 
-      const viewport =
+      const resolveTargetViewport = () =>
         cornerstoneViewportService.getCornerstoneViewport(targetViewportId) ||
         cornerstoneViewportService.getCornerstoneViewport(
           viewportGridService.getActiveViewportId()
         );
+      const viewport = resolveTargetViewport();
 
       if (!viewport) {
         console.warn('[ViewerQuiz] no viewport available for target navigation', {
@@ -14827,7 +14850,9 @@ function commandsModule({
         };
       }
 
-      const jumpResult = await jumpViewportToViewerQuizTargetImage(viewport, target);
+      const jumpResult = await jumpViewportToViewerQuizTargetImage(
+        viewport, target, resolveTargetViewport
+      );
 
       return {
         ...jumpResult,
@@ -14871,6 +14896,188 @@ function commandsModule({
         markerOptions,
       });
     },
+    // Saved multi-BWT answers contain a collection of annotation IDs, not one
+    // top-level measurement reference. Resolve exactly those learner calipers
+    // and render them together on their captured DICOM frame.
+    showViewerQuizLearnerBwtMeasurementSet: async ({
+      learnerMeasurements = [],
+      selectedSourceAnnotationId = '',
+      questionKey = '',
+    } = {}) => {
+      const references = Array.isArray(learnerMeasurements) ? learnerMeasurements : [];
+      const ids = references.map(item => getViewerQuizMeasurementSourceAnnotationId(item));
+      const selectedId = String(selectedSourceAnnotationId || '').trim();
+      if (!references.length || references.length > 4 || ids.some(id => !id) ||
+          new Set(ids).size !== ids.length ||
+          (selectedId && !ids.includes(selectedId))) {
+        return { ok: false, reason: 'invalid-learner-bwt-reference', renderedCount: 0 };
+      }
+
+      // A learner quiz must never retrieve a BWT annotation from the educator
+      // base study. Persisted data comes from the identified learner copy only.
+      // Newly captured, not-yet-saved calipers can come from the live service.
+      const { learnerSeriesDoc } = await getViewerQuizMeasurementSeriesDocs({ includeBaseSeries: false });
+      const annotations = references.map(reference => {
+        const saved = findViewerQuizBowelLearnerAnnotation(reference, learnerSeriesDoc);
+        if (saved) return saved;
+        const sourceId = getViewerQuizMeasurementSourceAnnotationId(reference);
+        // Only this viewer session's newly drawn calipers may use a live
+        // MeasurementService fallback. Never resolve an educator/base annotation.
+        return viewerMeasurementsCreatedInSession.has(sourceId)
+          ? getViewerQuizMeasurementAnnotationFromService(reference)
+          : null;
+      });
+      if (annotations.some(item => !item)) {
+        console.warn('[ViewerQuiz] learner BWT source annotations missing', {
+          questionKey,
+          requestedCount: references.length,
+          resolvedCount: annotations.filter(Boolean).length,
+        });
+        return { ok: false, reason: 'learner-bwt-source-annotation-not-found', renderedCount: 0 };
+      }
+
+      // Check captured SOP/frame identity before handing anything to a
+      // viewport hydration command. Never substitute a similar gold annotation.
+      const frameKey = (target: any) => [
+        String(target?.studyInstanceUID || '').trim(),
+        String(target?.seriesInstanceUID || '').trim(),
+        String(target?.sopInstanceUID || '').trim(),
+        Number(target?.frameNumber || 0),
+      ].join('|');
+      const initialTarget = references[0]?.viewerTarget || {};
+      const expectedFrame = frameKey(initialTarget);
+      if (!initialTarget.studyInstanceUID || !initialTarget.seriesInstanceUID ||
+          !initialTarget.sopInstanceUID || Number(initialTarget.frameNumber || 0) < 1 ||
+          references.some(item => frameKey(item.viewerTarget) !== expectedFrame)) {
+        return { ok: false, reason: 'learner-bwt-frame-mismatch', renderedCount: 0 };
+      }
+      const verified = annotations.map((saved, index) => {
+        const target = references[index]?.viewerTarget || {};
+        const expectedSop = String(target.sopInstanceUID || '').trim();
+        const actualSop = String(saved?.SOPInstanceUID || '').trim();
+        const expectedFrameNumber = Number(target.frameNumber || 0);
+        const actualFrameNumber = Number(getFrameNumberForAnnotation(saved));
+        if (!expectedSop || actualSop !== expectedSop || expectedFrameNumber < 1 ||
+            (actualFrameNumber > 0 && actualFrameNumber !== expectedFrameNumber)) {
+          return null;
+        }
+        return saved;
+      });
+      if (verified.some(item => !item)) {
+        return { ok: false, reason: 'learner-bwt-annotation-target-mismatch', renderedCount: 0 };
+      }
+
+      // Quiz responses intentionally omit geometric evidence. Recover it only
+      // from exact, verified learner-owned persisted annotations (never quiz
+      // JSON or educator/base study snapshots). The panel uses this for
+      // informational spacing and angle, not for scoring or quiz persistence.
+      const trustedSpatialEvidence = verified.map((source, index) => {
+        const evidence = findViewerQuizBowelLearnerAnnotation(
+          references[index], learnerSeriesDoc
+        )?.quizSpatialEvidence;
+        return {
+          sourceAnnotationId: ids[index],
+          ...(evidence?.source === 'dicom-calibrated-image-index-v1'
+            ? { quizSpatialEvidence: evidence } : {}),
+        };
+      });
+
+      const selectedIndex = selectedId ? ids.indexOf(selectedId) : 0;
+      // All BWT answer targets have passed SOP/frame verification. Normalize
+      // their saved image aliases for the shared same-image group renderer,
+      // retaining each learner-owned annotation's actual calibrated points.
+      const imageId = String(
+        references[selectedIndex]?.viewerTarget?.referencedImageId ||
+        verified[selectedIndex]?.referencedImageId || ''
+      ).trim();
+      const sourcesToDisplay = verified.map(source => ({
+        ...source,
+        ...(imageId ? { referencedImageId: imageId } : {}),
+      }));
+      const displayed = await actions.showSavedViewerAnnotationsForSameImage({
+        annotations: sourcesToDisplay,
+        referenceAnnotation: sourcesToDisplay[selectedIndex],
+        selectReferenceAnnotation: true,
+      });
+      const renderedCount = Number(displayed?.hydratedCount || 0);
+      if (displayed?.ok !== true || renderedCount !== verified.length) {
+        console.warn('[ViewerQuiz] learner BWT set not fully displayed', {
+          questionKey,
+          reason: displayed?.reason || 'incomplete-bwt-hydration',
+          expectedCount: verified.length,
+          renderedCount,
+        });
+        return {
+          ...displayed,
+          ok: false,
+          reason: displayed?.reason || 'incomplete-bwt-hydration',
+          renderedCount,
+        };
+      }
+
+      // Length hydration can return a Cornerstone annotation object without
+      // indexing it under the active stack viewport's actual annotation group.
+      // Confirm real viewport registration, not only the hydration count.
+      const viewportId = displayed.viewportId || viewportGridService.getActiveViewportId();
+      const viewport = cornerstoneViewportService.getCornerstoneViewport(viewportId);
+      if (!viewport?.element) {
+        return { ok: false, reason: 'learner-bwt-viewport-unavailable', renderedCount: 0 };
+      }
+      const manager = annotation.state.getAnnotationManager?.();
+      const groupKey = manager?.getGroupKey?.(viewport.element);
+      // Cornerstone uses annotationUID; saved AR rows use uid/annotationId.
+      // Comparing them with getAnnotationId() falsely reports zero overlays
+      // even when the calipers are visibly registered on the viewport.
+      const visibleOnViewport = (annotationId: string) =>
+        (annotation.state.getAnnotations?.('Length', viewport.element) || []).some(
+          item => getMeasurementAnnotationId(item) === annotationId
+        );
+
+      let indexedCount = 0;
+      for (const source of sourcesToDisplay) {
+        const annotationId = getAnnotationId(source);
+        const live = annotation.state.getAnnotation?.(annotationId);
+        if (!live) continue;
+        if (!visibleOnViewport(annotationId) && manager?.addAnnotation && groupKey != null) {
+          annotation.state.removeAnnotation?.(annotationId);
+          live.metadata = {
+            ...(live.metadata || {}),
+            FrameOfReferenceUID: groupKey,
+          };
+          manager.addAnnotation(live, groupKey);
+        }
+        if (visibleOnViewport(annotationId)) {
+          live.isVisible = true;
+          cornerstoneTools.annotation.selection.setAnnotationSelected?.(
+            annotationId, annotationId === ids[selectedIndex]
+          );
+          indexedCount += 1;
+        }
+      }
+      try {
+        const { triggerAnnotationRenderForViewportIds } = await import(
+          '@cornerstonejs/tools/utilities'
+        );
+        triggerAnnotationRenderForViewportIds([viewport.id || viewportId]);
+      } catch {}
+      viewport.render?.();
+      if (indexedCount !== verified.length) {
+        console.warn('[ViewerQuiz] BWT annotations not indexed in viewport', {
+          questionKey, expectedCount: verified.length, indexedCount,
+        });
+        return {
+          ...displayed, ok: false, reason: 'learner-bwt-viewport-registration-failed',
+          renderedCount: indexedCount,
+          trustedSpatialEvidence,
+        };
+      }
+
+      return {
+        ...displayed, ok: true, renderedCount: indexedCount,
+        learnerRendered: true, trustedSpatialEvidence,
+      };
+    },
+
     showViewerQuizLearnerMeasurement: async ({
       learnerMeasurement = {},
       viewerTarget = null,
@@ -17113,6 +17320,9 @@ function commandsModule({
     },
     clearViewerQuizMarkerOptions: {
       commandFn: actions.clearViewerQuizMarkerOptions,
+    },
+    showViewerQuizLearnerBwtMeasurementSet: {
+      commandFn: actions.showViewerQuizLearnerBwtMeasurementSet,
     },
     showViewerQuizLearnerMeasurement: {
       commandFn: actions.showViewerQuizLearnerMeasurement,

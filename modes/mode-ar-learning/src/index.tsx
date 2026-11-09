@@ -165,6 +165,17 @@ function isViewerQuizMeasurementCaptureMode() {
   return ['selected', 'manual', 'quiz'].includes(captureMode) || isViewerQuizWorkflowFromUrl();
 }
 
+// Only explicit URL configuration may act as a quiz-domain fallback. The
+// generic /rviewer/ path is NOT proof that a bowel quiz uses Echo labels.
+function getExplicitQuizMeasurementDomainFromUrl() {
+  if (getLearningUrlParam('arIntegration') === 'iuscan') return 'bowel';
+  return normalizeQuizMeasurementDomain(
+    getLearningUrlParam('arMeasurementDomain') ||
+    getLearningUrlParam('arViewerDomain') ||
+    getLearningUrlParam('viewerDomain')
+  );
+}
+
 const AR_QUIZ_MEASUREMENT_ADDED_EVENT = 'ar-learning:quiz-measurement-added';
 
 function dispatchViewerQuizMeasurementAdded(measurement) {
@@ -739,8 +750,7 @@ async function getLabelConfigForMeasurement(
   const viewerQuizMeasurementWorkflow = isViewerQuizMeasurementCaptureMode();
   const resolvedStudyDomain = viewerQuizMeasurementWorkflow
     ? normalizeQuizMeasurementDomain(quizMeasurementDomain) ||
-      normalizeQuizMeasurementDomain(getViewerMeasurementDomainFromPath()) ||
-      normalizeQuizMeasurementDomain(await resolveViewerMeasurementDomain(commandsManager))
+      getExplicitQuizMeasurementDomainFromUrl()
     : await resolveViewerMeasurementDomain(commandsManager);
   const domain = resolvedStudyDomain === 'iuscan' ? 'bowel' : resolvedStudyDomain;
 
@@ -1110,9 +1120,9 @@ function modeFactory({ modeConfiguration }) {
         );
       }
 
-      _quizMeasurementDomain = normalizeQuizMeasurementDomain(
-        getViewerMeasurementDomainFromPath()
-      );
+      _quizMeasurementDomain = isViewerQuizMeasurementCaptureMode()
+        ? getExplicitQuizMeasurementDomainFromUrl()
+        : normalizeQuizMeasurementDomain(getViewerMeasurementDomainFromPath());
 
       _quizMeasurementDomainHandler = (event: Event) => {
         const nextDomain = normalizeQuizMeasurementDomain(
@@ -1178,11 +1188,17 @@ function modeFactory({ modeConfiguration }) {
         source = 'measurement-service',
       } = {}) => {
         const id = String(annotationId || '').trim();
+        // Startup hydration may still be fetching saved calipers while the
+        // learner begins a new Length drawing. Do not suppress that genuine
+        // Cornerstone completion; hydrated saved annotations are excluded below.
+        const freshDrawingCompleted =
+          quizMeasurementWorkflow &&
+          source === 'cornerstone-annotation-completed' && !!sourceAnnotation;
 
         if (
           !completionAwareMeasurementWorkflow ||
           measurementToolsReadOnly ||
-          _suppressLabelPrompt ||
+          (_suppressLabelPrompt && !freshDrawingCompleted) ||
           !id ||
           _handledCompletedAnnotationIds.has(id) ||
           inFlightCompletedAnnotationIds.has(id)
@@ -1217,8 +1233,9 @@ function modeFactory({ modeConfiguration }) {
             return false;
           }
 
-          _handledCompletedAnnotationIds.add(id);
-
+          // Do not mark this annotation as handled until the quiz's label is
+          // confirmed. The Length dialog and MeasurementService update may
+          // finish on different ticks; otherwise failed captures cannot retry.
           commandsManager.runCommand('markViewerMeasurementCreatedInSession', {
             uid: id,
           });
@@ -1266,18 +1283,28 @@ function modeFactory({ modeConfiguration }) {
             }
           }
 
-          const completedMeasurement =
+          let completedMeasurement =
             measurementService.getMeasurement?.(id) || currentMeasurement;
 
-          // A canceled or failed label dialog must not bind an unlabeled gold answer.
-          // Read the service entry again: label updates happen inside the dialog command.
+          // The labelling dialog can resolve before its MeasurementService
+          // update is readable. Check the exact source ID before declaring
+          // this completion handled; the subsequent quiz capture needs the label.
           if (quizMeasurementWorkflow && !String(completedMeasurement?.label || '').trim()) {
-            console.info('[AR Measurements] skipped unlabeled quiz measurement', {
+            for (let attempt = 0; attempt < 8; attempt += 1) {
+              await new Promise(resolve => window.setTimeout(resolve, 50));
+              completedMeasurement = measurementService.getMeasurement?.(id) || completedMeasurement;
+              if (String(completedMeasurement?.label || '').trim()) break;
+            }
+          }
+
+          if (quizMeasurementWorkflow && !String(completedMeasurement?.label || '').trim()) {
+            console.warn('[AR Measurements] quiz caliper not labelled; capture deferred', {
               annotationId: id,
             });
             return false;
           }
 
+          _handledCompletedAnnotationIds.add(id);
           dispatchViewerQuizMeasurementAdded(completedMeasurement);
 
           if (!isViewerQuizMeasurementCaptureMode()) {
