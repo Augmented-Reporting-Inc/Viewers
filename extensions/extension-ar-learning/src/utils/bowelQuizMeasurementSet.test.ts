@@ -1,6 +1,7 @@
 import {
   appendBowelMeasurementSetAnswer,
   getBowelMeasurementSetEntries,
+  getBowelMeasurementSetMidpointSpacingMm,
 } from './bowelQuizMeasurementSet';
 
 const question = {
@@ -48,6 +49,7 @@ describe('learner multiple-BWT capture', () => {
     expect(getBowelMeasurementSetEntries(second.entries).length).toBe(2);
     expect(second.entries?.map(item => item.sourceAnnotationId)).toEqual(['a', 'b']);
     expect(second.axis).toEqual([5, 0, 0]);
+    expect(getBowelMeasurementSetMidpointSpacingMm(second.entries || [])).toBe(5);
   });
 
   it('does not duplicate a caliper from two completion notifications', () => {
@@ -55,6 +57,18 @@ describe('learner multiple-BWT capture', () => {
     const repeated = appendBowelMeasurementSetAnswer(question, first.entries || [], caliper('a', 0));
     expect(repeated.ok).toBe(false);
     expect(repeated.reason).toMatch(/already in the measurement set/);
+  });
+
+  it('does not calculate informational spacing when calibration or frame differs', () => {
+    const first = caliper('a', 0);
+    const otherFrame = caliper('b', 5, {
+      viewerTarget: { ...target, frameNumber: 7 },
+    });
+    expect(getBowelMeasurementSetMidpointSpacingMm([first, otherFrame])).toBeNull();
+    expect(getBowelMeasurementSetMidpointSpacingMm([first, caliper('b', 5, {
+      quizSpatialEvidence: { physicalPoints: [[5, 0, 0], [5, 3.2, 0]] },
+    })])).toBeNull();
+    expect(getBowelMeasurementSetMidpointSpacingMm([first])).toBeNull();
   });
 
   it('fails closed for wrong frames and uncalibrated measurements', () => {
