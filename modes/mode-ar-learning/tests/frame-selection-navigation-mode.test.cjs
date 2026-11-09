@@ -113,3 +113,59 @@ test('measurement label wraps and longitudinal caliper spacing uses learner cali
   assert.match(panelSource, /whitespace-normal break-words text-xs text-gray-300/);
   assert.match(panelSource, /getLearnerBwtCaptureFailureMessage\(reason\)/);
 });
+
+
+test('frame-only navigation selects a matching SOP display set rather than first-in-series', () => {
+  const vm = require('node:vm');
+  const commandsSource = fs.readFileSync(
+    path.join(__dirname, '..', '..', '..', 'extensions', 'cornerstone', 'src', 'commandsModule.ts'),
+    'utf8'
+  );
+  const start = commandsSource.indexOf('function getDisplaySetForViewerQuizTarget(');
+  const end = commandsSource.indexOf('function findImageIdIndexForViewerQuizTarget(', start);
+  assert.ok(start >= 0 && end > start);
+  const getter = vm.runInNewContext([
+    'const displaySetContainsSavedAnnotation = (set, annotation) =>',
+    '  (set.images || []).some(image => image.SOPInstanceUID === annotation.SOPInstanceUID);',
+    commandsSource.slice(start, end),
+    'getDisplaySetForViewerQuizTarget',
+  ].join('\n'));
+  const wrong = { displaySetInstanceUID: 'set-1', images: [{ SOPInstanceUID: 'other-sop' }] };
+  const correct = { displaySetInstanceUID: 'set-2', images: [{ SOPInstanceUID: 'gold-sop' }] };
+  const service = {
+    getDisplaySetForSOPInstanceUID: () => null,
+    getDisplaySetsForSeries: () => [wrong, correct],
+  };
+  const resolved = getter(service, { seriesInstanceId: 'series-a', sopInstanceId: 'gold-sop' });
+  assert.equal(resolved.displaySetInstanceUID, 'set-2');
+  assert.equal(getter(service, { seriesInstanceId: 'series-a', sopInstanceId: 'unknown' }), null);
+});
+
+test('instance-only target finds requested cine SOP without gold frame information', () => {
+  const vm = require('node:vm');
+  const commandsSource = fs.readFileSync(
+    path.join(__dirname, '..', '..', '..', 'extensions', 'cornerstone', 'src', 'commandsModule.ts'),
+    'utf8'
+  );
+  const start = commandsSource.indexOf('function findImageIdIndexForViewerQuizTarget(');
+  const end = commandsSource.indexOf('async function waitForViewerQuizTargetImageMatch(', start);
+  assert.ok(start >= 0 && end > start);
+  const getMatch = vm.runInNewContext([
+    'const getViewportImageIds = viewport => viewport.getImageIds();',
+    'const normalizeImageIdForCompare = imageId => String(imageId || "").toLowerCase().replace(/^wadors:/, "");',
+    commandsSource.slice(start, end),
+    'findImageIdIndexForViewerQuizTarget',
+  ].join('\n'));
+  const viewport = { getImageIds: () => [
+    'wadors:/studies/study-a/series/series-a/instances/other-sop/frames/1',
+    'wadors:/studies/study-a/series/series-a/instances/gold-sop/frames/1',
+    'wadors:/studies/study-a/series/series-a/instances/gold-sop/frames/18',
+  ] };
+  const target = {
+    sopInstanceId: 'gold-sop', referencedImageId: '',
+    frameNumber: null, imageIndex: null,
+  };
+  const match = getMatch(viewport, target);
+  assert.equal(match.index, 1, 'opens the requested SOP at its first available frame');
+  assert.equal(match.source, 'sop', 'the gold frame must not select the starting image');
+});
