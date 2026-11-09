@@ -5385,7 +5385,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
             <label className="block text-xs font-semibold text-gray-200">Learner task</label>
             <select
               className="mt-1 w-full rounded border border-gray-700 bg-black px-2 py-1 text-xs text-white"
-              value={answerConfig.frameSelectionMode === 'instance_and_frame' ? 'instance_and_frame' : 'frame_only'}
+              value={answerConfig.frameSelectionMode === 'frame_only' ? 'frame_only' : 'instance_and_frame'}
               disabled={authoringSaving || !isDraftDefinition(authoringDefinition)}
               onChange={event => patchAuthoringAnswerConfig(question, {
                 frameSelectionMode: event.target.value,
