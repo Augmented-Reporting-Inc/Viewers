@@ -77,7 +77,9 @@ test('restored active learner question re-broadcasts the Bowel domain before lab
   assert.ok(start >= 0 && end > start);
   assert.match(effect, /activeQuestionKey\.split\(':\'\)/);
   assert.match(effect, /getLearnerQuizMeasurementDomain\(quiz, payload\)/);
-  assert.match(effect, /if \(domain\) dispatchQuizMeasurementDomain\(domain\)/);
+  assert.match(effect, /dispatchQuizMeasurementDomain\(domain\)/);
+  assert.match(effect, /getLearnerQuizMeasurementDomain\(item, payload\)/);
+  assert.match(effect, /if \(domains\.length === 1\) domain = domains\[0\]/);
   assert.match(effect, /\[activeQuestionKey, quizzes, payload, authoringMode, authoringMeasurementDomain, authoringQuestions\]/);
 
   const fs = require('node:fs');
