@@ -652,6 +652,33 @@ function shouldGuideFrameSelectionToInstance(question: QuizQuestion) {
   return plainObject(question?.answerConfig).frameSelectionMode === 'frame_only';
 }
 
+function getLearnerBwtCaptureFailureMessage(reason: string): string {
+  const explanation = cleanString(reason);
+  if (!explanation || explanation === 'measurement-not-ready' ||
+      explanation === 'selected-measurement-not-found') {
+    return 'This caliper was not recorded because its labelled measurement is not available yet.';
+  }
+  if (explanation === 'no-selected-measurement') {
+    return 'The completed caliper could not be identified. Draw and label a new BWT caliper.';
+  }
+  if (explanation.includes('bwt-spatial-calibration-unavailable') ||
+      explanation.includes('Calibrated image-index') ||
+      explanation.includes('physical-pixel-spacing-unavailable') ||
+      explanation.includes('dicom-calibration')) {
+    return 'This caliper could not be recorded because its DICOM image calibration could not be verified.';
+  }
+  if (explanation.includes('expected anatomical label') ||
+      explanation.includes('calibrated Length measurement')) {
+    return explanation;
+  }
+  if (explanation.includes('same identified image/frame') ||
+      explanation.includes('exact DICOM frame') ||
+      explanation.includes('active-dicom-frame')) {
+    return 'All BWT calipers must be measured on the same identified DICOM frame.';
+  }
+  return explanation;
+}
+
 function getQuestionSelectionViewerTarget(
   question: QuizQuestion,
   viewerTarget: any,
@@ -3062,14 +3089,15 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
             console.warn('[CaseQuestionsPanel] learner BWT caliper not captured', {
               quizKey, questionKey, measurementId, reason,
             });
+            const message = getLearnerBwtCaptureFailureMessage(reason);
             setBowelCaptureErrors(current => ({
               ...current,
-              [activationKey]: 'Caliper not recorded. Check its label, frame and calibration.',
+              [activationKey]: message,
             }));
             uiNotificationService.show({
               title: 'Bowel measurement set',
-              message: 'The BWT caliper could not be recorded.',
-              type: 'warning', duration: 4500,
+              message,
+              type: 'warning', duration: 5500,
             });
           } finally {
             autoBowelLearnerCaptureInFlightRef.current.delete(captureId);
