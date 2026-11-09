@@ -14944,8 +14944,11 @@ function commandsModule({
         String(target?.sopInstanceUID || '').trim(),
         Number(target?.frameNumber || 0),
       ].join('|');
-      const expectedFrame = frameKey(references[0]?.viewerTarget);
-      if (!expectedFrame || references.some(item => frameKey(item.viewerTarget) !== expectedFrame)) {
+      const initialTarget = references[0]?.viewerTarget || {};
+      const expectedFrame = frameKey(initialTarget);
+      if (!initialTarget.studyInstanceUID || !initialTarget.seriesInstanceUID ||
+          !initialTarget.sopInstanceUID || Number(initialTarget.frameNumber || 0) < 1 ||
+          references.some(item => frameKey(item.viewerTarget) !== expectedFrame)) {
         return { ok: false, reason: 'learner-bwt-frame-mismatch', renderedCount: 0 };
       }
       const verified = annotations.map((saved, index) => {
@@ -14953,9 +14956,8 @@ function commandsModule({
         const expectedSop = String(target.sopInstanceUID || '').trim();
         const actualSop = String(saved?.SOPInstanceUID || '').trim();
         const expectedFrameNumber = Number(target.frameNumber || 0);
-        const actualFrameNumber = getFrameNumberForAnnotation(saved);
-        if (!expectedSop || expectedFrameNumber < 1 ||
-            (actualSop && actualSop !== expectedSop) ||
+        const actualFrameNumber = Number(getFrameNumberForAnnotation(saved));
+        if (!expectedSop || actualSop !== expectedSop || expectedFrameNumber < 1 ||
             (actualFrameNumber > 0 && actualFrameNumber !== expectedFrameNumber)) {
           return null;
         }
@@ -14966,10 +14968,20 @@ function commandsModule({
       }
 
       const selectedIndex = selectedId ? ids.indexOf(selectedId) : 0;
-      const selected = verified[selectedIndex];
+      // All BWT answer targets have passed SOP/frame verification. Normalize
+      // their saved image aliases for the shared same-image group renderer,
+      // retaining each learner-owned annotation's actual calibrated points.
+      const imageId = String(
+        references[selectedIndex]?.viewerTarget?.referencedImageId ||
+        verified[selectedIndex]?.referencedImageId || ''
+      ).trim();
+      const sourcesToDisplay = verified.map(source => ({
+        ...source,
+        ...(imageId ? { referencedImageId: imageId } : {}),
+      }));
       const displayed = await actions.showSavedViewerAnnotationsForSameImage({
-        annotations: verified,
-        referenceAnnotation: selected,
+        annotations: sourcesToDisplay,
+        referenceAnnotation: sourcesToDisplay[selectedIndex],
         selectReferenceAnnotation: true,
       });
       const renderedCount = Number(displayed?.hydratedCount || 0);
