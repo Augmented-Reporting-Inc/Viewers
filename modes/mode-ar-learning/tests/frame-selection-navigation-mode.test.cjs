@@ -89,3 +89,25 @@ test('learner auto-capture also works when active question comes from saved sess
   assert.match(panelSource, /const \[activeQuestionKey, setActiveQuestionKey\] = useState/);
   assert.match(panelSource, /initialSessionState\?\.activeQuestionKey/);
 });
+
+
+test('frame-only navigation re-resolves the display-set viewport and reports failure', () => {
+  const commandsSource = fs.readFileSync(
+    path.join(__dirname, '..', '..', '..', 'extensions', 'cornerstone', 'src', 'commandsModule.ts'),
+    'utf8'
+  );
+  assert.match(commandsSource, /await Promise\.resolve\(actions\.setDisplaySetsForViewports\(\{ viewportsToUpdate \}\)\)/);
+  assert.match(commandsSource, /await waitForViewerQuizTargetImageMatch\(viewport, target, attempts, resolveViewport\)/);
+  assert.match(commandsSource, /cornerstoneViewportService\.getCornerstoneViewport\(targetViewportId\)/);
+  assert.match(commandsSource, /const targetViewport = latestViewport \|\| viewport/);
+  assert.match(panelSource, /guided frame question missing learner navigation hint/);
+  assert.match(panelSource, /frameNavigationErrors\[captureKey\]/);
+  assert.match(panelSource, /shouldGuideFrameSelectionToInstance\(question\) && result\?\.ok !== true/);
+});
+
+test('measurement label wraps and longitudinal caliper spacing uses learner calibration', () => {
+  assert.match(panelSource, /getBowelMeasurementSetMidpointSpacingMm\(bowelEntries\)/);
+  assert.match(panelSource, /Caliper midpoint spacing:/);
+  assert.match(panelSource, /whitespace-normal break-words text-xs text-gray-300/);
+  assert.match(panelSource, /getLearnerBwtCaptureFailureMessage\(reason\)/);
+});
