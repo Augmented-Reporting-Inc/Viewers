@@ -20,6 +20,26 @@ export function getBowelMeasurementSetEntries(value: any): MeasurementAnswer[] {
   return Array.isArray(value) ? value : [];
 }
 
+/**
+ * FormAPI intentionally removes geometry from persisted quiz response values.
+ * For informational learner UI only, supplement those stripped rows with
+ * trusted geometry loaded from the same learner copy's MeasurementAnnotations.
+ * Never persist the supplemented rows as quiz answers or score from them.
+ */
+export function restoreBowelMeasurementSetDisplayEvidence(
+  answerEntries: MeasurementAnswer[],
+  verifiedEvidenceById: Record<string, any> = {}
+): MeasurementAnswer[] {
+  return (Array.isArray(answerEntries) ? answerEntries : []).map(entry => {
+    const sourceId = clean(entry?.sourceAnnotationId);
+    const existing = obj(entry?.quizSpatialEvidence);
+    if (existing.source === 'dicom-calibrated-image-index-v1') return entry;
+    const trusted = sourceId ? obj(verifiedEvidenceById[sourceId]) : {};
+    if (trusted.source !== 'dicom-calibrated-image-index-v1') return entry;
+    return { ...entry, quizSpatialEvidence: trusted };
+  });
+}
+
 /** Human-readable display for the existing canonical BWT measurement labels. */
 export function formatBowelBwtMeasurementLabel(value: unknown): string {
   const label = clean(value);
