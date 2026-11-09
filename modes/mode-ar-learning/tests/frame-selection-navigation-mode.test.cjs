@@ -12,7 +12,7 @@ test('legacy and explicit frame-only questions open the assigned instance withou
   assert.match(panelSource, /function shouldGuideFrameSelectionToInstance\(question: QuizQuestion\)/);
   assert.match(panelSource, /mode === '' \|\| mode === 'frame_only'/);
   assert.match(panelSource, /shouldGuideFrameSelectionToInstance\(question\)\s*\? configuredFrameTarget\s*: null/);
-  assert.match(panelSource, /Mode: Legacy — viewer opens the assigned instance/);
+  assert.doesNotMatch(panelSource, /Mode: Legacy — viewer opens the assigned instance/);
 });
 
 test('instance-and-frame questions do not jump to the correct instance', () => {
@@ -48,17 +48,50 @@ test('learner cards display an explicit active question status', () => {
 });
 
 test('learner measurement domain prefers the authorized quiz before URL fallback', () => {
-  const line = panelSource.indexOf('const quizMeasurementDomain = authoringMode');
-  assert.ok(line >= 0);
-  const portion = panelSource.slice(line, line + 700);
+  const start = panelSource.indexOf('function getLearnerQuizMeasurementDomain(');
+  const end = panelSource.indexOf('function resolveQuizAuthoringMeasurementDomain(', start);
+  assert.ok(start >= 0 && end > start);
+  const portion = panelSource.slice(start, end);
   assert.match(portion, /normalizeQuizMeasurementDomain\(quiz\?\.domain\)/);
-  assert.match(portion, /normalizeQuizMeasurementDomain\(payload\?\.seriesDoc\?\.measurementDomain\)/);
+  assert.match(portion, /normalizeQuizMeasurementDomain\(source\?\.seriesDoc\?\.measurementDomain\)/);
   assert.ok(
     portion.indexOf('normalizeQuizMeasurementDomain(quiz?.domain)') <
       portion.indexOf('getQuizAuthoringMeasurementDomainFromUrl()')
   );
+  assert.match(panelSource, /getLearnerQuizMeasurementDomain\(quiz, payload\)/);
 });
 
+
+test('BWT learner panel shows each captured anatomical label and the required segment', () => {
+  assert.match(panelSource, /Required anatomical label: \{requiredBowelLabel\}/);
+  assert.match(panelSource, /formatBowelBwtMeasurementLabel\(measurement\.measurementType\)/);
+  assert.match(panelSource, /formatBowelBwtMeasurementLabel\(bowelSettings\.measurementTarget\)/);
+  assert.doesNotMatch(panelSource, /Mode: Find frame only/);
+  assert.doesNotMatch(panelSource, /Mode: Find instance and frame/);
+});
+
+test('restored active learner question re-broadcasts the Bowel domain before labelling', () => {
+  const start = panelSource.indexOf('// The highlighted question is restored from session storage on reopen.');
+  const end = panelSource.indexOf('async function refreshScoringPayload()', start);
+  const effect = panelSource.slice(start, end);
+  assert.ok(start >= 0 && end > start);
+  assert.match(effect, /activeQuestionKey\.split\(':\'\)/);
+  assert.match(effect, /getLearnerQuizMeasurementDomain\(quiz, payload\)/);
+  assert.match(effect, /if \(domain\) dispatchQuizMeasurementDomain\(domain\)/);
+  assert.match(effect, /\[activeQuestionKey, quizzes, payload, authoringMode, authoringMeasurementDomain, authoringQuestions\]/);
+
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const modeSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'index.tsx'), 'utf8');
+  const labelStart = modeSource.indexOf('async function getLabelConfigForMeasurement(');
+  const labelEnd = modeSource.indexOf('async function waitForViewerMeasurementServiceEntry(', labelStart);
+  const labelConfig = modeSource.slice(labelStart, labelEnd);
+  assert.match(labelConfig, /normalizeQuizMeasurementDomain\(quizMeasurementDomain\) \|\|\s*getExplicitQuizMeasurementDomainFromUrl\(\)/);
+  assert.doesNotMatch(labelConfig, /getViewerMeasurementDomainFromPath\(\)/,
+    'a generic /rviewer/ location must never default a bowel quiz to Echo');
+  assert.doesNotMatch(labelConfig, /resolveViewerMeasurementDomain\(commandsManager\)\)\s*:\s*await/,
+    'quiz branches must not inherit unverified study labels');
+});
 
 test('quiz Length completion remains retryable until the label is available', () => {
   const fs = require('node:fs');
