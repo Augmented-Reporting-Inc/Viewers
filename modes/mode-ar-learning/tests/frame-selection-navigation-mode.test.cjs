@@ -82,3 +82,10 @@ test('learner BWT capture retains the last failure cause and clears it on succes
   assert.match(panelSource, /delete bowelCaptureFailureReasonRef\.current\[captureKey\]/);
   assert.match(panelSource, /aria-live="polite">Bowel measurements:/);
 });
+
+
+test('learner auto-capture also works when active question comes from saved session', () => {
+  assert.match(panelSource, /lastActivated\s*\?\s*lastActivated !== activationKey\s*:\s*activeQuestionKey !== activationKey/);
+  assert.match(panelSource, /const \[activeQuestionKey, setActiveQuestionKey\] = useState/);
+  assert.match(panelSource, /initialSessionState\?\.activeQuestionKey/);
+});
