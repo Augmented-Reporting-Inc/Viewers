@@ -648,7 +648,7 @@ function getQuestionViewerTarget(question: QuizQuestion) {
 // learner to select the frame. Explicit instance-and-frame mode starts from
 // the learner's current navigation rather than revealing the gold instance.
 function shouldGuideFrameSelectionToInstance(question: QuizQuestion) {
-  return plainObject(question?.answerConfig).frameSelectionMode !== 'instance_and_frame';
+  return plainObject(question?.answerConfig).frameSelectionMode === 'frame_only';
 }
 
 function getQuestionSelectionViewerTarget(
