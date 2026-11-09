@@ -199,3 +199,23 @@ test('async instance navigation refreshes a replaced viewport before matching', 
   assert.equal(match.viewport, currentViewport);
   assert.ok(resolves >= 2);
 });
+
+
+test('Show your answer explicitly opens the learner-selected exact frame', () => {
+  const start = panelSource.indexOf('function renderQuestionReview(');
+  const end = panelSource.indexOf('function renderAuthoringQuestion(', start);
+  const review = panelSource.slice(start, end > start ? end : undefined);
+  const showYourAnswer = review.slice(review.indexOf('Show your answer') - 800, review.indexOf('Show your answer'));
+  assert.match(showYourAnswer, /viewerTarget: learnerTarget/);
+  assert.match(showYourAnswer, /revealExactFrame: question\.type === 'frameSelection'/);
+  assert.match(panelSource, /frame-selection configuration/);
+  assert.match(panelSource, /Mode: Find frame only/);
+});
+
+test('multiple-BWT post-score review shows each gold length and scoring rules', () => {
+  assert.match(panelSource, /bowelReference\.goldMeasurements/);
+  assert.match(panelSource, /Correct reference lengths/);
+  assert.match(panelSource, /numeric tolerance:/i);
+  assert.match(panelSource, /current rubric does not require/);
+  assert.match(panelSource, /reviewDetails\.spatial\.observed/);
+});
