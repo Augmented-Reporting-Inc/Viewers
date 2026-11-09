@@ -29,6 +29,7 @@ import {
   isBowelMeasurementSetQuestion,
   getBowelMeasurementSetEntries,
   appendBowelMeasurementSetAnswer,
+  getBowelMeasurementSetMidpointSpacingMm,
 } from '../utils/bowelQuizMeasurementSet';
 import {
   COMPOSITE_FRAME_SLOTS,
@@ -4832,7 +4833,11 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       const linkedRVSP = cleanString(plainObject(question.answerConfig).measurementKind) === 'ivcRapRvsp';
       const bowelSet = isBowelMeasurementSetQuestion(question);
       const bowelEntries = getBowelMeasurementSetEntries(plainObject(value).measurements);
-      const bowelCount = Number(plainObject(plainObject(question.answerConfig).measurementSet).requiredCount) || 2;
+      const bowelSettings = plainObject(plainObject(question.answerConfig).measurementSet);
+      const bowelCount = Number(bowelSettings.requiredCount) || 2;
+      const midpointSpacingMm = bowelSettings.orientation === 'longitudinal'
+        ? getBowelMeasurementSetMidpointSpacingMm(bowelEntries)
+        : null;
 
       return (
         <div className="mt-2 w-full min-w-0 max-w-full space-y-2 overflow-hidden">
@@ -4853,8 +4858,13 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                 Draw and label each BWT caliper on the same DICOM frame.
               </div>
               {bowelCaptureErrors[`${quiz.quizKey}:${question.questionKey}`] ? (
-                <div className="mt-1 text-amber-300" role="alert">
+                <div className="mt-1 break-words text-amber-300" role="alert">
                   {bowelCaptureErrors[`${quiz.quizKey}:${question.questionKey}`]}
+                </div>
+              ) : null}
+              {midpointSpacingMm !== null ? (
+                <div className="mt-1 text-blue-200">
+                  Caliper midpoint spacing: {midpointSpacingMm.toFixed(1)} mm (informational; not scored)
                 </div>
               ) : null}
               {bowelEntries.map((measurement, index) => (
@@ -4928,7 +4938,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
             value?.measurementLabel ||
             value?.label
           ) ? (
-            <div className="truncate text-xs text-gray-300" title={cleanString(
+            <div className="min-w-0 whitespace-normal break-words text-xs text-gray-300" title={cleanString(
               plainObject(value?.reviewPayload).label ||
               value?.measurementLabel ||
               value?.label
