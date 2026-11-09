@@ -116,7 +116,7 @@ jobs:
             BUILD_COMMIT=${{ steps.image.outputs.source_sha }}
             BUILD_DATE=${{ github.run_id }}
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-to: type=gha,mode=max,ignore-error=true
 
       - name: Verify ECR digest
         id: pinned
