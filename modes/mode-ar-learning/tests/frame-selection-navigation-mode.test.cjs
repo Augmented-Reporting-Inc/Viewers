@@ -148,6 +148,10 @@ test('multi-BWT opens its complete saved learner annotation set, never the gold 
   assert.match(command, /getFrameNumberForAnnotation\(saved\)/);
   assert.match(command, /actions\.showSavedViewerAnnotationsForSameImage\(/);
   assert.match(command, /renderedCount !== verified\.length/);
+  assert.match(command, /getAnnotations\?\.\('Length', viewport\.element\)/);
+  assert.match(command, /getGroupKey\?\.\(viewport\.element\)/);
+  assert.match(command, /manager\.addAnnotation\(live, groupKey\)/);
+  assert.match(command, /indexedCount !== verified\.length/);
   assert.match(source, /commandFn: actions\.showViewerQuizLearnerBwtMeasurementSet/);
   const selectStart = panelSource.indexOf('async function selectQuestion(');
   const selectEnd = panelSource.indexOf('async function captureCurrentFrameAnswer(', selectStart);
