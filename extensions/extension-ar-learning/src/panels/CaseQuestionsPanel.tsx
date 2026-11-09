@@ -28,6 +28,7 @@ import { composeIVCRapRVSP, isIVCReviewCurrent, RAP_CHOICES_MMHG } from '../util
 import {
   isBowelMeasurementSetQuestion,
   getBowelMeasurementSetEntries,
+  formatBowelBwtMeasurementLabel,
   appendBowelMeasurementSetAnswer,
   getBowelMeasurementSetMidpointSpacingMm,
   getBowelMeasurementSetEstimatedRadialAngleDegrees,
@@ -180,6 +181,14 @@ function inferLegacyQuizMeasurementDomain(
   }
 
   return '';
+}
+
+function getLearnerQuizMeasurementDomain(quiz: QuizDefinition, source: any): string {
+  return normalizeQuizMeasurementDomain(quiz?.domain) ||
+    normalizeQuizMeasurementDomain(source?.seriesDoc?.measurementDomain) ||
+    normalizeQuizMeasurementDomain(source?.measurementDomain) ||
+    inferLegacyQuizMeasurementDomain(quiz) ||
+    getQuizAuthoringMeasurementDomainFromUrl();
 }
 
 function resolveQuizAuthoringMeasurementDomain(
@@ -2078,6 +2087,27 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     [scoringPayload, deferredReportScoring]
   );
 
+  // The highlighted question is restored from session storage on reopen.
+  // A fresh card click is not required, so restore its clinical domain before
+  // the next Length annotation requests a label (the /rviewer/ path is generic).
+  useEffect(() => {
+    if (authoringMode) {
+      const questionKey = activeQuestionKey.startsWith('authoring:')
+        ? activeQuestionKey.slice('authoring:'.length) : '';
+      const active = authoringQuestions.find(item => item.questionKey === questionKey);
+      if (active?.type === 'measurementNumeric' && authoringMeasurementDomain) {
+        dispatchQuizMeasurementDomain(authoringMeasurementDomain);
+      }
+      return;
+    }
+    const [quizKey, questionKey] = activeQuestionKey.split(':');
+    const quiz = quizzes.find(item => item.quizKey === quizKey);
+    const question = quiz?.questions?.find(item => item.questionKey === questionKey);
+    if (question?.type !== 'measurementNumeric') return;
+    const domain = getLearnerQuizMeasurementDomain(quiz, payload);
+    if (domain) dispatchQuizMeasurementDomain(domain);
+  }, [activeQuestionKey, quizzes, payload, authoringMode, authoringMeasurementDomain, authoringQuestions]);
+
   async function refreshScoringPayload() {
     try {
       if (deferredReportScoring) {
@@ -2495,11 +2525,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     if (question.type === 'measurementNumeric') {
       const quizMeasurementDomain = authoringMode
         ? authoringMeasurementDomain || resolveQuizAuthoringMeasurementDomain(authoringDefinition)
-        : normalizeQuizMeasurementDomain(quiz?.domain) ||
-          normalizeQuizMeasurementDomain(payload?.seriesDoc?.measurementDomain) ||
-          normalizeQuizMeasurementDomain(payload?.measurementDomain) ||
-          inferLegacyQuizMeasurementDomain(quiz) ||
-          getQuizAuthoringMeasurementDomainFromUrl();
+        : getLearnerQuizMeasurementDomain(quiz, payload);
 
       dispatchQuizMeasurementDomain(quizMeasurementDomain);
 
@@ -4795,13 +4821,6 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
             {captureInProgress ? 'Capturing frame…' : 'Use current frame as answer'}
           </button>
 
-          <div className="text-[11px] text-blue-200">
-            {cleanString(plainObject(question.answerConfig).frameSelectionMode) === ''
-              ? 'Mode: Legacy — viewer opens the assigned instance; instance and frame are both graded'
-              : shouldGuideFrameSelectionToInstance(question)
-                ? 'Mode: Find frame only — viewer opens the assigned instance'
-                : 'Mode: Find instance and frame — no automatic instance navigation'}
-          </div>
           {targetHasNavigationIdentity(selectedTarget) ? (
             <div className="bg-green-950/30 rounded border border-green-700 px-2 py-1 text-xs text-green-100">
               Captured {getViewerTargetSummary(selectedTarget)}
@@ -4925,6 +4944,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       const bowelEntries = getBowelMeasurementSetEntries(plainObject(value).measurements);
       const bowelSettings = plainObject(plainObject(question.answerConfig).measurementSet);
       const bowelCount = Number(bowelSettings.requiredCount) || 2;
+      const requiredBowelLabel = formatBowelBwtMeasurementLabel(bowelSettings.measurementTarget);
       const midpointSpacingMm = bowelSettings.orientation === 'longitudinal'
         ? getBowelMeasurementSetMidpointSpacingMm(bowelEntries)
         : null;
@@ -4950,6 +4970,11 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               <div className="mt-1 text-gray-400">
                 Draw and label each BWT caliper on the same DICOM frame.
               </div>
+              {requiredBowelLabel ? (
+                <div className="mt-1 font-semibold text-blue-100">
+                  Required anatomical label: {requiredBowelLabel}
+                </div>
+              ) : null}
               {bowelCaptureErrors[`${quiz.quizKey}:${question.questionKey}`] ? (
                 <div className="mt-1 break-words text-amber-300" role="alert">
                   {bowelCaptureErrors[`${quiz.quizKey}:${question.questionKey}`]}
@@ -4973,7 +4998,10 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               {bowelEntries.map((measurement, index) => (
                 <div key={measurement.sourceAnnotationId || index}
                   className="mt-1 flex items-center justify-between gap-2">
-                  <span>#{index + 1}: {measurement.value} {measurement.unit}</span>
+                  <span className="min-w-0 whitespace-normal break-words">
+                    #{index + 1}: {formatBowelBwtMeasurementLabel(measurement.measurementType) || 'Unlabelled BWT'}
+                    {' · '}{measurement.value} {measurement.unit}
+                  </span>
                   <button type="button" className="text-red-300 underline disabled:opacity-50"
                     disabled={disabled}
                     onClick={event => {
