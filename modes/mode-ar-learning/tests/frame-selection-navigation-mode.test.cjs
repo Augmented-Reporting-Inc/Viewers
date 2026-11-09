@@ -254,7 +254,7 @@ test('frame-only navigation re-resolves the display-set viewport and reports fai
 });
 
 test('measurement label wraps and longitudinal caliper spacing uses learner calibration', () => {
-  assert.match(panelSource, /getBowelMeasurementSetMidpointSpacingMm\(bowelEntries\)/);
+  assert.match(panelSource, /getBowelMeasurementSetMidpointSpacingMm\(bowelGeometryEntries\)/);
   assert.match(panelSource, /Caliper midpoint spacing:/);
   assert.match(panelSource, /whitespace-normal break-words text-xs text-gray-300/);
   assert.match(panelSource, /getLearnerBwtCaptureFailureMessage\(reason\)/);
@@ -262,7 +262,7 @@ test('measurement label wraps and longitudinal caliper spacing uses learner cali
 
 
 test('learner cross-sectional BWT displays a live estimated angle without gold centre data', () => {
-  assert.match(panelSource, /getBowelMeasurementSetEstimatedRadialAngleDegrees\(bowelEntries\)/);
+  assert.match(panelSource, /getBowelMeasurementSetEstimatedRadialAngleDegrees\(bowelGeometryEntries\)/);
   assert.match(panelSource, /Estimated radial angle: \{estimatedRadialAngle\.toFixed\(1\)\}°/);
   assert.match(panelSource, /official scored angle uses the educator-defined lumen centre/);
 });
