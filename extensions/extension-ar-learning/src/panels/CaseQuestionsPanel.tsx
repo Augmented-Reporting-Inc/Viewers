@@ -2469,6 +2469,34 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     return result;
   }
 
+  async function showLearnerBowelMeasurements(
+    quiz: QuizDefinition,
+    question: QuizQuestion,
+    measurements: any[],
+    selectedSourceAnnotationId = '',
+    notifyOnFailure = false
+  ) {
+    const result = await runViewerCommand(commandsManager, 'showViewerQuizLearnerBwtMeasurementSet', {
+      learnerMeasurements: measurements,
+      selectedSourceAnnotationId,
+      questionKey: question.questionKey,
+    });
+    if (result?.ok === true) return true;
+    console.warn('[CaseQuestionsPanel] learner BWT calipers could not be shown', {
+      quizKey: quiz.quizKey, questionKey: question.questionKey,
+      reason: cleanString(result?.reason) || 'navigation-failed',
+    });
+    if (notifyOnFailure) {
+      uiNotificationService.show({
+        title: 'Bowel measurements',
+        message: 'The saved BWT calipers could not be displayed on their recorded image. Reopen the learner study or check that the measurements were saved.',
+        type: 'warning',
+        duration: 6000,
+      });
+    }
+    return false;
+  }
+
   async function selectQuestion(
     quiz: QuizDefinition,
     question: QuizQuestion,
@@ -2663,6 +2691,23 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       : getQuestionOverlayMarkerOptions(quiz, question, reviewQuestionAnswer, {
           reviewMode: 'learner',
         });
+
+    // Multi-BWT answers store an array of learner calipers, not the single
+    // top-level annotation reference expected by the generic review path.
+    // Restore every learner-owned Length overlay, including unscored drafts.
+    const savedBowelMeasurements = !authoringMode && isBowelMeasurementSetQuestion(question)
+      ? getBowelMeasurementSetEntries(plainObject(questionAnswer).measurements) : [];
+    if (savedBowelMeasurements.length > 0) {
+      try {
+        if (await showLearnerBowelMeasurements(quiz, question, savedBowelMeasurements)) {
+          return;
+        }
+      } catch (error) {
+        console.warn('[CaseQuestionsPanel] learner BWT set restoration failed', {
+          questionKey: question.questionKey, error,
+        });
+      }
+    }
 
     if (
       question.type === 'measurementNumeric' &&
@@ -5010,6 +5055,31 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                     #{index + 1}: {formatBowelBwtMeasurementLabel(measurement.measurementType) || 'Unlabelled BWT'}
                     {' · '}{measurement.value} {measurement.unit}
                   </span>
+                  <button type="button" data-quiz-review-action="learner"
+                    className="shrink-0 text-blue-200 underline hover:text-white"
+                    onClick={async event => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      const key = `${quiz.quizKey}:${question.questionKey}`;
+                      lastActivatedQuestionRef.current = key;
+                      setActiveQuestionKey(key);
+                      syncQuizMeasurementDomainToUrl(
+                        getLearnerQuizMeasurementDomain(quiz, payload), { overwrite: true }
+                      );
+                      try {
+                        await showLearnerBowelMeasurements(
+                          quiz, question, bowelEntries, cleanString(measurement.sourceAnnotationId), true
+                        );
+                      } catch (error) {
+                        console.warn('[CaseQuestionsPanel] BWT view failed', error);
+                        uiNotificationService.show({
+                          title: 'Bowel measurements',
+                          message: 'The saved calipers could not be displayed.',
+                          type: 'warning', duration: 5000,
+                        });
+                      }
+                    }}
+                  >View</button>
                   <button type="button" className="text-red-300 underline disabled:opacity-50"
                     disabled={disabled}
                     onClick={event => {
