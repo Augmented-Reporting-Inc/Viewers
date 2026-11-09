@@ -100,6 +100,8 @@ test('frame-only navigation re-resolves the display-set viewport and reports fai
   assert.match(commandsSource, /await waitForViewerQuizTargetImageMatch\(viewport, target, attempts, resolveViewport\)/);
   assert.match(commandsSource, /cornerstoneViewportService\.getCornerstoneViewport\(targetViewportId\)/);
   assert.match(commandsSource, /const targetViewport = latestViewport \|\| viewport/);
+  assert.match(commandsSource, /seriesDisplaySets\.find\(displaySet =>\s*displaySetContainsSavedAnnotation/);
+  assert.match(commandsSource, /seriesDisplaySets\.length > 1\) return null/);
   assert.match(panelSource, /guided frame question missing learner navigation hint/);
   assert.match(panelSource, /frameNavigationErrors\[captureKey\]/);
   assert.match(panelSource, /shouldGuideFrameSelectionToInstance\(question\) && result\?\.ok !== true/);
