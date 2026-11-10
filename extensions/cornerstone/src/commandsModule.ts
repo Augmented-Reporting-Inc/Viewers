@@ -8111,6 +8111,27 @@ function commandsModule({
     disabled: false,
     isActive: lvSimpsonMouseTools.isActive(),
   }));
+  // Quiz context highlights existing custom measurement toolbar buttons without
+  // activating a generic annotation or changing clinical tool acquisition.
+  let activeQuizMeasurementKind = '';
+  const quizToolbarEvaluators = {
+    'evaluate.arQuizLAVolume': ['laVolumeBiplane', 'laVolumeBiplaneDisks'],
+    'evaluate.arQuizRAArea': ['raArea'],
+    'evaluate.arQuizRVFAC': ['rvFAC'],
+  };
+  Object.entries(quizToolbarEvaluators).forEach(([name, kinds]) => {
+    toolbarService?.registerEvaluateFunction?.(name, () =>
+      kinds.includes(activeQuizMeasurementKind) ? { isActive: true } : {}
+    );
+  });
+  const setQuizToolbarMeasurementKind = (measurementKind = '') => {
+    const next = String(measurementKind || '').trim();
+    if (activeQuizMeasurementKind === next) return;
+    activeQuizMeasurementKind = next;
+    toolbarService?.refreshToolbarState?.({
+      viewportId: viewportGridService.getActiveViewportId(),
+    });
+  };
   let suppressLVSimpsonRecoveryEvents = 0;
 
   // Length's label-dialog cancellation only runs after the second click.
@@ -12612,6 +12633,7 @@ function commandsModule({
       }
     },
     setToolActiveToolbar: ({ value, itemId, toolName, toolGroupIds = [] }) => {
+      setQuizToolbarMeasurementKind('');
       // Sometimes it is passed as value (tools with options), sometimes as itemId (toolbar buttons)
       toolName = toolName || itemId || value;
       if (lvSimpsonMouseTools.isActive() && activeLVSimpsonWorkflowSessionId) {
@@ -12778,12 +12800,17 @@ function commandsModule({
         cineStopped: stopCine,
       };
     },
+    setViewerQuizMeasurementContext: ({ measurementKind = '' } = {}) => {
+      setQuizToolbarMeasurementKind(measurementKind);
+      return { ok: true, measurementKind: activeQuizMeasurementKind };
+    },
     activateViewerQuizMeasurementTool: ({
       toolName = 'Length',
       measurementKind = '',
       efContourTargets = null,
       questionKey = '',
     } = {}) => {
+      setQuizToolbarMeasurementKind(measurementKind);
       if (measurementKind === 'lvSimpsonEF') {
         if (activeLAVolumeWorkflowSessionId) {
           clearLAVolumeWorkflowIfCurrent(activeLAVolumeWorkflowSessionId);
@@ -12861,6 +12888,7 @@ function commandsModule({
       return actions.activateViewerMeasurementTool({ toolName, stopCine: true });
     },
     releaseViewerQuizDrawingTool: () => {
+      setQuizToolbarMeasurementKind('');
       if (activeLVSimpsonWorkflowSessionId) {
         clearLVSimpsonWorkflowIfCurrent(activeLVSimpsonWorkflowSessionId);
       }
@@ -16207,6 +16235,9 @@ function commandsModule({
     },
     activateViewerQuizMeasurementTool: {
       commandFn: actions.activateViewerQuizMeasurementTool,
+    },
+    setViewerQuizMeasurementContext: {
+      commandFn: actions.setViewerQuizMeasurementContext,
     },
     releaseViewerQuizDrawingTool: {
       commandFn: actions.releaseViewerQuizDrawingTool,
