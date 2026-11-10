@@ -59,3 +59,31 @@ export function getGoldPhaseMeasurementSummary(component: any, kind: string): st
     ? 'Contour area ≈ ' + cm2.toFixed(2) + ' cm²' : 'Contour saved';
 }
 
+
+/**
+ * A phase name alone is not sufficient authority to delete a measurement:
+ * distinct quiz questions can use the same study and anatomical slot.
+ * Match saved evidence by annotation ID, or guided evidence by exact DICOM
+ * study/series/SOP/frame identity. Without either, selection is ambiguous.
+ */
+export function matchesCompositePhaseSource(
+  measurement: any,
+  source: { annotationId?: string; target?: any } = {}
+): boolean {
+  const expectedId = clean(source.annotationId);
+  if (expectedId) return getCompositePhaseMeasurementId(measurement) === expectedId;
+
+  const target = asObject(source.target);
+  const sop = clean(target.sopInstanceUID || target.SOPInstanceUID);
+  const study = clean(target.studyInstanceUID || target.StudyInstanceUID);
+  const series = clean(target.seriesInstanceUID || target.SeriesInstanceUID);
+  const frame = Number(target.frameNumber);
+  if (!study || !series || !sop || !Number.isInteger(frame) || frame < 1) return false;
+  const actual = asObject(measurement);
+  const actualStudy = clean(actual.referenceStudyUID || actual.StudyInstanceUID);
+  const actualSeries = clean(actual.referenceSeriesUID || actual.SeriesInstanceUID);
+  const actualSop = clean(actual.SOPInstanceUID || actual.metadata?.SOPInstanceUID);
+  const actualFrame = Number(actual.frameNumber || actual.metadata?.frameNumber);
+  return study === actualStudy && series === actualSeries && sop === actualSop &&
+    actualFrame === frame;
+}
