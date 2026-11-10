@@ -642,6 +642,63 @@ function getSavedGoldCompositeNavigationComponents(answerConfig: any) {
   });
 }
 
+function getCompositePhaseSlot(measurement: any, kind: string): string {
+  const source = plainObject(measurement);
+  const measurementKind = cleanString(source.measurementKind ||
+    plainObject(source.measurements).measurementKind);
+  if (kind === 'rvFAC' || kind === 'raArea') {
+    if (measurementKind !== 'echoAreaSlot') return '';
+    return cleanString(source.echoArea?.slot || source.measurements?.echoArea?.slot || source.slot);
+  }
+  if (kind === 'laVolumeBiplane' || kind === 'laVolumeBiplaneDisks') {
+    if (measurementKind !== 'laVolumeSlot') return '';
+    return cleanString(source.laVolume?.slot || source.measurements?.laVolume?.slot || source.slot);
+  }
+  if (kind === 'ivcCollapsibility' || kind === 'ivcRapRvsp') {
+    if (cleanString(source.toolName) !== 'Length') return '';
+    const label = cleanString(source.label || source.measurementRole || source.role)
+      .toLowerCase().replace(/[^a-z0-9]/g, '');
+    if (['ivcexp', 'ivcexpiration', 'ivcendexpiration', 'ivcendexpirationdiameter'].includes(label)) {
+      return 'IVC_EXP';
+    }
+    if (['ivcinsp', 'ivcinspiration', 'ivcendinspiration', 'ivcendinspirationdiameter'].includes(label)) {
+      return 'IVC_INSP';
+    }
+  }
+  return '';
+}
+
+function getCompositePhaseMeasurementId(measurement: any): string {
+  return cleanString(measurement?.uid || measurement?.annotationUID ||
+    measurement?.annotationId || measurement?.id);
+}
+
+function getGoldPhaseMeasurementSummary(component: any, kind: string): string {
+  const points = component?.points;
+  if (!Array.isArray(points) || points.some(point => !Array.isArray(point))) {
+    return 'Gold source recorded';
+  }
+  if (['ivcCollapsibility', 'ivcRapRvsp'].includes(kind)) {
+    if (points.length !== 2) return 'Caliper saved';
+    const length = Math.hypot(...[0, 1, 2].map(axis =>
+      Number(points[1][axis] ?? 0) - Number(points[0][axis] ?? 0)));
+    return Number.isFinite(length) && length > 0
+      ? 'Diameter ≈ ' + length.toFixed(2) + ' mm' : 'Caliper saved';
+  }
+  if (points.length < 3) return 'Contour saved';
+  const total = [0, 0, 0];
+  for (let i = 0; i < points.length; i += 1) {
+    const a = points[i], b = points[(i + 1) % points.length];
+    const az = Number(a[2] ?? 0), bz = Number(b[2] ?? 0);
+    total[0] += Number(a[1]) * bz - az * Number(b[1]);
+    total[1] += az * Number(b[0]) - Number(a[0]) * bz;
+    total[2] += Number(a[0]) * Number(b[1]) - Number(a[1]) * Number(b[0]);
+  }
+  const cm2 = Math.hypot(...total) / 200;
+  return Number.isFinite(cm2) && cm2 > 0
+    ? 'Contour area ≈ ' + cm2.toFixed(2) + ' cm²' : 'Contour saved';
+}
+
 function getQuestionViewerTarget(question: QuizQuestion) {
   const answerConfig = plainObject(question?.answerConfig);
   const efContourTargets = getCompleteEFContourFrameTargets(answerConfig);
@@ -2011,6 +2068,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
   const latestLearnerAnswersRef = useRef(answersByQuizKey);
   useEffect(() => { latestLearnerAnswersRef.current = answersByQuizKey; }, [answersByQuizKey]);
   const [capturingMeasurementKey, setCapturingMeasurementKey] = useState('');
+  const [liveCompositeMeasurements, setLiveCompositeMeasurements] = useState<any[]>([]);
   // Explicit educator/learner interpretation only. No default RAP is selected.
   const [rapSelectionsByQuestionKey, setRapSelectionsByQuestionKey] =
     useState<Record<string, string>>({});
@@ -2287,6 +2345,151 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       authoringQuestions,
     });
   }, [authoringDefinition, authoringMode, authoringQuestions, sessionStateKey]);
+
+  async function refreshLiveCompositeMeasurements() {
+    try {
+      const response = await runViewerCommand(commandsManager, 'getViewerMeasurementSnapshotForPanel', {});
+      setLiveCompositeMeasurements(Array.isArray(response) ? response : []);
+    } catch (error) {
+      console.warn('[CaseQuestionsPanel] composite measurement refresh failed', error);
+    }
+  }
+
+  useEffect(() => {
+    const refresh = () => { void refreshLiveCompositeMeasurements(); };
+    window.addEventListener('ar-measurements:live-measurements-updated', refresh);
+    refresh();
+    return () => {
+      window.removeEventListener('ar-measurements:live-measurements-updated', refresh);
+    };
+  }, [commandsManager]);
+
+  function getActiveCompositePhaseMeasurement(
+    kind: string, slot: string, target: any = null
+  ) {
+    const study = cleanString(target?.studyInstanceUID);
+    const candidates = liveCompositeMeasurements.filter(item => {
+      if (getCompositePhaseSlot(item, kind) !== slot) return false;
+      const actualStudy = cleanString(item.referenceStudyUID || item.StudyInstanceUID);
+      return !study || (actualStudy && actualStudy === study);
+    });
+    return candidates.length === 1 ? candidates[0] : null;
+  }
+
+  async function deleteCompositePhaseMeasurement(
+    quiz: QuizDefinition, question: QuizQuestion, slot: string, sourceTarget: any
+  ) {
+    const kind = cleanString(plainObject(question.answerConfig).measurementKind);
+    if (authoringMode && (!isDraftDefinition(authoringDefinition) || authoringSaving)) return;
+    const live = getActiveCompositePhaseMeasurement(kind, slot, sourceTarget);
+    const measurementId = getCompositePhaseMeasurementId(live);
+    if (!measurementId || live?.isLocked || live?.arMeasurementReadOnly) {
+      uiNotificationService.show({
+        title: 'Delete measurement', type: 'warning', duration: 5500,
+        message: 'Open the source and load its editable measurement before deleting this phase.',
+      });
+      return;
+    }
+    if (!window.confirm('Delete ' + slot + '? The calculated quiz answer must be captured again.')) return;
+    await runViewerCommand(commandsManager, 'removeMeasurement', { uid: measurementId });
+    const after = await runViewerCommand(commandsManager, 'getViewerMeasurementSnapshotForPanel', {});
+    if (!Array.isArray(after) || after.some(item =>
+      getCompositePhaseMeasurementId(item) === measurementId)) {
+      uiNotificationService.show({
+        title: 'Delete measurement', type: 'warning', duration: 5000,
+        message: 'The source measurement could not be removed. No gold answer was changed.',
+      });
+      return;
+    }
+    if (authoringMode) {
+      updateAuthoringQuestion(question.questionKey, current => {
+        const config = plainObject(current.answerConfig);
+        const gold = plainObject(config.goldMeasurement);
+        const composite = plainObject(gold.compositeResult);
+        const remaining = (Array.isArray(composite.components) ? composite.components : [])
+          .filter(component => cleanString(component?.slot) !== slot);
+        return {
+          ...current,
+          answerConfig: {
+            ...config, goldValue: null,
+            goldMeasurement: Object.keys(gold).length ? {
+              ...gold, value: null,
+              sourceAnnotationId: cleanString(remaining[0]?.annotationId),
+              compositeResult: { ...composite, value: null, components: remaining },
+            } : null,
+          },
+        };
+      });
+    } else {
+      // A partial composite must never remain a gradeable learner response.
+      setAnswer(quiz.quizKey, question, null);
+    }
+    await refreshLiveCompositeMeasurements();
+    uiNotificationService.show({
+      title: 'Measurement deleted', type: 'info', duration: 4000,
+      message: slot + ' removed. The other measurements remain; recapture the result.',
+    });
+  }
+
+  function renderCompositeMeasurementProgress(
+    quiz: QuizDefinition, question: QuizQuestion, disabled: boolean
+  ) {
+    const config = plainObject(question.answerConfig);
+    const kind = cleanString(config.measurementKind);
+    const slots = kind === 'raArea'
+      ? [{ slot: 'RA_ES', label: 'RA end-systole' }]
+      : COMPOSITE_FRAME_SLOTS[kind] || [];
+    if (!slots.length) return null;
+    // Learners can see their own saved answer, never the educator's gold evidence.
+    const answer = authoringMode
+      ? plainObject(config.goldMeasurement)
+      : plainObject(answersByQuizKey?.[quiz.quizKey]?.[question.questionKey]);
+    const composite = kind === 'ivcRapRvsp'
+      ? plainObject(plainObject(answer.compositeResult).ivc?.compositeResult)
+      : plainObject(answer.compositeResult);
+    const savedComponents = Array.isArray(composite.components) ? composite.components : [];
+    return (
+      <div className="mt-2 rounded border border-emerald-700/60 bg-emerald-950/10 p-2 text-xs">
+        <div className="font-semibold text-emerald-100">Measurement components</div>
+        {slots.map(({ slot, label }) => {
+          const saved = savedComponents.find(part => cleanString(part?.slot) === slot);
+          const sourceTarget = authoringMode
+            ? plainObject(config.compositeFrameTargets)[slot] || saved?.target
+            : saved?.target || (config.compositeFrameGuidanceEnabled === true
+              ? plainObject(config.compositeFrameTargets)[slot] : null);
+          const live = getActiveCompositePhaseMeasurement(kind, slot, sourceTarget);
+          return (
+            <div key={slot} className="mt-2 border-t border-gray-700 pt-2">
+              <div className="font-medium text-gray-100">{label}</div>
+              <div className={live || saved ? 'text-emerald-200' : 'text-amber-200'}>
+                {live ? 'Measurement drawn' : saved ? 'Saved measurement' : 'Not measured'}
+                {saved ? ' · ' + getGoldPhaseMeasurementSummary(saved, kind) : ''}
+              </div>
+              {saved?.target ? (
+                <div className="text-gray-300">Saved source: {getViewerTargetSummary(saved.target)}</div>
+              ) : null}
+              <div className="mt-1 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  className="rounded border border-red-600 px-2 py-1 text-red-100 disabled:opacity-40"
+                  disabled={disabled || !live || !getCompositePhaseMeasurementId(live)}
+                  onClick={event => {
+                    event.preventDefault(); event.stopPropagation();
+                    void deleteCompositePhaseMeasurement(quiz, question, slot, sourceTarget);
+                  }}
+                >Delete {slot}</button>
+              </div>
+            </div>
+          );
+        })}
+        {answer.value != null && answer.value !== '' ? (
+          <div className="mt-2 font-semibold text-emerald-200">
+            {authoringMode ? 'Gold' : 'Saved'} calculated result: {answer.value} {answer.unit || config.unit || ''}
+          </div>
+        ) : null}
+      </div>
+    );
+  }
 
   function setAnswer(quizKey: string, question: QuizQuestion, value: any) {
     reportEducationChange(`quiz:${quizKey}`);
@@ -5042,6 +5245,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       return (
         <div className="mt-2 w-full min-w-0 max-w-full space-y-2 overflow-hidden">
           {renderCompositePhaseNavigation(question, disabled)}
+          {renderCompositeMeasurementProgress(quiz, question, disabled)}
           {['ivcCollapsibility', 'ivcRapRvsp'].includes(
             cleanString(plainObject(question.answerConfig).measurementKind)
           ) ? renderIVCCaliperControls(quiz, question, disabled) : null}
@@ -5949,7 +6153,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
           </div>
         ) : null}
 
-        {savedGoldComponents.length > 0 && !hasGuidedEFFrames ? (
+        {savedGoldComponents.length > 0 && !hasGuidedEFFrames &&
+          !['rvFAC', 'raArea', 'laVolumeBiplane', 'laVolumeBiplaneDisks', 'ivcCollapsibility', 'ivcRapRvsp']
+            .includes(cleanString(answerConfig.measurementKind)) ? (
           <div className="mt-2 rounded border border-emerald-700/70 bg-emerald-950/20 p-2">
             <div className="text-xs font-semibold text-emerald-100">
               Saved gold contours — {savedGoldComponents.filter(component => component.complete).length}/{savedGoldComponents.length} verified source references
@@ -6103,6 +6309,10 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               </div>
             ) : null}
 
+            {renderCompositeMeasurementProgress(
+              { quizKey: 'authoring', quizVersion: 1 }, question,
+              isCapturing || authoringSaving || !isDraftDefinition(authoringDefinition)
+            )}
             {['ivcCollapsibility', 'ivcRapRvsp'].includes(
               cleanString(answerConfig.measurementKind)
             ) ? renderIVCCaliperControls(
