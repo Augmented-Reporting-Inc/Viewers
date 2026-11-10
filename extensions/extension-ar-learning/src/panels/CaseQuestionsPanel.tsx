@@ -2381,6 +2381,12 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     };
   }, [commandsManager, measurementService]);
 
+  useEffect(() => {
+    // Switching quiz questions can change the measurement kind without
+    // producing a MeasurementService event. Load its calculated status now.
+    void refreshLiveCompositeMeasurements();
+  }, [activeQuestionKey]);
+
   function getActiveCompositePhaseMeasurement(
     kind: string, slot: string, source: { annotationId?: string; target?: any } = {}
   ) {
@@ -4568,7 +4574,10 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     const question = authoringQuestionsRef.current.find(item => item.questionKey === questionKey);
     if (!question) return;
     const signature = getCompositeGoldCaptureSignature(question, liveCompositeMeasurements);
-    if (!signature) return;
+    // Phase labels/annotation IDs alone do not prove that the clinical
+    // calculation is calibrated or ready. Never auto-capture on that basis.
+    if (!signature || liveCompositeStatus.questionKey !== activeQuestionKey ||
+        liveCompositeStatus.complete !== true) return;
     const captureKey = questionKey + ':' + signature;
     if (autoCompositeGoldCaptureInFlightRef.current.has(captureKey)) return;
     autoCompositeGoldCaptureInFlightRef.current.add(captureKey);
@@ -4586,7 +4595,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       window.clearTimeout(timer);
       autoCompositeGoldCaptureInFlightRef.current.delete(captureKey);
     };
-  }, [liveCompositeMeasurements, activeQuestionKey, authoringMode, authoringDefinition, authoringSaving]);
+  }, [liveCompositeMeasurements, liveCompositeStatus, activeQuestionKey, authoringMode, authoringDefinition, authoringSaving]);
 
   async function captureBowelQuizLumenCenter(question: QuizQuestion) {
     const current = authoringQuestionsRef.current.find(
@@ -4677,12 +4686,24 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
           commandsManager, 'getViewerMeasurementSnapshotForPanel', {}
         );
         if (getCompositeGoldCaptureSignature(currentQuestion, snapshot)) {
+          const kind = cleanString(
+            plainObject(currentQuestion.answerConfig).measurementKind
+          );
+          const diagnostic = await runViewerCommand(
+            commandsManager, 'getViewerQuizCompositeStatusForActiveStudy',
+            { measurementKind: kind }
+          );
+          if (diagnostic?.complete !== true) {
+            throw new Error('Calculated ' + kind + ' gold is not ready: ' +
+              (cleanString(diagnostic?.message) ||
+                'the phase measurements are not calibrated or their source evidence is incomplete.') +
+              ' No invalid gold value has been saved.');
+          }
           const accepted = await captureAuthoringMeasurement(currentQuestion, { silent: true });
           if (accepted !== true) {
-            throw new Error(
-              'Complete composite measurements could not be captured as gold. ' +
-              'Review the phase sources and use the calculated result as gold before saving.'
-            );
+            throw new Error('The ' + kind + ' calculation is complete but cannot be captured as gold. ' +
+              'Verify that the contour DICOM sources match the required phase frames and retry. ' +
+              'No invalid gold value has been saved.');
           }
         }
       }
@@ -5380,6 +5401,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
           {cleanString(plainObject(question.answerConfig).measurementKind) === 'rvFAC'
             ? renderRVFACContourControls(quiz, question, disabled)
             : null}
+          {renderCompositeCalculatedStatus(quiz, question)}
           {bowelSet ? (
             <div className="rounded border border-blue-700 bg-blue-950/20 p-2 text-xs text-gray-200">
               <div className="font-semibold" aria-live="polite">Bowel measurements: {bowelEntries.length} / {bowelCount}</div>
