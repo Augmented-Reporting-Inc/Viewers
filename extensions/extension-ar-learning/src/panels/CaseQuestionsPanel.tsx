@@ -3820,15 +3820,14 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     questionKey: string,
     updater: (question: QuizQuestion) => QuizQuestion
   ) {
+    // Keep the save source synchronous. Capturing gold and pressing Save
+    // immediately must not serialize the previous React render's questions.
+    const nextQuestions = authoringQuestionsRef.current.map(question =>
+      question.questionKey === questionKey ? updater(question) : question
+    );
+    authoringQuestionsRef.current = nextQuestions;
+    setAuthoringQuestions(nextQuestions);
     reportEducationChange('authoring');
-    setAuthoringQuestions(current => {
-      const nextQuestions = current.map(question =>
-        question.questionKey === questionKey ? updater(question) : question
-      );
-
-      authoringQuestionsRef.current = nextQuestions;
-      return nextQuestions;
-    });
   }
 
   function patchAuthoringQuestion(question: QuizQuestion, patch: Partial<QuizQuestion>) {
@@ -4569,6 +4568,28 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
 
     try {
       const definitionId = getDefinitionId(authoringDefinition);
+      // In an educator's active composite question, Save Draft accepts the
+      // completed viewer-calculated gold result before serializing question
+      // JSON. A frame-incomplete or mismatched measurement is never inferred.
+      const activeAuthoringKey = activeQuestionKey.startsWith('authoring:')
+        ? activeQuestionKey.slice('authoring:'.length) : '';
+      const currentQuestion = authoringQuestionsRef.current.find(
+        item => item.questionKey === activeAuthoringKey
+      );
+      if (currentQuestion && !capturingAuthoringKey) {
+        const snapshot = await runViewerCommand(
+          commandsManager, 'getViewerMeasurementSnapshotForPanel', {}
+        );
+        if (getCompositeGoldCaptureSignature(currentQuestion, snapshot)) {
+          const accepted = await captureAuthoringMeasurement(currentQuestion, { silent: true });
+          if (accepted !== true) {
+            throw new Error(
+              'Complete composite measurements could not be captured as gold. ' +
+              'Review the phase sources and use the calculated result as gold before saving.'
+            );
+          }
+        }
+      }
       const questionsToSave = authoringQuestionsRef.current;
       const hasMeasurementQuestions = questionsToSave.some(
         question => question.type === 'measurementNumeric'
