@@ -48,6 +48,29 @@ describe('live composite preview uses the gold-capture validation contract', () 
     SOPInstanceUID: 'sop', referencedImageId: 'wadors:studies/study/series/series/instances/sop/frames/' + frameNumber,
     frameNumber,
   });
+  it('previews both physically calibrated IVC diameters, including incomplete pairs', () => {
+    const ivc = (label: string, mm: number, frameNumber: number) => ({
+      uid: label, toolName: 'Length', label,
+      points: [[0, 0, 0], [mm, 0, 0]],
+      measurements: { length: mm, lengthUnit: 'mm' },
+      referenceStudyUID: 'study', referenceSeriesUID: 'series',
+      SOPInstanceUID: 'sop', frameNumber,
+      referencedImageId: 'wadors:studies/study/series/series/instances/sop/frames/' + frameNumber,
+    });
+    const exp = ivc('IVCexp', 20, 14);
+    const insp = ivc('IVCinsp', 10, 17);
+    const partial = getViewerQuizCompositeStatus('ivcCollapsibility', [exp]);
+    expect(partial.complete).toBe(false);
+    expect(partial.phaseValues).toEqual({ IVC_EXP: 20 });
+    const full = getViewerQuizCompositeStatus('ivcCollapsibility', [exp, insp]);
+    expect(full.complete).toBe(true);
+    expect(full.value).toBeCloseTo(50);
+    expect(full.phaseValues).toEqual({ IVC_EXP: 20, IVC_INSP: 10 });
+    expect(resolveViewerQuizCompositeResult('ivcCollapsibility', [exp, insp])?.derived)
+      .toEqual({ expirationDiameterMM: 20, inspirationDiameterMM: 10,
+        collapsibilityPercent: 50 });
+  });
+
   it('provides validated RV phase areas in the saved composite for portal display', () => {
     const gold = resolveViewerQuizCompositeResult('rvFAC', [
       rv('RV_ED', 3000, 14), rv('RV_ES', 1800, 17),
@@ -98,6 +121,11 @@ describe('live composite preview uses the gold-capture validation contract', () 
     expect(status.value).toBeGreaterThan(0);
     expect(status.phaseValues.A4C).toBeGreaterThan(0);
     expect(status.phaseValues.A2C).toBeGreaterThan(0);
+    const saved = resolveViewerQuizCompositeResult('laVolumeBiplane', [
+      phase('A4C'), phase('A2C'),
+    ]);
+    expect(saved?.derived?.a4cAreaCM2).toBeCloseTo(status.phaseValues.A4C);
+    expect(saved?.derived?.a2cAreaCM2).toBeCloseTo(status.phaseValues.A2C);
   });
   it('explains missing calibration rather than showing an unverified number', () => {
     const es = rv('RV_ES', 1800, 17);

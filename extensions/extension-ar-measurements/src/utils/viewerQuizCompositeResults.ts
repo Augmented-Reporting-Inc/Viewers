@@ -257,6 +257,21 @@ function getCompositeCalibratedPhaseAreas(kind: CompositeKind, measurements: Mea
       if (area != null && Number.isFinite(area) && area > 0) phaseValues[slot] = area;
     }
   }
+  if (kind === 'ivcCollapsibility') {
+    const result = calculateIVCFromMeasurements(measurements);
+    const measured = result?.values;
+    if (measured) {
+      const phases = {
+        IVC_EXP: measured.expirationDiameterMM,
+        IVC_INSP: measured.inspirationDiameterMM,
+      };
+      for (const [slot, diameter] of Object.entries(phases)) {
+        if (diameter != null && Number.isFinite(diameter) && diameter > 0) {
+          phaseValues[slot] = diameter;
+        }
+      }
+    }
+  }
   if (kind === 'laVolumeBiplane' || kind === 'laVolumeBiplaneDisks') {
     const la = calculateLAVolume(measurements);
     for (const slot of LA_VOLUME_SLOT_ORDER) {

@@ -40,7 +40,8 @@ import {
   matchesConfiguredCompositeFrame,
 } from '../utils/compositeFrameTargets';
 import { EF_CONTOUR_FRAME_SLOTS, getEFGoldContourAuthoringRows } from '../utils/efGoldContourAuthoring';
-import { getCompositePhaseSlot, getCompositePhaseMeasurementId, matchesCompositePhaseSource, getCompositeGoldCaptureSignature, findEditableCompositePhaseMeasurement, getCompositeGoldPersistenceError } from '../utils/quizCompositePhaseEvidence';
+import { getCompositePhaseSlot, getCompositePhaseMeasurementId, matchesCompositePhaseSource, getCompositeGoldCaptureSignature, getSavedCompositePhaseValues,
+  findEditableCompositePhaseMeasurement, getCompositeGoldPersistenceError } from '../utils/quizCompositePhaseEvidence';
 
 const AR_QUIZ_MEASUREMENT_ADDED_EVENT = 'ar-learning:quiz-measurement-added';
 const AR_QUIZ_MEASUREMENT_LABELLED_EVENT = 'ar-learning:quiz-measurement-labelled';
@@ -2566,9 +2567,17 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       : quiz.quizKey + ':' + question.questionKey;
     const phaseValues = liveCompositeStatus.questionKey === statusKey
       ? plainObject(liveCompositeStatus.phaseValues) : {};
-    const area = phaseValues[slot];
-    const areaLabel = live && area != null && Number.isFinite(Number(area)) && Number(area) > 0
-      ? ' · ' + Number(area).toFixed(2) + ' cm²' : '';
+    const goldAnswer = authoringMode
+      ? plainObject(plainObject(question.answerConfig).goldMeasurement)
+      : plainObject(answersByQuizKey?.[quiz.quizKey]?.[question.questionKey]);
+    const savedValue = hasSaved ? getSavedCompositePhaseValues(goldAnswer, kind)[slot] : null;
+    const liveArea = phaseValues[slot];
+    const liveValue = live && liveArea != null && Number.isFinite(Number(liveArea)) &&
+      Number(liveArea) > 0 ? Number(liveArea) : null;
+    const phaseValue = liveValue ?? savedValue;
+    const units = kind === 'ivcCollapsibility' || kind === 'ivcRapRvsp' ? 'mm' : 'cm²';
+    const areaLabel = phaseValue != null && Number.isFinite(phaseValue)
+      ? ' · ' + phaseValue.toFixed(2) + ' ' + units : '';
     return (
       <>
         <span className={live || hasSaved ? 'text-emerald-200 text-[11px]' : 'text-amber-200 text-[11px]'}>
@@ -4638,6 +4647,12 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     // calculation is calibrated or ready. Never auto-capture on that basis.
     if (!signature || liveCompositeStatus.questionKey !== activeQuestionKey ||
         liveCompositeStatus.complete !== true) return;
+    if (signature.startsWith('backfill:')) {
+      const previous = plainObject(plainObject(question.answerConfig).goldMeasurement);
+      if (previous.value == null || liveCompositeStatus.value == null ||
+          Math.round(Number(previous.value) * 100) !==
+          Math.round(Number(liveCompositeStatus.value) * 100)) return;
+    }
     const captureKey = questionKey + ':' + signature;
     if (autoCompositeGoldCaptureInFlightRef.current.has(captureKey)) return;
     autoCompositeGoldCaptureInFlightRef.current.add(captureKey);
@@ -4745,7 +4760,8 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         const snapshot = await runViewerCommand(
           commandsManager, 'getViewerMeasurementSnapshotForPanel', {}
         );
-        if (getCompositeGoldCaptureSignature(currentQuestion, snapshot)) {
+        const captureSignature = getCompositeGoldCaptureSignature(currentQuestion, snapshot);
+        if (captureSignature) {
           const kind = cleanString(
             plainObject(currentQuestion.answerConfig).measurementKind
           );
@@ -4759,7 +4775,16 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                 'the phase measurements are not calibrated or their source evidence is incomplete.') +
               ' No invalid gold value has been saved.');
           }
-          const accepted = await captureAuthoringMeasurement(currentQuestion, { silent: true });
+          const saved = plainObject(plainObject(currentQuestion.answerConfig).goldMeasurement);
+          // A display-only backfill must never silently alter the gold scalar
+          // or previously verified source contours.
+          const safeBackfill = !captureSignature.startsWith('backfill:') ||
+            (saved.value != null && diagnostic.value != null &&
+             Math.round(Number(saved.value) * 100) ===
+             Math.round(Number(diagnostic.value) * 100));
+          const accepted = safeBackfill
+            ? await captureAuthoringMeasurement(currentQuestion, { silent: true })
+            : true;
           if (accepted !== true) {
             throw new Error('The ' + kind + ' calculation is complete but cannot be captured as gold: ' +
               (lastCompositeGoldCaptureErrorRef.current ||

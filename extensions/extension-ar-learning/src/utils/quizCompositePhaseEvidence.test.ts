@@ -1,6 +1,7 @@
 import {
   getCompositePhaseSlot, getCompositePhaseMeasurementId, getGoldPhaseMeasurementSummary,
-  matchesCompositePhaseSource, getCompositeGoldCaptureSignature, findEditableCompositePhaseMeasurement,
+  matchesCompositePhaseSource, getCompositeGoldCaptureSignature, getSavedCompositePhaseValues,
+  findEditableCompositePhaseMeasurement,
   getCompositeGoldPersistenceError,
 } from './quizCompositePhaseEvidence';
 
@@ -75,8 +76,42 @@ describe('quiz composite phase evidence', () => {
     question.answerConfig.compositeFrameTargets.RV_ES = target(17);
     question.answerConfig.goldMeasurement = { value: 50, compositeResult: { components: [
       { slot: 'RV_ED', annotationId: 'ed' }, { slot: 'RV_ES', annotationId: 'es' },
-    ] }};
+    ], derived: { edaCM2: 30, esaCM2: 18 } }};
     expect(getCompositeGoldCaptureSignature(question, [ed, es])).toBe('');
+  });
+  it('safely detects legacy gold missing physical phase values', () => {
+    const ed = { uid: 'ed', measurementKind: 'echoAreaSlot',
+      echoArea: { slot: 'RV_ED' }, referenceStudyUID: 'study' };
+    const es = { ...ed, uid: 'es', echoArea: { slot: 'RV_ES' } };
+    const question = { type: 'measurementNumeric', answerConfig: {
+      measurementKind: 'rvFAC', goldMeasurement: { value: 40, compositeResult: {
+        components: [{ slot: 'RV_ED', annotationId: 'ed' },
+          { slot: 'RV_ES', annotationId: 'es' }],
+      } },
+    } };
+    expect(getCompositeGoldCaptureSignature(question, [ed, es]))
+      .toBe('backfill:RV_ED:ed|RV_ES:es');
+    question.answerConfig.goldMeasurement.compositeResult.derived = {
+      edaCM2: 30, esaCM2: 18,
+    };
+    expect(getCompositeGoldCaptureSignature(question, [ed, es])).toBe('');
+    const modified = { ...es, uid: 'replaced' };
+    expect(getCompositeGoldCaptureSignature(question, [ed, modified]))
+      .toBe('RV_ED:ed|RV_ES:replaced');
+  });
+  it('projects only saved validated RV, LA and IVC phase values', () => {
+    expect(getSavedCompositePhaseValues({ compositeResult: { derived: {
+      edaCM2: 25.25, esaCM2: 15.1,
+    } } }, 'rvFAC')).toEqual({ RV_ED: 25.25, RV_ES: 15.1 });
+    expect(getSavedCompositePhaseValues({ compositeResult: { derived: {
+      a4cAreaCM2: 16, a2cAreaCM2: 11.25,
+    } } }, 'laVolumeBiplane')).toEqual({ A4C: 16, A2C: 11.25 });
+    expect(getSavedCompositePhaseValues({ compositeResult: { derived: {
+      expirationDiameterMM: 20.5, inspirationDiameterMM: 10.5,
+    } } }, 'ivcCollapsibility')).toEqual({ IVC_EXP: 20.5, IVC_INSP: 10.5 });
+    expect(getSavedCompositePhaseValues({ compositeResult: { components: [
+      { points: [[0,0,0],[10,0,0]] },
+    ] } }, 'ivcCollapsibility')).toEqual({});
   });
   it('detects two labelled IVC Length calipers without accepting unlabelled lengths', () => {
     const exp = { uid: 'exp', toolName: 'Length', label: 'IVCexp', referenceStudyUID: 'study' };
@@ -128,6 +163,16 @@ describe('quiz composite phase evidence', () => {
     expect(getCompositeGoldPersistenceError([question], [{
       ...question, answerConfig: { ...question.answerConfig, compositeFrameTargets: {} },
     }])).toContain('source frame');
+    const enriched = { ...question, answerConfig: { ...question.answerConfig,
+      goldMeasurement: { ...question.answerConfig.goldMeasurement,
+        compositeResult: { ...question.answerConfig.goldMeasurement.compositeResult,
+          derived: { edaCM2: 30, esaCM2: 18 },
+        },
+      },
+    } };
+    expect(getCompositeGoldPersistenceError([enriched], [question]))
+      .toContain('calibrated gold phase values');
+    expect(getCompositeGoldPersistenceError([enriched], [enriched])).toBe('');
   });
   it('formats physical geometry as approximate and does not treat missing geometry as numeric', () => {
     expect(getGoldPhaseMeasurementSummary({

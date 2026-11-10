@@ -33,6 +33,31 @@ export function getCompositePhaseMeasurementId(measurement: any): string {
     measurement?.annotationId || measurement?.id);
 }
 
+const PHASE_VALUE_FIELDS: Record<string, Record<string, string>> = {
+  rvFAC: { RV_ED: 'edaCM2', RV_ES: 'esaCM2' },
+  laVolumeBiplane: { A4C: 'a4cAreaCM2', A2C: 'a2cAreaCM2' },
+  laVolumeBiplaneDisks: { A4C: 'a4cAreaCM2', A2C: 'a2cAreaCM2' },
+  ivcCollapsibility: {
+    IVC_EXP: 'expirationDiameterMM',
+    IVC_INSP: 'inspirationDiameterMM',
+  },
+};
+
+/** Read only viewer-validated physical gold values. Never infer from raw points. */
+export function getSavedCompositePhaseValues(answer: any, kind: string): Record<string, number> {
+  const result = asObject(asObject(answer).compositeResult);
+  const derived = asObject(result.derived);
+  const resultValues: Record<string, number> = {};
+  for (const [slot, field] of Object.entries(PHASE_VALUE_FIELDS[kind] || {})) {
+    const value = derived[field];
+    if (value == null || clean(value) === '') continue;
+    const numeric = Number(value);
+    if (Number.isFinite(numeric) && numeric > 0) resultValues[slot] = numeric;
+  }
+  return resultValues;
+}
+
+
 export function getGoldPhaseMeasurementSummary(component: any, kind: string): string {
   const points = component?.points;
   if (!Array.isArray(points) || points.some(point => !Array.isArray(point))) {
@@ -138,12 +163,24 @@ export function getCompositeGoldCaptureSignature(question: any, measurements: an
   const gold = asObject(config.goldMeasurement);
   const goldParts = Array.isArray(gold.compositeResult?.components)
     ? gold.compositeResult.components : [];
-  if (gold.value != null && gold.value !== '' && slots.every(slot => {
-    const selected = components.find(part => part.slot === slot);
-    return goldParts.some(part =>
-      clean(part.slot) === slot && clean(part.annotationId) === selected?.id);
-  })) return '';
-  return components.map(part => part.slot + ':' + part.id).join('|');
+  const sameSourceGold = gold.value != null && gold.value !== '' &&
+    slots.every(slot => {
+      const selected = components.find(part => part.slot === slot);
+      return goldParts.some(part =>
+        clean(part.slot) === slot && clean(part.annotationId) === selected?.id);
+    });
+  const signature = components.map(part => part.slot + ':' + part.id).join('|');
+  if (!sameSourceGold) return signature;
+  const fields = PHASE_VALUE_FIELDS[kind];
+  if (fields) {
+    const savedValues = getSavedCompositePhaseValues(gold, kind);
+    // The caller validates a complete clinical calculation and verifies the
+    // stored gold scalar still matches before upgrading an older gold capture.
+    if (!slots.every(slot => savedValues[slot] != null)) {
+      return 'backfill:' + signature;
+    }
+  }
+  return '';
 }
 
 export function findEditableCompositePhaseMeasurement(
@@ -218,6 +255,11 @@ export function getCompositeGoldPersistenceError(expectedQuestions: any[], persi
             Array.isArray(saved?.points) && saved.points.length === part.points.length))
         ))) {
       return kind + ' saved gold measurement or contour evidence was not persisted.';
+    }
+    const phaseValues = getSavedCompositePhaseValues(gold, kind);
+    const remoteValues = getSavedCompositePhaseValues(actualGold, kind);
+    if (Object.keys(phaseValues).some(slot => remoteValues[slot] !== phaseValues[slot])) {
+      return kind + ' calibrated gold phase values were not persisted.';
     }
   }
   return '';
