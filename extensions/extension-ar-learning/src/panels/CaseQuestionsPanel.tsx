@@ -6364,8 +6364,10 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
 
             <label className="mt-2 block text-xs font-semibold text-gray-200">
               {['lvSimpsonEF', 'laVolumeBiplane', 'laVolumeBiplaneDisks', 'rvFAC', 'raArea', 'ivcCollapsibility'].includes(cleanString(answerConfig.measurementKind))
-                ? `Numeric tolerance (${cleanString(answerConfig.measurementKind) === 'lvSimpsonEF' ? '%' : 'mL'})`
-                : ['ivcCollapsibility', 'rvFAC', 'raArea', 'laVolumeBiplaneDisks'].includes(cleanString(answerConfig.measurementKind)) ? 'Numeric tolerance' : 'Length tolerance'}
+                ? 'Numeric tolerance (' +
+                  (['lvSimpsonEF', 'rvFAC', 'ivcCollapsibility'].includes(cleanString(answerConfig.measurementKind))
+                    ? '%' : cleanString(answerConfig.measurementKind) === 'raArea' ? 'cm²' : 'mL') + ')'
+                : 'Length tolerance'}
             </label>
             <input
               className="mt-1 w-36 rounded border border-gray-700 bg-black px-2 py-1 text-sm text-white"
@@ -6386,7 +6388,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               }
             />
 
-            {['lvSimpsonEF', 'laVolumeBiplane', 'laVolumeBiplaneDisks', 'rvFAC', 'raArea', 'ivcCollapsibility'].includes(cleanString(answerConfig.measurementKind)) ? (
+            {['lvSimpsonEF', 'laVolumeBiplane', 'laVolumeBiplaneDisks', 'rvFAC', 'raArea'].includes(cleanString(answerConfig.measurementKind)) ? (
               <div className="mt-3 border-t border-gray-700 pt-2">
                 <label className="flex items-center gap-2 text-xs text-gray-200">
                   <input
@@ -6431,7 +6433,24 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               </div>
             ) : null}
 
-            {cleanString(answerConfig.measurementKind) !== 'lvSimpsonEF' && cleanString(answerConfig.measurementKind) !== 'laVolumeBiplane' ? (
+            {cleanString(answerConfig.measurementKind) === 'ivcCollapsibility' ? (
+              <label className="mt-3 block text-xs font-semibold text-gray-200">
+                Maximum caliper endpoint distance (mm)
+                <input type="number" min="0" max="100" step="0.1"
+                  className="mt-1 block w-36 rounded border border-gray-700 bg-black px-2 py-1 text-sm text-white"
+                  value={numberOrEmpty(plainObject(question.scoringConfig).caliperEndpointToleranceMM ?? 5)}
+                  disabled={authoringSaving || !isDraftDefinition(authoringDefinition)}
+                  onChange={event => patchAuthoringQuestion(question, {
+                    scoringConfig: {
+                      ...plainObject(question.scoringConfig),
+                      caliperEndpointToleranceMM: event.target.value,
+                    },
+                  })}
+                />
+              </label>
+            ) : null}
+
+            {!['lvSimpsonEF', 'laVolumeBiplane', 'laVolumeBiplaneDisks', 'rvFAC', 'raArea', 'ivcCollapsibility'].includes(cleanString(answerConfig.measurementKind)) ? (
               <>
             <label className="mt-3 block text-xs font-semibold text-gray-200">
               {bowelSet ? 'Reference location radius (mm; visual guide)' : 'Position radius tolerance'}
