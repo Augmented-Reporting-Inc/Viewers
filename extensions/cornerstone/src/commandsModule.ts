@@ -123,7 +123,7 @@ import {
 } from '../../extension-ar-measurements/src/utils/bowelMeasurementTargets';
 import { calculateLVSimpson } from '../../extension-ar-measurements/src/utils/lvSimpson';
 import { getEchoAreaSlot } from '../../extension-ar-measurements/src/utils/echoAreaMeasurements';
-import { resolveViewerQuizCompositeResult, resolveViewerQuizLVSimpsonForStudy, isViewerQuizCompositeReviewCurrent } from '../../extension-ar-measurements/src/utils/viewerQuizCompositeResults';
+import { resolveViewerQuizCompositeResult, resolveViewerQuizLVSimpsonForStudy, isViewerQuizCompositeReviewCurrent, getViewerQuizCompositeStatus } from '../../extension-ar-measurements/src/utils/viewerQuizCompositeResults';
 import { createGuidedMouseToolOwnership } from './utils/guidedMouseToolOwnership';
 import { calibrateUSContourPoints, worldToImageIndex } from './utils/usRegionLengthCalibration';
 
@@ -15942,6 +15942,29 @@ function commandsModule({
         viewportId: activeViewportId,
       });
     },
+    getViewerQuizCompositeStatusForActiveStudy: ({ measurementKind = '' } = {}) => {
+      const kind = String(measurementKind || '').trim();
+      const activeViewportId = viewportGridService.getActiveViewportId();
+      const displaySet = getActiveViewportDisplaySet({
+        viewportGridService, displaySetService, viewportId: activeViewportId,
+      });
+      const study = String(
+        displaySet?.StudyInstanceUID || displaySet?.studyInstanceUID || ''
+      ).trim();
+      if (!study) {
+        return {
+          complete: false, value: null, unit: '',
+          message: 'Select an image from the quiz study before reviewing the calculated measurement.',
+        };
+      }
+      const snapshot = getCurrentViewerMeasurementSnapshot(measurementService);
+      return getViewerQuizCompositeStatus(
+        kind as any,
+        snapshot.filter(entry =>
+          String(entry?.referenceStudyUID || entry?.StudyInstanceUID || '').trim() === study
+        )
+      );
+    },
     getSelectedViewerMeasurementQuizAnswer: async ({
       question = {},
       measurementType = '',
@@ -16050,9 +16073,11 @@ function commandsModule({
           ? authoritativeEF?.composite
           : resolveViewerQuizCompositeResult(requestedKind, sourceMeasurements);
         if (!composite) {
+          const diagnostic = getViewerQuizCompositeStatus(requestedKind as any, sourceMeasurements);
           return {
             ok: false,
-            reason: 'composite-measurement-incomplete',
+            reason: diagnostic.message || 'Composite measurement is not yet complete or calibrated.',
+            reasonCode: 'composite-measurement-incomplete',
             selectedMeasurementId,
           };
         }
@@ -16547,6 +16572,9 @@ function commandsModule({
     },
     getViewerMeasurementSnapshotForPanel: {
       commandFn: actions.getViewerMeasurementSnapshotForPanel,
+    },
+    getViewerQuizCompositeStatusForActiveStudy: {
+      commandFn: actions.getViewerQuizCompositeStatusForActiveStudy,
     },
     getViewerQuizLVSimpsonForActiveStudy: {
       commandFn: actions.getViewerQuizLVSimpsonForActiveStudy,
