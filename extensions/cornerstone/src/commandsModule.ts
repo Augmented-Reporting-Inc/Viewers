@@ -657,12 +657,37 @@ function getCurrentViewerMeasurementSnapshot(
         if (!sourceImage || !measuredImage || sourceImage === measuredImage) {
           const sourceStats = annotation.data.cachedStats ||
             annotation.cachedStats || {};
+          const contourPoints = annotation.data?.contour?.polyline ||
+            annotation.data?.handles?.points;
+          const regions = annotation.data?.echoArea?.calibrationRegions ||
+            measurement?.echoArea?.calibrationRegions;
+          // Once a contour is edited, the original area is stale. Recalculate
+          // from the currently drawn contour and its previously verified DICOM
+          // region rather than trusting an old MeasurementService value.
+          const hasAreaCalibration = isRightHeartContour &&
+            Array.isArray(regions) && regions.length > 0 &&
+            Array.isArray(contourPoints);
+          const updatedArea = hasAreaCalibration
+            ? calibratedEchoAreaFromRegions({
+                points: contourPoints, imageId: sourceImage || measuredImage,
+                regions,
+              })
+            : null;
           return {
             ...measurement,
-            cachedStats: sourceStats,
+            ...(hasAreaCalibration ? {
+              points: contourPoints,
+              area: updatedArea,
+              measurements: {
+                ...(measurement.measurements || {}),
+                area: updatedArea,
+                areaUnit: updatedArea != null ? 'cm2' : '',
+              },
+            } : {}),
+            cachedStats: hasAreaCalibration ? {} : sourceStats,
             data: {
               ...(measurement?.data || {}),
-              cachedStats: sourceStats,
+              cachedStats: hasAreaCalibration ? {} : sourceStats,
             },
           };
         }
