@@ -84,8 +84,15 @@ export function matchesCompositePhaseSource(
   const actualSeries = clean(actual.referenceSeriesUID || actual.SeriesInstanceUID);
   const actualSop = clean(actual.SOPInstanceUID || actual.metadata?.SOPInstanceUID);
   const actualFrame = Number(actual.frameNumber || actual.metadata?.frameNumber);
-  return study === actualStudy && series === actualSeries && sop === actualSop &&
-    actualFrame === frame;
+  if (study === actualStudy && series === actualSeries && sop === actualSop &&
+      actualFrame === frame) return true;
+  // Some MeasurementService adapters omit the numeric frame after restoration,
+  // but preserve the exact DICOMweb imageId. Compare the *entire* imageId,
+  // never just instance/series proximity.
+  const expectedImage = clean(target.referencedImageId);
+  const actualImage = clean(actual.referencedImageId || actual.metadata?.referencedImageId);
+  return Boolean(expectedImage && actualImage && expectedImage === actualImage &&
+    study === actualStudy);
 }
 
 /**
@@ -134,4 +141,33 @@ export function getCompositeGoldCaptureSignature(question: any, measurements: an
       clean(part.slot) === slot && clean(part.annotationId) === selected?.id);
   })) return '';
   return components.map(part => part.slot + ':' + part.id).join('|');
+}
+
+export function findEditableCompositePhaseMeasurement(
+  measurements: any[], kind: string, slot: string,
+  source: { annotationId?: string; target?: any } = {}
+): any | null {
+  const target = asObject(source.target);
+  const study = clean(target.studyInstanceUID || target.StudyInstanceUID);
+  const candidates = (Array.isArray(measurements) ? measurements : []).filter(item => {
+    if (item?.isLocked || item?.arMeasurementReadOnly) return false;
+    if (getCompositePhaseSlot(item, kind) !== slot) return false;
+    const actualStudy = clean(item.referenceStudyUID || item.StudyInstanceUID);
+    return !study || (actualStudy && actualStudy === study);
+  });
+  const exact = candidates.filter(item => matchesCompositePhaseSource(item, source));
+  if (exact.length === 1) return exact[0];
+  if (exact.length > 1 || clean(source.annotationId)) return null;
+
+  // If the source specifies an exact frame, a different identified frame must
+  // not silently become the selected/deleted contour.
+  const identified = clean(target.sopInstanceUID || target.SOPInstanceUID) &&
+    Number.isInteger(Number(target.frameNumber)) && Number(target.frameNumber) > 0;
+  if (identified && candidates.some(item =>
+    clean(item.SOPInstanceUID || item.metadata?.SOPInstanceUID) &&
+    Number.isInteger(Number(item.frameNumber || item.metadata?.frameNumber)) &&
+    Number(item.frameNumber || item.metadata?.frameNumber) > 0)) return null;
+
+  // No saved gold identity yet: only a unique phase in this study is safe.
+  return candidates.length === 1 ? candidates[0] : null;
 }
