@@ -3821,6 +3821,44 @@ function normalizeUltrasoundRegion(region) {
   };
 }
 
+/**
+ * DICOM ultrasound-region calibration is the same source used by the EF tool.
+ * A contour can be used as an area only when *every* point is inside one
+ * unambiguous spatial region with physical centimetre/mm spacing.
+ * This never estimates an area from uncalibrated viewport/world pixels.
+ */
+function calibratedEchoAreaFromRegions({
+  points, imageId, regions,
+}: { points: number[][]; imageId: string; regions: any[] }) {
+  if (!imageId || !Array.isArray(regions) || !regions.length) return null;
+  const imagePlane = metaData.get?.('imagePlaneModule', imageId);
+  const physical = calibrateUSContourPoints({ points, imagePlane, regions });
+  if (!physical || physical.length < 6) return null;
+  let doubleArea = 0;
+  for (let index = 0; index < physical.length; index += 1) {
+    const [x1, y1] = physical[index];
+    const [x2, y2] = physical[(index + 1) % physical.length];
+    doubleArea += x1 * y2 - x2 * y1;
+  }
+  const areaCM2 = Math.abs(doubleArea) / 200; // physical points mm, area / 100 mm²/cm²
+  return Number.isFinite(areaCM2) && areaCM2 > 0 ? areaCM2 : null;
+}
+
+function getVerifiedEchoAreaCalibration({
+  displaySet, imageId, sopInstanceId, points,
+}: { displaySet: any; imageId: string; sopInstanceId: string; points: number[][] }) {
+  if (!imageId || !sopInstanceId) return null;
+  const instances = getDisplaySetInstances(displaySet);
+  const source = instances.find(instance =>
+    String(getSopInstanceIdFromSource(instance) || '') === sopInstanceId
+  );
+  if (!source) return null;
+  const regions = getUltrasoundRegionsFromSource(source)
+    .map(normalizeUltrasoundRegion).filter(Boolean);
+  const areaCM2 = calibratedEchoAreaFromRegions({ points, imageId, regions });
+  return areaCM2 == null ? null : { areaCM2, regions };
+}
+
 function chooseUltrasoundRegionForPoints(regions = [], points = []) {
   const normalizedRegions = regions.map(normalizeUltrasoundRegion).filter(Boolean);
 
