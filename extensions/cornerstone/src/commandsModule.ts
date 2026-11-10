@@ -5600,7 +5600,7 @@ function installSpectralDopplerTextOverrideForViewport({ viewport, viewportId = 
  * drag gesture; returns world points only, with no temporary annotation persisted.
  * EF, LA and quiz-only right-heart acquisitions call their own validated calculators.
  */
-function captureViewerClickTrace({ viewport, isCancelled, setCancelHandler }) {
+function captureViewerClickTrace({ viewport, isCancelled, setCancelHandler, previewLabel = '' }) {
   const element = viewport?.element;
   if (!element?.addEventListener || !viewport?.canvasToWorld || !viewport?.worldToCanvas) {
     return Promise.resolve(null);
@@ -5652,7 +5652,18 @@ function captureViewerClickTrace({ viewport, isCancelled, setCancelHandler }) {
         element.appendChild(overlay);
       }
       overlay.style.zIndex = '999';
-      overlay.replaceChildren(polyline);
+      if (previewLabel) {
+        const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        label.setAttribute('x', '12');
+        label.setAttribute('y', '22');
+        label.setAttribute('fill', '#facc15');
+        label.setAttribute('font-size', '14');
+        label.setAttribute('font-weight', '600');
+        label.textContent = previewLabel + ' · tracing (not yet calculated)';
+        overlay.replaceChildren(polyline, label);
+      } else {
+        overlay.replaceChildren(polyline);
+      }
     }
 
     function onMouseDown(event) {
@@ -9564,7 +9575,7 @@ function commandsModule({
           onCancel: () => clearLVSimpsonWorkflowIfCurrent(workflowSessionId),
         });
         const points = await captureViewerClickTrace({
-          viewport,
+          viewport, previewLabel: slotDisplayName + ' LA volume',
           isCancelled: isWorkflowCancelled,
           setCancelHandler: cancel => {
             if (activeLVSimpsonWorkflowSessionId === workflowSessionId) {
@@ -11084,7 +11095,8 @@ function commandsModule({
         });
         try {
           const traced = await captureViewerClickTrace({
-            viewport, isCancelled,
+            viewport, previewLabel: target.label,
+            isCancelled,
             setCancelHandler: cancel => {
               if (!isCancelled()) rvFACGuidedCancel = cancel;
             },
