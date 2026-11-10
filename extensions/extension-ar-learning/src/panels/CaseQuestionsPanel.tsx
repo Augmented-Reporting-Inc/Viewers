@@ -2399,16 +2399,29 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       return;
     }
     if (authoringMode) {
-      updateAuthoringQuestion(question.questionKey, current => ({
-        ...current,
-        answerConfig: {
-          ...plainObject(current.answerConfig),
-          // Leave individual source targets configured for redraw; the old
-          // calculated gold is no longer a valid answer.
-          goldValue: null, goldMeasurement: null,
-          measurementType: '',
-        },
-      }));
+      updateAuthoringQuestion(question.questionKey, current => {
+        const config = plainObject(current.answerConfig);
+        const gold = plainObject(config.goldMeasurement);
+        const composite = plainObject(gold.compositeResult);
+        const surviving = (Array.isArray(composite.components) ? composite.components : [])
+          .filter(part => cleanString(part?.slot) !== slot);
+        return {
+          ...current,
+          answerConfig: {
+            ...config,
+            // Preserve other phase sources and contours, but invalidate the
+            // old calculated gold scalar until the missing phase is redrawn.
+            goldValue: null,
+            goldMeasurement: surviving.length
+              ? {
+                  ...gold, value: null,
+                  sourceAnnotationId: cleanString(surviving[0]?.annotationId),
+                  compositeResult: { ...composite, value: null, components: surviving },
+                }
+              : null,
+          },
+        };
+      });
     } else {
       // A partial composite must never remain a gradeable learner response.
       setAnswer(quiz.quizKey, question, null);
@@ -4802,8 +4815,8 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         <div className="mb-1 font-semibold text-cyan-100">LA volume contour technique</div>
         <p className="mb-2 text-gray-300">
           For each apical view, navigate to its selected end-systolic DICOM frame.
-          Both techniques preserve calibrated annular and superior-wall landmarks;
-          freehand additionally requires tracing the closed LA cavity.
+          Freehand: click a mitral hinge, trace the LA cavity without holding the mouse,
+          and finish at the opposite hinge. Axis + apex: draw the annular line and superior LA axis.
         </p>
         {views.map(({ slot, label }) => (
           <div key={slot} className="mb-2 flex flex-wrap items-center gap-2">
