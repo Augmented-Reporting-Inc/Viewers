@@ -40,7 +40,7 @@ import {
   matchesConfiguredCompositeFrame,
 } from '../utils/compositeFrameTargets';
 import { EF_CONTOUR_FRAME_SLOTS, getEFGoldContourAuthoringRows } from '../utils/efGoldContourAuthoring';
-import { getCompositePhaseSlot, getCompositePhaseMeasurementId, getGoldPhaseMeasurementSummary, matchesCompositePhaseSource, getCompositeGoldCaptureSignature } from '../utils/quizCompositePhaseEvidence';
+import { getCompositePhaseSlot, getCompositePhaseMeasurementId, getGoldPhaseMeasurementSummary, matchesCompositePhaseSource, getCompositeGoldCaptureSignature, findEditableCompositePhaseMeasurement } from '../utils/quizCompositePhaseEvidence';
 
 const AR_QUIZ_MEASUREMENT_ADDED_EVENT = 'ar-learning:quiz-measurement-added';
 const AR_QUIZ_MEASUREMENT_LABELLED_EVENT = 'ar-learning:quiz-measurement-labelled';
@@ -2342,21 +2342,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
   function getActiveCompositePhaseMeasurement(
     kind: string, slot: string, source: { annotationId?: string; target?: any } = {}
   ) {
-    const study = cleanString(source.target?.studyInstanceUID || source.target?.StudyInstanceUID);
-    const candidates = liveCompositeMeasurements.filter(item => {
-      if (item?.isLocked || item?.arMeasurementReadOnly) return false;
-      if (getCompositePhaseSlot(item, kind) !== slot) return false;
-      const sourceStudy = cleanString(item.referenceStudyUID || item.StudyInstanceUID);
-      return !study || (sourceStudy && sourceStudy === study);
-    });
-    // Prefer explicit gold annotation identity or the configured DICOM frame.
-    const exact = candidates.filter(item => matchesCompositePhaseSource(item, source));
-    if (exact.length === 1) return exact[0];
-    if (exact.length > 1) return null;
-    // During initial contour capture there is no gold annotation ID. The
-    // unique, editable slot within the requested study is the only candidate;
-    // never resolve ambiguous duplicate contours or a different study.
-    return candidates.length === 1 ? candidates[0] : null;
+    return findEditableCompositePhaseMeasurement(liveCompositeMeasurements, kind, slot, source);
   }
 
   function getCompositePhaseDisplayEvidence(
@@ -2390,16 +2376,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     // Refresh immediately before deleting to avoid acting on a stale panel
     // snapshot after a frame switch or measurement replacement.
     const refreshed = await runViewerCommand(commandsManager, 'getViewerMeasurementSnapshotForPanel', {});
-    const targetStudy = cleanString(phaseSource.target?.studyInstanceUID || phaseSource.target?.StudyInstanceUID);
-    const candidates = (Array.isArray(refreshed) ? refreshed : []).filter(item => {
-      if (item?.isLocked || item?.arMeasurementReadOnly) return false;
-      if (getCompositePhaseSlot(item, kind) !== slot) return false;
-      const measuredStudy = cleanString(item.referenceStudyUID || item.StudyInstanceUID);
-      return !targetStudy || (measuredStudy && measuredStudy === targetStudy);
-    });
-    const exact = candidates.filter(item => matchesCompositePhaseSource(item, phaseSource));
-    const record = exact.length === 1 ? exact[0] : exact.length > 1 ? null
-      : candidates.length === 1 ? candidates[0] : null;
+    const record = findEditableCompositePhaseMeasurement(
+      Array.isArray(refreshed) ? refreshed : [], kind, slot, phaseSource
+    );
     const measurementId = getCompositePhaseMeasurementId(record);
     if (!measurementId) {
       uiNotificationService.show({
