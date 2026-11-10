@@ -2040,6 +2040,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
   const restoredSessionDirtyCheckedRef = useRef(false);
   const nextEducationSaveRequestId = () => String(++educationSaveRequestCounter.current);
   const [capturingAuthoringKey, setCapturingAuthoringKey] = useState('');
+  const [restoringCompositeAreaKey, setRestoringCompositeAreaKey] = useState('');
   const [authoringMeasurementDomain, setAuthoringMeasurementDomain] = useState('');
 
   // Notify only on validation state transitions, never on every pointer move.
@@ -2504,6 +2505,73 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     });
   }
 
+  async function restoreAuthoringGoldAreas(question: QuizQuestion) {
+    if (!authoringMode || !isDraftDefinition(authoringDefinition) ||
+        authoringSaving || restoringCompositeAreaKey) return;
+    const gold = plainObject(plainObject(question.answerConfig).goldMeasurement);
+    const originalValue = Number(gold.value);
+    const originalComponents = JSON.stringify(plainObject(gold.compositeResult).components || []);
+    const kind = cleanString(plainObject(question.answerConfig).measurementKind);
+    setRestoringCompositeAreaKey(question.questionKey);
+    try {
+      const recovered = await runViewerCommand(commandsManager,
+        'recoverViewerQuizGoldAreas', {
+          rubricMeasurement: gold,
+          questionKey: question.questionKey,
+        });
+      if (recovered?.ok !== true || !recovered.derived) {
+        uiNotificationService.show({
+          title: 'Calibrated gold areas unavailable', type: 'warning', duration: 7000,
+          message: cleanString(recovered?.reason) ||
+            'The exact saved DICOM contour or ultrasound-region calibration is unavailable.',
+        });
+        return;
+      }
+      const latest = authoringQuestionsRef.current.find(item =>
+        item.questionKey === question.questionKey);
+      const latestGold = plainObject(plainObject(latest?.answerConfig).goldMeasurement);
+      if (Number(latestGold.value) !== originalValue ||
+          JSON.stringify(plainObject(latestGold.compositeResult).components || []) !== originalComponents ||
+          cleanString(plainObject(latest?.answerConfig).measurementKind) !== kind) {
+        uiNotificationService.show({
+          title: 'Gold changed while recovering areas', type: 'warning', duration: 6000,
+          message: 'The saved source contours changed. Retry with the current gold measurement.',
+        });
+        return;
+      }
+      updateAuthoringQuestion(question.questionKey, current => {
+        const config = plainObject(current.answerConfig);
+        const prior = plainObject(config.goldMeasurement);
+        return {
+          ...current,
+          answerConfig: {
+            ...config,
+            goldMeasurement: {
+              ...prior,
+              compositeResult: {
+                ...plainObject(prior.compositeResult),
+                derived: recovered.derived,
+              },
+            },
+          },
+        };
+      });
+      uiNotificationService.show({
+        title: 'Calibrated gold areas recovered', type: 'success', duration: 6500,
+        message: 'Individual areas were validated from the saved DICOM contours. ' +
+          'The calculated gold result was not changed. Click Save Draft to persist them.',
+      });
+    } catch (error) {
+      console.warn('[CaseQuestionsPanel] gold-area recovery error', error);
+      uiNotificationService.show({
+        title: 'Calibrated gold areas unavailable', type: 'warning', duration: 6000,
+        message: cleanString(error?.message || error),
+      });
+    } finally {
+      setRestoringCompositeAreaKey('');
+    }
+  }
+
   function renderCompositeCalculatedStatus(
     quiz: QuizDefinition, question: QuizQuestion
   ) {
@@ -2524,6 +2592,13 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     const sameGold = hasLive && hasGold &&
       Math.abs(Number(status.value) - Number(gold.value)) < 0.005;
     const unit = cleanString(status.unit || gold.unit || config.unit);
+    const recoverableKind = ['rvFAC', 'laVolumeBiplane', 'laVolumeBiplaneDisks']
+      .includes(kind);
+    const savedSlots = Array.isArray(plainObject(gold.compositeResult).components)
+      ? plainObject(gold.compositeResult).components : [];
+    const savedPhaseValues = getSavedCompositePhaseValues(gold, kind);
+    const needsAreaRecovery = authoringMode && recoverableKind && hasGold &&
+      savedSlots.length === 2 && Object.keys(savedPhaseValues).length < 2;
     return (
       <div className="mt-2 rounded border border-emerald-700/60 bg-emerald-950/10 px-2 py-2 text-xs">
         {hasLive ? (
@@ -2551,6 +2626,25 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         {!hasGold && hasLive && authoringMode ? (
           <div className="mt-1 text-gray-300">
             Result is ready for capture; Save Draft persists it.
+          </div>
+        ) : null}
+        {needsAreaRecovery ? (
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <span className="text-amber-200">
+              Saved contours have no recorded individual calibrated areas.
+            </span>
+            <button type="button"
+              className="rounded border border-cyan-600 px-2 py-1 text-cyan-100 disabled:opacity-40"
+              disabled={!isDraftDefinition(authoringDefinition) ||
+                authoringSaving || !!restoringCompositeAreaKey}
+              onClick={event => {
+                event.preventDefault();
+                event.stopPropagation();
+                void restoreAuthoringGoldAreas(question);
+              }}>
+              {restoringCompositeAreaKey === question.questionKey
+                ? 'Verifying saved contours…' : 'Restore calibrated gold areas'}
+            </button>
           </div>
         ) : null}
       </div>
@@ -4743,6 +4837,13 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       return;
     }
 
+    if (restoringCompositeAreaKey) {
+      uiNotificationService.show({
+        title: 'Save Draft', type: 'warning', duration: 4000,
+        message: 'Complete the calibrated gold-area recovery before saving.',
+      });
+      return;
+    }
     setAuthoringSaving(true);
     setErrorMessage('');
 

@@ -127,6 +127,7 @@ import { resolveViewerQuizCompositeResult, resolveViewerQuizLVSimpsonForStudy, i
 import { createGuidedMouseToolOwnership } from './utils/guidedMouseToolOwnership';
 import { calibrateUSContourPoints, worldToImageIndex } from './utils/usRegionLengthCalibration';
 import { calculateCalibratedEchoAreaCM2 } from './utils/quizEchoAreaCalibration';
+import { resolveViewerQuizGoldAreaBackfill } from '../../extension-ar-measurements/src/utils/quizGoldAreaBackfill';
 
 const { DefaultHistoryMemo } = csUtils.HistoryMemo;
 const toggleSyncFunctions = {
@@ -16150,6 +16151,84 @@ function commandsModule({
         viewportId: activeViewportId,
       });
     },
+    /**
+     * Restore missing physical RV/LA phase areas from the immutable gold
+     * contours and the original DICOM US-region calibration. This is an
+     * explicit authoring action, not a learner or scoring calculation.
+     * Never derive areas from uncalibrated world/pixel geometry.
+     */
+    recoverViewerQuizGoldAreas: async ({
+      rubricMeasurement = {}, questionKey = '',
+    } = {}) => {
+      const kind = String(rubricMeasurement?.measurementKind || '').trim();
+      const previousFrame = await actions.getCurrentViewerQuizFrameAnswer();
+      const previousTarget = previousFrame?.ok ? previousFrame.answer?.selectedTarget : null;
+      const previousViewportId = viewportGridService.getActiveViewportId();
+      try {
+        return await resolveViewerQuizGoldAreaBackfill({
+          kind,
+          gold: rubricMeasurement,
+          calibrate: async component => {
+            const target = component?.target || {};
+            // Load each *exact* SOP/frame before reading its image-plane
+            // metadata. The two contours may belong to different series.
+            const navigation = await actions.jumpToViewerQuizTarget({
+              viewerTarget: target, questionKey,
+            });
+            if (!navigation?.ok) return null;
+            const displaySet = getDisplaySetForSavedAnnotation(displaySetService, {
+              SOPInstanceUID: target.sopInstanceUID,
+              SeriesInstanceUID: target.seriesInstanceUID,
+            });
+            if (!displaySet) return null;
+            const sourceStudy = String(displaySet.StudyInstanceUID || '').trim();
+            const sourceSeries = String(displaySet.SeriesInstanceUID || '').trim();
+            if ((sourceStudy && sourceStudy !== String(target.studyInstanceUID || '')) ||
+                (sourceSeries && sourceSeries !== String(target.seriesInstanceUID || ''))) {
+              return null;
+            }
+            const sourceViewport = cornerstoneViewportService.getCornerstoneViewport(
+              navigation.viewportId || viewportGridService.getActiveViewportId()
+            );
+            const actualImageId = sourceViewport
+              ? String(getCurrentViewportImageInfo(sourceViewport)?.imageId || '')
+              : '';
+            // Never apply DICOM metadata from a different cine frame, even
+            // if a viewer navigation reported success before the image changed.
+            if (!actualImageId ||
+                getSopInstanceIdFromImageId(actualImageId) !== String(target.sopInstanceUID || '') ||
+                getFrameNumberFromReferencedImageId(actualImageId) !== Number(target.frameNumber)) {
+              return null;
+            }
+            const calibrated = getVerifiedEchoAreaCalibration({
+              displaySet,
+              imageId: actualImageId,
+              sopInstanceId: String(target.sopInstanceUID || ''),
+              points: component.points || [],
+            });
+            return calibrated?.areaCM2 ?? null;
+          },
+        });
+      } catch (error) {
+        console.warn('[ViewerQuiz] gold area recovery failed', error);
+        return { ok: false, reason: 'gold-area-recovery-error' };
+      } finally {
+        // Recovery is read-only until the educator explicitly saves the
+        // updated draft. Restore their original viewing context.
+        if (previousTarget?.sopInstanceUID) {
+          try {
+            const restored = await actions.jumpToViewerQuizTarget({
+              viewerTarget: previousTarget, questionKey,
+            });
+            if (restored?.ok && previousViewportId) {
+              await Promise.resolve(actions.setViewportActive({ viewportId: previousViewportId }));
+            }
+          } catch (error) {
+            console.warn('[ViewerQuiz] could not restore pre-recovery frame', error);
+          }
+        }
+      }
+    },
     getViewerQuizCompositeStatusForActiveStudy: ({ measurementKind = '' } = {}) => {
       const kind = String(measurementKind || '').trim();
       const activeViewportId = viewportGridService.getActiveViewportId();
@@ -16783,6 +16862,9 @@ function commandsModule({
     },
     getViewerQuizCompositeStatusForActiveStudy: {
       commandFn: actions.getViewerQuizCompositeStatusForActiveStudy,
+    },
+    recoverViewerQuizGoldAreas: {
+      commandFn: actions.recoverViewerQuizGoldAreas,
     },
     getViewerQuizLVSimpsonForActiveStudy: {
       commandFn: actions.getViewerQuizLVSimpsonForActiveStudy,
