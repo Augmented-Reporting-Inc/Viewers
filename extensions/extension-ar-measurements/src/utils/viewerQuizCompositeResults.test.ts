@@ -48,6 +48,13 @@ describe('live composite preview uses the gold-capture validation contract', () 
     SOPInstanceUID: 'sop', referencedImageId: 'wadors:studies/study/series/series/instances/sop/frames/' + frameNumber,
     frameNumber,
   });
+  it('provides validated RV phase areas in the saved composite for portal display', () => {
+    const gold = resolveViewerQuizCompositeResult('rvFAC', [
+      rv('RV_ED', 3000, 14), rv('RV_ES', 1800, 17),
+    ]);
+    expect(gold?.derived).toEqual({ edaCM2: 30, esaCM2: 18, facPercent: 40 });
+  });
+
   it('shows a calibrated RV FAC live result before it is captured as gold', () => {
     const status = getViewerQuizCompositeStatus('rvFAC', [
       rv('RV_ED', 3000, 14), rv('RV_ES', 1800, 17),

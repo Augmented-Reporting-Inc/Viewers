@@ -40,7 +40,7 @@ import {
   matchesConfiguredCompositeFrame,
 } from '../utils/compositeFrameTargets';
 import { EF_CONTOUR_FRAME_SLOTS, getEFGoldContourAuthoringRows } from '../utils/efGoldContourAuthoring';
-import { getCompositePhaseSlot, getCompositePhaseMeasurementId, getGoldPhaseMeasurementSummary, matchesCompositePhaseSource, getCompositeGoldCaptureSignature, findEditableCompositePhaseMeasurement, getCompositeGoldPersistenceError } from '../utils/quizCompositePhaseEvidence';
+import { getCompositePhaseSlot, getCompositePhaseMeasurementId, matchesCompositePhaseSource, getCompositeGoldCaptureSignature, findEditableCompositePhaseMeasurement, getCompositeGoldPersistenceError } from '../utils/quizCompositePhaseEvidence';
 
 const AR_QUIZ_MEASUREMENT_ADDED_EVENT = 'ar-learning:quiz-measurement-added';
 const AR_QUIZ_MEASUREMENT_LABELLED_EVENT = 'ar-learning:quiz-measurement-labelled';
@@ -2380,7 +2380,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       if (settledRefresh !== null) window.clearTimeout(settledRefresh);
       compositeSnapshotRequestRef.current++;
     };
-  }, [commandsManager, measurementService]);
+  }, [commandsManager, measurementService, activeQuestionKey, authoringMode, quizzes]);
 
   useEffect(() => {
     // Switching quiz questions can change the measurement kind without
@@ -2516,13 +2516,24 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       ? plainObject(liveCompositeStatus) : {};
     const gold = authoringMode ? plainObject(config.goldMeasurement)
       : plainObject(answersByQuizKey?.[quiz.quizKey]?.[question.questionKey]);
-    const hasGold = gold.value !== null && gold.value !== undefined &&
-      cleanString(gold.value) !== '';
+    const hasGold = gold.value != null && cleanString(gold.value) !== '' &&
+      Number.isFinite(Number(gold.value));
+    const hasLive = status.complete === true && status.value != null &&
+      Number.isFinite(Number(status.value));
+    const sameGold = hasLive && hasGold &&
+      Math.abs(Number(status.value) - Number(gold.value)) < 0.005;
+    const unit = cleanString(status.unit || gold.unit || config.unit);
     return (
       <div className="mt-2 rounded border border-emerald-700/60 bg-emerald-950/10 px-2 py-2 text-xs">
-        {status.complete === true && Number.isFinite(Number(status.value)) ? (
+        {hasLive ? (
           <div className="font-semibold text-emerald-200">
-            Calculated measurement: {Number(status.value).toFixed(2)} {cleanString(status.unit)}
+            {sameGold ? 'Calculated and saved gold: ' : 'Calculated measurement: '}
+            {Number(status.value).toFixed(2)} {unit}
+          </div>
+        ) : hasGold ? (
+          <div className="font-semibold text-emerald-200">
+            {authoringMode ? 'Saved gold: ' : 'Saved answer: '}
+            {Number(gold.value).toFixed(2)} {unit}
           </div>
         ) : (
           <div className="text-amber-200">
@@ -2530,14 +2541,15 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               'Complete both calibrated measurements and their source references.'}
           </div>
         )}
-        {hasGold ? (
-          <div className="mt-1 text-emerald-100">
-            {authoringMode ? 'Captured gold: ' : 'Saved answer: '}
-            {gold.value} {gold.unit || config.unit || ''}
+        {hasGold && hasLive && !sameGold ? (
+          <div className="mt-1 text-amber-200">
+            Saved gold: {Number(gold.value).toFixed(2)} {unit}. The live value has changed;
+            review the contours and recapture before saving changes.
           </div>
-        ) : authoringMode ? (
+        ) : null}
+        {!hasGold && hasLive && authoringMode ? (
           <div className="mt-1 text-gray-300">
-            No gold answer captured yet. The calculated result must be captured before publishing.
+            Result is ready for capture; Save Draft persists it.
           </div>
         ) : null}
       </div>
@@ -2562,8 +2574,39 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         <span className={live || hasSaved ? 'text-emerald-200 text-[11px]' : 'text-amber-200 text-[11px]'}>
           {live ? 'Measured' : hasSaved ? 'Gold saved' : 'Not measured'}
           {areaLabel}
-          {hasSaved ? ' · ' + getGoldPhaseMeasurementSummary(saved, kind) : ''}
+          {hasSaved ? ' · Gold source saved' : ''}
         </span>
+        {hasSaved && targetHasNavigationIdentity(saved?.target) ? (
+          <button
+            type="button"
+            className="rounded border border-emerald-600 px-2 py-1 text-emerald-100"
+            onClick={event => {
+              event.preventDefault();
+              event.stopPropagation();
+              void (async () => {
+                const answer = authoringMode
+                  ? plainObject(plainObject(question.answerConfig).goldMeasurement)
+                  : plainObject(answersByQuizKey?.[quiz.quizKey]?.[question.questionKey]);
+                const result = await runViewerCommand(commandsManager,
+                  'showViewerQuizMeasurementComparison', {
+                    rubricMeasurement: answer,
+                    viewerTarget: saved.target,
+                    focusedCompositeSlot: slot,
+                    questionKey: question.questionKey,
+                  });
+                if (result?.rubricRendered !== true) {
+                  uiNotificationService.show({
+                    title: 'Saved contour', type: 'warning', duration: 5000,
+                    message: 'Saved source could not be displayed: ' +
+                      cleanString(result?.reason || 'source unavailable'),
+                  });
+                }
+              })().catch(error => console.warn(
+                '[CaseQuestionsPanel] composite gold phase navigation failed', error
+              ));
+            }}
+          >View saved</button>
+        ) : null}
         <button
           type="button"
           className="rounded border border-red-600 px-2 py-1 text-red-100 disabled:opacity-40"
@@ -6560,7 +6603,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               </button>
             ) : null}
 
-            {!bowelSet && (answerConfig.goldValue !== null &&
+            {!bowelSet && !['rvFAC', 'raArea', 'laVolumeBiplane', 'laVolumeBiplaneDisks', 'ivcCollapsibility'].includes(
+              cleanString(answerConfig.measurementKind)
+            ) && (answerConfig.goldValue !== null &&
             typeof answerConfig.goldValue !== 'undefined' &&
             answerConfig.goldValue !== '' ? (
               <div className="bg-green-950/30 mt-2 rounded border border-green-700 px-2 py-1 text-xs text-green-100">

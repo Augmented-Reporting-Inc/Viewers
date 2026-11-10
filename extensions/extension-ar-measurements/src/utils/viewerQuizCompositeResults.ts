@@ -222,6 +222,21 @@ export function resolveViewerQuizCompositeResult(
         collapsibilityPercent: (result.values as any).collapsibilityPercent,
       },
     } : {}),
+    ...(kind === 'rvFAC' && result?.values ? {
+      derived: {
+        edaCM2: (result.values as any).edaCM2,
+        esaCM2: (result.values as any).esaCM2,
+        facPercent: (result.values as any).facPercent,
+      },
+    } : {}),
+    ...((kind === 'laVolumeBiplane' || kind === 'laVolumeBiplaneDisks') &&
+      (result as any)?.slots ? {
+      derived: {
+        a4cAreaCM2: (result as any).slots.A4C?.areaCM2,
+        a2cAreaCM2: (result as any).slots.A2C?.areaCM2,
+        volumeML: value,
+      },
+    } : {}),
   };
 }
 

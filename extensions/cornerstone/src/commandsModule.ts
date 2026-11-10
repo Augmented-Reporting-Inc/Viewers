@@ -15555,6 +15555,7 @@ function commandsModule({
       learnerMeasurement = {},
       rubricMeasurement = {},
       viewerTarget = null,
+      focusedCompositeSlot = '',
       questionKey = '',
       radius = null,
       radiusUnit = 'world',
@@ -15615,7 +15616,8 @@ function commandsModule({
         ).trim();
         const study = String(target.studyInstanceUID || '').trim();
         if (
-          !Array.isArray(points) || points.length < 3 ||
+          !Array.isArray(points) ||
+          points.length < (rubricMeasurement?.measurementKind === 'ivcCollapsibility' ? 2 : 3) ||
           points.length > 5000 || !imageId ||
           (expectedStudy && (!study || study !== expectedStudy))
         ) {
@@ -15633,7 +15635,8 @@ function commandsModule({
           annotationId: String(component.annotationId || '').trim(),
           uid: String(component.annotationId || '').trim(),
           workflow: VIEWER_MEASUREMENTS_WORKFLOW,
-          toolName: 'PlanarFreehandROI',
+          toolName: rubricMeasurement?.measurementKind === 'ivcCollapsibility'
+            ? 'Length' : 'PlanarFreehandROI',
           label: slot,
           measurementRole: slot,
           measurementKind: rubricMeasurement.measurementKind,
@@ -15643,7 +15646,7 @@ function commandsModule({
           referencedImageId: imageId,
           frameNumber: Number(target.frameNumber || 0),
           points: safePoints,
-          contourClosed: true,
+          contourClosed: rubricMeasurement?.measurementKind !== 'ivcCollapsibility',
         };
       };
       const resolvedRubricContours = compositeRubric
@@ -15656,9 +15659,9 @@ function commandsModule({
               getRequestedWorkflowAnnotations(seriesDoc?.MeasurementAnnotations)
             ).find(item => getMeasurementAnnotationId(item) === sourceId);
             const sourceAnnotation =
+              embeddedContourFromComponent(component, slot) ||
               persisted ||
-              getViewerQuizMeasurementAnnotationFromService(reference) ||
-              embeddedContourFromComponent(component, slot);
+              getViewerQuizMeasurementAnnotationFromService(reference);
             return sourceAnnotation ? { sourceAnnotation, slot } : null;
           }).filter(Boolean)
         : [];
@@ -15719,7 +15722,7 @@ function commandsModule({
       // Authoring gold calipers already loaded in Cornerstone should be selected
       // directly. Reconstructing a temporary comparison overlay can fail when
       // the saved source annotation has not yet been rehydrated into this viewport.
-      if (goldSourceId && !getViewerQuizMeasurementSourceAnnotationId(learnerMeasurement)) {
+      if (!compositeRubric && goldSourceId && !getViewerQuizMeasurementSourceAnnotationId(learnerMeasurement)) {
         const liveGold = annotation.state.getAnnotation?.(goldSourceId);
         const goldTarget = getViewerQuizMeasurementReferenceTarget(rubricMeasurement, rubricAnnotation);
         const expectedImage = normalizeImageIdForCompare(
@@ -15788,6 +15791,23 @@ function commandsModule({
       ].filter(entry => !!entry.sourceAnnotation);
 
       for (const entry of entries) {
+        const sourceId = String(entry.sourceAnnotation?.annotationId ||
+          entry.sourceAnnotation?.uid || '').trim();
+        const native = compositeRubric && entry.variant === 'rubric' && sourceId
+          ? annotation.state.getAnnotation?.(sourceId) : null;
+        const expectedImage = normalizeImageIdForCompare(
+          entry.sourceAnnotation?.referencedImageId || '');
+        const nativeImage = normalizeImageIdForCompare(
+          native?.metadata?.referencedImageId || '');
+        if (native && expectedImage && nativeImage === expectedImage) {
+          native.isVisible = true;
+          cornerstoneTools.annotation.selection.setAnnotationSelected?.(
+            sourceId, !focusedCompositeSlot || entry.slot === focusedCompositeSlot
+          );
+          renderedCount++;
+          rubricRendered = true;
+          continue;
+        }
         const comparisonAnnotation = buildViewerQuizMeasurementComparisonAnnotation({
           sourceAnnotation: entry.sourceAnnotation,
           variant: entry.variant,
@@ -15863,13 +15883,15 @@ function commandsModule({
 
         hydratedAnnotation.isLocked = true;
         hydratedAnnotation.isVisible = true;
+        const focused = entry.variant === 'rubric' && !!focusedCompositeSlot &&
+          entry.slot === focusedCompositeSlot;
         annotation.config.style.setAnnotationStyles(
           comparisonAnnotationId,
-          VIEWER_QUIZ_MEASUREMENT_COMPARISON_STYLES[entry.variant]
+          focused ? VIEWER_QUIZ_MEASUREMENT_COMPARISON_STYLES.rubricFocused
+            : VIEWER_QUIZ_MEASUREMENT_COMPARISON_STYLES[entry.variant]
         );
         cornerstoneTools.annotation.selection.setAnnotationSelected?.(
-          comparisonAnnotationId,
-          false
+          comparisonAnnotationId, focused
         );
         viewerQuizMeasurementComparisonAnnotationIds.add(comparisonAnnotationId);
         renderedCount += 1;
