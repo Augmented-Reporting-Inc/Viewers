@@ -2376,9 +2376,30 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     // Refresh immediately before deleting to avoid acting on a stale panel
     // snapshot after a frame switch or measurement replacement.
     const refreshed = await runViewerCommand(commandsManager, 'getViewerMeasurementSnapshotForPanel', {});
-    const record = findEditableCompositePhaseMeasurement(
+    let record = findEditableCompositePhaseMeasurement(
       Array.isArray(refreshed) ? refreshed : [], kind, slot, phaseSource
     );
+    // A saved gold contour can be on a different source frame and absent from
+    // the currently hydrated viewport. Navigate to that exact source, then
+    // resolve by its annotation ID (not by a similarly labelled contour).
+    if (!record && cleanString(phaseSource.annotationId) &&
+        targetHasNavigationIdentity(phaseSource.target)) {
+      const jumped = await runViewerCommand(commandsManager, 'jumpToViewerQuizTarget', {
+        viewerTarget: phaseSource.target, questionKey: question.questionKey,
+      });
+      if (jumped?.ok) {
+        if (cleanString(jumped.viewportId)) {
+          await runViewerCommand(commandsManager, 'setViewportActive', {
+            viewportId: jumped.viewportId,
+          });
+        }
+        const hydrated = await runViewerCommand(commandsManager,
+          'getViewerMeasurementSnapshotForPanel', {});
+        record = findEditableCompositePhaseMeasurement(
+          Array.isArray(hydrated) ? hydrated : [], kind, slot, phaseSource
+        );
+      }
+    }
     const measurementId = getCompositePhaseMeasurementId(record);
     if (!measurementId) {
       uiNotificationService.show({
@@ -2448,7 +2469,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         <button
           type="button"
           className="rounded border border-red-600 px-2 py-1 text-red-100 disabled:opacity-40"
-          disabled={disabled || !live || !getCompositePhaseMeasurementId(live)}
+          disabled={disabled || (!getCompositePhaseMeasurementId(live) && !hasSaved)}
           onClick={event => {
             event.preventDefault(); event.stopPropagation();
             void deleteCompositePhaseMeasurement(quiz, question, slot, phaseSource);
