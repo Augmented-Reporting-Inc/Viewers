@@ -1,7 +1,7 @@
 import { calculateLVSimpson, LV_SIMPSON_SLOT_ORDER } from './lvSimpson';
 import { calculateLAVolume, calculateLABiplaneDisks, LA_VOLUME_SLOT_ORDER, LA_VOLUME_AREA_LENGTH_METHOD, LA_VOLUME_DISKS_METHOD } from './laVolume';
-import { calculateRVFACFromMeasurements, calculateRAAreaFromMeasurements, getEchoAreaSlot } from './echoAreaMeasurements';
-import { calculateIVCFromMeasurements, isIVCDiameterMeasurement } from './rightHeartMeasurements';
+import { calculateRVFACFromMeasurements, calculateRAAreaFromMeasurements, getEchoAreaSlot, getCalibratedEchoAreaCM2 } from './echoAreaMeasurements';
+import { calculateIVCFromMeasurements, isIVCDiameterMeasurement, getMeasurementDICOMFrameNumber } from './rightHeartMeasurements';
 
 type Measurement = Record<string, any>;
 type CompositeKind = 'lvSimpsonEF' | 'laVolumeBiplane' | 'laVolumeBiplaneDisks' | 'rvFAC' | 'raArea' | 'ivcCollapsibility';
@@ -45,26 +45,6 @@ function slotOf(measurement: Measurement, kind: CompositeKind): string {
       ? getEchoAreaSlot(measurement)
       : clean(g?.slot || measurement?.slot).toUpperCase();
   return slot || '';
-}
-
-/**
- * For multiframe EF contours, the referenced image is the actual viewed
- * frame. Some legacy annotations retain a default frameNumber=1 despite
- * referencing another /frames/N image. Do not transfer that stale number
- * into newly authored gold/scored composite evidence.
- *
- * Restrict this correction to EF; other measurement contracts are unchanged.
- */
-function efSourceFrameNumber(measurement: Measurement): number {
-  const imageId = clean(
-    measurement?.referencedImageId || measurement?.metadata?.referencedImageId
-  );
-  const match = imageId.match(/\/frames\/([1-9][0-9]*)(?:[/?#]|$)/);
-  if (match) {
-    const referencedFrame = Number(match[1]);
-    if (Number.isSafeInteger(referencedFrame)) return referencedFrame;
-  }
-  return Number(measurement?.frameNumber || measurement?.metadata?.frameNumber || 0);
 }
 
 // The FormAPI EF evidence contract rejects contours above 5,000 points.
@@ -133,12 +113,9 @@ function collectComponents(measurements: Measurement[], kind: CompositeKind) {
         seriesInstanceUID: clean(measurement.referenceSeriesUID || measurement.SeriesInstanceUID),
         sopInstanceUID: clean(measurement.SOPInstanceUID || measurement.metadata?.SOPInstanceUID),
         referencedImageId: clean(measurement.referencedImageId || measurement.metadata?.referencedImageId),
-        // IVC Length adapters can also retain a default frameNumber=1 while
-        // referencing the correct DICOMweb /frames/N source. Only these two
-        // explicitly multiframe contracts use the trusted image reference.
-        frameNumber: kind === 'lvSimpsonEF' || kind === 'ivcCollapsibility'
-          ? efSourceFrameNumber(measurement)
-          : Number(measurement.frameNumber || measurement.metadata?.frameNumber || 0),
+        // Use the actual DICOM image frame for every composite, including
+        // RV FAC and LA, without weakening the same-SOP/frame prohibition.
+        frameNumber: getMeasurementDICOMFrameNumber(measurement),
       },
     });
   }
@@ -254,6 +231,28 @@ export function resolveViewerQuizCompositeResult(
  * but exposes actionable missing-calibration/geometry diagnostics without
  * disclosing study identifiers or treating incomplete evidence as a gold value.
  */
+/** Preview verified physical phase areas; never infer area from image pixels. */
+function getCompositeCalibratedPhaseAreas(kind: CompositeKind, measurements: Measurement[]) {
+  const phaseValues: Record<string, number> = {};
+  if (kind === 'rvFAC' || kind === 'raArea') {
+    for (const slot of (kind === 'rvFAC' ? ['RV_ED', 'RV_ES'] : ['RA_ES'])) {
+      const found = measurements.filter(m => getEchoAreaSlot(m) === slot);
+      if (found.length !== 1) continue;
+      const area = getCalibratedEchoAreaCM2(found[0]);
+      if (area != null && Number.isFinite(area) && area > 0) phaseValues[slot] = area;
+    }
+  }
+  if (kind === 'laVolumeBiplane' || kind === 'laVolumeBiplaneDisks') {
+    const la = calculateLAVolume(measurements);
+    for (const slot of LA_VOLUME_SLOT_ORDER) {
+      const phase = la?.slots?.[slot];
+      const area = Number(phase?.areaCM2);
+      if (phase?.complete && Number.isFinite(area) && area > 0) phaseValues[slot] = area;
+    }
+  }
+  return phaseValues;
+}
+
 export function getViewerQuizCompositeStatus(
   kind: CompositeKind,
   measurements: Measurement[] = []
@@ -266,6 +265,7 @@ export function getViewerQuizCompositeStatus(
     return { complete: false, value: null, unit: '', message: 'Unsupported measurement type.' };
   }
   const measurementList = Array.isArray(measurements) ? measurements : [];
+  const phaseValues = getCompositeCalibratedPhaseAreas(kind, measurementList);
   const composite = resolveViewerQuizCompositeResult(kind, measurementList);
   if (composite) {
     return {
@@ -273,6 +273,7 @@ export function getViewerQuizCompositeStatus(
       value: composite.value,
       unit: composite.unit,
       message: '',
+      phaseValues,
       components: composite.components.map(component => ({
         slot: component.slot,
         annotationId: component.annotationId,
@@ -303,6 +304,7 @@ export function getViewerQuizCompositeStatus(
     value: null,
     unit: '',
     message,
+    phaseValues,
   };
 }
 

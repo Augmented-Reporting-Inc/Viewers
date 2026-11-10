@@ -453,23 +453,24 @@ function isViewerMeasurementSessionFallbackReplacementReady(
   }
 
   if (isLAVolumeMeasurement(sessionMeasurement)) {
-    if (!isLAVolumeMeasurement(liveMeasurement)) {
-      return false;
-    }
-
+    if (!isLAVolumeMeasurement(liveMeasurement)) return false;
     const liveGeometry =
       liveMeasurement?.laVolume || liveMeasurement?.measurements?.laVolume || {};
     const liveSlot = getLAVolumeSlotFromMeasurement(liveMeasurement);
     const sessionSlot = getLAVolumeSlotFromMeasurement(sessionMeasurement);
     const livePoints = getViewerMeasurementSnapshotPoints(liveMeasurement, liveGeometry);
-
-    return !!(
-      liveMeasurement?.toolName &&
-      liveSlot &&
-      (!sessionSlot || liveSlot === sessionSlot) &&
-      livePoints.length >= 6 &&
-      (liveMeasurement?.referencedImageId || liveMeasurement?.referenceSeriesUID)
-    );
+    // A spline is not a valid replacement for LA source evidence until the
+    // guided anatomy and calibrated axis have arrived from Cornerstone.
+    const hasLandmarks = !!(liveGeometry.baseLeftPoint && liveGeometry.baseRightPoint &&
+      (liveGeometry.superiorPoint || liveGeometry.axisPoint || liveGeometry.apexPoint));
+    const axisLength = Number(liveGeometry.longAxisLengthMM);
+    const matchingSource = !sessionMeasurement?.referencedImageId ||
+      liveMeasurement?.referencedImageId === sessionMeasurement.referencedImageId;
+    return !!(liveMeasurement?.toolName &&
+      liveSlot && (!sessionSlot || liveSlot === sessionSlot) &&
+      livePoints.length >= 6 && hasLandmarks &&
+      Number.isFinite(axisLength) && axisLength > 0 &&
+      matchingSource && liveMeasurement?.referencedImageId);
   }
 
   return true;
@@ -636,6 +637,24 @@ function getCurrentViewerMeasurementSnapshot(
         ? cornerstoneTools.annotation.state.getAnnotation?.(measurementId)
         : null;
       const spectralDoppler = annotation?.data?.spectralDoppler;
+
+      // Preserve anatomical LA landmarks while following edited spline points
+      // on the exact source frame. The session fallback handles early adapters
+      // that have not yet populated the full LA measurement contract.
+      if (isLAVolumeMeasurement(measurement) && annotation?.data) {
+        const sourceImage = String(annotation?.metadata?.referencedImageId || '');
+        const measuredImage = String(measurement?.referencedImageId || '');
+        const points = annotation?.data?.contour?.polyline;
+        const geometry = annotation?.data?.laVolume ||
+          measurement?.laVolume || measurement?.measurements?.laVolume;
+        if ((!sourceImage || !measuredImage || sourceImage === measuredImage) &&
+          Array.isArray(points) && points.length >= 6 && geometry?.slot) {
+          return {
+            ...measurement, points,
+            laVolume: { ...geometry, contourPoints: points },
+          };
+        }
+      }
 
       // SplineROI and Length keep calibrated stats on their Cornerstone source
       // annotation. Quiz acquisition can populate MeasurementService before its

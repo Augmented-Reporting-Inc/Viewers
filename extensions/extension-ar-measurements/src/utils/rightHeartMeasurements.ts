@@ -168,6 +168,17 @@ function ivcSlot(measurement: ViewerMeasurement): IVCSlot | null {
   return null;
 }
 
+/** Actual cine frame always outranks a stale MeasurementService default. */
+export function getMeasurementDICOMFrameNumber(measurement: ViewerMeasurement): number {
+  const imageId = String(measurement?.referencedImageId ||
+    measurement?.metadata?.referencedImageId || '');
+  const match = imageId.match(/\/frames\/([1-9][0-9]*)(?:[/?#]|$)/);
+  const exactFrame = Number(match?.[1]);
+  if (Number.isSafeInteger(exactFrame) && exactFrame > 0) return exactFrame;
+  const storedFrame = Number(measurement?.frameNumber || measurement?.metadata?.frameNumber || 0);
+  return Number.isSafeInteger(storedFrame) && storedFrame > 0 ? storedFrame : 0;
+}
+
 function calibratedLengthMM(measurement: ViewerMeasurement): number | null {
   if (String(measurement?.toolName || '') !== 'Length') return null;
   const points = measurement?.points || measurement?.measurements?.points || [];

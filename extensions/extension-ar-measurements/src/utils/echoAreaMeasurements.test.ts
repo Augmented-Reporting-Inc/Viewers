@@ -98,6 +98,24 @@ describe('echo chamber areas', () => {
       .toBe('invalid');
   });
 
+  it('trusts referenced DICOM frames over a stale default frame number', () => {
+    const ed = {
+      ...area('RVEDA', 3000), SOPInstanceUID: 'cine-sop', frameNumber: 1,
+      referencedImageId: 'wadors:/studies/study-1/series/cine-1/instances/cine-sop/frames/14',
+    };
+    const es = {
+      ...area('RVESA', 1800), SOPInstanceUID: 'cine-sop', frameNumber: 1,
+      referencedImageId: 'wadors:/studies/study-1/series/cine-1/instances/cine-sop/frames/17',
+    };
+    const result = calculateRVFACFromMeasurements([ed, es]);
+    expect(result?.status).toBe('complete');
+    expect(result?.edEvidence?.frameNumber).toBe(14);
+    expect(result?.esEvidence?.frameNumber).toBe(17);
+    expect(calculateRVFACFromMeasurements([
+      ed, { ...es, referencedImageId: ed.referencedImageId, frameNumber: 17 },
+    ])?.status).toBe('invalid');
+  });
+
   it('maps only complete RV FAC calculations to structured report fields', () => {
     const rv = calculateRVFACFromMeasurements([area('RVEDA', 3000), area('RVESA', 1800)]);
     expect(buildClinicalRVFACReportFieldUpdates(rv)).toEqual({

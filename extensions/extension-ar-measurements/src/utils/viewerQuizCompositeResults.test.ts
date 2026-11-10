@@ -56,6 +56,42 @@ describe('live composite preview uses the gold-capture validation contract', () 
     expect(status.value).toBeCloseTo(40);
     expect(status.unit).toBe('%');
   });
+  it('shows verified RV phase areas even when both contours reference the same frame', () => {
+    const ed = { ...rv('RV_ED', 3000, 14), frameNumber: 1 };
+    const es = { ...rv('RV_ES', 1800, 14), frameNumber: 17 };
+    const status = getViewerQuizCompositeStatus('rvFAC', [ed, es]);
+    expect(status.complete).toBe(false);
+    expect(status.phaseValues).toEqual({ RV_ED: 30, RV_ES: 18 });
+    expect(status.message).toMatch(/same cine frame/i);
+  });
+  it('captures RV gold source frames from DICOM references despite stale metadata', () => {
+    const source = [ { ...rv('RV_ED', 3000, 14), frameNumber: 1 },
+      { ...rv('RV_ES', 1800, 17), frameNumber: 1 } ];
+    const answer = resolveViewerQuizCompositeResult('rvFAC', source);
+    expect(answer?.value).toBeCloseTo(40);
+    expect(answer?.components.map(c => c.target.frameNumber)).toEqual([14, 17]);
+  });
+  it('shows LA per-view physical area when both apical contours are complete', () => {
+    const points = [
+      [-10, 0, 0], [-10, 15, 0], [-7, 40, 0], [0, 60, 0],
+      [7, 40, 0], [10, 15, 0], [10, 0, 0],
+    ];
+    const phase = (slot: string) => ({
+      uid: slot, toolName: 'SplineROI', measurementKind: 'laVolumeSlot',
+      slot, points,
+      laVolume: { measurementKind: 'laVolumeSlot', slot, contourPoints: points,
+        baseLeftPoint: [-10, 0, 0], baseRightPoint: [10, 0, 0],
+        superiorPoint: [0, 60, 0], longAxisLengthMM: 60 },
+      referenceStudyUID: 'study', referenceSeriesUID: 'series',
+      SOPInstanceUID: 'sop-' + slot, frameNumber: 1,
+      referencedImageId: 'wadors:studies/study/series/series/instances/sop-' + slot + '/frames/1',
+    });
+    const status = getViewerQuizCompositeStatus('laVolumeBiplane', [phase('A4C'), phase('A2C')]);
+    expect(status.complete).toBe(true);
+    expect(status.value).toBeGreaterThan(0);
+    expect(status.phaseValues.A4C).toBeGreaterThan(0);
+    expect(status.phaseValues.A2C).toBeGreaterThan(0);
+  });
   it('explains missing calibration rather than showing an unverified number', () => {
     const es = rv('RV_ES', 1800, 17);
     es.measurements.area = 0;

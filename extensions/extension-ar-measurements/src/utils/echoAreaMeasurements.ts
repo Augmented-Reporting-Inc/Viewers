@@ -1,4 +1,4 @@
-import { calculateRAArea, calculateRVFAC } from './rightHeartMeasurements';
+import { calculateRAArea, calculateRVFAC, getMeasurementDICOMFrameNumber } from './rightHeartMeasurements';
 
 type Measurement = Record<string, any>;
 type AreaSlot = 'RA_ES' | 'RV_ED' | 'RV_ES';
@@ -113,7 +113,7 @@ function evidence(measurement: Measurement) {
     studyInstanceUID: clean(measurement?.referenceStudyUID || measurement?.StudyInstanceUID),
     seriesInstanceUID: clean(measurement?.referenceSeriesUID || measurement?.SeriesInstanceUID),
     sopInstanceUID: clean(measurement?.SOPInstanceUID || measurement?.metadata?.SOPInstanceUID),
-    frameNumber: Number(measurement?.frameNumber || measurement?.metadata?.frameNumber || 0),
+    frameNumber: getMeasurementDICOMFrameNumber(measurement),
     referencedImageId: clean(measurement?.referencedImageId || measurement?.metadata?.referencedImageId),
   };
 }

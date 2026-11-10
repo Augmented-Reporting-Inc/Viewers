@@ -2550,10 +2550,18 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     const { kind, saved, live, phaseSource } =
       getCompositePhaseDisplayEvidence(quiz, question, slot);
     const hasSaved = !!cleanString(saved?.annotationId);
+    const statusKey = authoringMode ? 'authoring:' + question.questionKey
+      : quiz.quizKey + ':' + question.questionKey;
+    const phaseValues = liveCompositeStatus.questionKey === statusKey
+      ? plainObject(liveCompositeStatus.phaseValues) : {};
+    const area = phaseValues[slot];
+    const areaLabel = live && area != null && Number.isFinite(Number(area)) && Number(area) > 0
+      ? ' · ' + Number(area).toFixed(2) + ' cm²' : '';
     return (
       <>
         <span className={live || hasSaved ? 'text-emerald-200 text-[11px]' : 'text-amber-200 text-[11px]'}>
           {live ? 'Measured' : hasSaved ? 'Gold saved' : 'Not measured'}
+          {areaLabel}
           {hasSaved ? ' · ' + getGoldPhaseMeasurementSummary(saved, kind) : ''}
         </span>
         <button
