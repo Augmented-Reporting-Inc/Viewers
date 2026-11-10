@@ -6914,7 +6914,10 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
             <button
               type="button"
               className="flex-1 rounded bg-purple-700 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50"
-              disabled={authoringSaving || !canEditDraft}
+              disabled={authoringSaving || !!capturingAuthoringKey || !canEditDraft}
+              title={capturingAuthoringKey
+                ? 'Complete the measurement capture before saving this quiz draft.'
+                : undefined}
               onClick={saveAuthoringDraft}
             >
               {authoringSaving ? 'Saving draft…' : 'Save authoring changes'}
