@@ -10161,101 +10161,19 @@ function commandsModule({
       // Freeze the active source before landmark drawing; each phase must
       // remain on the same DICOM image/frame through freehand acquisition.
       const acquisitionImageId = getCurrentViewportImageInfo(viewport)?.imageId || '';
-      const overlay = createLVSimpsonPreviewOverlay(viewport.element);
-
-      uiNotificationService.show({
-        title: `LA Volume step ${stepNumber}/2`,
-        message: `Navigate to ${slotDisplayName}. Draw the mitral annular closure line from one annular edge to the other. Press Esc to cancel.`,
-        type: 'info',
-        duration: 8000,
-      });
-
-      const annulus = await captureLVSimpsonDrag({
-        viewport,
-        toolGroup: laToolGroup,
-        restorePreviousTool: false,
-        isCancelled: isWorkflowCancelled,
-        setCancelHandler: cancel => {
-          if (activeLAVolumeWorkflowSessionId === workflowSessionId) {
-            activeLAVolumeCaptureCancel = cancel;
-          }
-        },
-        onPreview: ({ startWorld, currentWorld }) => {
-          drawLVSimpsonPreview({
-            overlay,
-            viewport,
-            baseLeftPoint: startWorld,
-            baseRightPoint: currentWorld,
-          });
-        },
-      });
-
-      if (!annulus || isWorkflowCancelled()) {
-        clearLVSimpsonPreviewOverlay(viewport.element);
-        setLVSimpsonViewportCursor(viewport.element, 'default');
-        clearLAVolumeWorkflowIfCurrent(workflowSessionId);
-        return null;
-      }
-
-      drawLVSimpsonPreview({
-        overlay,
-        viewport,
-        baseLeftPoint: annulus.startWorld,
-        baseRightPoint: annulus.endWorld,
-      });
-
-      uiNotificationService.show({
-        title: `LA Volume step ${stepNumber}/2`,
-        message: `Now drag from the annular midpoint to the inner edge of the furthest superior LA wall for ${slotDisplayName}.`,
-        type: 'info',
-        duration: 8000,
-      });
-
-      const superiorDrag = await captureLVSimpsonDrag({
-        viewport,
-        toolGroup: laToolGroup,
-        restorePreviousTool: false,
-        isCancelled: isWorkflowCancelled,
-        setCancelHandler: cancel => {
-          if (activeLAVolumeWorkflowSessionId === workflowSessionId) {
-            activeLAVolumeCaptureCancel = cancel;
-          }
-        },
-        onPreview: ({ currentWorld }) => {
-          drawLVSimpsonPreview({
-            overlay,
-            viewport,
-            baseLeftPoint: annulus.startWorld,
-            baseRightPoint: annulus.endWorld,
-            apexPoint: currentWorld,
-          });
-        },
-      });
-
-      clearLVSimpsonPreviewOverlay(viewport.element);
-      setLVSimpsonViewportCursor(viewport.element, 'default');
-
-      if (!superiorDrag?.endWorld || isWorkflowCancelled()) {
-        clearLAVolumeWorkflowIfCurrent(workflowSessionId);
-        return null;
-      }
-
-      // Both techniques retain the same independently calibrated annulus and
-      // superior-wall landmarks. Freehand replaces only the contour geometry;
-      // the area-length/disks calculators continue to use the same long axis.
-      let freehandContour: any = null;
+      // Axis + apex retains the existing two-drag acquisition. Freehand is a
+      // distinct, single click-to-trace acquisition (matching the EF tool).
+      let geometry: any = null;
       if (useFreehand) {
-        // Reuse EF's click-to-trace interaction, not Cornerstone's hold-and-drag ROI.
-        // The two calibrated annular/superior landmarks remain mandatory.
-        const expectedImageId = getCurrentViewportImageInfo(viewport)?.imageId || '';
         uiNotificationService.show({
-          title: 'LA Volume freehand',
-          message: 'Click once at the first annular hinge, trace without holding the mouse button, ' +
-            'then click at the opposite hinge to finish. Press Esc to cancel.',
-          type: 'info', duration: 10000,
+          title: `LA Volume ${slotDisplayName} freehand`,
+          message: 'Click the first mitral hinge, move around the atrial wall without holding ' +
+            'the mouse button, then click the opposite hinge to finish. Esc cancels.',
+          type: 'info', duration: 9500,
         });
         const points = await captureViewerClickTrace({
           viewport,
+          previewLabel: `LA ${slotDisplayName}`,
           isCancelled: isWorkflowCancelled,
           setCancelHandler: cancel => {
             if (activeLAVolumeWorkflowSessionId === workflowSessionId) {
@@ -10263,22 +10181,110 @@ function commandsModule({
             }
           },
         });
-        if (!points || isWorkflowCancelled() ||
-            getCurrentViewportImageInfo(viewport)?.imageId !== expectedImageId) {
+        if (!points || isWorkflowCancelled()) {
           clearLAVolumeWorkflowIfCurrent(workflowSessionId);
-          return { ok: false, reason: 'la-click-trace-cancelled-or-frame-changed' };
+          return { ok: false, reason: 'la-freehand-cancelled' };
         }
-        freehandContour = { points };
-      }
-
-      const geometry = buildEchoVolumeContourFromBaseAxis({
-        baseLeftPoint: annulus.startWorld,
-        baseRightPoint: annulus.endWorld,
-        axisPoint: superiorDrag.endWorld,
-      });
-
-      if (geometry?.points?.length && freehandContour?.points?.length >= 6) {
-        geometry.points = freehandContour.points;
+        // The existing EF geometry derivation determines annular hinges and
+        // the farthest superior-wall point from a single freehand contour.
+        // The LA area-length/disks calculations continue to use LA geometry.
+        geometry = deriveLVSimpsonGeometryFromFreehand(points);
+        if (!geometry) {
+          clearLAVolumeWorkflowIfCurrent(workflowSessionId);
+          uiNotificationService.show({
+            title: 'LA Volume',
+            message: 'The contour could not identify both mitral hinges and the superior LA wall. ' +
+              'Start at one hinge and finish at the other, or use Axis + apex.',
+            type: 'warning', duration: 7000,
+          });
+          return { ok: false, reason: 'la-freehand-landmarks-invalid' };
+        }
+      } else {
+        const overlay = createLVSimpsonPreviewOverlay(viewport.element);
+  
+        uiNotificationService.show({
+          title: `LA Volume step ${stepNumber}/2`,
+          message: `Navigate to ${slotDisplayName}. Draw the mitral annular closure line from one annular edge to the other. Press Esc to cancel.`,
+          type: 'info',
+          duration: 8000,
+        });
+  
+        const annulus = await captureLVSimpsonDrag({
+          viewport,
+          toolGroup: laToolGroup,
+          restorePreviousTool: false,
+          isCancelled: isWorkflowCancelled,
+          setCancelHandler: cancel => {
+            if (activeLAVolumeWorkflowSessionId === workflowSessionId) {
+              activeLAVolumeCaptureCancel = cancel;
+            }
+          },
+          onPreview: ({ startWorld, currentWorld }) => {
+            drawLVSimpsonPreview({
+              overlay,
+              viewport,
+              baseLeftPoint: startWorld,
+              baseRightPoint: currentWorld,
+            });
+          },
+        });
+  
+        if (!annulus || isWorkflowCancelled()) {
+          clearLVSimpsonPreviewOverlay(viewport.element);
+          setLVSimpsonViewportCursor(viewport.element, 'default');
+          clearLAVolumeWorkflowIfCurrent(workflowSessionId);
+          return null;
+        }
+  
+        drawLVSimpsonPreview({
+          overlay,
+          viewport,
+          baseLeftPoint: annulus.startWorld,
+          baseRightPoint: annulus.endWorld,
+        });
+  
+        uiNotificationService.show({
+          title: `LA Volume step ${stepNumber}/2`,
+          message: `Now drag from the annular midpoint to the inner edge of the furthest superior LA wall for ${slotDisplayName}.`,
+          type: 'info',
+          duration: 8000,
+        });
+  
+        const superiorDrag = await captureLVSimpsonDrag({
+          viewport,
+          toolGroup: laToolGroup,
+          restorePreviousTool: false,
+          isCancelled: isWorkflowCancelled,
+          setCancelHandler: cancel => {
+            if (activeLAVolumeWorkflowSessionId === workflowSessionId) {
+              activeLAVolumeCaptureCancel = cancel;
+            }
+          },
+          onPreview: ({ currentWorld }) => {
+            drawLVSimpsonPreview({
+              overlay,
+              viewport,
+              baseLeftPoint: annulus.startWorld,
+              baseRightPoint: annulus.endWorld,
+              apexPoint: currentWorld,
+            });
+          },
+        });
+  
+        clearLVSimpsonPreviewOverlay(viewport.element);
+        setLVSimpsonViewportCursor(viewport.element, 'default');
+  
+        if (!superiorDrag?.endWorld || isWorkflowCancelled()) {
+          clearLAVolumeWorkflowIfCurrent(workflowSessionId);
+          return null;
+        }
+  
+  
+        geometry = buildEchoVolumeContourFromBaseAxis({
+          baseLeftPoint: annulus.startWorld,
+          baseRightPoint: annulus.endWorld,
+          axisPoint: superiorDrag.endWorld,
+        });
       }
 
       if (!geometry?.points?.length) {
