@@ -217,8 +217,20 @@ function compatibleIVCCinePair(a: ViewerMeasurement, b: ViewerMeasurement): bool
 
   const sopA = String(a?.SOPInstanceUID || a?.metadata?.SOPInstanceUID || '').trim();
   const sopB = String(b?.SOPInstanceUID || b?.metadata?.SOPInstanceUID || '').trim();
-  const frameA = finiteNumber(a?.frameNumber ?? a?.metadata?.frameNumber);
-  const frameB = finiteNumber(b?.frameNumber ?? b?.metadata?.frameNumber);
+  // The Length adapter may retain a legacy frameNumber=1 while its exact
+  // referencedImageId points to a later cine frame. Use the DICOMweb frame,
+  // when explicitly encoded, rather than pairing two distinct frames as one.
+  const sourceFrame = (measurement: ViewerMeasurement) => {
+    const imageId = String(measurement?.referencedImageId ||
+      measurement?.metadata?.referencedImageId || '');
+    const match = imageId.match(/\/frames\/([1-9][0-9]*)(?:[/?#]|$)/);
+    const imageFrame = Number(match?.[1]);
+    return Number.isSafeInteger(imageFrame) && imageFrame > 0
+      ? imageFrame
+      : finiteNumber(measurement?.frameNumber ?? measurement?.metadata?.frameNumber);
+  };
+  const frameA = sourceFrame(a);
+  const frameB = sourceFrame(b);
   // Cross-series pairing is valid only with explicit distinct DICOM instances.
   if (seriesA !== seriesB && (!sopA || !sopB || sopA === sopB)) return false;
   if (sopA && sopB && sopA === sopB &&
