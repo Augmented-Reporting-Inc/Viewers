@@ -11073,7 +11073,12 @@ function commandsModule({
 
         const sop = getSopInstanceIdFromImageId(info.imageId) ||
           displaySet?.SOPInstanceUID || displaySet?.sopInstanceUID || '';
+        const verifiedArea = getVerifiedEchoAreaCalibration({
+          displaySet, imageId: info.imageId, sopInstanceId: sop,
+          points: geometry.points,
+        });
         const echoArea = {
+          ...(verifiedArea ? { calibrationRegions: verifiedArea.regions } : {}),
           slot: chosen, phase, view: 'A4C',
           method: 'closed-contour-planimetry',
           contourSource: geometry.contourSource,
@@ -11112,6 +11117,9 @@ function commandsModule({
           FrameOfReferenceUID: state.metadata.FrameOfReferenceUID,
           frameNumber: getFrameNumberFromReferencedImageId(info.imageId),
           points: geometry.points,
+          ...(verifiedArea ? { measurements: {
+            area: verifiedArea.areaCM2, areaUnit: 'cm2',
+          }} : {}),
         }, true);
         actions.markViewerMeasurementCreatedInSession?.({ uid: annotationId });
         dispatchLiveMeasurementsRefresh({ reason: 'guided-rv-area-created', annotationUID: annotationId });
@@ -11226,7 +11234,11 @@ function commandsModule({
           }
           const state = cornerstoneTools.annotation.state.getAnnotation?.(annotationId) || hydrated;
           if (!state) return { ok: false, reason: 'echo-area-spline-hydration-failed' };
+          const verifiedArea = getVerifiedEchoAreaCalibration({
+            displaySet, imageId: sourceImageId, sopInstanceId: sop, points,
+          });
           const echoArea = {
+            ...(verifiedArea ? { calibrationRegions: verifiedArea.regions } : {}),
             slot: selectedSlot, phase: target.phase, view: 'A4C',
             method: 'closed-contour-planimetry', contourSource: 'freehand-click-trace',
           };
@@ -11256,6 +11268,9 @@ function commandsModule({
             SOPInstanceUID: sop, referencedImageId: sourceImageId,
             FrameOfReferenceUID: state.metadata.FrameOfReferenceUID,
             frameNumber, points,
+            ...(verifiedArea ? { measurements: {
+              area: verifiedArea.areaCM2, areaUnit: 'cm2',
+            }} : {}),
           }, true);
           actions.markViewerMeasurementCreatedInSession?.({ uid: annotationId });
           dispatchLiveMeasurementsRefresh({ reason: 'quiz-echo-area-created', annotationUID: annotationId });
