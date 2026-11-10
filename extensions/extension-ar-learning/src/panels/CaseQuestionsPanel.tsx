@@ -40,7 +40,7 @@ import {
   matchesConfiguredCompositeFrame,
 } from '../utils/compositeFrameTargets';
 import { EF_CONTOUR_FRAME_SLOTS, getEFGoldContourAuthoringRows } from '../utils/efGoldContourAuthoring';
-import { getCompositePhaseSlot, getCompositePhaseMeasurementId, getGoldPhaseMeasurementSummary, matchesCompositePhaseSource, getCompositeGoldCaptureSignature, findEditableCompositePhaseMeasurement } from '../utils/quizCompositePhaseEvidence';
+import { getCompositePhaseSlot, getCompositePhaseMeasurementId, getGoldPhaseMeasurementSummary, matchesCompositePhaseSource, getCompositeGoldCaptureSignature, findEditableCompositePhaseMeasurement, getCompositeGoldPersistenceError } from '../utils/quizCompositePhaseEvidence';
 
 const AR_QUIZ_MEASUREMENT_ADDED_EVENT = 'ar-learning:quiz-measurement-added';
 const AR_QUIZ_MEASUREMENT_LABELLED_EVENT = 'ar-learning:quiz-measurement-labelled';
@@ -4624,10 +4624,26 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         throw saveError;
       }
 
-      const savedDefinition = result?.definition || result?.quizDefinition || null;
-      const savedQuestions = Array.isArray(savedDefinition?.questions)
-        ? savedDefinition.questions
-        : questionsToSave;
+      // The server response alone does not prove the versioned gold survived
+      // sanitization. Read back the draft from FormAPI before notifying the
+      // portal or replacing local editor evidence.
+      const persistedPayload = await getViewerQuizAuthoringContent();
+      const persistedDefinition = (Array.isArray(persistedPayload?.definitions)
+        ? persistedPayload.definitions : []).find(definition =>
+        getDefinitionId(definition) === definitionId
+      );
+      if (!persistedDefinition || !Array.isArray(persistedDefinition.questions)) {
+        throw new Error('Draft saved but its contents could not be verified in FormAPI. Refresh before publishing.');
+      }
+      const persistenceError = getCompositeGoldPersistenceError(
+        questionsToSave, persistedDefinition.questions
+      );
+      if (persistenceError) {
+        throw new Error('Draft save verification failed: ' + persistenceError +
+          ' The existing local answers were preserved for investigation.');
+      }
+      const savedDefinition = persistedDefinition;
+      const savedQuestions = savedDefinition.questions;
 
       if (savedDefinition) {
         setAuthoringDefinition(savedDefinition);
