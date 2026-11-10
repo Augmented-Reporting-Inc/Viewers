@@ -1961,7 +1961,7 @@ function getOverlayMarkerOptionsForQuestion(
 }
 
 function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsPanelProps) {
-  const { uiNotificationService } = servicesManager.services;
+  const { uiNotificationService, measurementService } = servicesManager.services;
   const authoringMode = isViewerQuizAuthoringMode();
   // The backend authorizes the launch and supplies this scoring mode. Combined
   // report assessments collect answers here but release scores in the report.
@@ -2290,23 +2290,53 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     });
   }, [authoringDefinition, authoringMode, authoringQuestions, sessionStateKey]);
 
+  const compositeSnapshotRequestRef = useRef(0);
   async function refreshLiveCompositeMeasurements() {
+    const request = ++compositeSnapshotRequestRef.current;
     try {
       const response = await runViewerCommand(commandsManager, 'getViewerMeasurementSnapshotForPanel', {});
-      setLiveCompositeMeasurements(Array.isArray(response) ? response : []);
+      // Ignore an older viewport snapshot that returned after a new contour
+      // completed or a user switched to another source image.
+      if (request === compositeSnapshotRequestRef.current) {
+        setLiveCompositeMeasurements(Array.isArray(response) ? response : []);
+      }
     } catch (error) {
       console.warn('[CaseQuestionsPanel] composite measurement refresh failed', error);
     }
   }
 
   useEffect(() => {
-    const refresh = () => { void refreshLiveCompositeMeasurements(); };
-    window.addEventListener('ar-measurements:live-measurements-updated', refresh);
+    const timers: number[] = [];
+    const refresh = () => {
+      void refreshLiveCompositeMeasurements();
+      // Annotation-created and Length label callbacks can precede MeasurementService
+      // state reconciliation. Recheck after the normal asynchronous update.
+      timers.push(window.setTimeout(() => void refreshLiveCompositeMeasurements(), 180));
+      timers.push(window.setTimeout(() => void refreshLiveCompositeMeasurements(), 650));
+    };
+    const events = measurementService?.EVENTS || {};
+    const subscriptions = [
+      events.MEASUREMENT_ADDED,
+      events.MEASUREMENT_UPDATED,
+      events.MEASUREMENT_REMOVED,
+      events.MEASUREMENTS_CLEARED,
+      events.RAW_MEASUREMENT_ADDED,
+    ].filter(Boolean).map(eventName => measurementService.subscribe(eventName, refresh));
+    const windowEvents = [
+      'ar-measurements:live-measurements-updated',
+      'ar-measurements:saved-annotations-updated',
+      AR_QUIZ_MEASUREMENT_ADDED_EVENT,
+      AR_QUIZ_MEASUREMENT_LABELLED_EVENT,
+    ];
+    windowEvents.forEach(name => window.addEventListener(name, refresh));
     refresh();
     return () => {
-      window.removeEventListener('ar-measurements:live-measurements-updated', refresh);
+      subscriptions.forEach(subscription => subscription?.unsubscribe?.());
+      windowEvents.forEach(name => window.removeEventListener(name, refresh));
+      timers.forEach(timer => window.clearTimeout(timer));
+      compositeSnapshotRequestRef.current++;
     };
-  }, [commandsManager]);
+  }, [commandsManager, measurementService]);
 
   function getActiveCompositePhaseMeasurement(
     kind: string, slot: string, source: { annotationId?: string; target?: any } = {}
