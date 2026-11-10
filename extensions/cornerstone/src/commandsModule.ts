@@ -5561,6 +5561,69 @@ function sanitizeContourTextLines(lines = []) {
     .filter(Boolean);
 }
 
+/**
+ * Quiz-only physical area labels. Cornerstone's generic SplineROI cachedStats
+ * text may be based on a different ultrasound-region scale than the validated
+ * RV/LA calculation. Never display that native number for a quiz contour.
+ * The Case Questions panel and this viewport use the exact same calculator.
+ */
+function installQuizCompositeContourTextOverrideForViewport({
+  viewport, viewportId = '', measurementService, viewportGridService, displaySetService,
+}) {
+  if (!viewport) return;
+  let toolGroup = null;
+  try {
+    toolGroup =
+      ToolGroupManager.getToolGroupForViewport?.(
+        viewport.id || viewportId, viewport.renderingEngineId
+      ) || ToolGroupManager.getToolGroupForViewport?.(viewport.id || viewportId);
+  } catch {}
+  const toolName = toolNames.SplineROI || 'SplineROI';
+  const toolInstance = toolGroup?.getToolInstance?.(toolName);
+  if (!toolInstance || toolInstance.__arQuizCompositePhysicalTextInstalled) return;
+  const previous = toolInstance.configuration?.getTextLines;
+  const configuration = {
+    ...(toolInstance.configuration || {}),
+    getTextLines: function (...args) {
+      const source = args.flatMap(arg =>
+        [arg?.annotation?.data, arg?.data, arg]
+      ).find(item => item?.echoArea?.slot ||
+        item?.laVolume?.slot);
+      if (source) {
+        const area = source.echoArea;
+        const la = source.laVolume;
+        const slot = String(area?.slot || la?.slot || '').trim().toUpperCase();
+        const kind = area ? (slot === 'RA_ES' ? 'raArea' : 'rvFAC') : 'laVolumeBiplane';
+        const displaySet = getActiveViewportDisplaySet({
+          viewportGridService, displaySetService, viewportId: viewport.id || viewportId,
+        });
+        const study = String(displaySet?.StudyInstanceUID ||
+          displaySet?.studyInstanceUID || '').trim();
+        const current = getCurrentViewerMeasurementSnapshot(measurementService)
+          .filter(measurement => study && String(
+            measurement?.referenceStudyUID || measurement?.StudyInstanceUID || ''
+          ).trim() === study);
+        const status = getViewerQuizCompositeStatus(kind as any, current);
+        const value = status?.phaseValues?.[slot];
+        const label = ({
+          RV_ED: 'RVEDA', RV_ES: 'RVESA', RA_ES: 'RA area',
+          A4C: 'LA A4C', A2C: 'LA A2C',
+        })[slot] || slot;
+        return Number.isFinite(Number(value)) && value != null &&
+          Number(value) > 0
+          ? [label + ': ' + Number(value).toFixed(2) + ' cm²']
+          : [label + ': calibrated area unavailable'];
+      }
+      const lines = typeof previous === 'function'
+        ? previous.call(this, ...args) : [];
+      return sanitizeContourTextLines(lines);
+    },
+  };
+  toolInstance.configuration = configuration;
+  toolGroup?.setToolConfiguration?.(toolName, configuration, true);
+  toolInstance.__arQuizCompositePhysicalTextInstalled = true;
+}
+
 function installLVSimpsonContourTextCleanupForViewport({ viewport, viewportId = '', toolName }) {
   if (!viewport || !toolName) {
     return;
@@ -10546,6 +10609,10 @@ function commandsModule({
           viewportId: activeViewportId,
           toolName: toolNames.SplineROI || 'SplineROI',
         });
+        installQuizCompositeContourTextOverrideForViewport({
+          viewport, viewportId: activeViewportId,
+          measurementService, viewportGridService, displaySetService,
+        });
         viewport.render?.();
       } catch {}
 
@@ -11160,6 +11227,9 @@ function commandsModule({
           }} : {}),
         }, true);
         actions.markViewerMeasurementCreatedInSession?.({ uid: annotationId });
+        installQuizCompositeContourTextOverrideForViewport({
+          viewport, viewportId, measurementService, viewportGridService, displaySetService,
+        });
         dispatchLiveMeasurementsRefresh({ reason: 'guided-rv-area-created', annotationUID: annotationId });
         viewport.render?.();
         uiNotificationService.show({
@@ -11311,6 +11381,9 @@ function commandsModule({
             }} : {}),
           }, true);
           actions.markViewerMeasurementCreatedInSession?.({ uid: annotationId });
+          installQuizCompositeContourTextOverrideForViewport({
+            viewport, viewportId, measurementService, viewportGridService, displaySetService,
+          });
           dispatchLiveMeasurementsRefresh({ reason: 'quiz-echo-area-created', annotationUID: annotationId });
           viewport.render?.();
           return { ok: true, slot: selectedSlot, annotationId };
