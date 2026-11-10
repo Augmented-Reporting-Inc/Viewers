@@ -38,6 +38,26 @@ describe('echo chamber areas', () => {
     }])).toBeNull();
   });
 
+  it('accepts the authoritative nested Cornerstone SplineROI area only with physical units', () => {
+    const snapshot = area('RVEDA', 0);
+    snapshot.toolName = 'SplineROI';
+    snapshot.data = {
+      cachedStats: { 'imageId:dicom-frame': { area: 3000, areaUnit: 'mm²' } },
+    };
+    expect(getCalibratedEchoAreaCM2(snapshot)).toBe(30);
+    expect(getCalibratedEchoAreaCM2({
+      ...snapshot, data: { cachedStats: {
+        'imageId:dicom-frame': { area: 3000, areaUnit: 'px²' },
+      } },
+    })).toBeNull();
+    expect(getCalibratedEchoAreaCM2({
+      ...snapshot, data: { cachedStats: {
+        first: { area: 3000, areaUnit: 'mm²' },
+        second: { area: 2000, areaUnit: 'mm²' },
+      } },
+    })).toBeNull();
+  });
+
   it('provides RA area and rejects duplicate contours', () => {
     const ra = area('RAa', 1600);
     expect(calculateRAAreaFromMeasurements([ra])?.values?.areaCM2).toBe(16);
