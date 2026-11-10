@@ -87,3 +87,51 @@ export function matchesCompositePhaseSource(
   return study === actualStudy && series === actualSeries && sop === actualSop &&
     actualFrame === frame;
 }
+
+/**
+ * Determines whether an educator's live composite measurement is complete
+ * enough to request the existing authoritative quiz-capture command.
+ * This is a readiness check only: no numeric gold value is calculated here.
+ */
+export function getCompositeGoldCaptureSignature(question: any, measurements: any[]): string {
+  const kind = clean(question?.answerConfig?.measurementKind);
+  const slotsByKind: Record<string, string[]> = {
+    rvFAC: ['RV_ED', 'RV_ES'],
+    laVolumeBiplane: ['A4C', 'A2C'],
+    laVolumeBiplaneDisks: ['A4C', 'A2C'],
+    ivcCollapsibility: ['IVC_EXP', 'IVC_INSP'],
+    raArea: ['RA_ES'],
+  };
+  const slots = slotsByKind[kind];
+  if (question?.type !== 'measurementNumeric' || !slots) return '';
+  const config = asObject(question.answerConfig);
+  const guided = config.compositeFrameGuidanceEnabled === true;
+  const guidedFrames = asObject(config.compositeFrameTargets);
+  const live = Array.isArray(measurements) ? measurements : [];
+  const components: any[] = [];
+  for (const slot of slots) {
+    const target = guidedFrames[slot];
+    const candidates = live.filter(item => {
+      if (item?.isLocked || item?.arMeasurementReadOnly) return false;
+      if (getCompositePhaseSlot(item, kind) !== slot) return false;
+      if (guided) return matchesCompositePhaseSource(item, { target });
+      return true;
+    });
+    if (candidates.length !== 1) return '';
+    const item = candidates[0];
+    const id = getCompositePhaseMeasurementId(item);
+    const study = clean(item.referenceStudyUID || item.StudyInstanceUID);
+    if (!id || !study) return '';
+    components.push({ slot, id, study });
+  }
+  if (new Set(components.map(part => part.study)).size !== 1) return '';
+  const gold = asObject(config.goldMeasurement);
+  const goldParts = Array.isArray(gold.compositeResult?.components)
+    ? gold.compositeResult.components : [];
+  if (gold.value != null && gold.value !== '' && slots.every(slot => {
+    const selected = components.find(part => part.slot === slot);
+    return goldParts.some(part =>
+      clean(part.slot) === slot && clean(part.annotationId) === selected?.id);
+  })) return '';
+  return components.map(part => part.slot + ':' + part.id).join('|');
+}
