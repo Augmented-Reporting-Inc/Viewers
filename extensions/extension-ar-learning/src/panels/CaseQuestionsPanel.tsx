@@ -2014,6 +2014,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
   useEffect(() => { latestLearnerAnswersRef.current = answersByQuizKey; }, [answersByQuizKey]);
   const [capturingMeasurementKey, setCapturingMeasurementKey] = useState('');
   const [liveCompositeMeasurements, setLiveCompositeMeasurements] = useState<any[]>([]);
+  const [liveCompositeStatus, setLiveCompositeStatus] = useState<any>({
+    questionKey: '', complete: false, value: null, unit: '', message: '',
+  });
   // Explicit educator/learner interpretation only. No default RAP is selected.
   const [rapSelectionsByQuestionKey, setRapSelectionsByQuestionKey] =
     useState<Record<string, string>>({});
@@ -2301,6 +2304,33 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       if (request === compositeSnapshotRequestRef.current) {
         setLiveCompositeMeasurements(Array.isArray(response) ? response : []);
       }
+      // Read the same clinical composite calculator used by the quiz gold
+      // capture command. A drawn contour is not necessarily calibrated.
+      const activeKey = activeQuestionKey;
+      const selectedQuestion = authoringMode
+        ? authoringQuestionsRef.current.find(item =>
+            activeKey === 'authoring:' + item.questionKey
+          )
+        : quizzes.flatMap(quiz => quiz.questions || []).find(item =>
+            activeKey.endsWith(':' + item.questionKey)
+          );
+      const selectedKind = cleanString(
+        plainObject(selectedQuestion?.answerConfig).measurementKind
+      );
+      if (['rvFAC', 'raArea', 'laVolumeBiplane', 'laVolumeBiplaneDisks',
+        'ivcCollapsibility'].includes(selectedKind)) {
+        const status = await runViewerCommand(
+          commandsManager, 'getViewerQuizCompositeStatusForActiveStudy',
+          { measurementKind: selectedKind }
+        );
+        if (request === compositeSnapshotRequestRef.current &&
+            activeKey === activeQuestionKey) {
+          setLiveCompositeStatus({ ...plainObject(status), questionKey: activeKey });
+        }
+      } else if (request === compositeSnapshotRequestRef.current) {
+        setLiveCompositeStatus({ questionKey: activeKey,
+          complete: false, value: null, unit: '', message: '' });
+      }
     } catch (error) {
       console.warn('[CaseQuestionsPanel] composite measurement refresh failed', error);
     }
@@ -2464,6 +2494,47 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       title: 'Measurement deleted', type: 'info', duration: 4000,
       message: slot + ' removed. The other measurements remain; recapture the calculated result.',
     });
+  }
+
+  function renderCompositeCalculatedStatus(
+    quiz: QuizDefinition, question: QuizQuestion
+  ) {
+    const config = plainObject(question.answerConfig);
+    const kind = cleanString(config.measurementKind);
+    if (!['rvFAC', 'raArea', 'laVolumeBiplane', 'laVolumeBiplaneDisks',
+      'ivcCollapsibility'].includes(kind)) return null;
+    const key = authoringMode ? 'authoring:' + question.questionKey
+      : quiz.quizKey + ':' + question.questionKey;
+    const status = liveCompositeStatus.questionKey === key
+      ? plainObject(liveCompositeStatus) : {};
+    const gold = authoringMode ? plainObject(config.goldMeasurement)
+      : plainObject(answersByQuizKey?.[quiz.quizKey]?.[question.questionKey]);
+    const hasGold = gold.value !== null && gold.value !== undefined &&
+      cleanString(gold.value) !== '';
+    return (
+      <div className="mt-2 rounded border border-emerald-700/60 bg-emerald-950/10 px-2 py-2 text-xs">
+        {status.complete === true && Number.isFinite(Number(status.value)) ? (
+          <div className="font-semibold text-emerald-200">
+            Calculated measurement: {Number(status.value).toFixed(2)} {cleanString(status.unit)}
+          </div>
+        ) : (
+          <div className="text-amber-200">
+            Calculation not ready: {cleanString(status.message) ||
+              'Complete both calibrated measurements and their source references.'}
+          </div>
+        )}
+        {hasGold ? (
+          <div className="mt-1 text-emerald-100">
+            {authoringMode ? 'Captured gold: ' : 'Saved answer: '}
+            {gold.value} {gold.unit || config.unit || ''}
+          </div>
+        ) : authoringMode ? (
+          <div className="mt-1 text-gray-300">
+            No gold answer captured yet. The calculated result must be captured before publishing.
+          </div>
+        ) : null}
+      </div>
+    );
   }
 
   function renderCompositePhaseStatusAndDelete(
@@ -6381,6 +6452,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                   isCapturing || authoringSaving || !isDraftDefinition(authoringDefinition)
                 )
               : null}
+            {renderCompositeCalculatedStatus(
+              { quizKey: 'authoring', quizVersion: 1 }, question
+            )}
             {cleanString(answerConfig.measurementKind) === 'ivcRapRvsp'
               ? renderIVCRapRVSPControls(
                   'authoring', question, answerConfig.goldMeasurement,
