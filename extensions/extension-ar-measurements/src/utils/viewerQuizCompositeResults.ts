@@ -133,7 +133,10 @@ function collectComponents(measurements: Measurement[], kind: CompositeKind) {
         seriesInstanceUID: clean(measurement.referenceSeriesUID || measurement.SeriesInstanceUID),
         sopInstanceUID: clean(measurement.SOPInstanceUID || measurement.metadata?.SOPInstanceUID),
         referencedImageId: clean(measurement.referencedImageId || measurement.metadata?.referencedImageId),
-        frameNumber: kind === 'lvSimpsonEF'
+        // IVC Length adapters can also retain a default frameNumber=1 while
+        // referencing the correct DICOMweb /frames/N source. Only these two
+        // explicitly multiframe contracts use the trusted image reference.
+        frameNumber: kind === 'lvSimpsonEF' || kind === 'ivcCollapsibility'
           ? efSourceFrameNumber(measurement)
           : Number(measurement.frameNumber || measurement.metadata?.frameNumber || 0),
       },
