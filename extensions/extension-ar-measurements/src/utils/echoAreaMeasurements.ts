@@ -73,12 +73,28 @@ export function getCalibratedEchoAreaCM2(measurement: Measurement): number | nul
   );
   if (direct !== null) return direct;
 
-  const cached = measurement?.data || measurement?.cachedStats || {};
-  if (!cached || typeof cached !== 'object') return null;
-  const candidateValues = Object.values(cached)
-    .filter((value): value is Record<string, any> =>
-      !!value && typeof value === 'object' && !Array.isArray(value))
-    .map(value => convertAreaCM2(value.area, value.areaUnit ?? value.areaUnits))
+  // The Cornerstone annotation stores calibrated SplineROI statistics at
+  // annotation.data.cachedStats[targetId], whereas OHIF MeasurementService may
+  // expose them at measurement.cachedStats or measurement.data.cachedStats.
+  // Read only explicit area values with mm²/cm² units; never turn a pixel
+  // polygon's area into a clinical measurement.
+  const caches = [
+    measurement?.cachedStats,
+    measurement?.data?.cachedStats,
+    measurement?.measurements?.cachedStats,
+    measurement?.data,
+  ];
+  const candidates: Record<string, any>[] = [];
+  for (const cache of caches) {
+    if (!cache || typeof cache !== 'object' || Array.isArray(cache)) continue;
+    if (cache.area != null) candidates.push(cache);
+    for (const value of Object.values(cache)) {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) continue;
+      if ((value as any).area != null) candidates.push(value as Record<string, any>);
+    }
+  }
+  const candidateValues = candidates
+    .map(value => convertAreaCM2(value.area, value.areaUnit ?? value.areaUnits ?? value.unit))
     .filter((value): value is number => value !== null);
 
   if (!candidateValues.length) return null;
