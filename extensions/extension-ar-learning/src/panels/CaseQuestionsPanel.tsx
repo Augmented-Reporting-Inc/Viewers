@@ -40,7 +40,7 @@ import {
   matchesConfiguredCompositeFrame,
 } from '../utils/compositeFrameTargets';
 import { EF_CONTOUR_FRAME_SLOTS, getEFGoldContourAuthoringRows } from '../utils/efGoldContourAuthoring';
-import { getCompositePhaseSlot, getCompositePhaseMeasurementId, getGoldPhaseMeasurementSummary } from '../utils/quizCompositePhaseEvidence';
+import { getCompositePhaseSlot, getCompositePhaseMeasurementId, getGoldPhaseMeasurementSummary, matchesCompositePhaseSource } from '../utils/quizCompositePhaseEvidence';
 
 const AR_QUIZ_MEASUREMENT_ADDED_EVENT = 'ar-learning:quiz-measurement-added';
 const AR_QUIZ_MEASUREMENT_LABELLED_EVENT = 'ar-learning:quiz-measurement-labelled';
@@ -2309,25 +2309,24 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
   }, [commandsManager]);
 
   function getActiveCompositePhaseMeasurement(
-    kind: string, slot: string, target: any = null
+    kind: string, slot: string, source: { annotationId?: string; target?: any } = {}
   ) {
-    const study = cleanString(target?.studyInstanceUID);
     const candidates = liveCompositeMeasurements.filter(item => {
       // Never expose or manipulate a locked comparison/source contour as a learner edit.
       if (item?.isLocked || item?.arMeasurementReadOnly) return false;
       if (getCompositePhaseSlot(item, kind) !== slot) return false;
-      const actualStudy = cleanString(item.referenceStudyUID || item.StudyInstanceUID);
-      return !study || (actualStudy && actualStudy === study);
+      return matchesCompositePhaseSource(item, source);
     });
     return candidates.length === 1 ? candidates[0] : null;
   }
 
   async function deleteCompositePhaseMeasurement(
-    quiz: QuizDefinition, question: QuizQuestion, slot: string, sourceTarget: any
+    quiz: QuizDefinition, question: QuizQuestion, slot: string,
+    phaseSource: { annotationId?: string; target?: any }
   ) {
     const kind = cleanString(plainObject(question.answerConfig).measurementKind);
     if (authoringMode && (!isDraftDefinition(authoringDefinition) || authoringSaving)) return;
-    const live = getActiveCompositePhaseMeasurement(kind, slot, sourceTarget);
+    const live = getActiveCompositePhaseMeasurement(kind, slot, phaseSource);
     const measurementId = getCompositePhaseMeasurementId(live);
     if (!measurementId || live?.isLocked || live?.arMeasurementReadOnly) {
       uiNotificationService.show({
@@ -2403,7 +2402,8 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
             ? plainObject(config.compositeFrameTargets)[slot] || saved?.target
             : saved?.target || (config.compositeFrameGuidanceEnabled === true
               ? plainObject(config.compositeFrameTargets)[slot] : null);
-          const live = getActiveCompositePhaseMeasurement(kind, slot, sourceTarget);
+          const phaseSource = { annotationId: cleanString(saved?.annotationId), target: sourceTarget };
+          const live = getActiveCompositePhaseMeasurement(kind, slot, phaseSource);
           return (
             <div key={slot} className="mt-2 border-t border-gray-700 pt-2">
               <div className="font-medium text-gray-100">{label}</div>
@@ -2421,7 +2421,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                   disabled={disabled || !live || !getCompositePhaseMeasurementId(live)}
                   onClick={event => {
                     event.preventDefault(); event.stopPropagation();
-                    void deleteCompositePhaseMeasurement(quiz, question, slot, sourceTarget);
+                    void deleteCompositePhaseMeasurement(quiz, question, slot, phaseSource);
                   }}
                 >Delete {slot}</button>
               </div>
