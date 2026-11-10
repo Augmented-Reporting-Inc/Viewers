@@ -40,7 +40,7 @@ import {
   matchesConfiguredCompositeFrame,
 } from '../utils/compositeFrameTargets';
 import { EF_CONTOUR_FRAME_SLOTS, getEFGoldContourAuthoringRows } from '../utils/efGoldContourAuthoring';
-import { getCompositePhaseSlot, getCompositePhaseMeasurementId, getGoldPhaseMeasurementSummary, matchesCompositePhaseSource } from '../utils/quizCompositePhaseEvidence';
+import { getCompositePhaseSlot, getCompositePhaseMeasurementId, getGoldPhaseMeasurementSummary, matchesCompositePhaseSource, getCompositeGoldCaptureSignature } from '../utils/quizCompositePhaseEvidence';
 
 const AR_QUIZ_MEASUREMENT_ADDED_EVENT = 'ar-learning:quiz-measurement-added';
 const AR_QUIZ_MEASUREMENT_LABELLED_EVENT = 'ar-learning:quiz-measurement-labelled';
@@ -1995,6 +1995,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
   // Only newly captured BWT calipers need an annotation save before quiz save.
   const pendingBowelQuizMeasurementIdsRef = useRef(new Set<string>());
   const autoBowelGoldCaptureInFlightRef = useRef(new Set<string>());
+  const autoCompositeGoldCaptureInFlightRef = useRef(new Set<string>());
   // Serialize source-ID captures so two calipers cannot race a gold-set update.
   const autoBowelGoldCaptureQueueRef = useRef<Promise<void>>(Promise.resolve());
   const autoBowelLearnerCaptureInFlightRef = useRef(new Set<string>());
@@ -4308,6 +4309,21 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       }
 
       const answer = result.answer;
+      const captureKind = cleanString(answerConfig.measurementKind);
+      const guidedSlots = COMPOSITE_FRAME_SLOTS[captureKind] || [];
+      if (guidedSlots.length && answerConfig.compositeFrameGuidanceEnabled === true) {
+        const configured = getCompleteCompositeFrameTargets(answerConfig);
+        const components = plainObject(answer.compositeResult).components;
+        if (!configured || !Array.isArray(components) || components.length !== guidedSlots.length ||
+            guidedSlots.some(({ slot }) => {
+              const component = components.find(item => cleanString(item?.slot) === slot);
+              return !component || !matchesConfiguredCompositeFrame(
+                plainObject(component.target), configured[slot]
+              );
+            })) {
+          throw new Error('The calculated measurement must contain all required gold contours on their configured DICOM instance/frames.');
+        }
+      }
       if (isBowelMeasurementSetQuestion(question)) {
         const latest = authoringQuestionsRef.current.find(
           item => item.questionKey === question.questionKey
@@ -4428,13 +4444,14 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
           duration: 3000,
         });
       }
+      return true;
     } catch (error) {
       if (options.silent) {
-        console.warn('[CaseQuestionsPanel] automatic gold measurement capture failed:', error);
+        // Automatic capture attempts during incomplete measurements must not
+        // generate failure toasts or modify existing versioned gold evidence.
+        console.warn('[CaseQuestionsPanel] automatic gold measurement capture unavailable:', error);
+        return false;
       }
-      // Bowel sets use the explicit capture button; do not surface a
-      // stale annotation-added event as an educator failure toast.
-      if (options.silent && isBowelMeasurementSetQuestion(question)) return false;
       uiNotificationService.show({
         title: 'Quiz Authoring',
         message: `Measurement capture failed: ${error?.message || error}`,
@@ -4445,6 +4462,36 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       setCapturingAuthoringKey('');
     }
   }
+
+  // Completed composite phases become a gold answer through the existing
+  // validated Viewer capture command, never from a client-calculated scalar.
+  // The educator must still Save draft to persist the versioned answer.
+  useEffect(() => {
+    if (!authoringMode || !isDraftDefinition(authoringDefinition) || authoringSaving) return;
+    if (!activeQuestionKey.startsWith('authoring:')) return;
+    const questionKey = activeQuestionKey.slice('authoring:'.length);
+    const question = authoringQuestionsRef.current.find(item => item.questionKey === questionKey);
+    if (!question) return;
+    const signature = getCompositeGoldCaptureSignature(question, liveCompositeMeasurements);
+    if (!signature) return;
+    const captureKey = questionKey + ':' + signature;
+    if (autoCompositeGoldCaptureInFlightRef.current.has(captureKey)) return;
+    autoCompositeGoldCaptureInFlightRef.current.add(captureKey);
+    const timer = window.setTimeout(async () => {
+      try {
+        const current = authoringQuestionsRef.current.find(item => item.questionKey === questionKey);
+        if (!current || activeQuestionKey !== 'authoring:' + questionKey ||
+            getCompositeGoldCaptureSignature(current, liveCompositeMeasurements) !== signature) return;
+        await captureAuthoringMeasurement(current, { silent: true });
+      } finally {
+        autoCompositeGoldCaptureInFlightRef.current.delete(captureKey);
+      }
+    }, 300);
+    return () => {
+      window.clearTimeout(timer);
+      autoCompositeGoldCaptureInFlightRef.current.delete(captureKey);
+    };
+  }, [liveCompositeMeasurements, activeQuestionKey, authoringMode, authoringDefinition, authoringSaving]);
 
   async function captureBowelQuizLumenCenter(question: QuizQuestion) {
     const current = authoringQuestionsRef.current.find(
