@@ -52,6 +52,9 @@ describe('quiz composite phase evidence', () => {
     const question = { type: 'measurementNumeric', answerConfig: { measurementKind: 'rvFAC' } };
     expect(getCompositeGoldCaptureSignature(question, [ed])).toBe('');
     expect(getCompositeGoldCaptureSignature(question, [ed, es])).toBe('RV_ED:ed|RV_ES:es');
+    expect(getCompositeGoldCaptureSignature({
+      ...question, viewerTarget: { studyInstanceUID: 'other-study' },
+    }, [ed, es])).toBe('');
     expect(getCompositeGoldCaptureSignature(question, [ed, es, { ...es, uid: 'duplicate' }])).toBe('');
     expect(getCompositeGoldCaptureSignature(question, [ed, { ...es, referenceStudyUID: 'other' }])).toBe('');
   });
