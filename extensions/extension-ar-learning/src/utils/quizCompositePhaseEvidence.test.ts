@@ -1,6 +1,7 @@
 import {
   getCompositePhaseSlot, getCompositePhaseMeasurementId, getGoldPhaseMeasurementSummary,
   matchesCompositePhaseSource, getCompositeGoldCaptureSignature, getSavedCompositePhaseValues,
+  needsSavedCalibratedGoldAreas,
   findEditableCompositePhaseMeasurement,
   getCompositeGoldPersistenceError,
 } from './quizCompositePhaseEvidence';
@@ -99,6 +100,39 @@ describe('quiz composite phase evidence', () => {
     expect(getCompositeGoldCaptureSignature(question, [ed, modified]))
       .toBe('RV_ED:ed|RV_ES:replaced');
   });
+  it('automatically identifies older RV/LA gold requiring source-based area hydration', () => {
+    const question = (kind: string, slots: string[]) => ({
+      type: 'measurementNumeric', answerConfig: {
+        measurementKind: kind, goldMeasurement: {
+          value: kind === 'rvFAC' ? 19.71 : 68.59,
+          compositeResult: { components: slots.map((slot, index) => ({
+            slot, annotationId: 'a' + index,
+            target: { sopInstanceUID: 'sop-' + index },
+          })) },
+        },
+      },
+    });
+    const rv = question('rvFAC', ['RV_ED', 'RV_ES']);
+    const la = question('laVolumeBiplane', ['A4C', 'A2C']);
+    expect(needsSavedCalibratedGoldAreas(rv)).toBe(true);
+    expect(needsSavedCalibratedGoldAreas(la)).toBe(true);
+    expect(needsSavedCalibratedGoldAreas(question('laVolumeBiplaneDisks', ['A4C', 'A2C'])))
+      .toBe(true);
+    rv.answerConfig.goldMeasurement.compositeResult.derived = {
+      edaCM2: 29.7, esaCM2: 23.85,
+    };
+    expect(needsSavedCalibratedGoldAreas(rv)).toBe(false);
+    la.answerConfig.goldMeasurement.compositeResult.derived = { a4cAreaCM2: 15.2 };
+    expect(needsSavedCalibratedGoldAreas(la)).toBe(true);
+    la.answerConfig.goldMeasurement.compositeResult.derived.a2cAreaCM2 = 14.2;
+    expect(needsSavedCalibratedGoldAreas(la)).toBe(false);
+    expect(needsSavedCalibratedGoldAreas(question('ivcCollapsibility',
+      ['IVC_EXP', 'IVC_INSP']))).toBe(false);
+    const noSource = question('rvFAC', ['RV_ED', 'RV_ES']);
+    noSource.answerConfig.goldMeasurement.compositeResult.components[0].target.sopInstanceUID = '';
+    expect(needsSavedCalibratedGoldAreas(noSource)).toBe(false);
+  });
+
   it('projects only saved validated RV, LA and IVC phase values', () => {
     expect(getSavedCompositePhaseValues({ compositeResult: { derived: {
       edaCM2: 25.25, esaCM2: 15.1,

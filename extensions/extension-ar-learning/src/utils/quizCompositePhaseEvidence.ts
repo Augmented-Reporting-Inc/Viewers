@@ -43,6 +43,31 @@ const PHASE_VALUE_FIELDS: Record<string, Record<string, string>> = {
   },
 };
 
+/**
+ * Legacy RV/LA answers may contain a valid saved gold and two source contours
+ * without the individual physically calibrated area fields. Rehydration must
+ * happen automatically when the educator opens that question, not through a
+ * dedicated repair button. No source geometry is estimated here.
+ */
+export function needsSavedCalibratedGoldAreas(question: any): boolean {
+  if (question?.type !== 'measurementNumeric') return false;
+  const config = asObject(question.answerConfig);
+  const kind = clean(config.measurementKind);
+  const expectedSlots = kind === 'rvFAC' ? ['RV_ED', 'RV_ES'] :
+    ['laVolumeBiplane', 'laVolumeBiplaneDisks'].includes(kind) ? ['A4C', 'A2C'] : null;
+  if (!expectedSlots) return false;
+  const gold = asObject(config.goldMeasurement);
+  if (!Number.isFinite(Number(gold.value)) || gold.value == null || gold.value === '') return false;
+  const components = asObject(gold.compositeResult).components;
+  if (!Array.isArray(components) || components.length !== expectedSlots.length ||
+      expectedSlots.some(slot =>
+        components.filter(part => clean(part?.slot) === slot &&
+          clean(part?.annotationId) && asObject(part?.target).sopInstanceUID).length !== 1
+      )) return false;
+  const values = getSavedCompositePhaseValues(gold, kind);
+  return expectedSlots.some(slot => values[slot] == null);
+}
+
 /** Read only viewer-validated physical gold values. Never infer from raw points. */
 export function getSavedCompositePhaseValues(answer: any, kind: string): Record<string, number> {
   const result = asObject(asObject(answer).compositeResult);

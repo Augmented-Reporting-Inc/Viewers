@@ -16164,18 +16164,16 @@ function commandsModule({
       const previousFrame = await actions.getCurrentViewerQuizFrameAnswer();
       const previousTarget = previousFrame?.ok ? previousFrame.answer?.selectedTarget : null;
       const previousViewportId = viewportGridService.getActiveViewportId();
+      let navigatedForCalibration = false;
       try {
         return await resolveViewerQuizGoldAreaBackfill({
           kind,
           gold: rubricMeasurement,
           calibrate: async component => {
             const target = component?.target || {};
-            // Load each *exact* SOP/frame before reading its image-plane
-            // metadata. The two contours may belong to different series.
-            const navigation = await actions.jumpToViewerQuizTarget({
-              viewerTarget: target, questionKey,
-            });
-            if (!navigation?.ok) return null;
+            // The saved image's metadata may already be available on
+            // question open. Prefer a read-only calculation without changing
+            // the active viewport; navigate only if metadata must be loaded.
             const displaySet = getDisplaySetForSavedAnnotation(displaySetService, {
               SOPInstanceUID: target.sopInstanceUID,
               SeriesInstanceUID: target.seriesInstanceUID,
@@ -16187,6 +16185,21 @@ function commandsModule({
                 (sourceSeries && sourceSeries !== String(target.seriesInstanceUID || ''))) {
               return null;
             }
+            const savedImageId = String(target.referencedImageId || '');
+            const fromCachedMetadata = getVerifiedEchoAreaCalibration({
+              displaySet,
+              imageId: savedImageId,
+              sopInstanceId: String(target.sopInstanceUID || ''),
+              points: component.points || [],
+            });
+            if (fromCachedMetadata?.areaCM2 != null) {
+              return fromCachedMetadata.areaCM2;
+            }
+            const navigation = await actions.jumpToViewerQuizTarget({
+              viewerTarget: target, questionKey,
+            });
+            if (!navigation?.ok) return null;
+            navigatedForCalibration = true;
             const sourceViewport = cornerstoneViewportService.getCornerstoneViewport(
               navigation.viewportId || viewportGridService.getActiveViewportId()
             );
@@ -16215,7 +16228,7 @@ function commandsModule({
       } finally {
         // Recovery is read-only until the educator explicitly saves the
         // updated draft. Restore their original viewing context.
-        if (previousTarget?.sopInstanceUID) {
+        if (navigatedForCalibration && previousTarget?.sopInstanceUID) {
           try {
             const restored = await actions.jumpToViewerQuizTarget({
               viewerTarget: previousTarget, questionKey,

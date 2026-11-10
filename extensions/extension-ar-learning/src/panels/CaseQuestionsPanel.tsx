@@ -40,7 +40,7 @@ import {
   matchesConfiguredCompositeFrame,
 } from '../utils/compositeFrameTargets';
 import { EF_CONTOUR_FRAME_SLOTS, getEFGoldContourAuthoringRows } from '../utils/efGoldContourAuthoring';
-import { getCompositePhaseSlot, getCompositePhaseMeasurementId, matchesCompositePhaseSource, getCompositeGoldCaptureSignature, getSavedCompositePhaseValues,
+import { getCompositePhaseSlot, getCompositePhaseMeasurementId, matchesCompositePhaseSource, getCompositeGoldCaptureSignature, getSavedCompositePhaseValues, needsSavedCalibratedGoldAreas,
   findEditableCompositePhaseMeasurement, getCompositeGoldPersistenceError } from '../utils/quizCompositePhaseEvidence';
 
 const AR_QUIZ_MEASUREMENT_ADDED_EVENT = 'ar-learning:quiz-measurement-added';
@@ -2041,6 +2041,10 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
   const nextEducationSaveRequestId = () => String(++educationSaveRequestCounter.current);
   const [capturingAuthoringKey, setCapturingAuthoringKey] = useState('');
   const [restoringCompositeAreaKey, setRestoringCompositeAreaKey] = useState('');
+  const [compositeAreaRecoveryError, setCompositeAreaRecoveryError] =
+    useState<Record<string, string>>({});
+  const attemptedAreaRecoveryRef = useRef<Set<string>>(new Set());
+  const previousAreaRecoveryQuestionRef = useRef('');
   const [authoringMeasurementDomain, setAuthoringMeasurementDomain] = useState('');
 
   // Notify only on validation state transitions, never on every pointer move.
@@ -2520,11 +2524,11 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
           questionKey: question.questionKey,
         });
       if (recovered?.ok !== true || !recovered.derived) {
-        uiNotificationService.show({
-          title: 'Calibrated gold areas unavailable', type: 'warning', duration: 7000,
-          message: cleanString(recovered?.reason) ||
-            'The exact saved DICOM contour or ultrasound-region calibration is unavailable.',
-        });
+        setCompositeAreaRecoveryError(previous => ({
+          ...previous,
+          [question.questionKey]: cleanString(recovered?.reason) ||
+            'Exact saved DICOM contour calibration is unavailable.',
+        }));
         return;
       }
       const latest = authoringQuestionsRef.current.find(item =>
@@ -2556,21 +2560,55 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
           },
         };
       });
-      uiNotificationService.show({
-        title: 'Calibrated gold areas recovered', type: 'success', duration: 6500,
-        message: 'Individual areas were validated from the saved DICOM contours. ' +
-          'The calculated gold result was not changed. Click Save Draft to persist them.',
-      });
+      setCompositeAreaRecoveryError(previous => ({
+        ...previous, [question.questionKey]: '',
+      }));
+      // Persist with the normal educator Save Draft; never silently publish
+      // or overwrite the saved gold scalar while simply opening a question.
     } catch (error) {
       console.warn('[CaseQuestionsPanel] gold-area recovery error', error);
-      uiNotificationService.show({
-        title: 'Calibrated gold areas unavailable', type: 'warning', duration: 6000,
-        message: cleanString(error?.message || error),
-      });
+      setCompositeAreaRecoveryError(previous => ({
+        ...previous,
+        [question.questionKey]: 'Saved contour calibration could not be loaded.',
+      }));
     } finally {
       setRestoringCompositeAreaKey('');
     }
   }
+
+  // Same open-and-display behavior as other gold measurement questions.
+  // A valid, saved RV/LA source is re-calibrated without educator interaction,
+  // only when the legacy answer lacks per-phase physical areas.
+  useEffect(() => {
+    if (!authoringMode || !isDraftDefinition(authoringDefinition) ||
+        authoringSaving || restoringCompositeAreaKey) return;
+    const questionKey = activeQuestionKey.startsWith('authoring:')
+      ? activeQuestionKey.slice('authoring:'.length) : '';
+    if (previousAreaRecoveryQuestionRef.current !== questionKey) {
+      attemptedAreaRecoveryRef.current.clear();
+      previousAreaRecoveryQuestionRef.current = questionKey;
+    }
+    const question = authoringQuestions.find(item => item.questionKey === questionKey);
+    if (!question || !needsSavedCalibratedGoldAreas(question)) return;
+    const gold = plainObject(plainObject(question.answerConfig).goldMeasurement);
+    const attemptKey = questionKey + ':' + String(gold.value) + ':' +
+      JSON.stringify(plainObject(gold.compositeResult).components || []);
+    if (attemptedAreaRecoveryRef.current.has(attemptKey)) return;
+    const timeout = window.setTimeout(() => {
+      // The authoring question and its source contours may have changed while
+      // loading. Do not recover an outdated gold or navigate another question.
+      const current = authoringQuestionsRef.current.find(item =>
+        item.questionKey === questionKey);
+      const currentGold = plainObject(plainObject(current?.answerConfig).goldMeasurement);
+      const currentAttemptKey = questionKey + ':' + String(currentGold.value) + ':' +
+        JSON.stringify(plainObject(currentGold.compositeResult).components || []);
+      if (currentAttemptKey !== attemptKey || !needsSavedCalibratedGoldAreas(current)) return;
+      attemptedAreaRecoveryRef.current.add(attemptKey);
+      void restoreAuthoringGoldAreas(current);
+    }, 450);
+    return () => window.clearTimeout(timeout);
+  }, [activeQuestionKey, authoringQuestions, authoringDefinition, authoringMode,
+    authoringSaving, restoringCompositeAreaKey]);
 
   function renderCompositeCalculatedStatus(
     quiz: QuizDefinition, question: QuizQuestion
@@ -2592,13 +2630,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     const sameGold = hasLive && hasGold &&
       Math.abs(Number(status.value) - Number(gold.value)) < 0.005;
     const unit = cleanString(status.unit || gold.unit || config.unit);
-    const recoverableKind = ['rvFAC', 'laVolumeBiplane', 'laVolumeBiplaneDisks']
-      .includes(kind);
-    const savedSlots = Array.isArray(plainObject(gold.compositeResult).components)
-      ? plainObject(gold.compositeResult).components : [];
-    const savedPhaseValues = getSavedCompositePhaseValues(gold, kind);
-    const needsAreaRecovery = authoringMode && recoverableKind && hasGold &&
-      savedSlots.length === 2 && Object.keys(savedPhaseValues).length < 2;
+    const needsAreaRecovery = authoringMode && needsSavedCalibratedGoldAreas(question);
     return (
       <div className="mt-2 rounded border border-emerald-700/60 bg-emerald-950/10 px-2 py-2 text-xs">
         {hasLive ? (
@@ -2629,22 +2661,13 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
           </div>
         ) : null}
         {needsAreaRecovery ? (
-          <div className="mt-2 flex flex-wrap items-center gap-2">
-            <span className="text-amber-200">
-              Saved contours have no recorded individual calibrated areas.
-            </span>
-            <button type="button"
-              className="rounded border border-cyan-600 px-2 py-1 text-cyan-100 disabled:opacity-40"
-              disabled={!isDraftDefinition(authoringDefinition) ||
-                authoringSaving || !!restoringCompositeAreaKey}
-              onClick={event => {
-                event.preventDefault();
-                event.stopPropagation();
-                void restoreAuthoringGoldAreas(question);
-              }}>
-              {restoringCompositeAreaKey === question.questionKey
-                ? 'Verifying saved contours…' : 'Restore calibrated gold areas'}
-            </button>
+          <div className="mt-2 text-amber-200" aria-live="polite">
+            {restoringCompositeAreaKey === question.questionKey
+              ? 'Loading calibrated areas from the saved DICOM contours…'
+              : compositeAreaRecoveryError[question.questionKey]
+                ? 'Individual area values unavailable: ' +
+                  compositeAreaRecoveryError[question.questionKey]
+                : 'Checking saved DICOM contour calibration…'}
           </div>
         ) : null}
       </div>
