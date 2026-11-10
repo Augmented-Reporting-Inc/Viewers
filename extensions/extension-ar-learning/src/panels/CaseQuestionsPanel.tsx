@@ -5618,15 +5618,17 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         className={`bg-gray-950/50 rounded border p-2 ${isActiveAuthoringQuestion ? 'border-blue-400' : 'border-gray-700'}`}
         onClick={() => selectQuestion({ quizKey: 'authoring', quizVersion: 1 }, question)}
       >
+        {isActiveAuthoringQuestion ? (
+          <div className="mb-1 inline-flex rounded bg-blue-600 px-2 py-0.5 text-[11px] font-semibold text-white">Active Question</div>
+        ) : null}
         <div className="text-sm font-semibold">
           {index + 1}. {question.title || question.prompt || question.questionKey}
-          {isActiveAuthoringQuestion ? <span className="ml-2 text-xs text-blue-300">Active question</span> : null}
         </div>
         <div className="mt-1 text-[11px] uppercase tracking-wide text-gray-400">
           {question.type}
         </div>
 
-        {targetHasNavigationIdentity(viewerTarget) && (!hasGuidedEFFrames || (answerConfig.efContourFrameGuidanceEnabled !== true && savedGoldComponents.length === 0)) ? (
+        {targetHasNavigationIdentity(viewerTarget) && !compositePhaseSlots.length && (!hasGuidedEFFrames || (answerConfig.efContourFrameGuidanceEnabled !== true && savedGoldComponents.length === 0)) ? (
           <div className="mt-2 flex flex-wrap items-center gap-2">
             <button
               type="button"
@@ -5654,7 +5656,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
           </div>
         ) : null}
         <div className="mt-2 flex flex-wrap gap-2">
-          {isViewerNativeQuestion(question) ? (
+          {isViewerNativeQuestion(question) && compositePhaseSlots.length === 0 ? (
             <button
               type="button"
               className="rounded border border-blue-500 px-2 py-1 text-xs font-semibold text-blue-100 disabled:opacity-50"
@@ -6100,10 +6102,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                 )}
               </div>
             ) : null}
-            {renderCompositePhaseNavigation(
-              question,
-              isCapturing || authoringSaving || !isDraftDefinition(authoringDefinition)
-            )}
+
             {['ivcCollapsibility', 'ivcRapRvsp'].includes(
               cleanString(answerConfig.measurementKind)
             ) ? renderIVCCaliperControls(
@@ -6151,8 +6150,8 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                 : bowelSet
                   ? 'Add selected gold BWT caliper'
                 : answerConfig.goldValue != null && answerConfig.goldValue !== ''
-                  ? (cleanString(answerConfig.measurementKind) === 'lvSimpsonEF' || cleanString(answerConfig.measurementKind) === 'laVolumeBiplane') ? 'Replace gold answer with calculated result' : 'Replace gold answer with selected measurement'
-                  : (cleanString(answerConfig.measurementKind) === 'lvSimpsonEF' || cleanString(answerConfig.measurementKind) === 'laVolumeBiplane') ? 'Use calculated result as gold answer' : bowelSet ? 'Add selected gold BWT caliper' : 'Use selected measurement as gold answer'}
+                  ? ['lvSimpsonEF', 'laVolumeBiplane', 'laVolumeBiplaneDisks', 'rvFAC', 'raArea', 'ivcCollapsibility'].includes(cleanString(answerConfig.measurementKind)) ? 'Replace gold answer with calculated result' : 'Replace gold answer with selected measurement'
+                  : ['lvSimpsonEF', 'laVolumeBiplane', 'laVolumeBiplaneDisks', 'rvFAC', 'raArea', 'ivcCollapsibility'].includes(cleanString(answerConfig.measurementKind)) ? 'Use calculated result as gold answer' : bowelSet ? 'Add selected gold BWT caliper' : 'Use selected measurement as gold answer'}
             </button>
 
             {(answerConfig.goldValue !== null &&
@@ -6201,14 +6200,14 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               </div>
             ) : (
               <div className="mt-2 text-xs text-orange-200">
-                {(cleanString(answerConfig.measurementKind) === 'lvSimpsonEF' || cleanString(answerConfig.measurementKind) === 'laVolumeBiplane')
+                {['lvSimpsonEF', 'laVolumeBiplane', 'laVolumeBiplaneDisks', 'rvFAC', 'raArea', 'ivcCollapsibility'].includes(cleanString(answerConfig.measurementKind))
                   ? 'Complete all required contours, then capture the calculated result as the gold answer. No annotation selection is required.'
                   : 'Select a measurement annotation in the viewport, then capture it as the gold answer.'}
               </div>
             ))}
 
             <label className="mt-2 block text-xs font-semibold text-gray-200">
-              {(cleanString(answerConfig.measurementKind) === 'lvSimpsonEF' || cleanString(answerConfig.measurementKind) === 'laVolumeBiplane')
+              {['lvSimpsonEF', 'laVolumeBiplane', 'laVolumeBiplaneDisks', 'rvFAC', 'raArea', 'ivcCollapsibility'].includes(cleanString(answerConfig.measurementKind))
                 ? `Numeric tolerance (${cleanString(answerConfig.measurementKind) === 'lvSimpsonEF' ? '%' : 'mL'})`
                 : 'Length tolerance'}
             </label>
@@ -6231,7 +6230,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               }
             />
 
-            {(cleanString(answerConfig.measurementKind) === 'lvSimpsonEF' || cleanString(answerConfig.measurementKind) === 'laVolumeBiplane') ? (
+            {['lvSimpsonEF', 'laVolumeBiplane', 'laVolumeBiplaneDisks', 'rvFAC', 'raArea', 'ivcCollapsibility'].includes(cleanString(answerConfig.measurementKind)) ? (
               <div className="mt-3 border-t border-gray-700 pt-2">
                 <label className="flex items-center gap-2 text-xs text-gray-200">
                   <input
