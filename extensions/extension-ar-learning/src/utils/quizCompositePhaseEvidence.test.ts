@@ -1,6 +1,6 @@
 import {
   getCompositePhaseSlot, getCompositePhaseMeasurementId, getGoldPhaseMeasurementSummary,
-  matchesCompositePhaseSource, getCompositeGoldCaptureSignature,
+  matchesCompositePhaseSource, getCompositeGoldCaptureSignature, findEditableCompositePhaseMeasurement,
 } from './quizCompositePhaseEvidence';
 
 describe('quiz composite phase evidence', () => {
@@ -80,6 +80,32 @@ describe('quiz composite phase evidence', () => {
     const question = { type: 'measurementNumeric', answerConfig: { measurementKind: 'ivcCollapsibility' } };
     expect(getCompositeGoldCaptureSignature(question, [exp, insp])).toBe('IVC_EXP:exp|IVC_INSP:insp');
     expect(getCompositeGoldCaptureSignature(question, [exp, { ...insp, label: 'Length' }])).toBe('');
+  });
+  it('keeps RV phase delete actions independently enabled for unique measurements', () => {
+    const ed = { uid: 'ed', measurementKind: 'echoAreaSlot', echoArea: { slot: 'RV_ED' },
+      referenceStudyUID: 'study', referenceSeriesUID: 'series', SOPInstanceUID: 'sop',
+      frameNumber: 14 };
+    const es = { ...ed, uid: 'es', echoArea: { slot: 'RV_ES' }, frameNumber: 17 };
+    expect(findEditableCompositePhaseMeasurement([ed, es], 'rvFAC', 'RV_ED', {}).uid).toBe('ed');
+    expect(findEditableCompositePhaseMeasurement([ed, es], 'rvFAC', 'RV_ES', {}).uid).toBe('es');
+    expect(findEditableCompositePhaseMeasurement([ed, es], 'rvFAC', 'RV_ES',
+      { target: { studyInstanceUID: 'study', seriesInstanceUID: 'series',
+        sopInstanceUID: 'sop', frameNumber: 17 } }).uid).toBe('es');
+    expect(findEditableCompositePhaseMeasurement([ed, es], 'rvFAC', 'RV_ES',
+      { target: { studyInstanceUID: 'study', seriesInstanceUID: 'series',
+        sopInstanceUID: 'sop', frameNumber: 16 } })).toBeNull();
+    expect(findEditableCompositePhaseMeasurement([ed, es], 'rvFAC', 'RV_ES',
+      { annotationId: 'missing' })).toBeNull();
+  });
+  it('accepts exact referenced DICOM imageId if a restored entry omits its numeric frame', () => {
+    const target = { studyInstanceUID: 'study', seriesInstanceUID: 'series',
+      sopInstanceUID: 'sop', frameNumber: 14, referencedImageId: 'wadors:study/series/sop/frame/14' };
+    const measurement = { uid: 'ann', measurementKind: 'echoAreaSlot',
+      echoArea: { slot: 'RV_ED' }, referenceStudyUID: 'study',
+      referencedImageId: 'wadors:study/series/sop/frame/14' };
+    expect(matchesCompositePhaseSource(measurement, { target })).toBe(true);
+    expect(findEditableCompositePhaseMeasurement([measurement], 'rvFAC', 'RV_ED',
+      { target })).toEqual(measurement);
   });
   it('formats physical geometry as approximate and does not treat missing geometry as numeric', () => {
     expect(getGoldPhaseMeasurementSummary({
