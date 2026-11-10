@@ -172,24 +172,39 @@ function calibratedLengthMM(measurement: ViewerMeasurement): number | null {
   if (String(measurement?.toolName || '') !== 'Length') return null;
   const points = measurement?.points || measurement?.measurements?.points || [];
   if (!Array.isArray(points) || points.length < 2) return null;
-  const stats = measurement?.cachedStats || measurement?.data || {};
-  const firstStats = Object.values(stats).find(value => value && typeof value === 'object') as
-    | Record<string, any>
-    | undefined;
   const source = measurement?.measurements || {};
-  const raw = source.length ?? measurement?.length ?? firstStats?.length ??
-    (measurement?.toolName === 'Length' ? measurement?.value : null);
-  const unit = String(
-    source.lengthUnit || source.unit || measurement?.lengthUnit ||
-    measurement?.unit || firstStats?.lengthUnit || firstStats?.unit || ''
-  ).trim().toLowerCase();
-  const length = finiteNumber(raw);
-
-  // A pixel distance or an unlabelled raw number is not clinical evidence.
-  if (length == null || length <= 0) return null;
-  if (unit === 'mm') return length;
-  if (unit === 'cm') return length * 10;
-  return null;
+  const getLength = (raw: unknown, unit: unknown): number | null => {
+    const value = finiteNumber(raw);
+    if (value == null || value <= 0) return null;
+    const normalized = String(unit || '').trim().toLowerCase();
+    if (normalized === 'mm') return value;
+    if (normalized === 'cm') return value * 10;
+    return null; // Pixel/non-calibrated distances cannot be scored.
+  };
+  const explicit = getLength(source.length ?? measurement?.length ??
+    (measurement?.toolName === 'Length' ? measurement?.value : null),
+    source.lengthUnit || source.unit || measurement?.lengthUnit || measurement?.unit);
+  if (explicit != null) return explicit;
+  const caches = [
+    measurement?.cachedStats,
+    measurement?.data?.cachedStats,
+    measurement?.measurements?.cachedStats,
+    measurement?.data,
+  ];
+  const candidates: number[] = [];
+  for (const cache of caches) {
+    if (!cache || typeof cache !== 'object' || Array.isArray(cache)) continue;
+    const rows = [cache, ...Object.values(cache)];
+    for (const row of rows) {
+      if (!row || typeof row !== 'object' || Array.isArray(row)) continue;
+      const mm = getLength((row as any).length,
+        (row as any).lengthUnit || (row as any).unit);
+      if (mm != null) candidates.push(mm);
+    }
+  }
+  if (!candidates.length ||
+      candidates.some(mm => Math.abs(mm - candidates[0]) > 0.05)) return null;
+  return candidates[0];
 }
 
 function compatibleIVCCinePair(a: ViewerMeasurement, b: ViewerMeasurement): boolean {
