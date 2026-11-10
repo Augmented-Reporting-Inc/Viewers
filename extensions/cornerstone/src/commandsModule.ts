@@ -5596,11 +5596,11 @@ function installSpectralDopplerTextOverrideForViewport({ viewport, viewportId = 
 }
 
 /**
- * EF-only click-to-trace capture. Deliberately avoids the shared PlanarFreehandROI
- * gesture handler: only the final world-space points enter the existing Simpson
- * annotation/calculation path. No temporary Cornerstone annotation is persisted.
+ * Reusable education click-to-trace capture. Avoids the shared PlanarFreehandROI
+ * drag gesture; returns world points only, with no temporary annotation persisted.
+ * EF, LA and quiz-only right-heart acquisitions call their own validated calculators.
  */
-function captureLVSimpsonClickTrace({ viewport, isCancelled, setCancelHandler }) {
+function captureViewerClickTrace({ viewport, isCancelled, setCancelHandler }) {
   const element = viewport?.element;
   if (!element?.addEventListener || !viewport?.canvasToWorld || !viewport?.worldToCanvas) {
     return Promise.resolve(null);
@@ -9563,7 +9563,7 @@ function commandsModule({
           instruction: `Step ${stepNumber}/4: Click at one mitral hinge to start, move around the apex without holding the mouse button, then click the opposite hinge to finish. Esc cancels.`,
           onCancel: () => clearLVSimpsonWorkflowIfCurrent(workflowSessionId),
         });
-        const points = await captureLVSimpsonClickTrace({
+        const points = await captureViewerClickTrace({
           viewport,
           isCancelled: isWorkflowCancelled,
           setCancelHandler: cancel => {
@@ -10213,77 +10213,30 @@ function commandsModule({
       // the area-length/disks calculators continue to use the same long axis.
       let freehandContour: any = null;
       if (useFreehand) {
-        laVolumeMouseTools.restore();
-        const toolName = toolNames.PlanarFreehandROI || 'PlanarFreehandROI';
-        const activation = actions.activateViewerMeasurementTool({
-          toolName, stopCine: true,
-        });
-        if (!activation?.ok) {
-          clearLAVolumeWorkflowIfCurrent(workflowSessionId);
-          return { ok: false, reason: 'la-freehand-tool-unavailable' };
-        }
-
+        // Reuse EF's click-to-trace interaction, not Cornerstone's hold-and-drag ROI.
+        // The two calibrated annular/superior landmarks remain mandatory.
         const expectedImageId = getCurrentViewportImageInfo(viewport)?.imageId || '';
         uiNotificationService.show({
           title: 'LA Volume freehand',
-          message: `Trace and close the ${slotDisplayName} LA cavity including the annular closure line. Keep the same DICOM image/frame used for the landmarks. Press Esc to cancel.`,
+          message: 'Click once at the first annular hinge, trace without holding the mouse button, ' +
+            'then click at the opposite hinge to finish. Press Esc to cancel.',
           type: 'info', duration: 10000,
         });
-        freehandContour = await new Promise(resolve => {
-          let finished = false;
-          const finish = (result: any) => {
-            if (finished) return;
-            finished = true;
-            eventTarget.removeEventListener(Enums.Events.ANNOTATION_COMPLETED, completed);
-            window.removeEventListener('keydown', escape);
-            activeLAVolumeCaptureCancel = null;
-            resolve(result);
-          };
-          const completed = (event: Event) => {
-            if (isWorkflowCancelled()) return finish(null);
-            const source = (event as CustomEvent)?.detail?.annotation;
-            if (String(source?.metadata?.toolName || '') !== toolName) return;
-            const annotationId = String(source?.annotationUID || '').trim();
-            const imageId = String(source?.metadata?.referencedImageId || '');
-            const points = source?.data?.contour?.polyline;
-            if (!annotationId || !expectedImageId || imageId !== expectedImageId ||
-                !Array.isArray(points) || points.length < 6 ||
-                source?.data?.contour?.closed !== true ||
-                !points.every((point: any) =>
-                  Array.isArray(point) && point.length >= 2 &&
-                  point.slice(0, 3).every((coordinate: any) => Number.isFinite(Number(coordinate))))) {
-              uiNotificationService.show({
-                title: 'LA Volume freehand',
-                message: 'Closed calibrated LA contour on the landmark image/frame is required.',
-                type: 'warning', duration: 6000,
-              });
-              return;
+        const points = await captureViewerClickTrace({
+          viewport,
+          isCancelled: isWorkflowCancelled,
+          setCancelHandler: cancel => {
+            if (activeLAVolumeWorkflowSessionId === workflowSessionId) {
+              activeLAVolumeCaptureCancel = cancel;
             }
-            finish({ annotationId, points: points.map((point: any) =>
-              [Number(point[0]), Number(point[1]), Number(point[2] ?? 0)]) });
-          };
-          const escape = (event: KeyboardEvent) => {
-            if (event.key === 'Escape') finish(null);
-          };
-          activeLAVolumeCaptureCancel = () => finish(null);
-          eventTarget.addEventListener(Enums.Events.ANNOTATION_COMPLETED, completed);
-          window.addEventListener('keydown', escape);
+          },
         });
-        try {
-          actions.setToolActive({
-            toolName: toolNames.WindowLevel || 'WindowLevel',
-            toolGroupId: laToolGroup,
-          });
-        } catch (error) {
-          console.warn('[LA Volume] could not restore navigation after freehand:', error);
-        }
-        if (!freehandContour || isWorkflowCancelled()) {
+        if (!points || isWorkflowCancelled() ||
+            getCurrentViewportImageInfo(viewport)?.imageId !== expectedImageId) {
           clearLAVolumeWorkflowIfCurrent(workflowSessionId);
-          return { ok: false, reason: 'la-freehand-contour-cancelled' };
+          return { ok: false, reason: 'la-click-trace-cancelled-or-frame-changed' };
         }
-        // The temporary drawing is only an acquisition carrier; the ordinary
-        // persisted LA spline below owns the final editable annotation.
-        actions.removeMeasurement({ uid: freehandContour.annotationId });
+        freehandContour = { points };
       }
 
       const geometry = buildEchoVolumeContourFromBaseAxis({
@@ -11067,7 +11020,7 @@ function commandsModule({
         if (activeEchoAreaSessionId === sessionId) clearEchoAreaWorkflowListeners();
       }
     },
-    startEchoAreaContourWorkflow: async ({ slot = '' } = {}) => {
+    startEchoAreaContourWorkflow: async ({ slot = '', clickTrace = false } = {}) => {
       const configuredSlots = {
         RA_ES: {
           label: 'RAa',
@@ -11105,6 +11058,103 @@ function commandsModule({
           duration: 7000,
         });
         return { ok: false, reason: 'echo-area-slot-already-exists', slot: selectedSlot };
+      }
+
+      if (clickTrace) {
+        // This branch is restricted to quiz acquisition. Clinical freehand ROIs
+        // retain their established Cornerstone drag workflow and configuration.
+        clearEchoAreaWorkflowListeners();
+        clearSpectralDopplerWorkflowListeners();
+        clearUltrasoundDirectionalWorkflowListeners();
+        const { viewport } = _getActiveViewportEnabledElement() || {};
+        const viewportId = viewportGridService.getActiveViewportId();
+        if (!viewport?.element || !viewportId) {
+          return { ok: false, reason: 'viewport-not-ready' };
+        }
+        const sessionId = csUtils.uuidv4();
+        activeEchoAreaSessionId = sessionId;
+        const isCancelled = () => activeEchoAreaSessionId !== sessionId;
+        const imageInfo = getCurrentViewportImageInfo(viewport);
+        const sourceImageId = String(imageInfo?.imageId || '');
+        uiNotificationService.show({
+          title: target.title,
+          message: 'Click once at an annular hinge to start, trace without holding the mouse ' +
+            'button, then click again to finish and close the contour. Press Esc to cancel.',
+          type: 'info', duration: 9000,
+        });
+        try {
+          const traced = await captureViewerClickTrace({
+            viewport, isCancelled,
+            setCancelHandler: cancel => {
+              if (!isCancelled()) rvFACGuidedCancel = cancel;
+            },
+          });
+          if (!traced || isCancelled() ||
+              !sourceImageId || sourceImageId !== getCurrentViewportImageInfo(viewport)?.imageId) {
+            return { ok: false, reason: 'echo-area-trace-cancelled-or-frame-changed' };
+          }
+          if (traced.length < 6) return { ok: false, reason: 'echo-area-contour-too-short' };
+          const points = [...traced, traced[0]];
+          const displaySet = getActiveViewportDisplaySet({
+            viewportGridService, displaySetService, viewportId,
+          });
+          const study = String(displaySet?.StudyInstanceUID || displaySet?.studyInstanceUID || '');
+          const series = String(displaySet?.SeriesInstanceUID || displaySet?.seriesInstanceUID || '');
+          const sop = getSopInstanceIdFromImageId(sourceImageId) ||
+            displaySet?.SOPInstanceUID || displaySet?.sopInstanceUID || '';
+          const frameNumber = getFrameNumberFromReferencedImageId(sourceImageId);
+          if (!study || !series || !sop || !(frameNumber > 0)) {
+            return { ok: false, reason: 'echo-area-source-identity-missing' };
+          }
+          const annotationId = csUtils.uuidv4();
+          let hydrated = null;
+          try {
+            hydrated = cornerstoneTools.SplineROITool?.hydrate?.(viewportId, points, {
+              annotationUID: annotationId,
+            });
+          } catch (error) {
+            console.warn('[Echo Area] click-trace spline hydration failed:', error);
+          }
+          const state = cornerstoneTools.annotation.state.getAnnotation?.(annotationId) || hydrated;
+          if (!state) return { ok: false, reason: 'echo-area-spline-hydration-failed' };
+          const echoArea = {
+            slot: selectedSlot, phase: target.phase, view: 'A4C',
+            method: 'closed-contour-planimetry', contourSource: 'freehand-click-trace',
+          };
+          state.metadata = {
+            ...(state.metadata || {}),
+            toolName: toolNames.SplineROI || 'SplineROI',
+            referencedImageId: sourceImageId,
+            StudyInstanceUID: study,
+            SeriesInstanceUID: series,
+            SOPInstanceUID: sop,
+            FrameOfReferenceUID: viewport.getFrameOfReferenceUID?.() || '',
+          };
+          state.data = {
+            ...(state.data || {}), label: target.label, echoArea,
+            measurementKind: 'echoAreaSlot',
+            handles: { ...(state.data?.handles || {}), points },
+            contour: { ...(state.data?.contour || {}), polyline: points, closed: true },
+          };
+          state.invalidated = true;
+          measurementService.update(annotationId, {
+            uid: annotationId, annotationUID: annotationId,
+            toolName: toolNames.SplineROI || 'SplineROI',
+            label: target.label, measurementRole: target.label,
+            role: target.label, measurementKind: 'echoAreaSlot',
+            echoArea, slot: selectedSlot, phase: target.phase, view: 'A4C',
+            referenceStudyUID: study, referenceSeriesUID: series,
+            SOPInstanceUID: sop, referencedImageId: sourceImageId,
+            FrameOfReferenceUID: state.metadata.FrameOfReferenceUID,
+            frameNumber, points,
+          }, true);
+          actions.markViewerMeasurementCreatedInSession?.({ uid: annotationId });
+          dispatchLiveMeasurementsRefresh({ reason: 'quiz-echo-area-created', annotationUID: annotationId });
+          viewport.render?.();
+          return { ok: true, slot: selectedSlot, annotationId };
+        } finally {
+          if (activeEchoAreaSessionId === sessionId) clearEchoAreaWorkflowListeners();
+        }
       }
 
       clearEchoAreaWorkflowListeners();
@@ -11215,7 +11265,8 @@ function commandsModule({
       });
       return { ok: true, sessionId, slot: selectedSlot };
     },
-    startRAAreaWorkflow: () => actions.startEchoAreaContourWorkflow({ slot: 'RA_ES' }),
+    startRAAreaWorkflow: (options: { clickTrace?: boolean } = {}) =>
+      actions.startEchoAreaContourWorkflow({ ...options, slot: 'RA_ES' }),
     startRVFACWorkflow: () => {
       const measurements = getCurrentViewerMeasurementSnapshot(measurementService);
       const occupied = new Set(measurements.map(getEchoAreaSlot).filter(Boolean));
@@ -12774,7 +12825,7 @@ function commandsModule({
         if (activeLAVolumeWorkflowSessionId) {
           clearLAVolumeWorkflowIfCurrent(activeLAVolumeWorkflowSessionId);
         }
-        const command = actions.startRAAreaWorkflow();
+        const command = actions.startRAAreaWorkflow({ clickTrace: true });
         void Promise.resolve(command).catch(error =>
           console.warn('[Viewer quiz] right-heart capture activation failed:', error)
         );
