@@ -5626,7 +5626,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
           {question.type}
         </div>
 
-        {targetHasNavigationIdentity(viewerTarget) && !hasGuidedEFFrames ? (
+        {targetHasNavigationIdentity(viewerTarget) && (!hasGuidedEFFrames || (answerConfig.efContourFrameGuidanceEnabled !== true && savedGoldComponents.length === 0)) ? (
           <div className="mt-2 flex flex-wrap items-center gap-2">
             <button
               type="button"
@@ -5704,11 +5704,11 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
           ) : null}
         </div>
 
-        {targetHasNavigationIdentity(viewerTarget) && !hasGuidedEFFrames ? (
+        {targetHasNavigationIdentity(viewerTarget) && (!hasGuidedEFFrames || (answerConfig.efContourFrameGuidanceEnabled !== true && savedGoldComponents.length === 0)) ? (
           <div className="bg-blue-950/30 mt-2 rounded border border-blue-700 px-2 py-1 text-xs text-blue-100">
             Target: {targetSummary}
           </div>
-        ) : isViewerNativeQuestion(question) && !hasGuidedEFFrames ? (
+        ) : isViewerNativeQuestion(question) && (!hasGuidedEFFrames || (answerConfig.efContourFrameGuidanceEnabled !== true && savedGoldComponents.length === 0)) ? (
           <div className="mt-2 text-xs text-orange-200">
             Spatial questions should have a captured target frame before publishing.
           </div>
