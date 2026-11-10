@@ -39,6 +39,7 @@ import {
   getCompleteCompositeFrameTargets,
   matchesConfiguredCompositeFrame,
 } from '../utils/compositeFrameTargets';
+import { EF_CONTOUR_FRAME_SLOTS, getEFGoldContourAuthoringRows } from '../utils/efGoldContourAuthoring';
 
 const AR_QUIZ_MEASUREMENT_ADDED_EVENT = 'ar-learning:quiz-measurement-added';
 const AR_QUIZ_MEASUREMENT_LABELLED_EVENT = 'ar-learning:quiz-measurement-labelled';
@@ -55,15 +56,6 @@ function reportEducationSaveResult(source: string, requestId: string, succeeded:
     detail: { source, requestId, succeeded },
   }));
 }
-
-// EF uses one guided measurement question, but each of its four contours can
-// optionally have a different authored DICOM instance/frame.
-const EF_CONTOUR_FRAME_SLOTS = [
-  { slot: 'A4C_ED', label: 'A4C end-diastole' },
-  { slot: 'A4C_ES', label: 'A4C end-systole' },
-  { slot: 'A2C_ED', label: 'A2C end-diastole' },
-  { slot: 'A2C_ES', label: 'A2C end-systole' },
-];
 
 type CaseQuestionsPanelProps = {
   commandsManager: any;
@@ -5608,6 +5600,8 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     const authoredCompositeFrames = plainObject(answerConfig.compositeFrameTargets);
     const compositeFramesComplete = !!getCompleteCompositeFrameTargets(answerConfig);
     const savedGoldComponents = getSavedGoldCompositeNavigationComponents(answerConfig);
+    const efGoldRows = hasGuidedEFFrames
+      ? getEFGoldContourAuthoringRows(answerConfig, savedGoldComponents) : [];
     const guidedEFFramesComplete = !!getCompleteEFContourFrameTargets(answerConfig);
     const targetSummary = getViewerTargetSummary(viewerTarget);
     const isCapturing = capturingAuthoringKey.endsWith(`:${question.questionKey}`);
@@ -5633,7 +5627,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
           {question.type}
         </div>
 
-        {targetHasNavigationIdentity(viewerTarget) ? (
+        {targetHasNavigationIdentity(viewerTarget) && !hasGuidedEFFrames ? (
           <div className="mt-2 flex flex-wrap items-center gap-2">
             <button
               type="button"
@@ -5711,11 +5705,11 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
           ) : null}
         </div>
 
-        {targetHasNavigationIdentity(viewerTarget) ? (
+        {targetHasNavigationIdentity(viewerTarget) && !hasGuidedEFFrames ? (
           <div className="bg-blue-950/30 mt-2 rounded border border-blue-700 px-2 py-1 text-xs text-blue-100">
             Target: {targetSummary}
           </div>
-        ) : isViewerNativeQuestion(question) ? (
+        ) : isViewerNativeQuestion(question) && !hasGuidedEFFrames ? (
           <div className="mt-2 text-xs text-orange-200">
             Spatial questions should have a captured target frame before publishing.
           </div>
@@ -5763,9 +5757,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
 
         {hasGuidedEFFrames ? (
           <div className="mt-2 rounded border border-slate-600 bg-slate-900/60 p-2">
-            <label className="flex items-center gap-2 text-xs font-semibold text-gray-100">
-              <input
-                type="checkbox"
+            <div className="text-xs font-semibold text-gray-100">EF contour frames and saved gold</div>
+            <label className="mt-2 flex items-center gap-2 text-xs font-semibold text-gray-100">
+              <input type="checkbox"
                 checked={answerConfig.efContourFrameGuidanceEnabled === true}
                 disabled={isCapturing || authoringSaving || !isDraftDefinition(authoringDefinition)}
                 onChange={event => patchAuthoringAnswerConfig(question, {
@@ -5775,57 +5769,109 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               />
               Guide each EF contour to an educator-selected instance/frame
             </label>
-            {answerConfig.efContourFrameGuidanceEnabled === true ? (
+            {(answerConfig.efContourFrameGuidanceEnabled === true || savedGoldComponents.length > 0) ? (
               <div className="mt-2 space-y-2">
+                <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px]">
+                  <span className="text-emerald-200">
+                    Saved gold: {efGoldRows.filter(row => row.goldVerified).length}/4 verified source references
+                  </span>
+                  {answerConfig.efContourFrameGuidanceEnabled === true ? (
+                    <span className={guidedEFFramesComplete ? 'text-green-200' : 'text-amber-200'}>
+                      Targets: {efGoldRows.filter(row => row.configuredComplete).length}/4 captured
+                    </span>
+                  ) : null}
+                </div>
                 <p className="text-[11px] text-gray-300">
-                  Select the correct image and frame in the viewer, then capture it for each contour.
-                  The EF panel Continue button will navigate to each saved target before drawing.
+                  {answerConfig.efContourFrameGuidanceEnabled === true
+                    ? 'Capture each target from the selected viewer frame. Saved gold contours remain separate and must match the targets.'
+                    : 'Frame guidance is off. Saved gold contours can still be inspected without recapturing them.'}
                 </p>
-                {EF_CONTOUR_FRAME_SLOTS.map(({ slot, label }) => {
-                  const target = plainObject(authoredEFFrames[slot]);
-                  const captured = targetHasNavigationIdentity(target);
+                {efGoldRows.map(row => {
+                  const guidanceEnabled = answerConfig.efContourFrameGuidanceEnabled === true;
+                  const targetCaptured = targetHasNavigationIdentity(row.configuredTarget);
                   return (
-                    <div key={slot} className="flex flex-wrap items-center gap-2 border-t border-gray-700 pt-2 text-xs">
-                      <span className="min-w-28 font-medium text-gray-100">{label}</span>
-                      <span className={captured ? 'text-green-200' : 'text-amber-200'}>
-                        {captured ? getViewerTargetSummary(target) : 'Not captured'}
-                      </span>
-                      <button
-                        type="button"
-                        className="rounded border border-blue-500 px-2 py-1 text-blue-100 disabled:opacity-50"
-                        disabled={isCapturing || authoringSaving || !isDraftDefinition(authoringDefinition)}
-                        onClick={event => {
-                          event.preventDefault();
-                          event.stopPropagation();
-                          void captureAuthoringEFContourFrame(question, slot);
-                        }}
-                      >
-                        {captured ? 'Replace frame' : 'Capture current frame'}
-                      </button>
-                      {captured ? (
-                        <button
-                          type="button"
-                          className="rounded border border-slate-500 px-2 py-1 text-gray-100"
-                          onClick={event => {
-                            event.preventDefault();
-                            event.stopPropagation();
-                            void runViewerCommand(commandsManager, 'jumpToViewerQuizTarget', {
-                              viewerTarget: target,
-                              questionKey: question.questionKey,
-                            });
-                          }}
-                        >
-                          Jump to frame
-                        </button>
+                    <div key={row.slot} className="border-t border-gray-700 pt-2 text-xs">
+                      <div className="font-medium text-gray-100">{row.label}</div>
+                      {guidanceEnabled ? (
+                        <div className={row.configuredComplete ? 'mt-1 text-gray-300' : 'mt-1 text-amber-200'}>
+                          Target: {row.configuredComplete
+                            ? getViewerTargetSummary(row.configuredTarget)
+                            : targetCaptured ? 'Incomplete frame source' : 'Not configured'}
+                        </div>
+                      ) : null}
+                      <div className={row.goldVerified
+                        ? row.sourceMismatch ? 'mt-1 text-amber-200' : 'mt-1 text-emerald-200'
+                        : 'mt-1 text-amber-200'}>
+                        Gold: {row.goldVerified
+                          ? `Saved · ${getViewerTargetSummary(row.savedTarget)}${row.sourceMismatch ? ' · Does not match target' : ' · Source verified'}`
+                          : 'No verified saved contour'}
+                      </div>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {guidanceEnabled ? (
+                          <button type="button"
+                            className="rounded border border-blue-500 px-2 py-1 text-blue-100 disabled:opacity-50"
+                            disabled={isCapturing || authoringSaving || !isDraftDefinition(authoringDefinition)}
+                            onClick={event => {
+                              event.preventDefault();
+                              event.stopPropagation();
+                              void captureAuthoringEFContourFrame(question, row.slot);
+                            }}>
+                            {targetCaptured ? 'Replace target' : 'Capture target'}
+                          </button>
+                        ) : null}
+                        {row.goldVerified ? (
+                          <button type="button"
+                            className="rounded border border-emerald-600 px-2 py-1 text-emerald-100 disabled:opacity-40"
+                            disabled={authoringSaving}
+                            onClick={event => {
+                              event.preventDefault();
+                              event.stopPropagation();
+                              setActiveQuestionKey(`authoring:${question.questionKey}`);
+                              void runViewerCommand(commandsManager, 'jumpToViewerQuizTarget', {
+                                viewerTarget: row.savedTarget,
+                                questionKey: question.questionKey,
+                              });
+                            }}>
+                            View saved gold
+                          </button>
+                        ) : null}
+                        {guidanceEnabled && row.configuredComplete &&
+                            (!row.goldVerified || row.sourceMismatch) ? (
+                          <button type="button"
+                            className="rounded border border-slate-500 px-2 py-1 text-gray-100"
+                            onClick={event => {
+                              event.preventDefault();
+                              event.stopPropagation();
+                              void runViewerCommand(commandsManager, 'jumpToViewerQuizTarget', {
+                                viewerTarget: row.configuredTarget,
+                                questionKey: question.questionKey,
+                              });
+                            }}>
+                            Jump to target
+                          </button>
+                        ) : null}
+                      </div>
+                      {row.sourceMismatch ? (
+                        <div className="mt-2 text-[11px] text-amber-200" role="alert">
+                          This target differs from the saved gold source. Restore the matching target
+                          or recapture the gold contour before publishing.
+                        </div>
                       ) : null}
                     </div>
                   );
                 })}
-                <div className={guidedEFFramesComplete ? 'text-green-200 text-[11px]' : 'text-amber-200 text-[11px]'}>
-                  {guidedEFFramesComplete
-                    ? 'All four frames configured. Save the draft to retain the guided sequence.'
-                    : 'All four frames must be captured before saving guided EF navigation.'}
-                </div>
+                {answerConfig.efContourFrameGuidanceEnabled === true ? (
+                  <div className={guidedEFFramesComplete ? 'text-green-200 text-[11px]' : 'text-amber-200 text-[11px]'}>
+                    {guidedEFFramesComplete
+                      ? 'All four frames configured. Save the draft to retain the guided sequence.'
+                      : 'All four frames must be captured before saving guided EF navigation.'}
+                  </div>
+                ) : null}
+                {savedGoldComponents.length > 0 ? (
+                  <p className="border-t border-gray-700 pt-2 text-xs text-emerald-100">
+                    Saved result: {answerConfig.goldValue ?? plainObject(answerConfig.goldMeasurement).value ?? '—'} {answerConfig.unit || plainObject(answerConfig.goldMeasurement).unit || ''}
+                  </p>
+                ) : null}
               </div>
             ) : (
               <p className="mt-1 text-[11px] text-gray-400">
@@ -5902,7 +5948,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
           </div>
         ) : null}
 
-        {savedGoldComponents.length > 0 ? (
+        {savedGoldComponents.length > 0 && !hasGuidedEFFrames ? (
           <div className="mt-2 rounded border border-emerald-700/70 bg-emerald-950/20 p-2">
             <div className="text-xs font-semibold text-emerald-100">
               Saved gold contours — {savedGoldComponents.filter(component => component.complete).length}/{savedGoldComponents.length} verified source references
