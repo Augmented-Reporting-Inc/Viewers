@@ -2307,13 +2307,24 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
   }
 
   useEffect(() => {
-    const timers: number[] = [];
+    let quickRefresh: number | null = null;
+    let settledRefresh: number | null = null;
     const refresh = () => {
-      void refreshLiveCompositeMeasurements();
-      // Annotation-created and Length label callbacks can precede MeasurementService
-      // state reconciliation. Recheck after the normal asynchronous update.
-      timers.push(window.setTimeout(() => void refreshLiveCompositeMeasurements(), 180));
-      timers.push(window.setTimeout(() => void refreshLiveCompositeMeasurements(), 650));
+      // MeasurementService can emit updates during every contour pointer move.
+      // Coalesce them to avoid repeatedly querying the viewer and rerendering.
+      if (quickRefresh === null) {
+        quickRefresh = window.setTimeout(() => {
+          quickRefresh = null;
+          void refreshLiveCompositeMeasurements();
+        }, 80);
+      }
+      // Annotation-created/labelled events may precede the final service
+      // entry. Refresh again after its updates settle.
+      if (settledRefresh !== null) window.clearTimeout(settledRefresh);
+      settledRefresh = window.setTimeout(() => {
+        settledRefresh = null;
+        void refreshLiveCompositeMeasurements();
+      }, 400);
     };
     const events = measurementService?.EVENTS || {};
     const subscriptions = [
@@ -2334,7 +2345,8 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     return () => {
       subscriptions.forEach(subscription => subscription?.unsubscribe?.());
       windowEvents.forEach(name => window.removeEventListener(name, refresh));
-      timers.forEach(timer => window.clearTimeout(timer));
+      if (quickRefresh !== null) window.clearTimeout(quickRefresh);
+      if (settledRefresh !== null) window.clearTimeout(settledRefresh);
       compositeSnapshotRequestRef.current++;
     };
   }, [commandsManager, measurementService]);
