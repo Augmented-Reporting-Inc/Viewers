@@ -191,10 +191,11 @@ export function getCompositeGoldPersistenceError(expectedQuestions: any[], persi
     const remoteConfig = asObject(remote.answerConfig);
     if (config.compositeFrameGuidanceEnabled === true) {
       for (const [slot, source] of Object.entries(asObject(config.compositeFrameTargets))) {
+        const expected = asObject(source);
         const actual = asObject(remoteConfig.compositeFrameTargets)[slot];
         if (!actual || ['studyInstanceUID', 'seriesInstanceUID', 'sopInstanceUID'].some(
-          field => clean(source?.[field]) !== clean(actual[field])
-        ) || Number(source?.frameNumber) !== Number(actual.frameNumber)) {
+          field => clean(expected[field]) !== clean(actual[field])
+        ) || Number(expected.frameNumber) !== Number(actual.frameNumber)) {
           return kind + ' ' + slot + ' saved source frame was not persisted.';
         }
       }
