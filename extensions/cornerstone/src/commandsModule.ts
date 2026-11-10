@@ -15705,6 +15705,21 @@ function commandsModule({
         if (safePoints.some(point => !point || point.some(value => !Number.isFinite(value)))) {
           return null;
         }
+        const derived = rubricMeasurement?.compositeResult?.derived || {};
+        const ivcValue = slot === 'IVC_EXP' ? derived.expirationDiameterMM
+          : slot === 'IVC_INSP' ? derived.inspirationDiameterMM : null;
+        const areaValue = slot === 'RV_ED' ? derived.edaCM2
+          : slot === 'RV_ES' ? derived.esaCM2
+          : slot === 'A4C' ? derived.a4cAreaCM2
+          : slot === 'A2C' ? derived.a2cAreaCM2
+          : slot === 'RA_ES' ? derived.areaCM2 : null;
+        const physical = Number(
+          rubricMeasurement?.measurementKind === 'ivcCollapsibility' ? ivcValue : areaValue
+        );
+        const hasPhysical = (rubricMeasurement?.measurementKind === 'ivcCollapsibility'
+          ? ivcValue : areaValue) != null && Number.isFinite(physical) && physical > 0;
+        const unit = rubricMeasurement?.measurementKind === 'ivcCollapsibility'
+          ? 'mm' : 'cm²';
         return {
           annotationId: String(component.annotationId || '').trim(),
           uid: String(component.annotationId || '').trim(),
@@ -15714,6 +15729,12 @@ function commandsModule({
           label: slot,
           measurementRole: slot,
           measurementKind: rubricMeasurement.measurementKind,
+          ...(hasPhysical ? {
+            displayText: [slot + ': ' + physical.toFixed(2) + ' ' + unit],
+            measurements: rubricMeasurement?.measurementKind === 'ivcCollapsibility'
+              ? { length: physical, lengthUnit: 'mm' }
+              : { area: physical, areaUnit: 'cm2' },
+          } : {}),
           StudyInstanceUID: study,
           SeriesInstanceUID: String(target.seriesInstanceUID || ''),
           SOPInstanceUID: String(target.sopInstanceUID || ''),

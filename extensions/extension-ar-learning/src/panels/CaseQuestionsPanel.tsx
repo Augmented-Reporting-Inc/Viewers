@@ -4577,17 +4577,22 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         );
       }
 
-      try {
-        const displayResult = await showAuthoringGoldMeasurement(nextQuestion);
-
-        if (displayResult?.rubricRendered !== true) {
-          console.warn('[CaseQuestionsPanel] newly captured gold measurement was not displayed', {
-            questionKey: question.questionKey,
-            result: displayResult,
-          });
+      // A composite gold capture may finish on phase 2. Its two contours
+      // belong to separate frames; do not automatically navigate back to
+      // phase 1 or put comparison overlays on top of the editable sources.
+      // The phase-specific "View saved" action navigates explicitly.
+      if (!['rvFAC', 'raArea', 'laVolumeBiplane', 'laVolumeBiplaneDisks',
+        'ivcCollapsibility'].includes(configuredKind)) {
+        try {
+          const displayResult = await showAuthoringGoldMeasurement(nextQuestion);
+          if (displayResult?.rubricRendered !== true) {
+            console.warn('[CaseQuestionsPanel] newly captured gold measurement was not displayed', {
+              questionKey: question.questionKey, result: displayResult,
+            });
+          }
+        } catch (error) {
+          console.warn('[CaseQuestionsPanel] newly captured gold measurement display failed:', error);
         }
-      } catch (error) {
-        console.warn('[CaseQuestionsPanel] newly captured gold measurement display failed:', error);
       }
 
       if (!options.silent) {
