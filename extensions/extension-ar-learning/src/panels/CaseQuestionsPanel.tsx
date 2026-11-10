@@ -5595,7 +5595,6 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     const viewerTarget = getQuestionViewerTarget(question);
     const hasGuidedEFFrames = question.type === 'measurementNumeric' &&
       cleanString(answerConfig.measurementKind) === 'lvSimpsonEF';
-    const authoredEFFrames = plainObject(answerConfig.efContourTargets);
     const compositePhaseSlots = COMPOSITE_FRAME_SLOTS[cleanString(answerConfig.measurementKind)] || [];
     const authoredCompositeFrames = plainObject(answerConfig.compositeFrameTargets);
     const compositeFramesComplete = !!getCompleteCompositeFrameTargets(answerConfig);
