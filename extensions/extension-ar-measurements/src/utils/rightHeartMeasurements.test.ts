@@ -136,7 +136,8 @@ describe('right-heart measurement calculations', () => {
     expect(result?.values?.expirationDiameterMM).toBe(20);
     expect(result?.values?.collapsibilityPercent).toBe(60);
     expect(calculateIVCFromMeasurements([
-      exp, { ...insp, referencedImageId: exp.referencedImageId },
+      exp, { ...insp, referencedImageId:
+        'wadors:dicom-web/studies/study-A/series/cine-IVC/instances/sop-IVC/frames/4' },
     ])?.status).toBe('invalid');
     expect(calculateIVCFromMeasurements([
       { ...exp, data: { cachedStats: { target: { length: 20, unit: 'px' } } } },
