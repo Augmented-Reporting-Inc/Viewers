@@ -1,5 +1,6 @@
 import {
   getCompositePhaseSlot, getCompositePhaseMeasurementId, getGoldPhaseMeasurementSummary,
+  matchesCompositePhaseSource,
 } from './quizCompositePhaseEvidence';
 
 describe('quiz composite phase evidence', () => {
@@ -24,6 +25,23 @@ describe('quiz composite phase evidence', () => {
       .toBe('');
     expect(getCompositePhaseSlot({ toolName: 'PlanarFreehandROI', label: 'IVCexp' }, 'ivcCollapsibility'))
       .toBe('');
+  });
+  it('refuses a same-study wrong-phase-frame measurement during deletion', () => {
+    const source = {
+      uid: 'measured-ra', measurementKind: 'echoAreaSlot', echoArea: { slot: 'RA_ES' },
+      referenceStudyUID: 'study-1', referenceSeriesUID: 'series-1',
+      SOPInstanceUID: 'sop-1', frameNumber: 14,
+    };
+    const target = {
+      studyInstanceUID: 'study-1', seriesInstanceUID: 'series-1',
+      sopInstanceUID: 'sop-1', frameNumber: 14,
+    };
+    expect(matchesCompositePhaseSource(source, { target })).toBe(true);
+    expect(matchesCompositePhaseSource(source, { target: { ...target, frameNumber: 15 } })).toBe(false);
+    expect(matchesCompositePhaseSource(source, { target: { ...target, sopInstanceUID: 'sop-2' } })).toBe(false);
+    expect(matchesCompositePhaseSource(source, { annotationId: 'measured-ra' })).toBe(true);
+    expect(matchesCompositePhaseSource(source, { annotationId: 'different-ra' })).toBe(false);
+    expect(matchesCompositePhaseSource(source)).toBe(false);
   });
   it('formats physical geometry as approximate and does not treat missing geometry as numeric', () => {
     expect(getGoldPhaseMeasurementSummary({
