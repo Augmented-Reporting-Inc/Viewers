@@ -171,3 +171,50 @@ export function findEditableCompositePhaseMeasurement(
   // No saved gold identity yet: only a unique phase in this study is safe.
   return candidates.length === 1 ? candidates[0] : null;
 }
+
+/** Compare the FormAPI readback to the just-saved quiz. Session storage does
+ * not prove persistence, so a missing gold value or contour must be reported. */
+export function getCompositeGoldPersistenceError(expectedQuestions: any[], persistedQuestions: any[]): string {
+  const remoteByKey = new Map((Array.isArray(persistedQuestions) ? persistedQuestions : [])
+    .map(question => [clean(question?.questionKey), question]));
+  for (const question of Array.isArray(expectedQuestions) ? expectedQuestions : []) {
+    const config = asObject(question?.answerConfig);
+    const kind = clean(config.measurementKind);
+    if (!['rvFAC', 'laVolumeBiplane', 'laVolumeBiplaneDisks', 'ivcCollapsibility', 'raArea']
+      .includes(kind)) continue;
+    const gold = asObject(config.goldMeasurement);
+    const parts = Array.isArray(gold.compositeResult?.components)
+      ? gold.compositeResult.components : [];
+    const hasGold = gold.value != null && gold.value !== '' && parts.length > 0;
+    const remote = remoteByKey.get(clean(question.questionKey));
+    if (!remote) return 'Question ' + clean(question.questionKey) + ' is missing from the saved draft.';
+    const remoteConfig = asObject(remote.answerConfig);
+    if (config.compositeFrameGuidanceEnabled === true) {
+      for (const [slot, source] of Object.entries(asObject(config.compositeFrameTargets))) {
+        const actual = asObject(remoteConfig.compositeFrameTargets)[slot];
+        if (!actual || ['studyInstanceUID', 'seriesInstanceUID', 'sopInstanceUID'].some(
+          field => clean(source?.[field]) !== clean(actual[field])
+        ) || Number(source?.frameNumber) !== Number(actual.frameNumber)) {
+          return kind + ' ' + slot + ' saved source frame was not persisted.';
+        }
+      }
+    }
+    if (!hasGold) continue;
+    const actualGold = asObject(remoteConfig.goldMeasurement);
+    const actualParts = Array.isArray(actualGold.compositeResult?.components)
+      ? actualGold.compositeResult.components : [];
+    if (!Number.isFinite(Number(actualGold.value)) ||
+        Number(actualGold.value) !== Number(gold.value) ||
+        parts.length !== actualParts.length ||
+        parts.some(part => !actualParts.some(saved =>
+          clean(saved?.slot) === clean(part?.slot) &&
+          clean(saved?.annotationId) === clean(part?.annotationId) &&
+          Number(saved?.target?.frameNumber) === Number(part?.target?.frameNumber) &&
+          (!Array.isArray(part?.points) || (
+            Array.isArray(saved?.points) && saved.points.length === part.points.length))
+        ))) {
+      return kind + ' saved gold measurement or contour evidence was not persisted.';
+    }
+  }
+  return '';
+}
