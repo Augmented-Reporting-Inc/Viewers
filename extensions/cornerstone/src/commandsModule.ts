@@ -126,6 +126,7 @@ import { getEchoAreaSlot } from '../../extension-ar-measurements/src/utils/echoA
 import { resolveViewerQuizCompositeResult, resolveViewerQuizLVSimpsonForStudy, isViewerQuizCompositeReviewCurrent, getViewerQuizCompositeStatus } from '../../extension-ar-measurements/src/utils/viewerQuizCompositeResults';
 import { createGuidedMouseToolOwnership } from './utils/guidedMouseToolOwnership';
 import { calibrateUSContourPoints, worldToImageIndex } from './utils/usRegionLengthCalibration';
+import { calculateCalibratedEchoAreaCM2 } from './utils/quizEchoAreaCalibration';
 
 const { DefaultHistoryMemo } = csUtils.HistoryMemo;
 const toggleSyncFunctions = {
@@ -3859,14 +3860,7 @@ function calibratedEchoAreaFromRegions({
   const imagePlane = metaData.get?.('imagePlaneModule', imageId);
   const physical = calibrateUSContourPoints({ points, imagePlane, regions });
   if (!physical || physical.length < 6) return null;
-  let doubleArea = 0;
-  for (let index = 0; index < physical.length; index += 1) {
-    const [x1, y1] = physical[index];
-    const [x2, y2] = physical[(index + 1) % physical.length];
-    doubleArea += x1 * y2 - x2 * y1;
-  }
-  const areaCM2 = Math.abs(doubleArea) / 200; // physical points mm, area / 100 mm²/cm²
-  return Number.isFinite(areaCM2) && areaCM2 > 0 ? areaCM2 : null;
+  return calculateCalibratedEchoAreaCM2(physical);
 }
 
 function getVerifiedEchoAreaCalibration({
