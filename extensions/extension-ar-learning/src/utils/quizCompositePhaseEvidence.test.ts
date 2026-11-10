@@ -1,6 +1,7 @@
 import {
   getCompositePhaseSlot, getCompositePhaseMeasurementId, getGoldPhaseMeasurementSummary,
   matchesCompositePhaseSource, getCompositeGoldCaptureSignature, findEditableCompositePhaseMeasurement,
+  getCompositeGoldPersistenceError,
 } from './quizCompositePhaseEvidence';
 
 describe('quiz composite phase evidence', () => {
@@ -106,6 +107,24 @@ describe('quiz composite phase evidence', () => {
     expect(matchesCompositePhaseSource(measurement, { target })).toBe(true);
     expect(findEditableCompositePhaseMeasurement([measurement], 'rvFAC', 'RV_ED',
       { target })).toEqual(measurement);
+  });
+  it('detects FormAPI gold/source evidence dropped during quiz save', () => {
+    const target = { studyInstanceUID: 'study', seriesInstanceUID: 'series',
+      sopInstanceUID: 'sop', frameNumber: 14 };
+    const question = { questionKey: 'q-rv', type: 'measurementNumeric', answerConfig: {
+      measurementKind: 'rvFAC', compositeFrameGuidanceEnabled: true,
+      compositeFrameTargets: { RV_ED: target },
+      goldMeasurement: { value: 50, compositeResult: { components: [
+        { slot: 'RV_ED', annotationId: 'ed', target, points: [[0,0],[1,0],[1,1]] },
+      ] } },
+    } };
+    expect(getCompositeGoldPersistenceError([question], [question])).toBe('');
+    expect(getCompositeGoldPersistenceError([question], [{
+      ...question, answerConfig: { ...question.answerConfig, goldMeasurement: null },
+    }])).toContain('gold measurement');
+    expect(getCompositeGoldPersistenceError([question], [{
+      ...question, answerConfig: { ...question.answerConfig, compositeFrameTargets: {} },
+    }])).toContain('source frame');
   });
   it('formats physical geometry as approximate and does not treat missing geometry as numeric', () => {
     expect(getGoldPhaseMeasurementSummary({
