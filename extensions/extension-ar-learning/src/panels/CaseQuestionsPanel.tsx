@@ -4375,8 +4375,10 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       // Composite results use fixed clinical units supplied by the viewer.
       const configuredKind = cleanString(answerConfig.measurementKind);
       const compositeUnit =
-        configuredKind === 'lvSimpsonEF' ? '%' :
-        configuredKind === 'laVolumeBiplane' ? 'mL' : '';
+        ['lvSimpsonEF', 'rvFAC', 'ivcCollapsibility'].includes(configuredKind) ? '%' :
+        ['laVolumeBiplane', 'laVolumeBiplaneDisks'].includes(configuredKind) ? 'mL' :
+        configuredKind === 'raArea' ? 'cm2' :
+        configuredKind === 'ivcRapRvsp' ? 'mmHg' : '';
       const expectedUnit = cleanString(compositeUnit || answerConfig.unit).toLowerCase();
       const capturedUnit = cleanString(answer.unit).toLowerCase();
       if (compositeUnit && cleanString(answer.measurementKind) !== configuredKind) {
@@ -6419,7 +6421,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
             <label className="mt-2 block text-xs font-semibold text-gray-200">
               {['lvSimpsonEF', 'laVolumeBiplane', 'laVolumeBiplaneDisks', 'rvFAC', 'raArea', 'ivcCollapsibility'].includes(cleanString(answerConfig.measurementKind))
                 ? `Numeric tolerance (${cleanString(answerConfig.measurementKind) === 'lvSimpsonEF' ? '%' : 'mL'})`
-                : 'Length tolerance'}
+                : ['ivcCollapsibility', 'rvFAC', 'raArea', 'laVolumeBiplaneDisks'].includes(cleanString(answerConfig.measurementKind)) ? 'Numeric tolerance' : 'Length tolerance'}
             </label>
             <input
               className="mt-1 w-36 rounded border border-gray-700 bg-black px-2 py-1 text-sm text-white"
