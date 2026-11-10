@@ -5605,10 +5605,11 @@ function installQuizCompositeContourTextOverrideForViewport({
           ).trim() === study);
         const status = getViewerQuizCompositeStatus(kind as any, current);
         const value = status?.phaseValues?.[slot];
-        const label = ({
+        const areaLabels: Record<string, string> = {
           RV_ED: 'RVEDA', RV_ES: 'RVESA', RA_ES: 'RA area',
           A4C: 'LA A4C', A2C: 'LA A2C',
-        })[slot] || slot;
+        };
+        const label = areaLabels[slot] || slot;
         return Number.isFinite(Number(value)) && value != null &&
           Number(value) > 0
           ? [label + ': ' + Number(value).toFixed(2) + ' cm²']

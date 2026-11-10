@@ -277,7 +277,8 @@ export function getViewerQuizCompositeStatus(
     'rvFAC', 'raArea', 'ivcCollapsibility',
   ];
   if (!supported.includes(kind)) {
-    return { complete: false, value: null, unit: '', message: 'Unsupported measurement type.' };
+    return { complete: false, value: null, unit: '',
+      message: 'Unsupported measurement type.', phaseValues: {} as Record<string, number> };
   }
   const measurementList = Array.isArray(measurements) ? measurements : [];
   const phaseValues = getCompositeCalibratedPhaseAreas(kind, measurementList);
