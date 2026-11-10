@@ -2705,6 +2705,15 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     const measurementKind = question.type === 'measurementNumeric'
       ? cleanString(plainObject(question.answerConfig).measurementKind)
       : '';
+    // The toolbar reflects the selected quiz measurement workflow even when
+    // saved contours are being reviewed and no drawing should start.
+    try {
+      await runViewerCommand(commandsManager, 'setViewerQuizMeasurementContext', {
+        measurementKind,
+      });
+    } catch (error) {
+      console.warn('[CaseQuestionsPanel] could not highlight quiz measurement toolbar', error);
+    }
     // Reopening an educator's completed composite is a review action, not
     // an instruction to start another measurement session over saved contours.
     const savedGoldComponents = authoringMode
