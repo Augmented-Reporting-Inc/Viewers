@@ -1996,6 +1996,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
   const pendingBowelQuizMeasurementIdsRef = useRef(new Set<string>());
   const autoBowelGoldCaptureInFlightRef = useRef(new Set<string>());
   const autoCompositeGoldCaptureInFlightRef = useRef(new Set<string>());
+  const lastCompositeGoldCaptureErrorRef = useRef('');
   // Serialize source-ID captures so two calipers cannot race a gold-set update.
   const autoBowelGoldCaptureQueueRef = useRef<Promise<void>>(Promise.resolve());
   const autoBowelLearnerCaptureInFlightRef = useRef(new Set<string>());
@@ -4399,6 +4400,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     // Binding is always an explicit question, never inferred from the last drawing.
     setActiveQuestionKey(`authoring:${question.questionKey}`);
     setCapturingAuthoringKey(captureKey);
+    lastCompositeGoldCaptureErrorRef.current = '';
 
     try {
       const result = await captureQuizMeasurementResult(question, {
@@ -4550,6 +4552,8 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       if (options.silent) {
         // Automatic capture attempts during incomplete measurements must not
         // generate failure toasts or modify existing versioned gold evidence.
+        lastCompositeGoldCaptureErrorRef.current =
+          cleanString(error?.message || error);
         console.warn('[CaseQuestionsPanel] automatic gold measurement capture unavailable:', error);
         return false;
       }
@@ -4701,9 +4705,10 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
           }
           const accepted = await captureAuthoringMeasurement(currentQuestion, { silent: true });
           if (accepted !== true) {
-            throw new Error('The ' + kind + ' calculation is complete but cannot be captured as gold. ' +
-              'Verify that the contour DICOM sources match the required phase frames and retry. ' +
-              'No invalid gold value has been saved.');
+            throw new Error('The ' + kind + ' calculation is complete but cannot be captured as gold: ' +
+              (lastCompositeGoldCaptureErrorRef.current ||
+                'check that every contour uses the required DICOM source frame.') +
+              ' No invalid gold value has been saved.');
           }
         }
       }
