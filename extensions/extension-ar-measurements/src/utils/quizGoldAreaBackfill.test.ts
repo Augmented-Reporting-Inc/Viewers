@@ -63,12 +63,12 @@ describe('validated per-phase gold area recovery from saved DICOM contours', () 
   it('refuses unsupported sources, same-frame reuse, absent calibration and conflicts', async () => {
     const components = [source('RV_ED', 14), source('RV_ES', 17)];
     const base = gold('rvFAC', 'rv-fac-planimetry-v1', components, 20);
-    const noSource = structuredClone(base);
+    const noSource = JSON.parse(JSON.stringify(base));
     noSource.compositeResult.components[0].target.referencedImageId = '';
     expect((await resolveViewerQuizGoldAreaBackfill({
       kind: 'rvFAC', gold: noSource, calibrate: async () => 10,
     })).ok).toBe(false);
-    const duplicate = structuredClone(base);
+    const duplicate = JSON.parse(JSON.stringify(base));
     duplicate.compositeResult.components[1].target = {
       ...duplicate.compositeResult.components[0].target,
     };
