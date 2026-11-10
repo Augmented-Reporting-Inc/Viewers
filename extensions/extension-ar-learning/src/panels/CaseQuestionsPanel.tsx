@@ -2313,6 +2313,8 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
   ) {
     const study = cleanString(target?.studyInstanceUID);
     const candidates = liveCompositeMeasurements.filter(item => {
+      // Never expose or manipulate a locked comparison/source contour as a learner edit.
+      if (item?.isLocked || item?.arMeasurementReadOnly) return false;
       if (getCompositePhaseSlot(item, kind) !== slot) return false;
       const actualStudy = cleanString(item.referenceStudyUID || item.StudyInstanceUID);
       return !study || (actualStudy && actualStudy === study);
