@@ -40,6 +40,7 @@ import {
   matchesConfiguredCompositeFrame,
 } from '../utils/compositeFrameTargets';
 import { EF_CONTOUR_FRAME_SLOTS, getEFGoldContourAuthoringRows } from '../utils/efGoldContourAuthoring';
+import { getCompositePhaseSlot, getCompositePhaseMeasurementId, getGoldPhaseMeasurementSummary } from '../utils/quizCompositePhaseEvidence';
 
 const AR_QUIZ_MEASUREMENT_ADDED_EVENT = 'ar-learning:quiz-measurement-added';
 const AR_QUIZ_MEASUREMENT_LABELLED_EVENT = 'ar-learning:quiz-measurement-labelled';
@@ -640,63 +641,6 @@ function getSavedGoldCompositeNavigationComponents(answerConfig: any) {
       Number(target.frameNumber) > 0;
     return { slot, label, complete, target };
   });
-}
-
-function getCompositePhaseSlot(measurement: any, kind: string): string {
-  const source = plainObject(measurement);
-  const measurementKind = cleanString(source.measurementKind ||
-    plainObject(source.measurements).measurementKind);
-  if (kind === 'rvFAC' || kind === 'raArea') {
-    if (measurementKind !== 'echoAreaSlot') return '';
-    return cleanString(source.echoArea?.slot || source.measurements?.echoArea?.slot || source.slot);
-  }
-  if (kind === 'laVolumeBiplane' || kind === 'laVolumeBiplaneDisks') {
-    if (measurementKind !== 'laVolumeSlot') return '';
-    return cleanString(source.laVolume?.slot || source.measurements?.laVolume?.slot || source.slot);
-  }
-  if (kind === 'ivcCollapsibility' || kind === 'ivcRapRvsp') {
-    if (cleanString(source.toolName) !== 'Length') return '';
-    const label = cleanString(source.label || source.measurementRole || source.role)
-      .toLowerCase().replace(/[^a-z0-9]/g, '');
-    if (['ivcexp', 'ivcexpiration', 'ivcendexpiration', 'ivcendexpirationdiameter'].includes(label)) {
-      return 'IVC_EXP';
-    }
-    if (['ivcinsp', 'ivcinspiration', 'ivcendinspiration', 'ivcendinspirationdiameter'].includes(label)) {
-      return 'IVC_INSP';
-    }
-  }
-  return '';
-}
-
-function getCompositePhaseMeasurementId(measurement: any): string {
-  return cleanString(measurement?.uid || measurement?.annotationUID ||
-    measurement?.annotationId || measurement?.id);
-}
-
-function getGoldPhaseMeasurementSummary(component: any, kind: string): string {
-  const points = component?.points;
-  if (!Array.isArray(points) || points.some(point => !Array.isArray(point))) {
-    return 'Gold source recorded';
-  }
-  if (['ivcCollapsibility', 'ivcRapRvsp'].includes(kind)) {
-    if (points.length !== 2) return 'Caliper saved';
-    const length = Math.hypot(...[0, 1, 2].map(axis =>
-      Number(points[1][axis] ?? 0) - Number(points[0][axis] ?? 0)));
-    return Number.isFinite(length) && length > 0
-      ? 'Diameter ≈ ' + length.toFixed(2) + ' mm' : 'Caliper saved';
-  }
-  if (points.length < 3) return 'Contour saved';
-  const total = [0, 0, 0];
-  for (let i = 0; i < points.length; i += 1) {
-    const a = points[i], b = points[(i + 1) % points.length];
-    const az = Number(a[2] ?? 0), bz = Number(b[2] ?? 0);
-    total[0] += Number(a[1]) * bz - az * Number(b[1]);
-    total[1] += az * Number(b[0]) - Number(a[0]) * bz;
-    total[2] += Number(a[0]) * Number(b[1]) - Number(a[1]) * Number(b[0]);
-  }
-  const cm2 = Math.hypot(...total) / 200;
-  return Number.isFinite(cm2) && cm2 > 0
-    ? 'Contour area ≈ ' + cm2.toFixed(2) + ' cm²' : 'Contour saved';
 }
 
 function getQuestionViewerTarget(question: QuizQuestion) {
