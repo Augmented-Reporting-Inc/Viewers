@@ -1,4 +1,4 @@
-import { boundEFQuizEvidencePoints, isViewerQuizCompositeReviewCurrent, resolveViewerQuizCompositeResult, resolveViewerQuizLVSimpsonForStudy } from './viewerQuizCompositeResults';
+import { boundEFQuizEvidencePoints, isViewerQuizCompositeReviewCurrent, resolveViewerQuizCompositeResult, resolveViewerQuizLVSimpsonForStudy, getViewerQuizCompositeStatus } from './viewerQuizCompositeResults';
 
 describe('viewer quiz composite result evidence', () => {
   it('rejects missing required Simpson slots', () => {
@@ -37,6 +37,41 @@ describe('viewer quiz composite result evidence', () => {
   });
 });
 
+
+describe('live composite preview uses the gold-capture validation contract', () => {
+  const rv = (slot: string, areaMM2: number, frameNumber: number) => ({
+    uid: slot, measurementKind: 'echoAreaSlot',
+    toolName: 'SplineROI', echoArea: { slot },
+    points: [[0, 0, 0], [30, 0, 0], [30, 30, 0], [0, 30, 0]],
+    measurements: { area: areaMM2, areaUnit: 'mm²' },
+    referenceStudyUID: 'study', referenceSeriesUID: 'series',
+    SOPInstanceUID: 'sop', referencedImageId: 'wadors:studies/study/series/series/instances/sop/frames/' + frameNumber,
+    frameNumber,
+  });
+  it('shows a calibrated RV FAC live result before it is captured as gold', () => {
+    const status = getViewerQuizCompositeStatus('rvFAC', [
+      rv('RV_ED', 3000, 14), rv('RV_ES', 1800, 17),
+    ]);
+    expect(status.complete).toBe(true);
+    expect(status.value).toBeCloseTo(40);
+    expect(status.unit).toBe('%');
+  });
+  it('explains missing calibration rather than showing an unverified number', () => {
+    const es = rv('RV_ES', 1800, 17);
+    es.measurements.area = 0;
+    const status = getViewerQuizCompositeStatus('rvFAC', [rv('RV_ED', 3000, 14), es]);
+    expect(status.complete).toBe(false);
+    expect(status.value).toBeNull();
+    expect(status.message).toMatch(/calibrated/i);
+  });
+  it('does not invent LA volume from incomplete apical sources', () => {
+    const status = getViewerQuizCompositeStatus('laVolumeBiplane', [
+      { uid: 'a4c', measurementKind: 'laVolumeSlot', slot: 'A4C' },
+    ]);
+    expect(status.complete).toBe(false);
+    expect(status.value).toBeNull();
+  });
+});
 
 describe('LV EF progress versus quiz capture precision', () => {
   it('accepts a capture when both values round to the same reviewed hundredth', () => {
