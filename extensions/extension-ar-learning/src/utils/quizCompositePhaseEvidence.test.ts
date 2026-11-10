@@ -1,6 +1,6 @@
 import {
   getCompositePhaseSlot, getCompositePhaseMeasurementId, getGoldPhaseMeasurementSummary,
-  matchesCompositePhaseSource,
+  matchesCompositePhaseSource, getCompositeGoldCaptureSignature,
 } from './quizCompositePhaseEvidence';
 
 describe('quiz composite phase evidence', () => {
@@ -42,6 +42,44 @@ describe('quiz composite phase evidence', () => {
     expect(matchesCompositePhaseSource(source, { annotationId: 'measured-ra' })).toBe(true);
     expect(matchesCompositePhaseSource(source, { annotationId: 'different-ra' })).toBe(false);
     expect(matchesCompositePhaseSource(source)).toBe(false);
+  });
+  it('requires both unique RV phases in the same study before educator auto-capture', () => {
+    const ed = { uid: 'ed', measurementKind: 'echoAreaSlot', echoArea: { slot: 'RV_ED' },
+      referenceStudyUID: 'study', referenceSeriesUID: 'series', SOPInstanceUID: 'sop',
+      frameNumber: 14 };
+    const es = { ...ed, uid: 'es', echoArea: { slot: 'RV_ES' }, frameNumber: 17 };
+    const question = { type: 'measurementNumeric', answerConfig: { measurementKind: 'rvFAC' } };
+    expect(getCompositeGoldCaptureSignature(question, [ed])).toBe('');
+    expect(getCompositeGoldCaptureSignature(question, [ed, es])).toBe('RV_ED:ed|RV_ES:es');
+    expect(getCompositeGoldCaptureSignature(question, [ed, es, { ...es, uid: 'duplicate' }])).toBe('');
+    expect(getCompositeGoldCaptureSignature(question, [ed, { ...es, referenceStudyUID: 'other' }])).toBe('');
+  });
+  it('does not auto-capture off-frame guided sources or an already-captured gold result', () => {
+    const ed = { uid: 'ed', measurementKind: 'echoAreaSlot', echoArea: { slot: 'RV_ED' },
+      referenceStudyUID: 'study', referenceSeriesUID: 'series', SOPInstanceUID: 'sop',
+      frameNumber: 14 };
+    const es = { ...ed, uid: 'es', echoArea: { slot: 'RV_ES' }, frameNumber: 17 };
+    const target = frame => ({ studyInstanceUID: 'study', seriesInstanceUID: 'series',
+      sopInstanceUID: 'sop', frameNumber: frame });
+    const question = { type: 'measurementNumeric', answerConfig: {
+      measurementKind: 'rvFAC', compositeFrameGuidanceEnabled: true,
+      compositeFrameTargets: { RV_ED: target(14), RV_ES: target(17) },
+    }};
+    expect(getCompositeGoldCaptureSignature(question, [ed, es])).toBe('RV_ED:ed|RV_ES:es');
+    question.answerConfig.compositeFrameTargets.RV_ES = target(16);
+    expect(getCompositeGoldCaptureSignature(question, [ed, es])).toBe('');
+    question.answerConfig.compositeFrameTargets.RV_ES = target(17);
+    question.answerConfig.goldMeasurement = { value: 50, compositeResult: { components: [
+      { slot: 'RV_ED', annotationId: 'ed' }, { slot: 'RV_ES', annotationId: 'es' },
+    ] }};
+    expect(getCompositeGoldCaptureSignature(question, [ed, es])).toBe('');
+  });
+  it('detects two labelled IVC Length calipers without accepting unlabelled lengths', () => {
+    const exp = { uid: 'exp', toolName: 'Length', label: 'IVCexp', referenceStudyUID: 'study' };
+    const insp = { uid: 'insp', toolName: 'Length', label: 'IVCinsp', referenceStudyUID: 'study' };
+    const question = { type: 'measurementNumeric', answerConfig: { measurementKind: 'ivcCollapsibility' } };
+    expect(getCompositeGoldCaptureSignature(question, [exp, insp])).toBe('IVC_EXP:exp|IVC_INSP:insp');
+    expect(getCompositeGoldCaptureSignature(question, [exp, { ...insp, label: 'Length' }])).toBe('');
   });
   it('formats physical geometry as approximate and does not treat missing geometry as numeric', () => {
     expect(getGoldPhaseMeasurementSummary({
