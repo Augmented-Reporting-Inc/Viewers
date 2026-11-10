@@ -39,10 +39,12 @@ describe('echo chamber areas', () => {
   });
 
   it('accepts the authoritative nested Cornerstone SplineROI area only with physical units', () => {
-    const snapshot = area('RVEDA', 0);
-    snapshot.toolName = 'SplineROI';
-    snapshot.data = {
-      cachedStats: { 'imageId:dicom-frame': { area: 3000, areaUnit: 'mm²' } },
+    const snapshot = {
+      ...area('RVEDA', 0),
+      toolName: 'SplineROI',
+      data: {
+        cachedStats: { 'imageId:dicom-frame': { area: 3000, areaUnit: 'mm²' } },
+      },
     };
     expect(getCalibratedEchoAreaCM2(snapshot)).toBe(30);
     expect(getCalibratedEchoAreaCM2({
