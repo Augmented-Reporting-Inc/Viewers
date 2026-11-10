@@ -246,6 +246,64 @@ export function resolveViewerQuizCompositeResult(
 }
 
 /**
+ * Read-only status for the Case Questions panel and educator Save Draft
+ * preflight. Uses the exact same validated composite resolver as gold capture,
+ * but exposes actionable missing-calibration/geometry diagnostics without
+ * disclosing study identifiers or treating incomplete evidence as a gold value.
+ */
+export function getViewerQuizCompositeStatus(
+  kind: CompositeKind,
+  measurements: Measurement[] = []
+) {
+  const supported: CompositeKind[] = [
+    'lvSimpsonEF', 'laVolumeBiplane', 'laVolumeBiplaneDisks',
+    'rvFAC', 'raArea', 'ivcCollapsibility',
+  ];
+  if (!supported.includes(kind)) {
+    return { complete: false, value: null, unit: '', message: 'Unsupported measurement type.' };
+  }
+  const measurementList = Array.isArray(measurements) ? measurements : [];
+  const composite = resolveViewerQuizCompositeResult(kind, measurementList);
+  if (composite) {
+    return {
+      complete: true,
+      value: composite.value,
+      unit: composite.unit,
+      message: '',
+      components: composite.components.map(component => ({
+        slot: component.slot,
+        annotationId: component.annotationId,
+      })),
+    };
+  }
+  const result = kind === 'lvSimpsonEF'
+    ? calculateLVSimpson(measurementList)
+    : kind === 'laVolumeBiplane'
+      ? calculateLAVolume(measurementList)
+      : kind === 'laVolumeBiplaneDisks'
+        ? calculateLABiplaneDisks(measurementList)
+        : kind === 'rvFAC'
+          ? calculateRVFACFromMeasurements(measurementList)
+          : kind === 'raArea'
+            ? calculateRAAreaFromMeasurements(measurementList)
+            : calculateIVCFromMeasurements(measurementList);
+  const messages = Array.isArray((result as any)?.messages)
+    ? (result as any).messages
+    : [(result as any)?.message].filter(Boolean);
+  const message = result?.status === 'complete'
+    ? 'The calculated result is available but its annotation geometry or DICOM frame evidence is incomplete. Check source frames and saved contours.'
+    : messages.length
+      ? messages.map(clean).filter(Boolean).join(' ')
+      : 'Complete the required calibrated measurements in the same study.';
+  return {
+    complete: false,
+    value: null,
+    unit: '',
+    message,
+  };
+}
+
+/**
  * Resolve the exact active-study evidence used for both the viewer EF summary
  * and the quiz's numeric EF capture. Never blend saved annotations or contours
  * from unrelated studies into an authoring/learner quiz gold answer.
