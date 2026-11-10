@@ -132,6 +132,9 @@ export function getCompositeGoldCaptureSignature(question: any, measurements: an
     components.push({ slot, id, study });
   }
   if (new Set(components.map(part => part.study)).size !== 1) return '';
+  const questionTarget = asObject(question.viewerTarget || config.viewerTarget || config.goldTarget);
+  const expectedStudy = clean(questionTarget.studyInstanceUID || questionTarget.StudyInstanceUID);
+  if (expectedStudy && components[0].study !== expectedStudy) return '';
   const gold = asObject(config.goldMeasurement);
   const goldParts = Array.isArray(gold.compositeResult?.components)
     ? gold.compositeResult.components : [];
