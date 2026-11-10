@@ -636,6 +636,38 @@ function getCurrentViewerMeasurementSnapshot(
         : null;
       const spectralDoppler = annotation?.data?.spectralDoppler;
 
+      // SplineROI and Length keep calibrated stats on their Cornerstone source
+      // annotation. Quiz acquisition can populate MeasurementService before its
+      // numeric adapter receives those stats. Preserve only the source tool's
+      // calibrated cachedStats, never infer an area/diameter from polygon pixels.
+      const sourceKind = String(measurement?.measurementKind ||
+        measurement?.measurements?.measurementKind || '').trim();
+      const isRightHeartContour = sourceKind === 'echoAreaSlot';
+      const ivcLabel = String(measurement?.label ||
+        measurement?.measurementRole || measurement?.role || '')
+        .toLowerCase().replace(/[^a-z0-9]/g, '');
+      const isIVC = measurement?.toolName === 'Length' &&
+        ['ivcexp', 'ivcexpiration', 'ivcinsp', 'ivcinspiration',
+         'ivcendexpiration', 'ivcendinspiration',
+         'ivcendexpirationdiameter', 'ivcendinspirationdiameter'].includes(ivcLabel);
+      if ((isRightHeartContour || isIVC) && annotation?.data) {
+        const sourceImage = String(annotation?.metadata?.referencedImageId || '');
+        const measuredImage = String(measurement?.referencedImageId || '');
+        // Never substitute measurements from a different source frame.
+        if (!sourceImage || !measuredImage || sourceImage === measuredImage) {
+          const sourceStats = annotation.data.cachedStats ||
+            annotation.cachedStats || {};
+          return {
+            ...measurement,
+            cachedStats: sourceStats,
+            data: {
+              ...(measurement?.data || {}),
+              cachedStats: sourceStats,
+            },
+          };
+        }
+      }
+
       if (spectralDoppler?.measurementKind !== SPECTRAL_DOPPLER_MEASUREMENT_KIND) {
         return measurement;
       }
