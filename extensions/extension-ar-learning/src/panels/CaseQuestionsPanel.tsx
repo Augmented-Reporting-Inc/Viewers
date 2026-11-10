@@ -4829,7 +4829,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                   void (async () => {
                     await activateQuestionForPhaseCapture(quiz, question);
                     if (!(await ensureConfiguredCompositePhaseFrame(question, slot))) return;
-                    await runViewerCommand(commandsManager, choice.command, { slot });
+                    await runViewerCommand(commandsManager, choice.command, {
+                      slot, clickTrace: choice.command === 'startEchoAreaContourWorkflow',
+                    });
                   })();
                 }}
               >
