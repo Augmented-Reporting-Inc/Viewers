@@ -15634,6 +15634,125 @@ function commandsModule({
         failedSlots: errors.map(item => item.slot),
       };
     },
+    /**
+     * Restore all individual composite contours from the learner's saved
+     * Series MeasurementAnnotations, NOT from educator gold or quiz JSON.
+     *
+     * Each SOP/frame is hydrated on its actual DICOM image, then the viewer
+     * returns to the first phase. No new annotation, scoring value, or
+     * clinical report field is persisted by this read-only restoration.
+     */
+    showViewerQuizLearnerCompositeMeasurement: async ({
+      learnerMeasurement = {}, viewerTarget = null, questionKey = '',
+    } = {}) => {
+      clearViewerQuizMeasurementComparisonAnnotations();
+      const kind = String(learnerMeasurement?.measurementKind || '').trim();
+      const expected = kind === 'rvFAC' ? ['RV_ED', 'RV_ES']
+        : ['laVolumeBiplane', 'laVolumeBiplaneDisks'].includes(kind) ? ['A4C', 'A2C']
+        : kind === 'ivcCollapsibility' ? ['IVC_EXP', 'IVC_INSP'] : null;
+      const parts = learnerMeasurement?.compositeResult?.components;
+      if (!expected || !Array.isArray(parts) || parts.length !== expected.length ||
+          expected.some(slot => parts.filter(part => part?.slot === slot).length !== 1)) {
+        return { ok: false, learnerRendered: false, restoredCount: 0,
+          reason: 'incomplete-learner-composite-source' };
+      }
+
+      const { learnerSeriesDoc } = await getViewerQuizMeasurementSeriesDocs({
+        includeBaseSeries: false,
+      });
+      const saveTarget = getArViewerSaveTargetFromUrl();
+      const learnerId = String(saveTarget.learnerSeriesId || saveTarget.seriesId || '');
+      if (!learnerSeriesDoc?.isLearnerCopy || !learnerId ||
+          learnerId !== String(learnerSeriesDoc._id || '')) {
+        return { ok: false, learnerRendered: false, restoredCount: 0,
+          reason: 'learner-copy-source-unavailable' };
+      }
+      const saved = getRequestedWorkflowAnnotations(
+        learnerSeriesDoc.MeasurementAnnotations,
+        [VIEWER_MEASUREMENTS_WORKFLOW]
+      );
+      const sourceAnnotations: any[] = [];
+      const sourceIds = new Set<string>();
+      const sourceFrames = new Set<string>();
+      for (const slot of expected) {
+        const part = parts.find(entry => entry.slot === slot);
+        const target = part?.target || {};
+        const id = String(part?.annotationId || '').trim();
+        const study = String(target.studyInstanceUID || '').trim();
+        const series = String(target.seriesInstanceUID || '').trim();
+        const sop = String(target.sopInstanceUID || '').trim();
+        const frame = Number(target.frameNumber);
+        const imageId = String(target.referencedImageId || '').trim();
+        const source = saved.find(candidate =>
+          getMeasurementAnnotationId(candidate) === id
+        );
+        if (!id || sourceIds.has(id) || !study || !series || !sop ||
+            !Number.isSafeInteger(frame) || frame < 1 ||
+            !imageId || !source ||
+            (learnerSeriesDoc.StudyInstanceUID &&
+              String(learnerSeriesDoc.StudyInstanceUID) !== study) ||
+            String(source.StudyInstanceUID || source.referenceStudyUID || '') !== study ||
+            String(source.SeriesInstanceUID || source.referenceSeriesUID || '') !== series ||
+            String(source.SOPInstanceUID || '') !== sop ||
+            getFrameNumberFromReferencedImageId(imageId) !== frame ||
+            getFrameNumberForAnnotation(source) !== frame ||
+            normalizeImageIdForCompare(source.referencedImageId || '') !==
+              normalizeImageIdForCompare(imageId) ||
+            !Array.isArray(source.points) ||
+            source.points.length < (kind === 'ivcCollapsibility' ? 2 : 3)) {
+          return { ok: false, learnerRendered: false,
+            restoredCount: sourceAnnotations.length,
+            reason: 'learner-composite-source-frame-or-geometry-mismatch' };
+        }
+        const sourceFrame = [study, series, sop, frame].join('|');
+        if (sourceFrames.has(sourceFrame)) {
+          return { ok: false, learnerRendered: false,
+            restoredCount: sourceAnnotations.length,
+            reason: 'duplicate-learner-composite-source-frame' };
+        }
+        sourceIds.add(id);
+        sourceFrames.add(sourceFrame);
+        sourceAnnotations.push({ source, slot, target });
+      }
+
+      let restoredCount = 0;
+      for (const item of sourceAnnotations) {
+        const outcome = await actions.jumpToSavedViewerAnnotation({
+          annotation: item.source, selectAnnotation: false,
+          runDelayedDisplayRefresh: false,
+        });
+        if (outcome?.ok !== true) {
+          return { ok: false, learnerRendered: false, restoredCount,
+            reason: outcome?.reason || 'learner-contour-hydration-failed' };
+        }
+        const id = getMeasurementAnnotationId(item.source);
+        const hydrated = id ? annotation.state.getAnnotation?.(id) : null;
+        if (!hydrated ||
+            normalizeImageIdForCompare(hydrated.metadata?.referencedImageId || '') !==
+              normalizeImageIdForCompare(item.target.referencedImageId)) {
+          return { ok: false, learnerRendered: false, restoredCount,
+            reason: 'learner-contour-not-visible-at-its-saved-frame' };
+        }
+        hydrated.isVisible = true;
+        restoredCount += 1;
+      }
+
+      const firstTarget = viewerTarget || sourceAnnotations[0]?.target;
+      if (firstTarget) {
+        const navigation = await actions.jumpToViewerQuizTarget({
+          viewerTarget: firstTarget, questionKey,
+        });
+        if (navigation?.ok !== true) {
+          return { ok: false, learnerRendered: false, restoredCount,
+            reason: 'learner-composite-return-navigation-failed' };
+        }
+      }
+      dispatchLiveMeasurementsRefresh({
+        kind: 'learner-composite-restored', restoredCount,
+      });
+      return { ok: true, learnerRendered: true, restoredCount };
+    },
+
     showViewerQuizLearnerMeasurement: async ({
       learnerMeasurement = {},
       viewerTarget = null,
@@ -18071,6 +18190,9 @@ function commandsModule({
     },
     showViewerQuizLearnerMeasurement: {
       commandFn: actions.showViewerQuizLearnerMeasurement,
+    },
+    showViewerQuizLearnerCompositeMeasurement: {
+      commandFn: actions.showViewerQuizLearnerCompositeMeasurement,
     },
     showViewerQuizLearnerCompositeMeasurement: {
       commandFn: actions.showViewerQuizLearnerCompositeMeasurement,
