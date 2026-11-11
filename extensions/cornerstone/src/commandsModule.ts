@@ -15794,6 +15794,7 @@ function commandsModule({
       rubricMeasurement = {},
       viewerTarget = null,
       focusedCompositeSlot = '',
+      compositeDisplayRole = 'rubric',
       questionKey = '',
       radius = null,
       radiusUnit = 'world',
@@ -15802,6 +15803,11 @@ function commandsModule({
       clearAllViewerQuizMarkerOverlays();
 
       const { learnerSeriesDoc, baseSeriesDoc } = await getViewerQuizMeasurementSeriesDocs();
+      const showLearnerComposite = compositeDisplayRole === 'learner';
+      if (showLearnerComposite && !learnerSeriesDoc?.isLearnerCopy) {
+        return { ok: false, reason: 'learner-copy-evidence-unavailable',
+          learnerRendered: false, renderedCount: 0 };
+      }
 
       // Opt-in BWT comparisons use two separate authorities: learner-copy
       // Series for learner evidence and versioned quiz JSON for educator gold.
@@ -15816,10 +15822,10 @@ function commandsModule({
           ]) || getViewerQuizMeasurementAnnotationFromService(learnerMeasurement);
       const embeddedGoldAnnotation = buildViewerQuizGoldBwtDisplaySource(rubricMeasurement);
       const persistedRubricAnnotation = isBowelGoldReference ? null :
-        findViewerQuizMeasurementAnnotationInSeriesDocs(rubricMeasurement, [
-          baseSeriesDoc,
-          learnerSeriesDoc,
-        ]) || getViewerQuizMeasurementAnnotationFromService(rubricMeasurement);
+        findViewerQuizMeasurementAnnotationInSeriesDocs(rubricMeasurement,
+          showLearnerComposite ? [learnerSeriesDoc] : [baseSeriesDoc, learnerSeriesDoc]
+        ) || (showLearnerComposite ? null :
+          getViewerQuizMeasurementAnnotationFromService(rubricMeasurement));
       const rubricAnnotation = isBowelGoldReference
         ? embeddedGoldAnnotation : persistedRubricAnnotation;
       const goldSourceId = getViewerQuizMeasurementSourceAnnotationId(rubricMeasurement);
@@ -15920,13 +15926,16 @@ function commandsModule({
             const sourceId = String(component?.annotationId || '').trim();
             if (!sourceId) return null;
             const reference = { sourceAnnotationId: sourceId };
-            const persisted = [baseSeriesDoc, learnerSeriesDoc].flatMap(seriesDoc =>
+            const savedSources = showLearnerComposite
+              ? [learnerSeriesDoc] : [baseSeriesDoc, learnerSeriesDoc];
+            const persisted = savedSources.flatMap(seriesDoc =>
               getRequestedWorkflowAnnotations(seriesDoc?.MeasurementAnnotations)
             ).find(item => getMeasurementAnnotationId(item) === sourceId);
             const sourceAnnotation =
-              embeddedContourFromComponent(component, slot) ||
               persisted ||
-              getViewerQuizMeasurementAnnotationFromService(reference);
+              embeddedContourFromComponent(component, slot) ||
+              (showLearnerComposite ? null :
+                getViewerQuizMeasurementAnnotationFromService(reference));
             return sourceAnnotation ? { sourceAnnotation, slot } : null;
           }).filter(Boolean)
         : [];
@@ -16061,7 +16070,7 @@ function commandsModule({
         ...(compositeRubric
           ? resolvedRubricContours.map(entry => ({
               sourceAnnotation: entry.sourceAnnotation,
-              variant: 'rubric' as const,
+              variant: (showLearnerComposite ? 'learner' : 'rubric') as 'learner' | 'rubric',
               slot: entry.slot,
             }))
           : [{ sourceAnnotation: rubricAnnotation, variant: 'rubric' as const, slot: '' }]),
@@ -16070,7 +16079,7 @@ function commandsModule({
       for (const entry of entries) {
         const sourceId = String(entry.sourceAnnotation?.annotationId ||
           entry.sourceAnnotation?.uid || '').trim();
-        const native = compositeRubric && entry.variant === 'rubric' && sourceId
+        const native = compositeRubric && sourceId
           ? annotation.state.getAnnotation?.(sourceId) : null;
         const expectedImage = normalizeImageIdForCompare(
           entry.sourceAnnotation?.referencedImageId || '');
@@ -16082,7 +16091,8 @@ function commandsModule({
             sourceId, !focusedCompositeSlot || entry.slot === focusedCompositeSlot
           );
           renderedCount++;
-          rubricRendered = true;
+          if (showLearnerComposite) learnerRendered = true;
+          else rubricRendered = true;
           continue;
         }
         const comparisonAnnotation = buildViewerQuizMeasurementComparisonAnnotation({
@@ -16160,11 +16170,12 @@ function commandsModule({
 
         hydratedAnnotation.isLocked = true;
         hydratedAnnotation.isVisible = true;
-        const focused = entry.variant === 'rubric' && !!focusedCompositeSlot &&
+        const focused = !!focusedCompositeSlot && !!entry.slot &&
           entry.slot === focusedCompositeSlot;
         annotation.config.style.setAnnotationStyles(
           comparisonAnnotationId,
-          focused ? VIEWER_QUIZ_MEASUREMENT_COMPARISON_STYLES.rubricFocused
+          focused && entry.variant === 'rubric'
+            ? VIEWER_QUIZ_MEASUREMENT_COMPARISON_STYLES.rubricFocused
             : VIEWER_QUIZ_MEASUREMENT_COMPARISON_STYLES[entry.variant]
         );
         cornerstoneTools.annotation.selection.setAnnotationSelected?.(
