@@ -20,6 +20,8 @@ on:
       - 'extensions/cornerstone/src/utils/spectralVmaxTargets.test.ts'
       - 'extensions/cornerstone/src/utils/spectralVmaxClick*.ts'
       - 'extensions/cornerstone/src/utils/rvFacContour*.ts'
+      - 'extensions/cornerstone/src/utils/installQuizContourTextRenderer*.ts'
+      - 'extensions/cornerstone/src/utils/quizEchoAreaCalibration*.ts'
       - 'extensions/cornerstone/src/utils/ultrasoundDirectionalReportMapping.ts'
       - 'extensions/extension-ar-measurements/src/utils/rightHeartMeasurements*.ts'
       - 'extensions/extension-ar-measurements/src/utils/echoAreaMeasurements*.ts'
@@ -57,7 +59,7 @@ jobs:
       - name: Test calibrated EF dual capture and save/reopen invariants
         run: yarn jest --config extensions/cornerstone/jest.config.js --runInBand --coverage=false --runTestsByPath extensions/cornerstone/src/utils/efPhysicalCalibration.test.ts extensions/cornerstone/src/utils/measurementAnnotationHydration.ef.test.ts
       - name: Test physically calibrated quiz area and RV/LA viewport unit labels
-        run: yarn jest --config extensions/cornerstone/jest.config.js --runInBand --coverage=false --runTestsByPath extensions/cornerstone/src/utils/quizEchoAreaCalibration.test.ts
+        run: yarn jest --config extensions/cornerstone/jest.config.js --runInBand --coverage=false --runTestsByPath extensions/cornerstone/src/utils/quizEchoAreaCalibration.test.ts extensions/cornerstone/src/utils/installQuizContourTextRenderer.test.ts
       - name: Test guided LV EF contour geometry
         run: yarn jest --config extensions/cornerstone/jest.config.js --runInBand --coverage=false --runTestsByPath extensions/cornerstone/src/utils/lvSimpsonContour.test.ts
       - name: Test editable annulus/apex RV contour geometry
