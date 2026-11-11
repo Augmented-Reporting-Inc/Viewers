@@ -1,3 +1,5 @@
+import { convertPhysicalValue } from './physicalMeasurementPresentation';
+
 /**
  * Reusable right-heart scalar calculations.
  *
@@ -38,17 +40,14 @@ export function calculateRVFAC(edaCM2: NumericInput, esaCM2: NumericInput) {
 
 export function calculateRAArea(area: NumericInput, unit: string) {
   const value = finiteNumber(area);
-  const normalized = String(unit || '').trim().toLowerCase().replace(/\s/g, '');
   if (value == null) {
     return { status: 'incomplete' as MeasurementCalculationStatus, areaCM2: null };
   }
-  if (value <= 0 || !['cm²', 'cm2', 'mm²', 'mm2'].includes(normalized)) {
+  const areaCM2 = convertPhysicalValue(value, unit, 'cm²', 'area');
+  if (value <= 0 || areaCM2 == null) {
     return { status: 'invalid' as MeasurementCalculationStatus, areaCM2: null };
   }
-  return {
-    status: 'complete' as MeasurementCalculationStatus,
-    areaCM2: normalized.startsWith('mm') ? value / 100 : value,
-  };
+  return { status: 'complete' as MeasurementCalculationStatus, areaCM2 };
 }
 
 export function calculateIVCCollapsibility(
@@ -187,9 +186,7 @@ function calibratedLengthMM(measurement: ViewerMeasurement): number | null {
 
   // A pixel distance or an unlabelled raw number is not clinical evidence.
   if (length == null || length <= 0) return null;
-  if (unit === 'mm') return length;
-  if (unit === 'cm') return length * 10;
-  return null;
+  return convertPhysicalValue(length, unit, 'mm', 'length');
 }
 
 function compatibleIVCCinePair(a: ViewerMeasurement, b: ViewerMeasurement): boolean {
