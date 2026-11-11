@@ -140,7 +140,7 @@ export type VerifiedPhysicalMeasurement = Readonly<{
   value: number;
   unit: string;
   measurementKind: string;
-  verified: true; // Set only after acquisition/calibration/evidence validation.
+  verified: boolean; // Only true is accepted, after source/evidence validation.
   calibrationSource?: string;
   sourceReference?: unknown;
 }>;
