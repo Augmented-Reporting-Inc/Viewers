@@ -152,3 +152,48 @@ export function getLearnerCompositeSourceComponents(answer: any, kind: string): 
 function slotIsIVC(kind: string): boolean {
   return kind === 'ivcCollapsibility' || kind === 'ivcRapRvsp';
 }
+
+/**
+ * Learner quiz saving must persist the underlying phase annotations in the
+ * isolated learner Series, not only a numeric/geometry-bearing quiz response.
+ * Match each saved contour to the persisted source by full DICOM identity.
+ */
+export function getLearnerCompositePersistenceSources(
+  questions: any[], answers: Record<string, any> = {}
+): Array<{ annotationId: string; target: any }> {
+  const sources: Array<{ annotationId: string; target: any }> = [];
+  for (const question of Array.isArray(questions) ? questions : []) {
+    if (question?.type !== 'measurementNumeric') continue;
+    const kind = clean(question?.answerConfig?.measurementKind);
+    const answer = asObject(answers[question.questionKey]);
+    const phases = getLearnerCompositeSourceComponents(answer, kind);
+    for (const part of phases) {
+      const annotationId = clean(part.annotationId);
+      if (!annotationId || sources.some(source => source.annotationId === annotationId)) continue;
+      sources.push({ annotationId, target: part.target });
+    }
+  }
+  return sources;
+}
+
+export function isPersistedLearnerCompositeSource(
+  saved: any, source: { annotationId: string; target: any }
+): boolean {
+  if (!saved || !source) return false;
+  const target = asObject(source.target);
+  const frame = Number(target.frameNumber);
+  const savedId = getCompositePhaseMeasurementId(saved);
+  const expectedFrame = clean(target.referencedImageId)
+    .match(/\/frames\/([1-9][0-9]*)(?:[/?#]|$)/);
+  const actualImage = clean(saved.referencedImageId || saved.metadata?.referencedImageId);
+  const actualFrame = actualImage.match(/\/frames\/([1-9][0-9]*)(?:[/?#]|$)/);
+  return savedId === clean(source.annotationId) &&
+    clean(saved.StudyInstanceUID || saved.referenceStudyUID) === clean(target.studyInstanceUID) &&
+    clean(saved.SeriesInstanceUID || saved.referenceSeriesUID) === clean(target.seriesInstanceUID) &&
+    clean(saved.SOPInstanceUID || saved.metadata?.SOPInstanceUID) === clean(target.sopInstanceUID) &&
+    Number.isSafeInteger(frame) && frame > 0 &&
+    !!expectedFrame && Number(expectedFrame[1]) === frame &&
+    !!actualFrame && Number(actualFrame[1]) === frame &&
+    clean(target.referencedImageId) === actualImage &&
+    Array.isArray(saved.points) && saved.points.length >= 2;
+}
