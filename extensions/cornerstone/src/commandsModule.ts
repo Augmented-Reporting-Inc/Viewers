@@ -126,7 +126,7 @@ import { getEchoAreaSlot } from '../../extension-ar-measurements/src/utils/echoA
 import { resolveViewerQuizCompositeResult, resolveViewerQuizLVSimpsonForStudy, isViewerQuizCompositeReviewCurrent, getViewerQuizCompositeStatus } from '../../extension-ar-measurements/src/utils/viewerQuizCompositeResults';
 import { createGuidedMouseToolOwnership } from './utils/guidedMouseToolOwnership';
 import { calibrateUSContourPoints, worldToImageIndex } from './utils/usRegionLengthCalibration';
-import { calculateCalibratedEchoAreaCM2 } from './utils/quizEchoAreaCalibration';
+import { calculateCalibratedEchoAreaCM2, getSavedQuizEchoAreaDisplayInfo } from './utils/quizEchoAreaCalibration';
 import { resolveViewerQuizGoldAreaBackfill } from '../../extension-ar-measurements/src/utils/quizGoldAreaBackfill';
 
 const { DefaultHistoryMemo } = csUtils.HistoryMemo;
@@ -4165,6 +4165,16 @@ function getSavedContourAreaForDisplay(savedAnnotation, referencedImageId = '') 
   return rawArea;
 }
 
+function getSavedQuizEchoContourAreaDisplay(savedAnnotation) {
+  const isQuizEchoContour =
+    savedAnnotation?.measurementKind === 'echoAreaSlot' ||
+    !!getEchoAreaSlot(savedAnnotation) ||
+    isLAVolumeMeasurement(savedAnnotation);
+  if (!isQuizEchoContour) return null;
+  const measurements = savedAnnotation?.measurements || {};
+  return getSavedQuizEchoAreaDisplayInfo(measurements.area, measurements.areaUnit);
+}
+
 function getSavedAnnotationDisplayText(savedAnnotation) {
   const savedSpectralDoppler = getSpectralDopplerGeometry(savedAnnotation, savedAnnotation);
 
@@ -4178,6 +4188,12 @@ function getSavedAnnotationDisplayText(savedAnnotation) {
   if (savedAnnotation?.toolName === 'ArrowAnnotate') {
     const text = getArrowAnnotateText(savedAnnotation);
     return text ? [text] : [];
+  }
+  // Quiz RV/LA contour areas already carry explicit physical units from
+  // calibrated measurement data. Do not reuse stale generic ROI displayText.
+  const quizArea = getSavedQuizEchoContourAreaDisplay(savedAnnotation);
+  if (quizArea) {
+    return [`${quizArea.value.toFixed(2)} ${quizArea.areaUnit}`];
   }
   const measurements = savedAnnotation?.measurements || {};
   const isCurvedLength = isBowelCurvedLengthViewerMeasurement(savedAnnotation, savedAnnotation);
@@ -4252,7 +4268,8 @@ function buildSavedAnnotationStatsForMeasurementService(savedAnnotation, referen
   }
 
   if (isViewerContourTool(savedAnnotation?.toolName)) {
-    const area = getSavedContourAreaForDisplay(
+    const quizArea = getSavedQuizEchoContourAreaDisplay(savedAnnotation);
+    const area = quizArea?.value ?? getSavedContourAreaForDisplay(
       savedAnnotation,
       referencedImageId || savedAnnotation?.referencedImageId || ''
     );
@@ -4264,9 +4281,9 @@ function buildSavedAnnotationStatsForMeasurementService(savedAnnotation, referen
     return {
       [statsKey]: {
         area,
-        areaUnit: 'mm²',
-        areaUnits: 'mm²',
-        unit: 'mm',
+        areaUnit: quizArea?.areaUnit || 'mm²',
+        areaUnits: quizArea?.areaUnit || 'mm²',
+        unit: quizArea?.linearUnit || 'mm',
       },
     };
   }
@@ -4344,7 +4361,8 @@ function buildSavedAnnotationStatsForCornerstone(savedAnnotation, referencedImag
   }
 
   if (isViewerContourTool(savedAnnotation?.toolName)) {
-    const area = getSavedContourAreaForDisplay(
+    const quizArea = getSavedQuizEchoContourAreaDisplay(savedAnnotation);
+    const area = quizArea?.value ?? getSavedContourAreaForDisplay(
       savedAnnotation,
       referencedImageId || savedAnnotation?.referencedImageId || ''
     );
@@ -4358,17 +4376,17 @@ function buildSavedAnnotationStatsForCornerstone(savedAnnotation, referencedImag
         targetId,
         {
           area,
-          areaUnit: 'mm²',
-          areaUnits: 'mm²',
-          unit: 'mm',
-          units: 'mm',
-          modalityUnit: 'mm',
+          areaUnit: quizArea?.areaUnit || 'mm²',
+          areaUnits: quizArea?.areaUnit || 'mm²',
+          unit: quizArea?.linearUnit || 'mm',
+          units: quizArea?.linearUnit || 'mm',
+          modalityUnit: quizArea?.linearUnit || 'mm',
           modalityUnitOptions: {
-            areaUnit: 'mm²',
-            unit: 'mm',
+            areaUnit: quizArea?.areaUnit || 'mm²',
+            unit: quizArea?.linearUnit || 'mm',
           },
           arSavedMeasurementArea: area,
-          arSavedMeasurementAreaUnit: 'mm²',
+          arSavedMeasurementAreaUnit: quizArea?.areaUnit || 'mm²',
         },
       ])
     );
