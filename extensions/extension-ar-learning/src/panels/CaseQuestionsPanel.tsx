@@ -24,7 +24,7 @@ import {
   isMatchingQuizEFCompletion,
   getInitialGuidedEFQuestionTarget,
 } from '../utils/quizCompositeCaptureIntent';
-import { composeIVCRapRVSP, attachLearnerRapRvspToIVCAnswer, attachLearnerRapSelectionToIVCAnswer, isIVCReviewCurrent, RAP_CHOICES_MMHG } from '../utils/ivcRapRvsp';
+import { composeIVCRapRVSP, attachRapRvspEvidenceToIVCAnswer, attachLearnerRapRvspToIVCAnswer, attachLearnerRapSelectionToIVCAnswer, isIVCReviewCurrent, RAP_CHOICES_MMHG } from '../utils/ivcRapRvsp';
 import {
   getLearnerCompositeAutoCaptureSignature,
   getLearnerCompositeSourceComponents,
@@ -5624,6 +5624,105 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     );
   }
 
+  function renderAuthoringIVCRapRVSPReference(question: QuizQuestion, disabled: boolean) {
+    const answer = plainObject(plainObject(question.answerConfig).goldMeasurement);
+    const current = plainObject(answer.compositeResult);
+    const questions = authoringQuestionsRef.current;
+    const index = questions.findIndex(item => item.questionKey === question.questionKey);
+    const priorTR = index > 0 ? questions.slice(0, index).reverse().find(item =>
+      item.type === 'measurementNumeric' &&
+      cleanString(plainObject(item.answerConfig).measurementKind) === 'trVmax'
+    ) : null;
+    const trGold = plainObject(plainObject(priorTR?.answerConfig).goldMeasurement);
+    const selectionKey = 'authoring:' + question.questionKey;
+    const savedRAP = current.rapRvsp?.ivc &&
+      isIVCReviewCurrent(current.rapRvsp.ivc, answer) ? current.rapMMHG : null;
+    const selection = rapSelectionsByQuestionKey[selectionKey] ??
+      (savedRAP == null ? '' : String(savedRAP));
+    const validIVC = answer.measurementKind === 'ivcCollapsibility' &&
+      answer.unit === '%' &&
+      Array.isArray(current.components) && current.components.length === 2;
+    const validTR = trGold.measurementKind === 'trVmax' && trGold.unit === 'm/s' &&
+      Number.isFinite(Number(trGold.value)) && Number(trGold.value) > 0 &&
+      !!cleanString(trGold.sourceAnnotationId) &&
+      !!cleanString(trGold.viewerTarget?.sopInstanceUID);
+    const calculated = validIVC && validTR
+      ? composeIVCRapRVSP({
+          ivcAnswer: answer, rapMMHG: selection, trVmaxAnswer: trGold,
+          trVmaxQuestionKey: priorTR?.questionKey || '',
+        })
+      : { status: 'unavailable' as const };
+    return (
+      <div className="mt-2 space-y-2 rounded border border-cyan-700 bg-cyan-950/20 p-2 text-xs">
+        <div className="font-semibold text-cyan-100">RAP / RVSP reference (educator)</div>
+        <div className={validTR ? 'text-green-200' : 'text-amber-200'}>
+          {validTR ? 'Recorded TR Vmax: ' + Number(trGold.value).toFixed(2) + ' m/s'
+            : 'Capture a calibrated TR Vmax gold measurement in an earlier quiz question first.'}
+        </div>
+        <label className="flex flex-wrap items-center gap-2">
+          RAP interpretation
+          <select aria-label="Educator RAP interpretation (mmHg)"
+            className="rounded border border-cyan-600 bg-black px-2 py-1 text-white"
+            value={selection} disabled={disabled || !validIVC}
+            onChange={event => setRapSelectionsByQuestionKey(currentSelections => ({
+              ...currentSelections, [selectionKey]: event.target.value,
+            }))}>
+            <option value="">Select RAP</option>
+            {RAP_CHOICES_MMHG.map(rap => (
+              <option key={rap} value={String(rap)}>{rap} mmHg</option>
+            ))}
+          </select>
+        </label>
+        {calculated.status === 'complete' ? (
+          <div className="text-green-200">
+            TR gradient: {calculated.compositeResult.trGradientMMHG} mmHg.
+            Calculated RVSP: {calculated.value} mmHg.
+          </div>
+        ) : <div className="text-amber-200">
+          Complete the gold IVC phases, choose RAP and capture an earlier source-linked TR Vmax.
+        </div>}
+        <button type="button" className="rounded border border-cyan-500 px-2 py-1 text-cyan-100 disabled:opacity-40"
+          disabled={disabled || calculated.status !== 'complete'}
+          onClick={event => {
+            event.preventDefault();
+            event.stopPropagation();
+            const latest = authoringQuestionsRef.current.find(item =>
+              item.questionKey === question.questionKey);
+            const latestAnswer = plainObject(plainObject(latest?.answerConfig).goldMeasurement);
+            const freshTR = plainObject(plainObject(authoringQuestionsRef.current.find(item =>
+              item.questionKey === priorTR?.questionKey)?.answerConfig).goldMeasurement);
+            const accepted = attachRapRvspEvidenceToIVCAnswer({
+              ivcAnswer: latestAnswer, rapMMHG: selection, trVmaxAnswer: freshTR,
+              trVmaxQuestionKey: priorTR?.questionKey || '',
+            });
+            if (accepted.status !== 'complete') {
+              uiNotificationService.show({
+                title: 'RAP / RVSP', type: 'warning', duration: 5000,
+                message: 'The IVC or TR Vmax gold source changed. Review and recalculate before saving.',
+              });
+              return;
+            }
+            updateAuthoringQuestion(question.questionKey, currentQuestion => ({
+              ...currentQuestion,
+              answerConfig: {
+                ...plainObject(currentQuestion.answerConfig),
+                goldMeasurement: accepted.answer,
+                // IVC remains the scored percentage, never RVSP mmHg.
+                goldValue: accepted.answer.value,
+              },
+            }));
+          }}>
+          Save RAP / RVSP reference with IVC gold
+        </button>
+        {savedRAP != null && Number.isFinite(Number(current.rvspMMHG)) ? (
+          <div className="text-green-200">
+            Saved reference: RAP {savedRAP} mmHg · RVSP {Number(current.rvspMMHG).toFixed(2)} mmHg
+          </div>
+        ) : null}
+      </div>
+    );
+  }
+
   function renderIVCRapRVSPControls(
     quizKey: string,
     question: QuizQuestion,
@@ -7061,6 +7160,11 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
             {renderCompositeCalculatedStatus(
               { quizKey: 'authoring', quizVersion: 1 }, question
             )}
+            {cleanString(answerConfig.measurementKind) === 'ivcCollapsibility'
+              ? renderAuthoringIVCRapRVSPReference(
+                  question, isCapturing || authoringSaving || !isDraftDefinition(authoringDefinition)
+                )
+              : null}
             {cleanString(answerConfig.measurementKind) === 'ivcRapRvsp'
               ? renderIVCRapRVSPControls(
                   'authoring', question, answerConfig.goldMeasurement,
