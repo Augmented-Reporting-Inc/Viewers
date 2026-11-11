@@ -127,6 +127,7 @@ import { resolveViewerQuizCompositeResult, resolveViewerQuizLVSimpsonForStudy, i
 import { createGuidedMouseToolOwnership } from './utils/guidedMouseToolOwnership';
 import { calibrateUSContourPoints, worldToImageIndex } from './utils/usRegionLengthCalibration';
 import { calculateCalibratedEchoAreaCM2, getSavedQuizEchoAreaDisplayInfo, getQuizCompositeContourViewportLines } from './utils/quizEchoAreaCalibration';
+import { installQuizContourTextRenderer } from './utils/installQuizContourTextRenderer';
 import { resolveViewerQuizGoldAreaBackfill } from '../../extension-ar-measurements/src/utils/quizGoldAreaBackfill';
 
 const { DefaultHistoryMemo } = csUtils.HistoryMemo;
@@ -5605,18 +5606,12 @@ function installQuizCompositeContourTextOverrideForViewport({
   displaySetService, toolGroupService,
 }) {
   if (!viewport) return;
-  // Viewer3's clinical and bowel tool configurations must not inherit the
-  // quiz-specific display override merely because the same ROI tool is used.
-  const params = getViewerUrlSearchParams();
-  const quizContext = params.has('arLibraryContentKey') ||
-    params.has('arQuizAuthoring') ||
-    /\/viewer\/learning(?:\/|$)/.test(String(window.location?.pathname || ''));
-  if (!quizContext) return;
+  // The hook is safe for any viewport: only explicit quiz composite contour
+  // metadata is intercepted. Depending on URL query parameters missed some
+  // legitimate quiz launches and left the native ROI mm² renderer active.
   const resolvedViewportId = viewport.id || viewportId;
   let toolGroup = null;
   try {
-    // Use the same OHIF tool-group lookup as measurement activation. The
-    // Cornerstone manager lookup alone may miss a reconfigured viewport.
     const groupRef = toolGroupService?.getToolGroupForViewport?.(resolvedViewportId);
     toolGroup = typeof groupRef === 'string'
       ? toolGroupService?.getToolGroup?.(groupRef) ||
@@ -5633,50 +5628,68 @@ function installQuizCompositeContourTextOverrideForViewport({
     return;
   }
 
-  // Both are used in quiz contour acquisition. Patching SplineROI alone
-  // leaves Cornerstone's PlanarFreehandROI "Area: ... mm²" text untouched.
+  // The rendering tool receives (data, targetId), not the annotation itself.
+  // Resolve the same validated phase value as Case Questions, but tie it to
+  // the annotation's actual image (and annotation id where supplied) instead
+  // of a stale active viewport captured when the tool group was first made.
+  const formatQuizContour = (data, rawTargetId = '') => {
+    const contourData = data?.annotation?.data || data?.data || data;
+    const slot = String(contourData?.echoArea?.slot ||
+      contourData?.laVolume?.slot || '').trim().toUpperCase();
+    const echoSlot = !!contourData?.echoArea?.slot &&
+      ['RV_ED', 'RV_ES', 'RA_ES'].includes(slot);
+    const laSlot = !!contourData?.laVolume?.slot &&
+      ['A4C', 'A2C'].includes(slot);
+    if (!echoSlot && !laSlot) return null;
+
+    const kind = echoSlot ? (slot === 'RA_ES' ? 'raArea' : 'rvFAC')
+      : 'laVolumeBiplane';
+    const targetImage = String(rawTargetId || '')
+      .replace(/^(?:imageId|volumeId):/i, '');
+    const annotationId = String(contourData?.arQuizSourceAnnotationId || '').trim();
+    const allMeasurements = getCurrentViewerMeasurementSnapshot(measurementService);
+    const matches = allMeasurements.filter(measurement => {
+      const candidateSlot = echoSlot
+        ? getEchoAreaSlot(measurement)
+        : String(measurement?.laVolume?.slot ||
+          measurement?.measurements?.laVolume?.slot || '').trim().toUpperCase();
+      if (candidateSlot !== slot) return false;
+      const candidateId = String(measurement?.uid || measurement?.annotationUID ||
+        measurement?.annotationId || '').trim();
+      if (annotationId && annotationId !== candidateId) return false;
+      const sourceImage = String(measurement?.referencedImageId ||
+        measurement?.metadata?.referencedImageId || '').trim();
+      return !targetImage || (sourceImage && sourceImage === targetImage);
+    });
+    // Duplicate or missing exact source references are not physical evidence.
+    // Saved contours may still have explicit previously validated cm² display
+    // text; the formatter handles that without adopting native pixel statistics.
+    let areaCM2 = null;
+    if (matches.length === 1) {
+      const study = String(matches[0]?.referenceStudyUID ||
+        matches[0]?.StudyInstanceUID || '').trim();
+      if (study) {
+        const scoped = allMeasurements.filter(measurement =>
+          String(measurement?.referenceStudyUID ||
+            measurement?.StudyInstanceUID || '').trim() === study);
+        const status = getViewerQuizCompositeStatus(kind as any, scoped);
+        areaCM2 = status?.phaseValues?.[slot] ?? null;
+      }
+    }
+    return getQuizCompositeContourViewportLines(contourData, areaCM2);
+  };
+
   for (const toolName of new Set([
     toolNames.SplineROI || 'SplineROI',
     toolNames.PlanarFreehandROI || 'PlanarFreehandROI',
   ])) {
-    const toolInstance = toolGroup.getToolInstance?.(toolName);
-    if (!toolInstance || toolInstance.__arQuizCompositePhysicalTextInstalled) continue;
-    const previous = toolInstance.configuration?.getTextLines;
-    const next = function (data, ...otherArgs) {
-      const contourData = data?.annotation?.data || data?.data || data;
-      const slot = String(contourData?.echoArea?.slot ||
-        contourData?.laVolume?.slot || '').trim().toUpperCase();
-      if (slot) {
-        const kind = contourData?.echoArea
-          ? (slot === 'RA_ES' ? 'raArea' : 'rvFAC')
-          : 'laVolumeBiplane';
-        const displaySet = getActiveViewportDisplaySet({
-          viewportGridService, displaySetService, viewportId: resolvedViewportId,
-        });
-        const study = String(displaySet?.StudyInstanceUID ||
-          displaySet?.studyInstanceUID || '').trim();
-        const current = getCurrentViewerMeasurementSnapshot(measurementService)
-          .filter(measurement => study && String(
-            measurement?.referenceStudyUID || measurement?.StudyInstanceUID || ''
-          ).trim() === study);
-        const status = getViewerQuizCompositeStatus(kind as any, current);
-        const textLines = getQuizCompositeContourViewportLines(
-          contourData, status?.phaseValues?.[slot]
-        );
-        if (textLines) return textLines;
-      }
-      const lines = typeof previous === 'function'
-        ? previous.call(this, data, ...otherArgs) : [];
-      return sanitizeContourTextLines(lines);
-    };
-    const configuration = { ...(toolInstance.configuration || {}), getTextLines: next };
-    toolInstance.configuration = configuration;
-    toolGroup.setToolConfiguration?.(toolName, configuration, true);
-    if (toolInstance.configuration?.getTextLines !== next) {
-      console.warn('[Quiz contour units] text override not retained', toolName);
-      continue;
+    const installed = installQuizContourTextRenderer({
+      toolGroup, toolName, formatQuizContour,
+      sanitizeFallback: sanitizeContourTextLines,
+    });
+    if (!installed) {
+      console.warn('[Quiz contour units] text renderer not active for', toolName);
     }
-    toolInstance.__arQuizCompositePhysicalTextInstalled = true;
   }
 }
 
