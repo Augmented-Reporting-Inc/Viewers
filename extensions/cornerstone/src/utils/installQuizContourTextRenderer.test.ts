@@ -89,6 +89,17 @@ describe('Cornerstone quiz contour text renderer', () => {
       .toEqual(['RVEDA: 20.11 cm²']);
   });
 
+  it('does not infer quiz identity from a generic clinical ROI label', () => {
+    const { toolInstance, group } = makeGroup();
+    installQuizContourTextRenderer({
+      toolGroup: group, toolName: 'SplineROI',
+      formatQuizContour: format({ RV_ED: 19.31 }),
+    });
+    const genericLabelOnly = { label: 'RVEDA' };
+    expect(toolInstance.configuration.getTextLines(genericLabelOnly, 'imageId:source'))
+      .toContain('Area: 19.3 mm²');
+  });
+
   it('returns false when no Cornerstone ROI tool is installed', () => {
     expect(installQuizContourTextRenderer({
       toolGroup: { getToolInstance: () => undefined }, toolName: 'SplineROI',
