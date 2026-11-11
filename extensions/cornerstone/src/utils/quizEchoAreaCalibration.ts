@@ -33,3 +33,45 @@ export function getSavedQuizEchoAreaDisplayInfo(area: unknown, areaUnit: unknown
   if (unit === 'mm2') return { value, areaUnit: 'mm²', linearUnit: 'mm' };
   return null;
 }
+
+/**
+ * Display-only formatter for RV/RA and LA quiz contour annotations.
+ * Cornerstone's native ROI cachedStats may use a different physical scale.
+ * Never relabel its raw number: display only the validated cm² phase value.
+ * Unrelated (clinical, bowel, spectral) contours are not intercepted.
+ */
+export function getQuizCompositeContourViewportLines(
+  data: any,
+  calibratedAreaCM2: unknown
+): string[] | null {
+  const slot = String(data?.echoArea?.slot || data?.laVolume?.slot || '')
+    .trim().toUpperCase();
+  const labels: Record<string, string> = {
+    RV_ED: 'RVEDA', RV_ES: 'RVESA', RA_ES: 'RA area',
+    A4C: 'LA A4C', A2C: 'LA A2C',
+  };
+  const isEcho = !!data?.echoArea?.slot;
+  const isLA = !!data?.laVolume?.slot;
+  if ((!isEcho && !isLA) || !labels[slot] ||
+      (isEcho && !['RV_ED', 'RV_ES', 'RA_ES'].includes(slot)) ||
+      (isLA && !['A4C', 'A2C'].includes(slot))) return null;
+
+  if (calibratedAreaCM2 != null && calibratedAreaCM2 !== '') {
+    const value = Number(calibratedAreaCM2);
+    if (Number.isFinite(value) && value > 0) {
+      return [`${labels[slot]}: ${value.toFixed(2)} cm²`];
+    }
+  }
+  // A hydrated legacy gold contour can already have explicitly calibrated
+  // display text even before the live composite snapshot is available.
+  const savedLines = data?.arSavedMeasurementDisplayText;
+  if (Array.isArray(savedLines)) {
+    const calibrated = savedLines.filter(line =>
+      /^\s*(?:[A-Za-z\s-]+:\s*)?\d+(?:\.\d+)?\s*cm(?:²|2)\s*$/i
+        .test(String(line))
+    );
+    if (calibrated.length) return calibrated.map(line =>
+      String(line).replace(/\s*cm2\s*$/i, ' cm²'));
+  }
+  return [`${labels[slot]}: calibrated area unavailable`];
+}
