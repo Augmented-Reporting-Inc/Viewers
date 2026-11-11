@@ -119,3 +119,36 @@ export function composeIVCRapRVSP({
     },
   };
 }
+
+/**
+ * Existing IVC-collapsibility questions continue to score the percentage,
+ * but may additionally save a learner-reviewed RAP/RVSP calculation as
+ * structured, independently sourced evidence on that same quiz answer.
+ *
+ * Never replace the percent with RVSP or use educator gold TR velocity.
+ * This is education answer evidence, NOT an unreviewed clinical report write.
+ */
+export function attachLearnerRapRvspToIVCAnswer({
+  ivcAnswer, rapMMHG, trVmaxAnswer, trVmaxQuestionKey,
+}: {
+  ivcAnswer?: any; rapMMHG?: unknown;
+  trVmaxAnswer?: any; trVmaxQuestionKey?: string;
+} = {}) {
+  const result = composeIVCRapRVSP({
+    ivcAnswer, rapMMHG, trVmaxAnswer, trVmaxQuestionKey,
+  });
+  if (result.status !== 'complete') return result;
+  return {
+    status: 'complete' as const,
+    answer: {
+      ...ivcAnswer,
+      compositeResult: {
+        ...ivcAnswer.compositeResult,
+        rapMMHG: result.compositeResult.rapMMHG,
+        trGradientMMHG: result.compositeResult.trGradientMMHG,
+        rvspMMHG: result.compositeResult.rvspMMHG,
+        rapRvsp: result.compositeResult,
+      },
+    },
+  };
+}
