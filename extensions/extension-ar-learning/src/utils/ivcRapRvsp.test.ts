@@ -1,4 +1,4 @@
-import { composeIVCRapRVSP, isIVCReviewCurrent } from './ivcRapRvsp';
+import { composeIVCRapRVSP, attachLearnerRapRvspToIVCAnswer, isIVCReviewCurrent } from './ivcRapRvsp';
 
 function target(instance: string, frame: number) {
   return {
@@ -52,15 +52,40 @@ describe('linked educational IVC/RAP/RVSP result', () => {
 
 describe('IVC review integrity checkpoint', () => {
   it('allows the exact reviewed source calipers to be accepted', () => {
-    expect(isIVCReviewCurrent(ivc, structuredClone(ivc))).toBe(true);
+    expect(isIVCReviewCurrent(ivc, JSON.parse(JSON.stringify(ivc)))).toBe(true);
   });
   it('invalidates source, geometry and derived value changes', () => {
-    const differentFrame = structuredClone(ivc);
+    const differentFrame = JSON.parse(JSON.stringify(ivc));
     differentFrame.compositeResult.components[0].target.frameNumber = 2;
     expect(isIVCReviewCurrent(ivc, differentFrame)).toBe(false);
-    const editedContour = structuredClone(ivc);
+    const editedContour = JSON.parse(JSON.stringify(ivc));
     editedContour.compositeResult.components[1].points[1][0] = 9;
     expect(isIVCReviewCurrent(ivc, editedContour)).toBe(false);
     expect(isIVCReviewCurrent(ivc, { ...ivc, value: 65 })).toBe(false);
+  });
+});
+
+describe('existing IVC collapsibility quiz with additional reviewed RAP and RVSP', () => {
+  it('retains the original collapsibility percent and exact source contours', () => {
+    const answer = attachLearnerRapRvspToIVCAnswer(args);
+    expect(answer.status).toBe('complete');
+    if (answer.status !== 'complete') return;
+    expect(answer.answer.measurementKind).toBe('ivcCollapsibility');
+    expect(answer.answer.unit).toBe('%');
+    expect(answer.answer.value).toBe(60);
+    expect(answer.answer.compositeResult.components).toEqual(ivc.compositeResult.components);
+    expect(answer.answer.compositeResult.rapMMHG).toBe(3);
+    expect(answer.answer.compositeResult.rvspMMHG).toBe(34.36);
+    expect(answer.answer.compositeResult.rapRvsp.trVmax.questionKey).toBe('q-tr');
+    expect(isIVCReviewCurrent(answer.answer.compositeResult.rapRvsp.ivc, ivc)).toBe(true);
+    expect(ivc.compositeResult).not.toHaveProperty('rapMMHG');
+  });
+  it('refuses missing source-linked TR velocity or an unreviewed RAP', () => {
+    expect(attachLearnerRapRvspToIVCAnswer({
+      ...args, rapMMHG: undefined,
+    }).status).toBe('unavailable');
+    expect(attachLearnerRapRvspToIVCAnswer({
+      ...args, trVmaxAnswer: { ...tr, sourceAnnotationId: '' },
+    }).status).toBe('unavailable');
   });
 });
