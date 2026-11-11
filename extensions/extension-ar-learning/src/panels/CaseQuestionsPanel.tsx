@@ -41,7 +41,7 @@ import {
 } from '../utils/compositeFrameTargets';
 import { EF_CONTOUR_FRAME_SLOTS, getEFGoldContourAuthoringRows } from '../utils/efGoldContourAuthoring';
 import { getCompositePhaseSlot, getCompositePhaseMeasurementId, matchesCompositePhaseSource, getCompositeGoldCaptureSignature, getSavedCompositePhaseValues, needsSavedCalibratedGoldAreas,
-  findEditableCompositePhaseMeasurement, getCompositeGoldPersistenceError } from '../utils/quizCompositePhaseEvidence';
+  findEditableCompositePhaseMeasurement, clearSavedCompositeGoldPhase, getCompositeGoldPersistenceError } from '../utils/quizCompositePhaseEvidence';
 
 const AR_QUIZ_MEASUREMENT_ADDED_EVENT = 'ar-learning:quiz-measurement-added';
 const AR_QUIZ_MEASUREMENT_LABELLED_EVENT = 'ar-learning:quiz-measurement-labelled';
@@ -2415,7 +2415,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       .find(part => cleanString(part?.slot) === slot);
     const configured = plainObject(config.compositeFrameTargets)[slot];
     const sourceTarget = authoringMode
-      ? configured || saved?.target
+      ? saved?.target || configured
       : saved?.target || (config.compositeFrameGuidanceEnabled === true ? configured : null);
     const phaseSource = { annotationId: cleanString(saved?.annotationId), target: sourceTarget };
     const live = getActiveCompositePhaseMeasurement(kind, slot, phaseSource);
@@ -2428,17 +2428,21 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
   ) {
     const kind = cleanString(plainObject(question.answerConfig).measurementKind);
     if (authoringMode && (!isDraftDefinition(authoringDefinition) || authoringSaving)) return;
-    // Refresh immediately before deleting to avoid acting on a stale panel
-    // snapshot after a frame switch or measurement replacement.
+    const savedId = cleanString(phaseSource.annotationId);
+    const latestQuestion = authoringMode
+      ? authoringQuestionsRef.current.find(item => item.questionKey === question.questionKey)
+      : null;
+    const savedPhase = authoringMode && savedId
+      ? clearSavedCompositeGoldPhase(latestQuestion, slot, savedId) : null;
+
+    // The current viewport may contain the replacement contour, while the
+    // saved gold still refers to a previous instance/frame. Never delete a
+    // different same-slot live contour to make the stale gold disappear.
     const refreshed = await runViewerCommand(commandsManager, 'getViewerMeasurementSnapshotForPanel', {});
     let record = findEditableCompositePhaseMeasurement(
       Array.isArray(refreshed) ? refreshed : [], kind, slot, phaseSource
     );
-    // A saved gold contour can be on a different source frame and absent from
-    // the currently hydrated viewport. Navigate to that exact source, then
-    // resolve by its annotation ID (not by a similarly labelled contour).
-    if (!record && cleanString(phaseSource.annotationId) &&
-        targetHasNavigationIdentity(phaseSource.target)) {
+    if (!record && savedPhase && targetHasNavigationIdentity(phaseSource.target)) {
       const jumped = await runViewerCommand(commandsManager, 'jumpToViewerQuizTarget', {
         viewerTarget: phaseSource.target, questionKey: question.questionKey,
       });
@@ -2456,56 +2460,50 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       }
     }
     const measurementId = getCompositePhaseMeasurementId(record);
-    if (!measurementId) {
+    if (!measurementId && !savedPhase) {
       uiNotificationService.show({
         title: 'Delete measurement', type: 'warning', duration: 5500,
         message: 'This phase cannot be uniquely identified. Open its source or resolve duplicate contours first.',
       });
       return;
     }
-    if (!window.confirm('Delete ' + slot + '? The calculated quiz answer must be captured again.')) return;
-    await runViewerCommand(commandsManager, 'removeMeasurement', { uid: measurementId });
-    const after = await runViewerCommand(commandsManager, 'getViewerMeasurementSnapshotForPanel', {});
-    if (!Array.isArray(after) || after.some(item =>
-      getCompositePhaseMeasurementId(item) === measurementId)) {
-      uiNotificationService.show({
-        title: 'Delete measurement', type: 'warning', duration: 5000,
-        message: 'The source measurement could not be removed. No gold answer was changed.',
-      });
-      return;
+
+    const prompt = measurementId
+      ? 'Delete ' + slot + '? The calculated quiz answer must be captured again.'
+      : 'Clear the saved ' + slot + ' gold reference? Its old annotation is not loaded and will not be deleted from the viewer.';
+    if (!window.confirm(prompt)) return;
+
+    if (measurementId) {
+      await runViewerCommand(commandsManager, 'removeMeasurement', { uid: measurementId });
+      const after = await runViewerCommand(commandsManager, 'getViewerMeasurementSnapshotForPanel', {});
+      if (!Array.isArray(after) || after.some(item =>
+        getCompositePhaseMeasurementId(item) === measurementId)) {
+        uiNotificationService.show({
+          title: 'Delete measurement', type: 'warning', duration: 5000,
+          message: 'The source measurement could not be removed. No gold answer was changed.',
+        });
+        return;
+      }
     }
-    if (authoringMode) {
-      updateAuthoringQuestion(question.questionKey, current => {
-        const config = plainObject(current.answerConfig);
-        const gold = plainObject(config.goldMeasurement);
-        const composite = plainObject(gold.compositeResult);
-        const surviving = (Array.isArray(composite.components) ? composite.components : [])
-          .filter(part => cleanString(part?.slot) !== slot);
-        return {
-          ...current,
-          answerConfig: {
-            ...config,
-            // Preserve other phase sources and contours, but invalidate the
-            // old calculated gold scalar until the missing phase is redrawn.
-            goldValue: null,
-            goldMeasurement: surviving.length
-              ? {
-                  ...gold, value: null,
-                  sourceAnnotationId: cleanString(surviving[0]?.annotationId),
-                  compositeResult: { ...composite, value: null, components: surviving },
-                }
-              : null,
-          },
-        };
-      });
-    } else {
-      // A partial composite must never remain a gradeable learner response.
+
+    if (authoringMode && savedPhase) {
+      // Recheck the exact saved annotation at commit time; a concurrent
+      // authoring edit must not be replaced by an older delete action.
+      updateAuthoringQuestion(question.questionKey, current =>
+        clearSavedCompositeGoldPhase(current, slot, savedId) || current
+      );
+    } else if (!authoringMode) {
+      // A partial learner composite must never remain gradeable.
       setAnswer(quiz.quizKey, question, null);
     }
+
     await refreshLiveCompositeMeasurements();
     uiNotificationService.show({
-      title: 'Measurement deleted', type: 'info', duration: 4000,
-      message: slot + ' removed. The other measurements remain; recapture the calculated result.',
+      title: savedPhase ? 'Gold phase cleared' : 'Measurement deleted',
+      type: 'info', duration: 4500,
+      message: savedPhase
+        ? slot + ' removed from saved gold. Other phases remain. Capture the replacement source if needed, then recapture the calculated result and Save Draft.'
+        : slot + ' removed. Recapture the calculated result.',
     });
   }
 
