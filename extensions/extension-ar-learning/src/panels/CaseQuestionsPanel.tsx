@@ -28,6 +28,7 @@ import { composeIVCRapRVSP, attachLearnerRapRvspToIVCAnswer, isIVCReviewCurrent,
 import {
   getLearnerCompositeAutoCaptureSignature,
   getLearnerCompositeSourceComponents,
+  isLearnerCompositeCaptureCurrent,
 } from '../utils/quizLearnerCompositeCapture';
 import {
   isBowelMeasurementSetQuestion,
@@ -3561,7 +3562,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
   async function captureSelectedMeasurementAnswer(
     quiz: QuizDefinition,
     question: QuizQuestion,
-    options: { measurementId?: string; silent?: boolean } = {}
+    options: { measurementId?: string; silent?: boolean; verifyCompositeStatus?: boolean } = {}
   ) {
     const captureKey = `${quiz.quizKey}:${question.questionKey}`;
 
@@ -3592,6 +3593,17 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         }
 
         return false;
+      }
+
+      // Validate after async capture against the current authoritative physical
+      // calculation and exact source annotation IDs, not a stale UI status.
+      if (options.verifyCompositeStatus) {
+        const kind = cleanString(plainObject(question.answerConfig).measurementKind);
+        const verified = await runViewerCommand(commandsManager,
+          'getViewerQuizCompositeStatusForActiveStudy', { measurementKind: kind });
+        if (!isLearnerCompositeCaptureCurrent(result.answer, verified, kind)) {
+          return false;
+        }
       }
 
       const currentAnswer = latestLearnerAnswersRef.current[quiz.quizKey]?.[question.questionKey];
@@ -3701,7 +3713,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       autoCompositeLearnerCaptureInFlightRef.current.add(captureKey);
       void (async () => {
         try {
-          if (await captureSelectedMeasurementAnswer(quiz, question, { silent: true })) {
+          if (await captureSelectedMeasurementAnswer(quiz, question, {
+            silent: true, verifyCompositeStatus: true,
+          })) {
             autoCompositeLearnerCapturedSignatureRef.current[captureKey] = signature;
           }
         } finally {
