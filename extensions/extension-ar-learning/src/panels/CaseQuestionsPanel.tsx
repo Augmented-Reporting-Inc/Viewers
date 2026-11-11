@@ -28,6 +28,8 @@ import { composeIVCRapRVSP, attachLearnerRapRvspToIVCAnswer, isIVCReviewCurrent,
 import {
   getLearnerCompositeAutoCaptureSignature,
   getLearnerCompositeSourceComponents,
+  getLearnerCompositePersistenceSources,
+  isPersistedLearnerCompositeSource,
   isLearnerCompositeCaptureCurrent,
 } from '../utils/quizLearnerCompositeCapture';
 import {
@@ -4149,6 +4151,73 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       if (deferredReportScoring && quiz.questions.some(q => q.type === 'measurementNumeric')) {
         await confirmReportOwnedMeasurementSave();
       }
+      // A quiz JSON answer is not proof its individual phase annotations were
+      // saved. Persist only the exact missing source contours on the learner's
+      // own Series before saving the answer. In combined report workflows the
+      // existing reviewed report-owned save runs first (above).
+      const compositeSources = getLearnerCompositePersistenceSources(
+        quiz.questions || [], quizAnswers
+      );
+      if (compositeSources.length) {
+        await ensureViewerQuizSaveSeriesDoc();
+        const readSaved = async () => await runViewerCommand(
+          commandsManager, 'getViewerMeasurementAnnotationsForActiveStudy',
+          { domain: 'echo', workflows: ['viewerMeasurements'] }
+        );
+        let persisted = await readSaved();
+        if (!persisted?.seriesDoc?.isLearnerCopy ||
+            !persisted?.saveTarget?.learnerSeriesId ||
+            String(persisted.seriesDoc._id || '') !==
+              String(persisted.saveTarget.learnerSeriesId)) {
+          throw new Error(
+            'Learner measurement evidence could not be verified on the isolated learner Series. No quiz answers were saved.'
+          );
+        }
+        const getMissing = (records: any[]) => compositeSources.filter(source =>
+          !(Array.isArray(records) ? records : []).some(annotation =>
+            isPersistedLearnerCompositeSource(annotation, source)
+          )
+        );
+        const missing = getMissing(persisted.annotations);
+        if (missing.length) {
+          // An exact quiz annotation ID in the learner's active viewer session
+          // is required. Never fetch educator/base gold or save an approximate
+          // contour from another question/frame.
+          const live = await runViewerCommand(
+            commandsManager, 'getViewerMeasurementSnapshotForPanel', {}
+          );
+          if (missing.some(source =>
+            !(Array.isArray(live) ? live : []).some(item =>
+              isPersistedLearnerCompositeSource(item, source)
+            )
+          )) {
+            throw new Error(
+              'Some learner composite contours are not available with their saved DICOM frame. Reopen and verify the affected measurements before saving.'
+            );
+          }
+          const result = await runViewerCommand(
+            commandsManager, 'saveViewerMeasurementsForActiveStudy', {
+              domain: 'echo',
+              measurementIds: missing.map(source => source.annotationId),
+              scoringIntent: 'draft', educationAttemptIntent: 'draft',
+              suppressSuccessNotification: true,
+            }
+          );
+          if (!result || result.ok === false) {
+            throw new Error(
+              'The learner phase contours could not be saved to AR. Quiz answers were not saved.'
+            );
+          }
+          persisted = await readSaved();
+          if (!persisted?.seriesDoc?.isLearnerCopy ||
+              getMissing(persisted.annotations).length) {
+            throw new Error(
+              'AR did not confirm persistence of every learner phase contour. Quiz answers were not saved.'
+            );
+          }
+        }
+      }
+
       const saveSource = `quiz:${quiz.quizKey}`;
       const saveRequestId = nextEducationSaveRequestId();
       reportEducationSaveStart(saveSource, saveRequestId);
