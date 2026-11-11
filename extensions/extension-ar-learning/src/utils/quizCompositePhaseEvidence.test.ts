@@ -3,7 +3,7 @@ import {
   matchesCompositePhaseSource, getCompositeGoldCaptureSignature, getSavedCompositePhaseValues,
   needsSavedCalibratedGoldAreas,
   findEditableCompositePhaseMeasurement, clearSavedCompositeGoldPhase,
-  getCompositeGoldPersistenceError,
+  getCompositeGoldPersistenceError, getIncompleteCompositeGoldReplacementReason,
 } from './quizCompositePhaseEvidence';
 
 describe('quiz composite phase evidence', () => {
@@ -240,6 +240,38 @@ describe('quiz composite phase evidence', () => {
     expect(cleared.answerConfig.goldMeasurement.compositeResult.derived).toBeNull();
     expect(cleared.answerConfig.goldMeasurement.compositeResult.components).toEqual([other]);
     expect(clearSavedCompositeGoldPhase(cleared, 'RV_ED', 'rv-old')).toBeNull();
+  });
+  it('blocks a misleading save after one LAV phase was replaced but gold was not recaptured', () => {
+    const pending = { type: 'measurementNumeric', answerConfig: {
+      measurementKind: 'laVolumeBiplane', goldValue: null,
+      goldMeasurement: { value: null, compositeResult: {
+        components: [{ slot: 'A4C', annotationId: 'kept-a4c' }],
+      } },
+    } };
+    expect(getIncompleteCompositeGoldReplacementReason([pending]))
+      .toContain('A2C');
+    expect(getIncompleteCompositeGoldReplacementReason([{
+      ...pending, answerConfig: { ...pending.answerConfig,
+        goldValue: 51, goldMeasurement: { value: 51, compositeResult: {
+          components: [
+            { slot: 'A4C', annotationId: 'kept-a4c' },
+            { slot: 'A2C', annotationId: 'new-a2c' },
+          ],
+        } },
+      },
+    }])).toBe('');
+    expect(getIncompleteCompositeGoldReplacementReason([{
+      ...pending, answerConfig: { measurementKind: 'laVolumeBiplane' },
+    }])).toBe('');
+  });
+  it('also detects a partially removed RV phase without affecting complete answers', () => {
+    const rv = { answerConfig: { measurementKind: 'rvFAC', goldValue: null,
+      goldMeasurement: { compositeResult: { components: [
+        { slot: 'RV_ES', annotationId: 'es' },
+      ] } },
+    } };
+    expect(getIncompleteCompositeGoldReplacementReason([rv])).toContain('RV_ED');
+    expect(getIncompleteCompositeGoldReplacementReason([])).toBe('');
   });
   it('detects FormAPI gold/source evidence dropped during quiz save', () => {
     const target = { studyInstanceUID: 'study', seriesInstanceUID: 'series',
