@@ -1,6 +1,8 @@
 import {
   getLearnerCompositeAutoCaptureSignature,
   getLearnerCompositeSourceComponents,
+  getLearnerCompositePersistenceSources,
+  isPersistedLearnerCompositeSource,
   isLearnerCompositeCaptureCurrent,
 } from './quizLearnerCompositeCapture';
 
@@ -158,5 +160,46 @@ describe('automatic learner capture rejects asynchronous source/calibration drif
     expect(isLearnerCompositeCaptureCurrent({...captured,
       compositeResult:{components:[captured.compositeResult.components[0]]}},
       active,'rvFAC')).toBe(false);
+  });
+});
+
+describe('read-after-write verified learner phase annotations', () => {
+  const parts = ['RV_ED', 'RV_ES'].map((slot, i) => ({
+    slot, annotationId:'ann-' + i,
+    target:frame('sop-' + i, [3,7][i]),
+    points:[[0,0,0],[3,0,0],[0,2,0]],
+  }));
+  const q = {questionKey:'q-rv',type:'measurementNumeric',
+    answerConfig:{measurementKind:'rvFAC'}};
+  const answer = {value:50,unit:'%',measurementKind:'rvFAC',
+    compositeResult:{components:parts}};
+  it('collects both exact source IDs, not a scalar-only quiz answer', () => {
+    const saved = getLearnerCompositePersistenceSources([q], {'q-rv':answer});
+    expect(saved).toHaveLength(2);
+    expect(saved.map(item=>item.annotationId)).toEqual(['ann-0','ann-1']);
+    expect(getLearnerCompositePersistenceSources([q], {'q-rv':{value:50,unit:'%'}}))
+      .toHaveLength(0);
+  });
+  it('rejects wrong learner DICOM identity, frame or missing contour geometry', () => {
+    const source = {annotationId:parts[0].annotationId,target:parts[0].target};
+    const stored = {
+      annotationId:source.annotationId,
+      StudyInstanceUID:'study',SeriesInstanceUID:'series',
+      SOPInstanceUID:'sop-0',
+      referencedImageId:parts[0].target.referencedImageId,
+      points:parts[0].points,
+    };
+    expect(isPersistedLearnerCompositeSource(stored,source)).toBe(true);
+    expect(isPersistedLearnerCompositeSource({
+      ...stored, StudyInstanceUID:'teaching-case',
+    },source)).toBe(false);
+    expect(isPersistedLearnerCompositeSource({
+      ...stored, referencedImageId:frame('sop-0',4).referencedImageId,
+    },source)).toBe(false);
+    expect(isPersistedLearnerCompositeSource({
+      ...stored, points:[],
+    },source)).toBe(false);
+    expect(isPersistedLearnerCompositeSource({...stored,annotationId:'other'},source))
+      .toBe(false);
   });
 });
