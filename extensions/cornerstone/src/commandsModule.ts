@@ -9164,6 +9164,22 @@ function commandsModule({
         return null;
       }
 
+      // Learner IVC phase buttons already identify expiration/inspiration.
+      // The question panel assigns the actual label by validated annotation
+      // ID and DICOM source. Suppress only the first-label dialog for a newly
+      // drawn Length in explicitly requested quiz measure-only mode.
+      // Do not bypass ordinary clinical/bowel labeling or manual relabeling.
+      const pendingAnnotation = cornerstoneTools.annotation.state.getAnnotation?.(uid);
+      if (viewerLengthLabelMode === VIEWER_LENGTH_LABEL_MODE_MEASURE_ONLY &&
+          measurement.toolName === 'Length' &&
+          pendingAnnotation?.metadata?.toolName === 'Length' &&
+          pendingAnnotation?.data?.arPendingLengthLabel === true) {
+        window.dispatchEvent(new CustomEvent('ar-learning:quiz-measurement-added', {
+          detail: { measurementId: uid },
+        }));
+        return String(measurement.label || 'Length');
+      }
+
       let labelConfig = options.labelConfigOverride;
 
       if (!labelConfig && measurement?.toolName === 'Length') {
