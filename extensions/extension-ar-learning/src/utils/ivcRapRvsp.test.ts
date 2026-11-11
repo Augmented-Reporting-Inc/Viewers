@@ -52,13 +52,13 @@ describe('linked educational IVC/RAP/RVSP result', () => {
 
 describe('IVC review integrity checkpoint', () => {
   it('allows the exact reviewed source calipers to be accepted', () => {
-    expect(isIVCReviewCurrent(ivc, structuredClone(ivc))).toBe(true);
+    expect(isIVCReviewCurrent(ivc, JSON.parse(JSON.stringify(ivc)))).toBe(true);
   });
   it('invalidates source, geometry and derived value changes', () => {
-    const differentFrame = structuredClone(ivc);
+    const differentFrame = JSON.parse(JSON.stringify(ivc));
     differentFrame.compositeResult.components[0].target.frameNumber = 2;
     expect(isIVCReviewCurrent(ivc, differentFrame)).toBe(false);
-    const editedContour = structuredClone(ivc);
+    const editedContour = JSON.parse(JSON.stringify(ivc));
     editedContour.compositeResult.components[1].points[1][0] = 9;
     expect(isIVCReviewCurrent(ivc, editedContour)).toBe(false);
     expect(isIVCReviewCurrent(ivc, { ...ivc, value: 65 })).toBe(false);
