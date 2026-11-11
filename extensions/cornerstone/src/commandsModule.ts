@@ -5596,7 +5596,7 @@ function installQuizCompositeContourTextOverrideForViewport({
   const params = getViewerUrlSearchParams();
   const quizContext = params.has('arLibraryContentKey') ||
     params.has('arQuizAuthoring') ||
-    /\\/viewer\\/learning(?:\\/|$)/.test(String(window.location?.pathname || ''));
+    /\/viewer\/learning(?:\/|$)/.test(String(window.location?.pathname || ''));
   if (!quizContext) return;
   const resolvedViewportId = viewport.id || viewportId;
   let toolGroup = null;
