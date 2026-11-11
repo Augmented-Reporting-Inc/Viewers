@@ -24,7 +24,14 @@ import {
   isMatchingQuizEFCompletion,
   getInitialGuidedEFQuestionTarget,
 } from '../utils/quizCompositeCaptureIntent';
-import { composeIVCRapRVSP, isIVCReviewCurrent, RAP_CHOICES_MMHG } from '../utils/ivcRapRvsp';
+import { composeIVCRapRVSP, attachLearnerRapRvspToIVCAnswer, isIVCReviewCurrent, RAP_CHOICES_MMHG } from '../utils/ivcRapRvsp';
+import {
+  getLearnerCompositeAutoCaptureSignature,
+  getLearnerCompositeSourceComponents,
+  getLearnerCompositePersistenceSources,
+  isPersistedLearnerCompositeSource,
+  isLearnerCompositeCaptureCurrent,
+} from '../utils/quizLearnerCompositeCapture';
 import {
   isBowelMeasurementSetQuestion,
   getBowelMeasurementSetEntries,
@@ -2002,6 +2009,11 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
   const autoBowelGoldCaptureQueueRef = useRef<Promise<void>>(Promise.resolve());
   const autoBowelLearnerCaptureInFlightRef = useRef(new Set<string>());
   const autoBowelLearnerCaptureQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const autoCompositeLearnerCaptureInFlightRef = useRef(new Set<string>());
+  const autoCompositeLearnerCapturedSignatureRef = useRef<Record<string, string>>({});
+  const pendingQuizIVCPhaseRef = useRef<null | {
+    activationKey: string; slot: string; target: any; issuedAt: number;
+  }>(null);
   const bowelCaptureFailureReasonRef = useRef<Record<string, string>>({});
   const [bowelCaptureErrors, setBowelCaptureErrors] = useState<Record<string, string>>({});
   // Geometry is intentionally absent from saved quiz responses. This cache
@@ -2633,7 +2645,8 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       <div className="mt-2 rounded border border-emerald-700/60 bg-emerald-950/10 px-2 py-2 text-xs">
         {hasLive ? (
           <div className="font-semibold text-emerald-200">
-            {sameGold ? 'Calculated and saved gold: ' : 'Calculated measurement: '}
+            {sameGold ? (authoringMode ? 'Calculated and saved gold: ' : 'Calculated and saved learner answer: ')
+              : 'Calculated measurement: '}
             {Number(status.value).toFixed(2)} {unit}
           </div>
         ) : hasGold ? (
@@ -2649,7 +2662,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         )}
         {hasGold && hasLive && !sameGold ? (
           <div className="mt-1 text-amber-200">
-            Saved gold: {Number(gold.value).toFixed(2)} {unit}. The live value has changed;
+            {authoringMode ? 'Saved gold' : 'Saved answer'}: {Number(gold.value).toFixed(2)} {unit}. The live value has changed;
             review the contours and recapture before saving changes.
           </div>
         ) : null}
@@ -2685,7 +2698,11 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     const goldAnswer = authoringMode
       ? plainObject(plainObject(question.answerConfig).goldMeasurement)
       : plainObject(answersByQuizKey?.[quiz.quizKey]?.[question.questionKey]);
-    const savedValue = hasSaved ? getSavedCompositePhaseValues(goldAnswer, kind)[slot] : null;
+    const phaseAnswer = kind === 'ivcRapRvsp'
+      ? plainObject(plainObject(goldAnswer.compositeResult).ivc) : goldAnswer;
+    const savedValue = hasSaved
+      ? getSavedCompositePhaseValues(phaseAnswer,
+        kind === 'ivcRapRvsp' ? 'ivcCollapsibility' : kind)[slot] : null;
     const liveArea = phaseValues[slot];
     const liveValue = live && liveArea != null && Number.isFinite(Number(liveArea)) &&
       Number(liveArea) > 0 ? Number(liveArea) : null;
@@ -2696,9 +2713,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     return (
       <>
         <span className={live || hasSaved ? 'text-emerald-200 text-[11px]' : 'text-amber-200 text-[11px]'}>
-          {live ? 'Measured' : hasSaved ? 'Gold saved' : 'Not measured'}
+          {live ? 'Measured' : hasSaved ? (authoringMode ? 'Gold saved' : 'Learner saved') : 'Not measured'}
           {areaLabel}
-          {hasSaved ? ' · Gold source saved' : ''}
+          {hasSaved ? (authoringMode ? ' · Gold source saved' : ' · Learner source saved') : ''}
         </span>
         {hasSaved && targetHasNavigationIdentity(saved?.target) ? (
           <button
@@ -2711,14 +2728,27 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                 const answer = authoringMode
                   ? plainObject(plainObject(question.answerConfig).goldMeasurement)
                   : plainObject(answersByQuizKey?.[quiz.quizKey]?.[question.questionKey]);
-                const result = await runViewerCommand(commandsManager,
-                  'showViewerQuizMeasurementComparison', {
-                    rubricMeasurement: answer,
-                    viewerTarget: saved.target,
-                    focusedCompositeSlot: slot,
-                    questionKey: question.questionKey,
-                  });
-                if (result?.rubricRendered !== true) {
+                // Learner phase overlays are reconstructed ONLY from learner
+                // evidence, never the educator's gold/teaching source.
+                const learner = !authoringMode;
+                const displayAnswer = kind === 'ivcRapRvsp'
+                  ? plainObject(plainObject(answer.compositeResult).ivc)
+                  : answer;
+                const result = learner
+                  ? await runViewerCommand(
+                      commandsManager, 'showViewerQuizLearnerCompositeMeasurement', {
+                        learnerMeasurement: displayAnswer,
+                        viewerTarget: saved.target,
+                        questionKey: question.questionKey,
+                      })
+                  : await runViewerCommand(
+                      commandsManager, 'showViewerQuizMeasurementComparison', {
+                        rubricMeasurement: displayAnswer,
+                        viewerTarget: saved.target,
+                        focusedCompositeSlot: slot,
+                        questionKey: question.questionKey,
+                      });
+                if ((learner ? result?.learnerRendered : result?.rubricRendered) !== true) {
                   uiNotificationService.show({
                     title: 'Saved contour', type: 'warning', duration: 5000,
                     message: 'Saved source could not be displayed: ' +
@@ -2998,6 +3028,10 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       return;
     }
     lastActivatedQuestionRef.current = nextActiveQuestionKey;
+    if (isNewQuestion && pendingQuizIVCPhaseRef.current) {
+      pendingQuizIVCPhaseRef.current = null;
+      void runViewerCommand(commandsManager, 'resetViewerLengthLabelMode', {});
+    }
     if (question.type === 'frameSelection') {
       setFrameNavigationErrors(current => {
         if (!current[nextActiveQuestionKey]) return current;
@@ -3183,6 +3217,46 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       : getQuestionOverlayMarkerOptions(quiz, question, reviewQuestionAnswer, {
           reviewMode: 'learner',
         });
+
+    // The learner's composite quiz answer contains multiple independently
+    // framed annotations. A single showViewerQuizLearnerMeasurement call
+    // restores only one and hides the saved individual phase contours.
+    // Rebuild *all* of the learner's saved phase sources before the generic
+    // single-measurement path; never fetch/overlay educator gold.
+    const learnerCompositeKind = !authoringMode ? measurementKind : '';
+    const learnerComposite = learnerCompositeKind === 'ivcRapRvsp'
+      ? plainObject(plainObject(questionAnswer).compositeResult).ivc
+      : questionAnswer;
+    const learnerComponents = getLearnerCompositeSourceComponents(
+      learnerComposite,
+      learnerCompositeKind === 'ivcRapRvsp' ? 'ivcCollapsibility' : learnerCompositeKind
+    );
+    if (learnerComponents.length === 2) {
+      try {
+        const firstSource = learnerComponents[0].target;
+        const restored = await runViewerCommand(
+          commandsManager, 'showViewerQuizLearnerCompositeMeasurement', {
+            learnerMeasurement: learnerComposite,
+            viewerTarget: firstSource,
+            questionKey: question.questionKey,
+          }
+        );
+        if (restored?.learnerRendered === true &&
+            restored?.restoredCount === learnerComponents.length) {
+          return;
+        }
+        console.warn('[CaseQuestionsPanel] saved learner composite restoration incomplete', {
+          questionKey: question.questionKey,
+          restoredCount: restored?.restoredCount || 0,
+          expectedCount: learnerComponents.length,
+          reason: restored?.reason || 'unknown',
+        });
+      } catch (error) {
+        console.warn('[CaseQuestionsPanel] learner composite restore failed', {
+          questionKey: question.questionKey, error,
+        });
+      }
+    }
 
     // Multi-BWT answers store an array of learner calipers, not the single
     // top-level annotation reference expected by the generic review path.
@@ -3488,7 +3562,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
   async function captureSelectedMeasurementAnswer(
     quiz: QuizDefinition,
     question: QuizQuestion,
-    options: { measurementId?: string; silent?: boolean } = {}
+    options: { measurementId?: string; silent?: boolean; verifyCompositeStatus?: boolean } = {}
   ) {
     const captureKey = `${quiz.quizKey}:${question.questionKey}`;
 
@@ -3519,6 +3593,17 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         }
 
         return false;
+      }
+
+      // Validate after async capture against the current authoritative physical
+      // calculation and exact source annotation IDs, not a stale UI status.
+      if (options.verifyCompositeStatus) {
+        const kind = cleanString(plainObject(question.answerConfig).measurementKind);
+        const verified = await runViewerCommand(commandsManager,
+          'getViewerQuizCompositeStatusForActiveStudy', { measurementKind: kind });
+        if (!isLearnerCompositeCaptureCurrent(result.answer, verified, kind)) {
+          return false;
+        }
       }
 
       const currentAnswer = latestLearnerAnswersRef.current[quiz.quizKey]?.[question.questionKey];
@@ -3560,6 +3645,17 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         return true;
       }
 
+      if (cleanString(plainObject(question.answerConfig).measurementKind) === 'ivcCollapsibility') {
+        const previouslyLinked = plainObject(plainObject(currentAnswer).compositeResult).rapRvsp;
+        if (previouslyLinked?.ivc &&
+            !isIVCReviewCurrent(previouslyLinked.ivc, result.answer)) {
+          // Edited or replaced calipers invalidate an earlier RAP/RVSP
+          // interpretation. Require a fresh explicit RAP choice.
+          setRapSelectionsByQuestionKey(current => ({
+            ...current, [captureKey]: '',
+          }));
+        }
+      }
       setAnswer(quiz.quizKey, question, setObjectAnswerPart(currentAnswer, result.answer));
 
       if (!options.silent) {
@@ -3587,6 +3683,49 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       setCapturingMeasurementKey('');
     }
   }
+
+  useEffect(() => {
+    if (authoringMode || !activeQuestionKey ||
+        liveCompositeStatus.questionKey !== activeQuestionKey ||
+        liveCompositeStatus.complete !== true) return;
+    const [quizKey, questionKey] = activeQuestionKey.split(':');
+    const quiz = quizzes.find(entry => entry.quizKey === quizKey);
+    const question = quiz?.questions?.find(entry => entry.questionKey === questionKey);
+    if (!quiz || !question || question.type !== 'measurementNumeric' ||
+        getQuizScoreItem(viewerQuizScore, quiz)) return;
+    const captureKey = `${quizKey}:${questionKey}`;
+    const signature = getLearnerCompositeAutoCaptureSignature({
+      question, liveMeasurements: liveCompositeMeasurements,
+      status: liveCompositeStatus,
+      savedAnswer: latestLearnerAnswersRef.current[quizKey]?.[questionKey],
+    });
+    if (!signature ||
+        autoCompositeLearnerCapturedSignatureRef.current[captureKey] === signature ||
+        autoCompositeLearnerCaptureInFlightRef.current.has(captureKey)) return;
+
+    // Cornerstone sends provisional updates while contour drawing finishes.
+    // Capture a settled, validated complete composite from the authoritative
+    // viewer command; never reuse a typed scalar or educator gold result.
+    const timer = window.setTimeout(() => {
+      if (lastActivatedQuestionRef.current &&
+          lastActivatedQuestionRef.current !== captureKey) return;
+      if (autoCompositeLearnerCaptureInFlightRef.current.has(captureKey)) return;
+      autoCompositeLearnerCaptureInFlightRef.current.add(captureKey);
+      void (async () => {
+        try {
+          if (await captureSelectedMeasurementAnswer(quiz, question, {
+            silent: true, verifyCompositeStatus: true,
+          })) {
+            autoCompositeLearnerCapturedSignatureRef.current[captureKey] = signature;
+          }
+        } finally {
+          autoCompositeLearnerCaptureInFlightRef.current.delete(captureKey);
+        }
+      })();
+    }, 650);
+    return () => window.clearTimeout(timer);
+  }, [activeQuestionKey, authoringMode, liveCompositeStatus,
+    liveCompositeMeasurements, quizzes, viewerQuizScore]);
 
   useEffect(() => {
     function handleQuizMeasurementAdded(event: Event) {
@@ -3672,6 +3811,41 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       const question = quiz?.questions?.find(item => item.questionKey === questionKey);
 
       if (!quiz || !question || question.type !== 'measurementNumeric') {
+        return;
+      }
+      // Only the active learner IVC phase button may assign a Length label.
+      const pendingPhase = pendingQuizIVCPhaseRef.current;
+      if (pendingPhase &&
+          pendingPhase.activationKey === `${quizKey}:${questionKey}` &&
+          Date.now() - pendingPhase.issuedAt < 60000 &&
+          !labelCompleted) {
+        void (async () => {
+          for (const delayMs of [80, 280, 750]) {
+            await new Promise(resolve => window.setTimeout(resolve, delayMs));
+            if (pendingQuizIVCPhaseRef.current !== pendingPhase ||
+                lastActivatedQuestionRef.current !== pendingPhase.activationKey) return;
+            const labeled = await runViewerCommand(
+              commandsManager, 'setViewerQuizIVCPhaseLabel', {
+                measurementId, slot: pendingPhase.slot,
+                expectedTarget: pendingPhase.target,
+              }
+            );
+            if (labeled?.ok) {
+              pendingQuizIVCPhaseRef.current = null;
+              return;
+            }
+            if (labeled?.reason === 'already-labelled-differently' ||
+                labeled?.reason === 'ivc-source-frame-mismatch') break;
+          }
+          if (pendingQuizIVCPhaseRef.current === pendingPhase) {
+            pendingQuizIVCPhaseRef.current = null;
+            await runViewerCommand(commandsManager, 'resetViewerLengthLabelMode', {});
+            uiNotificationService.show({
+              title: 'IVC phase label', type: 'warning', duration: 5000,
+              message: 'The new caliper could not be bound to the selected IVC phase. Verify its image frame.',
+            });
+          }
+        })();
         return;
       }
       if (isBowelMeasurementSetQuestion(question)) {
@@ -3975,6 +4149,73 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       if (deferredReportScoring && quiz.questions.some(q => q.type === 'measurementNumeric')) {
         await confirmReportOwnedMeasurementSave();
       }
+      // A quiz JSON answer is not proof its individual phase annotations were
+      // saved. Persist only the exact missing source contours on the learner's
+      // own Series before saving the answer. In combined report workflows the
+      // existing reviewed report-owned save runs first (above).
+      const compositeSources = getLearnerCompositePersistenceSources(
+        quiz.questions || [], quizAnswers
+      );
+      if (compositeSources.length) {
+        await ensureViewerQuizSaveSeriesDoc();
+        const readSaved = async () => await runViewerCommand(
+          commandsManager, 'getViewerMeasurementAnnotationsForActiveStudy',
+          { domain: 'echo', workflows: ['viewerMeasurements'] }
+        );
+        let persisted = await readSaved();
+        if (!persisted?.seriesDoc?.isLearnerCopy ||
+            !persisted?.saveTarget?.learnerSeriesId ||
+            String(persisted.seriesDoc._id || '') !==
+              String(persisted.saveTarget.learnerSeriesId)) {
+          throw new Error(
+            'Learner measurement evidence could not be verified on the isolated learner Series. No quiz answers were saved.'
+          );
+        }
+        const getMissing = (records: any[]) => compositeSources.filter(source =>
+          !(Array.isArray(records) ? records : []).some(annotation =>
+            isPersistedLearnerCompositeSource(annotation, source)
+          )
+        );
+        const missing = getMissing(persisted.annotations);
+        if (missing.length) {
+          // An exact quiz annotation ID in the learner's active viewer session
+          // is required. Never fetch educator/base gold or save an approximate
+          // contour from another question/frame.
+          const live = await runViewerCommand(
+            commandsManager, 'getViewerMeasurementSnapshotForPanel', {}
+          );
+          if (missing.some(source =>
+            !(Array.isArray(live) ? live : []).some(item =>
+              isPersistedLearnerCompositeSource(item, source)
+            )
+          )) {
+            throw new Error(
+              'Some learner composite contours are not available with their saved DICOM frame. Reopen and verify the affected measurements before saving.'
+            );
+          }
+          const result = await runViewerCommand(
+            commandsManager, 'saveViewerMeasurementsForActiveStudy', {
+              domain: 'echo',
+              measurementIds: missing.map(source => source.annotationId),
+              scoringIntent: 'draft', educationAttemptIntent: 'draft',
+              suppressSuccessNotification: true,
+            }
+          );
+          if (!result || result.ok === false) {
+            throw new Error(
+              'The learner phase contours could not be saved to AR. Quiz answers were not saved.'
+            );
+          }
+          persisted = await readSaved();
+          if (!persisted?.seriesDoc?.isLearnerCopy ||
+              getMissing(persisted.annotations).length) {
+            throw new Error(
+              'AR did not confirm persistence of every learner phase contour. Quiz answers were not saved.'
+            );
+          }
+        }
+      }
+
       const saveSource = `quiz:${quiz.quizKey}`;
       const saveRequestId = nextEducationSaveRequestId();
       reportEducationSaveStart(saveSource, saveRequestId);
@@ -5120,8 +5361,8 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       <div className="mt-2 rounded border border-cyan-700/70 p-2 text-xs">
         <div className="mb-1 font-semibold text-cyan-100">IVC phase measurements</div>
         <p className="mb-2 text-gray-300">
-          Use the expiration and inspiration source images independently.
-          After drawing each calibrated Length caliper, label it IVCexp or IVCinsp.
+          Choose expiration or inspiration below, then draw the calibrated
+          Length caliper. The selected phase is assigned automatically.
         </p>
         <div className="space-y-2">
           {[
@@ -5139,8 +5380,19 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                 void (async () => {
                   await activateQuestionForPhaseCapture(quiz, question);
                   if (!(await ensureConfiguredCompositePhaseFrame(question, phase.slot))) return;
+                  // Clicking a specific IVC phase is explicit learner intent.
+                  // Bind the next completed Length source to it without a
+                  // second, redundant label selection dialog.
+                  pendingQuizIVCPhaseRef.current = {
+                    activationKey: `${quiz.quizKey}:${question.questionKey}`,
+                    slot: phase.slot,
+                    target: plainObject(question.answerConfig).compositeFrameGuidanceEnabled === true
+                      ? plainObject(plainObject(question.answerConfig).compositeFrameTargets)[phase.slot]
+                      : null,
+                    issuedAt: Date.now(),
+                  };
                   await runViewerCommand(commandsManager, 'setViewerLengthLabelMode', {
-                    labelMode: 'prompt',
+                    labelMode: 'measure-only',
                   });
                   const activation = await runViewerCommand(
                     commandsManager, 'activateViewerMeasurementTool', {
@@ -5263,6 +5515,102 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
             {renderCompositePhaseStatusAndDelete(quiz, question, slot, disabled)}
           </div>
         ))}
+      </div>
+    );
+  }
+
+  function renderLearnerIVCRapReview(
+    quiz: QuizDefinition, question: QuizQuestion, savedAnswer: any, disabled: boolean
+  ) {
+    if (authoringMode ||
+        cleanString(plainObject(question.answerConfig).measurementKind) !== 'ivcCollapsibility') {
+      return null;
+    }
+    const answer = plainObject(savedAnswer);
+    const completeIVC = answer.measurementKind === 'ivcCollapsibility' &&
+      answer.unit === '%' &&
+      getLearnerCompositeSourceComponents(answer, 'ivcCollapsibility').length === 2;
+    const all = quiz.questions || [];
+    const index = all.findIndex(item => item.questionKey === question.questionKey);
+    const priorTR = index > 0 ? all.slice(0, index).reverse().find(item =>
+      item.type === 'measurementNumeric' &&
+      cleanString(plainObject(item.answerConfig).measurementKind) === 'trVmax') : null;
+    const trAnswer = priorTR
+      ? answersByQuizKey?.[quiz.quizKey]?.[priorTR.questionKey] : null;
+    const trValue = Number(trAnswer?.value);
+    const trIsRecorded = trAnswer?.measurementKind === 'trVmax' &&
+      trAnswer?.unit === 'm/s' &&
+      !!cleanString(trAnswer?.sourceAnnotationId) &&
+      !!cleanString(trAnswer?.viewerTarget?.sopInstanceUID) &&
+      Number.isFinite(trValue) && trValue > 0 && trValue <= 8;
+    const key = `${quiz.quizKey}:${question.questionKey}`;
+    const saved = plainObject(answer.compositeResult);
+    const reviewedRAP = saved.rapRvsp?.ivc &&
+      isIVCReviewCurrent(saved.rapRvsp.ivc, answer)
+      ? saved.rapMMHG : null;
+    const selection = rapSelectionsByQuestionKey[key] ??
+      (reviewedRAP != null ? String(reviewedRAP) : '');
+
+    return (
+      <div className="mt-2 rounded border border-cyan-700 bg-cyan-950/20 p-2 text-xs text-cyan-100">
+        <div className="font-semibold">After measuring IVC: select your RAP</div>
+        <div className="mt-1 text-gray-300">
+          AR calculates RVSP from your RAP and the TR Vmax you previously
+          captured in this quiz. RAP is not inferred from collapsibility.
+        </div>
+        <label className="mt-2 flex items-center gap-2">
+          RAP
+          <select aria-label="Learner RAP (mmHg)"
+            value={selection} disabled={disabled || !completeIVC}
+            className="rounded border border-cyan-600 bg-black px-2 py-1"
+            onClick={event => event.stopPropagation()}
+            onChange={event => {
+              const value = event.target.value;
+              setRapSelectionsByQuestionKey(current => ({ ...current, [key]: value }));
+              if (!value || !completeIVC) return;
+              const calculated = attachLearnerRapRvspToIVCAnswer({
+                ivcAnswer: answer, rapMMHG: value,
+                trVmaxAnswer: trAnswer, trVmaxQuestionKey: priorTR?.questionKey || '',
+              });
+              if (calculated.status === 'complete') {
+                setAnswer(quiz.quizKey, question, calculated.answer);
+              } else {
+                uiNotificationService.show({
+                  title: 'RAP / RVSP',
+                  type: 'warning', duration: 5500,
+                  message: calculated.reason === 'previous-tr-vmax-required'
+                    ? 'Record a calibrated TR Vmax answer earlier in this quiz before RVSP can be calculated and saved.'
+                    : 'The IVC source evidence must be current before RVSP can be calculated.',
+                });
+              }
+            }}
+          >
+            <option value="">Select RAP</option>
+            {RAP_CHOICES_MMHG.map(rap => (
+              <option key={rap} value={String(rap)}>{rap} mmHg</option>
+            ))}
+          </select>
+        </label>
+        {!completeIVC ? (
+          <div className="mt-1 text-amber-200">
+            Complete both calibrated IVC phase measurements first.
+          </div>
+        ) : !trIsRecorded ? (
+          <div className="mt-1 text-amber-200">
+            RVSP unavailable: a source-linked TR Vmax answer must be recorded earlier in this quiz.
+          </div>
+        ) : (
+          <div className="mt-1 text-green-200">
+            Recorded TR Vmax: {trValue.toFixed(2)} m/s
+          </div>
+        )}
+        {reviewedRAP != null && Number.isFinite(Number(saved.rvspMMHG)) ? (
+          <div className="mt-2 rounded border border-emerald-700 p-2 text-emerald-100">
+            Saved learner RAP: {reviewedRAP} mmHg
+            <div>Calculated RVSP: {Number(saved.rvspMMHG).toFixed(2)} mmHg</div>
+            <div className="text-gray-300">Both values are included in the quiz answer on Save or Submit.</div>
+          </div>
+        ) : null}
       </div>
     );
   }
@@ -5625,6 +5973,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
             ? renderRVFACContourControls(quiz, question, disabled)
             : null}
           {renderCompositeCalculatedStatus(quiz, question)}
+          {renderLearnerIVCRapReview(quiz, question, value, disabled)}
           {bowelSet ? (
             <div className="rounded border border-blue-700 bg-blue-950/20 p-2 text-xs text-gray-200">
               <div className="font-semibold" aria-live="polite">Bowel measurements: {bowelEntries.length} / {bowelCount}</div>
@@ -5701,7 +6050,16 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
             </div>
           ) : linkedRVSP
             ? renderIVCRapRVSPControls(quiz.quizKey, question, value, disabled)
-            : (
+            : ['rvFAC', 'laVolumeBiplane', 'laVolumeBiplaneDisks',
+              'ivcCollapsibility'].includes(
+              cleanString(plainObject(question.answerConfig).measurementKind)
+            ) ? (
+              <div className="rounded border border-emerald-700/60 bg-emerald-950/20 p-2 text-xs text-emerald-100">
+                {value?.value != null && Number.isFinite(Number(value.value))
+                  ? `Calculated answer: ${Number(value.value).toFixed(2)} ${value.unit || ''}`
+                  : 'Complete the required calibrated phases. The calculated answer will be captured automatically.'}
+              </div>
+            ) : (
                         <div className="flex w-full min-w-0 max-w-full items-center gap-2 overflow-hidden">
                           <input
                             className="min-w-0 flex-1 rounded border border-gray-700 bg-black px-2 py-1 text-sm text-white"
@@ -5744,9 +6102,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               ? 'Capturing…'
               : linkedRVSP
                 ? 'Accept IVC / RAP / RVSP measurement'
-              : cleanString(plainObject(question.answerConfig).measurementKind) === 'lvSimpsonEF' ||
-                  cleanString(plainObject(question.answerConfig).measurementKind) === 'laVolumeBiplane'
-                ? 'Capture calculated measurement'
+              : ['rvFAC', 'laVolumeBiplane', 'laVolumeBiplaneDisks', 'ivcCollapsibility',
+                  'lvSimpsonEF'].includes(cleanString(plainObject(question.answerConfig).measurementKind))
+                ? 'Recalculate from measured contours'
                 : 'Recapture selected measurement'}
           </button> : null}
 
