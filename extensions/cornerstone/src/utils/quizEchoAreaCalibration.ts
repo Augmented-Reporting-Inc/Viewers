@@ -18,3 +18,18 @@ export function calculateCalibratedEchoAreaCM2(pointsMM: number[][]): number | n
   const cm2 = Math.abs(doubleAreaMM2) / 200;
   return Number.isFinite(cm2) && cm2 > 0 ? cm2 : null;
 }
+
+/**
+ * Preserve the explicit physical unit of a saved echo quiz contour. Stored
+ * areas may be in cm² or mm²; a label-only conversion would be unsafe.
+ * Pixel areas and missing/unknown units are not accepted as physical values.
+ */
+export function getSavedQuizEchoAreaDisplayInfo(area: unknown, areaUnit: unknown) {
+  if (area == null || (typeof area === 'string' && !area.trim())) return null;
+  const value = Number(area);
+  const unit = String(areaUnit ?? '').toLowerCase().replace(/\s/g, '').replace(/²/g, '2');
+  if (!Number.isFinite(value) || value <= 0) return null;
+  if (unit === 'cm2') return { value, areaUnit: 'cm²', linearUnit: 'cm' };
+  if (unit === 'mm2') return { value, areaUnit: 'mm²', linearUnit: 'mm' };
+  return null;
+}
