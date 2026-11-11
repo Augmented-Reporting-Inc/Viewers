@@ -24,7 +24,7 @@ import {
   isMatchingQuizEFCompletion,
   getInitialGuidedEFQuestionTarget,
 } from '../utils/quizCompositeCaptureIntent';
-import { composeIVCRapRVSP, attachLearnerRapRvspToIVCAnswer, isIVCReviewCurrent, RAP_CHOICES_MMHG } from '../utils/ivcRapRvsp';
+import { composeIVCRapRVSP, attachLearnerRapRvspToIVCAnswer, attachLearnerRapSelectionToIVCAnswer, isIVCReviewCurrent, RAP_CHOICES_MMHG } from '../utils/ivcRapRvsp';
 import {
   getLearnerCompositeAutoCaptureSignature,
   getLearnerCompositeSourceComponents,
@@ -5574,13 +5574,22 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               });
               if (calculated.status === 'complete') {
                 setAnswer(quiz.quizKey, question, calculated.answer);
+              } else if (calculated.reason === 'previous-tr-vmax-required') {
+                const rapOnly = attachLearnerRapSelectionToIVCAnswer({
+                  ivcAnswer: answer, rapMMHG: value,
+                });
+                if (rapOnly.status === 'rap-only') {
+                  setAnswer(quiz.quizKey, question, rapOnly.answer);
+                  uiNotificationService.show({
+                    title: 'RAP recorded', type: 'info', duration: 5000,
+                    message: 'Your RAP selection is saved. RVSP remains unavailable until a calibrated earlier TR Vmax answer is recorded.',
+                  });
+                }
               } else {
                 uiNotificationService.show({
                   title: 'RAP / RVSP',
                   type: 'warning', duration: 5500,
-                  message: calculated.reason === 'previous-tr-vmax-required'
-                    ? 'Record a calibrated TR Vmax answer earlier in this quiz before RVSP can be calculated and saved.'
-                    : 'The IVC source evidence must be current before RVSP can be calculated.',
+                  message: 'The IVC source evidence must be current before RVSP can be calculated.',
                 });
               }
             }}
