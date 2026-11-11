@@ -1,3 +1,5 @@
+import { convertPhysicalValue } from './physicalMeasurementPresentation';
+
 const SAMPLE_COUNT = 20;
 const MIN_WIDTH_COVERAGE_RATIO = 0.8;
 const MAX_RECOMMENDED_AXIS_DIFFERENCE_MM = 5;
@@ -280,6 +282,13 @@ function buildSlotGeometry(measurement, slot) {
     };
   }
 
+  // Contour points have already been physically calibrated to millimetres
+  // by the LA acquisition workflow. Do not derive a scale from ROI pixels.
+  const areaCM2 = convertPhysicalValue(areaMM2, 'mm²', 'cm²', 'area');
+  if (areaCM2 == null) {
+    return { ...LA_VOLUME_SLOT_INFO[slot], complete: false,
+      messages: [`${display}: invalid physically calibrated contour area.`] };
+  }
   const widths = sampleWidths(projectedPoints, longAxisLengthMM);
   const coverageRatio = widths.filter(width => width > 0).length / SAMPLE_COUNT;
 
@@ -289,7 +298,7 @@ function buildSlotGeometry(measurement, slot) {
       complete: false,
       longAxisLengthMM,
       areaMM2,
-      areaCM2: areaMM2 / 100,
+      areaCM2,
       coverageRatio,
       messages: [buildCoverageMessage({ display, coverageRatio })],
     };
@@ -300,7 +309,7 @@ function buildSlotGeometry(measurement, slot) {
     complete: true,
     longAxisLengthMM,
     areaMM2,
-    areaCM2: areaMM2 / 100,
+    areaCM2,
     coverageRatio,
     // Independently sampled calibrated contour diameters are reused for
     // explicit biplane disk summation, without altering area-length results.
@@ -399,7 +408,12 @@ export function calculateLAVolume(measurements = [], seriesDocOrBsa = null) {
   const a2c = slots.A2C;
   const axisDifferenceMM = Math.abs(a4c.longAxisLengthMM - a2c.longAxisLengthMM);
   const laLengthMM = Math.min(a4c.longAxisLengthMM, a2c.longAxisLengthMM);
-  const laLengthCM = laLengthMM / 10;
+  const laLengthCM = convertPhysicalValue(laLengthMM, 'mm', 'cm', 'length');
+  if (laLengthCM == null || laLengthCM <= 0) {
+    return { status: 'invalid', method, methodId, slots, values: null,
+      messages: ['LA long-axis physical unit conversion failed.'],
+      guidance: ['LA long-axis physical unit conversion failed.'] };
+  }
   const a4cAreaCM2 = a4c.areaCM2;
   const a2cAreaCM2 = a2c.areaCM2;
   const volumeML = (0.85 * a4cAreaCM2 * a2cAreaCM2) / laLengthCM;
