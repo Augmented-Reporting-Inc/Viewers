@@ -1,5 +1,10 @@
 import { composeIVCRapRVSP, attachLearnerRapRvspToIVCAnswer, isIVCReviewCurrent } from './ivcRapRvsp';
 
+// Jest's jsdom runtime may not expose structuredClone even on Node 20+.
+function cloneTestEvidence<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value));
+}
+
 function target(instance: string, frame: number) {
   return {
     studyInstanceUID: 'study-1',
