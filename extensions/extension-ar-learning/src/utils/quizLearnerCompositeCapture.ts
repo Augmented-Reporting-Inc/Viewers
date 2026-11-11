@@ -96,6 +96,40 @@ export function getLearnerCompositeAutoCaptureSignature({
   });
 }
 
+/**
+ * The completion event is only a trigger. The freshly captured result must
+ * still correspond to the same numeric value and exact two source annotation
+ * IDs reported by the live composite resolver. A stale async response from a
+ * previous question or contour edit must never replace an answer.
+ */
+export function isLearnerCompositeCaptureCurrent(
+  captured: any, status: any, measurementKind: string
+): boolean {
+  const slots = PHASE_SLOTS[measurementKind];
+  if (!slots || status?.complete !== true ||
+      clean(captured?.measurementKind) !== measurementKind ||
+      clean(captured?.unit) !== clean(status.unit) ||
+      !Number.isFinite(Number(captured?.value)) ||
+      !Number.isFinite(Number(status.value)) ||
+      Math.abs(Number(captured.value) - Number(status.value)) > 0.005) return false;
+  const savedParts = asObject(captured.compositeResult).components;
+  const currentParts = status.components;
+  if (!Array.isArray(savedParts) || !Array.isArray(currentParts) ||
+      savedParts.length !== slots.length || currentParts.length !== slots.length) return false;
+  return slots.every(slot => {
+    const saved = savedParts.filter((part: any) => clean(part?.slot) === slot);
+    const current = currentParts.filter((part: any) => clean(part?.slot) === slot);
+    return saved.length === 1 && current.length === 1 &&
+      !!clean(saved[0].annotationId) &&
+      clean(saved[0].annotationId) === clean(current[0].annotationId) &&
+      Array.isArray(saved[0].points) && saved[0].points.length >= (slotIsIVC(measurementKind) ? 2 : 3) &&
+      clean(saved[0].target?.studyInstanceUID) &&
+      clean(saved[0].target?.sopInstanceUID) &&
+      Number.isSafeInteger(Number(saved[0].target?.frameNumber)) &&
+      Number(saved[0].target.frameNumber) > 0;
+  });
+}
+
 export function getLearnerCompositeSourceComponents(answer: any, kind: string): any[] {
   const parts = kind === 'ivcRapRvsp'
     ? asObject(asObject(asObject(answer).compositeResult).ivc?.compositeResult).components
