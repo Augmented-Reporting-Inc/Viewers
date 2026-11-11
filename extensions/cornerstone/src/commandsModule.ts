@@ -15536,6 +15536,104 @@ function commandsModule({
       };
     },
 
+    /**
+     * Learner composite quiz reopen: restore EACH exact, persisted learner
+     * source annotation on its own referenced DICOM image/frame. Never use
+     * educator gold or an approximate measurement lookup as a substitute.
+     * This restores drawing evidence without changing quiz scores or report.
+     */
+    showViewerQuizLearnerCompositeMeasurement: async ({
+      learnerMeasurement = {}, viewerTarget = null, questionKey = '',
+    } = {}) => {
+      const kind = String(learnerMeasurement?.measurementKind || '').trim();
+      const slots = kind === 'rvFAC' ? ['RV_ED', 'RV_ES']
+        : ['laVolumeBiplane', 'laVolumeBiplaneDisks'].includes(kind)
+          ? ['A4C', 'A2C']
+          : kind === 'ivcCollapsibility' || kind === 'ivcRapRvsp'
+            ? ['IVC_EXP', 'IVC_INSP'] : [];
+      const sourceComposite = kind === 'ivcRapRvsp'
+        ? learnerMeasurement?.compositeResult?.ivc?.compositeResult
+        : learnerMeasurement?.compositeResult;
+      const components = Array.isArray(sourceComposite?.components)
+        ? sourceComposite.components : [];
+      if (slots.length !== 2 || components.length !== slots.length ||
+          slots.some(slot => components.filter(item => item?.slot === slot).length !== 1)) {
+        return { ok: false, restoredCount: 0, reason: 'learner-composite-source-incomplete' };
+      }
+      const saveTarget = getArViewerSaveTargetFromUrl();
+      const learnerId = String(saveTarget.learnerSeriesId || '').trim();
+      const { learnerSeriesDoc } = await getViewerQuizMeasurementSeriesDocs({
+        includeBaseSeries: false,
+      });
+      // A learner view can only use its isolated copy; never load a source
+      // teaching study (or a previously opened educator's measurements).
+      if (!learnerId || !learnerSeriesDoc ||
+          String(learnerSeriesDoc._id || '') !== learnerId ||
+          learnerSeriesDoc.isLearnerCopy !== true) {
+        return { ok: false, restoredCount: 0, reason: 'learner-copy-not-available' };
+      }
+      const existing = getRequestedWorkflowAnnotations(
+        learnerSeriesDoc.MeasurementAnnotations, [VIEWER_MEASUREMENTS_WORKFLOW]
+      );
+      const sources = [];
+      for (const slot of slots) {
+        const component = components.find(item => item.slot === slot);
+        const expected = component?.target || {};
+        const sourceId = String(component?.annotationId || '').trim();
+        const saved = existing.filter(item =>
+          getMeasurementAnnotationId(item) === sourceId
+        );
+        if (!sourceId || saved.length !== 1 ||
+            !expected.studyInstanceUID || !expected.seriesInstanceUID ||
+            !expected.sopInstanceUID ||
+            !Number.isSafeInteger(Number(expected.frameNumber)) ||
+            Number(expected.frameNumber) < 1) {
+          return { ok: false, restoredCount: 0, reason: 'learner-source-annotation-unavailable', slot };
+        }
+        const annotation = saved[0];
+        const image = String(annotation.referencedImageId || '').trim();
+        const savedFrame = getFrameNumberFromReferencedImageId(image);
+        const expectedImage = String(expected.referencedImageId || '').trim();
+        if (String(annotation.StudyInstanceUID || '') !== String(expected.studyInstanceUID) ||
+            String(annotation.SeriesInstanceUID || '') !== String(expected.seriesInstanceUID) ||
+            String(annotation.SOPInstanceUID || '') !== String(expected.sopInstanceUID) ||
+            !image || !expectedImage ||
+            normalizeImageIdForCompare(image) !== normalizeImageIdForCompare(expectedImage) ||
+            savedFrame !== Number(expected.frameNumber) ||
+            (annotation.frameNumber && Number(annotation.frameNumber) !== savedFrame)) {
+          return { ok: false, restoredCount: 0, reason: 'learner-source-frame-mismatch', slot };
+        }
+        sources.push({ slot, annotation });
+      }
+      clearViewerQuizMeasurementComparisonAnnotations();
+      let restoredCount = 0;
+      const errors = [];
+      // Cornerstone needs the referenced frame to be available when a saved
+      // annotation is hydrated. Navigate to each in sequence, then return to
+      // the question target so learners are not stranded on the last phase.
+      for (const { slot, annotation: saved } of sources) {
+        const restored = await actions.jumpToSavedViewerAnnotation({
+          annotation: saved, selectAnnotation: false,
+          runDelayedDisplayRefresh: false,
+        });
+        if (restored?.ok === true) restoredCount++;
+        else errors.push({ slot, reason: restored?.reason || 'hydration-failed' });
+      }
+      if (viewerTarget) {
+        try {
+          await actions.jumpToViewerQuizTarget({ viewerTarget, questionKey });
+        } catch (error) {
+          console.warn('[ViewerQuiz] could not return to learner question frame', error);
+        }
+      }
+      return {
+        ok: errors.length === 0 && restoredCount === slots.length,
+        learnerRendered: restoredCount > 0, restoredCount,
+        expectedCount: slots.length,
+        reason: errors[0]?.reason || '',
+        failedSlots: errors.map(item => item.slot),
+      };
+    },
     showViewerQuizLearnerMeasurement: async ({
       learnerMeasurement = {},
       viewerTarget = null,
@@ -17984,6 +18082,9 @@ function commandsModule({
     },
     showViewerQuizLearnerMeasurement: {
       commandFn: actions.showViewerQuizLearnerMeasurement,
+    },
+    showViewerQuizLearnerCompositeMeasurement: {
+      commandFn: actions.showViewerQuizLearnerCompositeMeasurement,
     },
     clearViewerQuizMeasurementComparison: {
       commandFn: actions.clearViewerQuizMeasurementComparison,
