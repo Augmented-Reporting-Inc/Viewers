@@ -5591,6 +5591,13 @@ function installQuizCompositeContourTextOverrideForViewport({
   displaySetService, toolGroupService,
 }) {
   if (!viewport) return;
+  // Viewer3's clinical and bowel tool configurations must not inherit the
+  // quiz-specific display override merely because the same ROI tool is used.
+  const params = getViewerUrlSearchParams();
+  const quizContext = params.has('arLibraryContentKey') ||
+    params.has('arQuizAuthoring') ||
+    /\\/viewer\\/learning(?:\\/|$)/.test(String(window.location?.pathname || ''));
+  if (!quizContext) return;
   const resolvedViewportId = viewport.id || viewportId;
   let toolGroup = null;
   try {
