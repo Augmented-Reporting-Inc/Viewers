@@ -655,9 +655,11 @@ function isSavedQuizAreaContour(savedAnnotation: any = {}) {
   if (getSavedRightHeartQuizContourMetadata(savedAnnotation).measurementKind) return true;
   const la = savedAnnotation?.laVolume || savedAnnotation?.measurements?.laVolume || {};
   const kind = String(savedAnnotation?.measurementKind ||
-    savedAnnotation?.measurements?.measurementKind || la?.measurementKind || '').trim();
-  return kind === 'laVolumeSlot' && ['A4C', 'A2C']
-    .includes(String(la?.slot || savedAnnotation?.slot || '').trim().toUpperCase());
+    savedAnnotation?.measurements?.measurementKind || '').trim();
+  return (kind === 'laVolumeSlot' || la?.measurementKind === 'laVolumeSlot') &&
+    ['A4C', 'A2C'].includes(
+      String(la?.slot || savedAnnotation?.slot || '').trim().toUpperCase()
+    );
 }
 
 function getSavedQuizAreaCM2(savedAnnotation: any = {}) {
