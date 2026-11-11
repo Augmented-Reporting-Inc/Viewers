@@ -1,3 +1,5 @@
+import { presentVerifiedPhysicalMeasurement } from '../../../extension-ar-measurements/src/utils/physicalMeasurementPresentation';
+
 /**
  * Physical contour area only: caller must first calibrate every point using
  * an unambiguous DICOM ultrasound spatial region (mm units).
@@ -59,7 +61,17 @@ export function getQuizCompositeContourViewportLines(
   if (calibratedAreaCM2 != null && calibratedAreaCM2 !== '') {
     const value = Number(calibratedAreaCM2);
     if (Number.isFinite(value) && value > 0) {
-      return [`${labels[slot]}: ${value.toFixed(2)} cm²`];
+      // Same dimension-safe display policy used by other AR measurement views.
+      // The verified flag is justified by upstream composite phase validation;
+      // this formatter never calibrates native ROI pixels.
+      const measurementKind = slot === 'RV_ED' ? 'rvEDA'
+        : slot === 'RV_ES' ? 'rvESA'
+        : slot === 'RA_ES' ? 'raArea'
+        : slot === 'A4C' ? 'laA4C' : 'laA2C';
+      const displayed = presentVerifiedPhysicalMeasurement({
+        value, unit: 'cm²', measurementKind, verified: true,
+      });
+      if (displayed) return [`${labels[slot]}: ${displayed.text}`];
     }
   }
   // A hydrated legacy gold contour can already have explicitly calibrated
