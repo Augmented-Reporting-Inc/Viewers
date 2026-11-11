@@ -15561,7 +15561,9 @@ function commandsModule({
         return { ok: false, restoredCount: 0, reason: 'learner-composite-source-incomplete' };
       }
       const saveTarget = getArViewerSaveTargetFromUrl();
-      const learnerId = String(saveTarget.learnerSeriesId || '').trim();
+      const learnerId = String(
+        saveTarget.learnerSeriesId || saveTarget.seriesId || ''
+      ).trim();
       const { learnerSeriesDoc } = await getViewerQuizMeasurementSeriesDocs({
         includeBaseSeries: false,
       });
@@ -15576,6 +15578,8 @@ function commandsModule({
         learnerSeriesDoc.MeasurementAnnotations, [VIEWER_MEASUREMENTS_WORKFLOW]
       );
       const sources = [];
+      const sourceFrames = new Set<string>();
+      const sourceIds = new Set<string>();
       for (const slot of slots) {
         const component = components.find(item => item.slot === slot);
         const expected = component?.target || {};
@@ -15583,11 +15587,18 @@ function commandsModule({
         const saved = existing.filter(item =>
           getMeasurementAnnotationId(item) === sourceId
         );
-        if (!sourceId || saved.length !== 1 ||
+        const sourceFrame = [
+          expected.studyInstanceUID, expected.seriesInstanceUID,
+          expected.sopInstanceUID, expected.frameNumber,
+        ].map(value => String(value || '')).join('|');
+        if (!sourceId || sourceIds.has(sourceId) ||
+            sourceFrames.has(sourceFrame) || saved.length !== 1 ||
             !expected.studyInstanceUID || !expected.seriesInstanceUID ||
             !expected.sopInstanceUID ||
             !Number.isSafeInteger(Number(expected.frameNumber)) ||
-            Number(expected.frameNumber) < 1) {
+            Number(expected.frameNumber) < 1 ||
+            !Array.isArray(component?.points) ||
+            component.points.length < (kind === 'ivcCollapsibility' || kind === 'ivcRapRvsp' ? 2 : 3)) {
           return { ok: false, restoredCount: 0, reason: 'learner-source-annotation-unavailable', slot };
         }
         const annotation = saved[0];
@@ -15603,6 +15614,13 @@ function commandsModule({
             (annotation.frameNumber && Number(annotation.frameNumber) !== savedFrame)) {
           return { ok: false, restoredCount: 0, reason: 'learner-source-frame-mismatch', slot };
         }
+        if (!Array.isArray(annotation.points) ||
+            annotation.points.length < (kind === 'ivcCollapsibility' || kind === 'ivcRapRvsp' ? 2 : 3)) {
+          return { ok: false, restoredCount: 0,
+            reason: 'learner-saved-contour-geometry-unavailable', slot };
+        }
+        sourceIds.add(sourceId);
+        sourceFrames.add(sourceFrame);
         sources.push({ slot, annotation });
       }
       clearViewerQuizMeasurementComparisonAnnotations();
@@ -15616,8 +15634,20 @@ function commandsModule({
           annotation: saved, selectAnnotation: false,
           runDelayedDisplayRefresh: false,
         });
-        if (restored?.ok === true) restoredCount++;
-        else errors.push({ slot, reason: restored?.reason || 'hydration-failed' });
+        if (restored?.ok !== true) {
+          errors.push({ slot, reason: restored?.reason || 'hydration-failed' });
+          continue;
+        }
+        const sourceId = getMeasurementAnnotationId(saved);
+        const hydrated = sourceId ? annotation.state.getAnnotation?.(sourceId) : null;
+        if (!hydrated ||
+            normalizeImageIdForCompare(hydrated.metadata?.referencedImageId || '') !==
+              normalizeImageIdForCompare(saved.referencedImageId || '')) {
+          errors.push({ slot, reason: 'learner-contour-viewport-hydration-mismatch' });
+          continue;
+        }
+        hydrated.isVisible = true;
+        restoredCount++;
       }
       if (viewerTarget) {
         try {
