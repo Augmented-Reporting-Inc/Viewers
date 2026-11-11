@@ -8358,6 +8358,7 @@ function commandsModule({
     'evaluate.arQuizLAVolume': ['laVolumeBiplane', 'laVolumeBiplaneDisks'],
     'evaluate.arQuizRAArea': ['raArea'],
     'evaluate.arQuizRVFAC': ['rvFAC'],
+    'evaluate.arQuizSpectralVmax': ['trVmax'],
   };
   Object.entries(quizToolbarEvaluators).forEach(([name, kinds]) => {
     toolbarService?.registerEvaluateFunction?.(name, () =>
@@ -10757,6 +10758,14 @@ function commandsModule({
       preferredTargetKey = '',
       quizCapture = false,
     } = {}) => {
+      // The Vmax toolbar uses this same clinical acquisition command. When a
+      // TR Vmax quiz question is active, bind the known spectral target rather
+      // than falling back to generic Ultrasound Directional target selection.
+      // Outside that exact quiz context, retain the existing clinical UI.
+      if (spectralVmax && activeQuizMeasurementKind === 'trVmax') {
+        preferredTargetKey = 'echo.trPeakVelocity';
+        quizCapture = true;
+      }
       clearEchoAreaWorkflowListeners();
       clearUltrasoundDirectionalWorkflowListeners();
 
@@ -10949,6 +10958,20 @@ function commandsModule({
         }
 
         actions.markViewerMeasurementCreatedInSession?.({ uid: annotationId });
+        // The educator/learner quiz panel captures this exact calibrated
+        // annotation after its final label and physical m/s conversion exist.
+        // Do not emit a gradeable quiz event for generic or unsupported
+        // spectral measurements.
+        if (quizCapture && spectralVmax &&
+            selectedTarget?.key === 'echo.trPeakVelocity' &&
+            convertedReportValue?.unit === 'm/s' &&
+            Number.isFinite(Number(convertedReportValue?.value)) &&
+            Number(convertedReportValue.value) > 0 &&
+            Number(convertedReportValue.value) <= 8) {
+          window.dispatchEvent(new CustomEvent('ar-learning:quiz-measurement-added', {
+            detail: { measurementId: annotationId },
+          }));
+        }
         dispatchLiveMeasurementsRefresh({
           reason: 'ultrasound-directional-labelled',
           annotationUID: annotationId,
