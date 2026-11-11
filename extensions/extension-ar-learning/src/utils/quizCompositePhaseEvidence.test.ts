@@ -2,7 +2,7 @@ import {
   getCompositePhaseSlot, getCompositePhaseMeasurementId, getGoldPhaseMeasurementSummary,
   matchesCompositePhaseSource, getCompositeGoldCaptureSignature, getSavedCompositePhaseValues,
   needsSavedCalibratedGoldAreas,
-  findEditableCompositePhaseMeasurement,
+  findEditableCompositePhaseMeasurement, clearSavedCompositeGoldPhase,
   getCompositeGoldPersistenceError,
 } from './quizCompositePhaseEvidence';
 
@@ -179,6 +179,67 @@ describe('quiz composite phase evidence', () => {
     expect(matchesCompositePhaseSource(measurement, { target })).toBe(true);
     expect(findEditableCompositePhaseMeasurement([measurement], 'rvFAC', 'RV_ED',
       { target })).toEqual(measurement);
+  });
+  it('clears old A2C gold by saved annotation identity even when its DICOM frame is unloaded', () => {
+    const oldTarget = { studyInstanceUID: 'study', seriesInstanceUID: 'series-old',
+      sopInstanceUID: 'sop-old', frameNumber: 8 };
+    const replacementTarget = { studyInstanceUID: 'study', seriesInstanceUID: 'series-new',
+      sopInstanceUID: 'sop-new', frameNumber: 22 };
+    const a4c = { slot: 'A4C', annotationId: 'four', target: {
+      ...oldTarget, frameNumber: 12 } };
+    const a2c = { slot: 'A2C', annotationId: 'old-two', target: oldTarget };
+    const question = { type: 'measurementNumeric', answerConfig: {
+      measurementKind: 'laVolumeBiplane', goldValue: 68.59,
+      compositeFrameGuidanceEnabled: true,
+      compositeFrameTargets: { A4C: a4c.target, A2C: oldTarget },
+      goldMeasurement: { value: 68.59, compositeResult: {
+        value: 68.59, components: [a4c, a2c],
+        derived: { a4cAreaCM2: 31.26, a2cAreaCM2: 4.48 },
+      } },
+    } };
+    const newContour = { uid: 'new-two', measurementKind: 'laVolumeSlot',
+      laVolume: { slot: 'A2C' }, referenceStudyUID: 'study',
+      referenceSeriesUID: 'series-new', SOPInstanceUID: 'sop-new', frameNumber: 22 };
+    // Never confuse a new contour with the old gold merely because both
+    // represent A2C in the same study.
+    expect(findEditableCompositePhaseMeasurement([newContour],
+      'laVolumeBiplane', 'A2C', { annotationId: 'old-two', target: oldTarget })).toBeNull();
+    expect(clearSavedCompositeGoldPhase(question, 'A2C', 'wrong-id')).toBeNull();
+    const cleared = clearSavedCompositeGoldPhase(question, 'A2C', 'old-two');
+    expect(cleared.answerConfig.goldValue).toBeNull();
+    expect(cleared.answerConfig.goldMeasurement.value).toBeNull();
+    expect(cleared.answerConfig.goldMeasurement.compositeResult.value).toBeNull();
+    expect(cleared.answerConfig.goldMeasurement.compositeResult.derived).toBeNull();
+    expect(cleared.answerConfig.goldMeasurement.compositeResult.components).toEqual([a4c]);
+    expect(cleared.answerConfig.compositeFrameTargets.A4C).toEqual(a4c.target);
+    expect(cleared.answerConfig.compositeFrameTargets.A2C).toBeUndefined();
+    expect(question.answerConfig.goldValue).toBe(68.59);
+    expect(getCompositeGoldPersistenceError([cleared], [question]))
+      .toContain('cleared gold answer');
+    expect(getCompositeGoldPersistenceError([cleared], [cleared])).toBe('');
+    // After explicit Replace source, the new source must survive a delayed
+    // clear of old gold.
+    const updated = { ...question, answerConfig: { ...question.answerConfig,
+      compositeFrameTargets: { ...question.answerConfig.compositeFrameTargets,
+        A2C: replacementTarget } } };
+    expect(clearSavedCompositeGoldPhase(updated, 'A2C', 'old-two')
+      .answerConfig.compositeFrameTargets.A2C).toEqual(replacementTarget);
+  });
+  it('clears RV ED independently without retaining obsolete calculated FAC', () => {
+    const source = { slot: 'RV_ED', annotationId: 'rv-old',
+      target: { studyInstanceUID: 's', seriesInstanceUID: 'x',
+        sopInstanceUID: 'old', frameNumber: 3 } };
+    const other = { slot: 'RV_ES', annotationId: 'rv-es' };
+    const question = { answerConfig: {
+      goldValue: 27, goldMeasurement: { value: 27,
+        compositeResult: { components: [source, other],
+          derived: { edaCM2: 35, esaCM2: 25 } } },
+    } };
+    const cleared = clearSavedCompositeGoldPhase(question, 'RV_ED', 'rv-old');
+    expect(cleared.answerConfig.goldValue).toBeNull();
+    expect(cleared.answerConfig.goldMeasurement.compositeResult.derived).toBeNull();
+    expect(cleared.answerConfig.goldMeasurement.compositeResult.components).toEqual([other]);
+    expect(clearSavedCompositeGoldPhase(cleared, 'RV_ED', 'rv-old')).toBeNull();
   });
   it('detects FormAPI gold/source evidence dropped during quiz save', () => {
     const target = { studyInstanceUID: 'study', seriesInstanceUID: 'series',
