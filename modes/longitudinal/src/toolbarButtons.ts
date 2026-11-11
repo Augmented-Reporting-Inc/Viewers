@@ -650,7 +650,7 @@ const toolbarButtons: Button[] = [
       label: 'Vmax',
       tooltip: 'Measure calibrated peak spectral velocity from the zero baseline to the dense envelope peak. Choose the Doppler target.',
       commands: 'startSpectralVmaxWorkflow',
-      evaluate: 'evaluate.action',
+      evaluate: ['evaluate.action', 'evaluate.arQuizSpectralVmax'],
     },
   },
   {
