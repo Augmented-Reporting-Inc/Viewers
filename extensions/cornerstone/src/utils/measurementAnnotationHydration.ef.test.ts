@@ -205,3 +205,52 @@ describe('saved echo quiz contour hydration units and renderer', () => {
     expect(hydrated?.data?.echoArea).toBeUndefined();
   });
 });
+
+describe('saved gold comparison overlays retain measured units', () => {
+  test.each([
+    ['rvFAC', 'RV_ED', 19.31],
+    ['rvFAC', 'RV_ES', 15.50],
+    ['laVolumeBiplane', 'A4C', 31.26],
+    ['laVolumeBiplaneDisks', 'A2C', 4.48],
+  ])('reopens %s %s from composite gold with cm² evidence', (kind, slot, value) => {
+    const { getQuizCompositeGoldContourSlotMetadata } =
+      require('./quizEchoAreaCalibration');
+    const gold = {
+      uid: 'gold-' + kind + '-' + slot,
+      annotationId: 'gold-' + kind + '-' + slot,
+      toolName: 'PlanarFreehandROI',
+      measurementKind: kind,
+      ...getQuizCompositeGoldContourSlotMetadata(kind, slot),
+      SOPInstanceUID: 'gold-sop',
+      StudyInstanceUID: 'study',
+      SeriesInstanceUID: 'series',
+      referencedImageId: image('gold-sop', 3),
+      FrameOfReferenceUID: 'gold-frame-reference',
+      frameNumber: 3,
+      points: points.map(p => [...p]),
+      measurements: { area: value, areaUnit: 'cm2' },
+    };
+    const hydrated = hydrateSavedViewerAnnotationForViewport({
+      annotation: gold,
+      viewport: {
+        id: 'viewport',
+        getCurrentImageId: () => gold.referencedImageId,
+        getViewReference: () => ({ FrameOfReferenceUID: gold.FrameOfReferenceUID }),
+        getCamera: () => ({}),
+        getFrameOfReferenceUID: () => gold.FrameOfReferenceUID,
+      },
+      viewportId: 'viewport',
+      selectAnnotation: false,
+    });
+    expect(hydrated).toBeTruthy();
+    const expected = (value as number).toFixed(2) + ' cm²';
+    expect(hydrated?.data?.arSavedMeasurementDisplayText).toEqual([expected]);
+    const stats: any = Object.values(hydrated?.data?.cachedStats || {})[0];
+    expect(stats).toMatchObject({ area: value, areaUnit: 'cm²' });
+    if ((slot as string).startsWith('RV_')) {
+      expect(hydrated?.data?.echoArea?.slot).toBe(slot);
+    } else {
+      expect(hydrated?.data?.laVolume?.slot).toBe(slot);
+    }
+  });
+});
