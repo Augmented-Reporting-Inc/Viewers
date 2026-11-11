@@ -167,7 +167,7 @@ export function attachLearnerRapSelectionToIVCAnswer({
  * Never replace the percent with RVSP or use educator gold TR velocity.
  * This is education answer evidence, NOT an unreviewed clinical report write.
  */
-export function attachLearnerRapRvspToIVCAnswer({
+export function attachRapRvspEvidenceToIVCAnswer({
   ivcAnswer, rapMMHG, trVmaxAnswer, trVmaxQuestionKey,
 }: {
   ivcAnswer?: any; rapMMHG?: unknown;
@@ -191,3 +191,7 @@ export function attachLearnerRapRvspToIVCAnswer({
     },
   };
 }
+
+/** Legacy learner call site uses the same verified, role-neutral composition.
+ * Educator gold remains a separate versioned quiz artifact, not learner data. */
+export const attachLearnerRapRvspToIVCAnswer = attachRapRvspEvidenceToIVCAnswer;
