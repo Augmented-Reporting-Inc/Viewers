@@ -120,6 +120,45 @@ export function composeIVCRapRVSP({
   };
 }
 
+/** Preserve an independently interpreted RAP when no linked TR Vmax is
+ * available yet. This is evidence of learner choice, not an RVSP estimate.
+ * Only a complete, source-verified IVC pair can anchor the review. */
+export function attachLearnerRapSelectionToIVCAnswer({
+  ivcAnswer, rapMMHG,
+}: {
+  ivcAnswer?: any; rapMMHG?: unknown;
+} = {}) {
+  const rap = finite(rapMMHG);
+  const collapse = finite(ivcAnswer?.value);
+  if (ivcAnswer?.measurementKind !== 'ivcCollapsibility' ||
+      ivcAnswer?.compositeResult?.methodId !== 'ivc-collapsibility-v1' ||
+      ivcAnswer?.unit !== '%' || collapse === null || collapse < 0 || collapse > 100 ||
+      !validCaliperComponents(ivcAnswer)) {
+    return { status: 'unavailable' as const, reason: 'ivc-caliper-evidence-incomplete' };
+  }
+  if (!RAP_CHOICES_MMHG.includes(rap as 3 | 8 | 15)) {
+    return { status: 'unavailable' as const, reason: 'select-rap-3-8-or-15' };
+  }
+  return {
+    status: 'rap-only' as const,
+    answer: {
+      ...ivcAnswer,
+      compositeResult: {
+        ...ivcAnswer.compositeResult,
+        rapMMHG: rap,
+        trGradientMMHG: null,
+        rvspMMHG: null,
+        rapRvsp: {
+          schemaVersion: 1,
+          methodId: IVC_RAP_RVSP_METHOD,
+          ivc: ivcAnswer,
+          rapMMHG: rap,
+        },
+      },
+    },
+  };
+}
+
 /**
  * Existing IVC-collapsibility questions continue to score the percentage,
  * but may additionally save a learner-reviewed RAP/RVSP calculation as
