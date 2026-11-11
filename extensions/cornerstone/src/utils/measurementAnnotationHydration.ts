@@ -13,6 +13,7 @@ import {
   buildSpectralDopplerDisplayText,
 } from './spectralDoppler';
 import { BOWEL_CURVED_LENGTH_MEASUREMENT_KIND } from '../../../extension-ar-measurements/src/utils/bowelMeasurementTargets';
+import { getSavedQuizEchoAreaDisplayInfo } from './quizEchoAreaCalibration';
 
 const CONTOUR_TOOL_NAMES = new Set(['SplineROI', 'PlanarFreehandROI', 'LivewireContour']);
 const ULTRASOUND_DIRECTIONAL_TOOL_NAME = 'UltrasoundDirectionalTool';
@@ -634,6 +635,44 @@ function getCornerstonePixelSpacingMM(referencedImageId = '') {
   };
 }
 
+/**
+ * Saved RV/RA quiz contours must retain their explicit phase identity after
+ * Cornerstone hydrate. LA contours use getSavedVolumeContourMetadata.
+ * Never infer a quiz slot from generic contour labels or anatomical context.
+ */
+function getSavedRightHeartQuizContourMetadata(savedAnnotation: any = {}) {
+  const echoArea = savedAnnotation?.echoArea || savedAnnotation?.measurements?.echoArea || {};
+  const kind = String(savedAnnotation?.measurementKind ||
+    savedAnnotation?.measurements?.measurementKind || '').trim();
+  const slot = String(echoArea?.slot || (kind === 'echoAreaSlot' && savedAnnotation?.slot) || '')
+    .trim().toUpperCase();
+  if (!['RV_ED', 'RV_ES', 'RA_ES'].includes(slot) ||
+      (kind !== 'echoAreaSlot' && !echoArea?.slot)) return {};
+  return { measurementKind: 'echoAreaSlot', echoArea: { ...echoArea, slot } };
+}
+
+function isSavedQuizAreaContour(savedAnnotation: any = {}) {
+  if (getSavedRightHeartQuizContourMetadata(savedAnnotation).measurementKind) return true;
+  const la = savedAnnotation?.laVolume || savedAnnotation?.measurements?.laVolume || {};
+  const kind = String(savedAnnotation?.measurementKind ||
+    savedAnnotation?.measurements?.measurementKind || la?.measurementKind || '').trim();
+  return kind === 'laVolumeSlot' && ['A4C', 'A2C']
+    .includes(String(la?.slot || savedAnnotation?.slot || '').trim().toUpperCase());
+}
+
+function getSavedQuizAreaCM2(savedAnnotation: any = {}) {
+  if (!isSavedQuizAreaContour(savedAnnotation)) return null;
+  const measurements = savedAnnotation?.measurements || {};
+  const physical = getSavedQuizEchoAreaDisplayInfo(
+    measurements.area, measurements.areaUnit
+  );
+  if (!physical) return null;
+  // Only a declared physical mm² value may be converted. Never relabel
+  // raw pixel geometry or assume Cornerstone's uncalibrated ROI statistics.
+  const cm2 = physical.areaUnit === 'mm²' ? physical.value / 100 : physical.value;
+  return Number.isFinite(cm2) && cm2 > 0 ? cm2 : null;
+}
+
 function getSavedContourAreaMM2(savedAnnotation, referencedImageId = '') {
   if (isSavedSpectralDopplerAnnotation(savedAnnotation)) {
     return null;
@@ -739,25 +778,30 @@ function getSavedContourStats(savedAnnotation, referencedImageId = '') {
         };
   }
 
-  const area = getSavedContourAreaMM2(savedAnnotation, referencedImageId);
+  const quizContour = isSavedQuizAreaContour(savedAnnotation);
+  const area = quizContour
+    ? getSavedQuizAreaCM2(savedAnnotation)
+    : getSavedContourAreaMM2(savedAnnotation, referencedImageId);
 
   if (area == null) {
     return null;
   }
+  const areaUnit = quizContour ? 'cm²' : 'mm²';
+  const linearUnit = quizContour ? 'cm' : 'mm';
 
   return {
     area,
-    areaUnit: 'mm²',
-    areaUnits: 'mm²',
-    unit: 'mm',
-    units: 'mm',
-    modalityUnit: 'mm',
+    areaUnit,
+    areaUnits: areaUnit,
+    unit: linearUnit,
+    units: linearUnit,
+    modalityUnit: linearUnit,
     modalityUnitOptions: {
-      areaUnit: 'mm²',
-      unit: 'mm',
+      areaUnit,
+      unit: linearUnit,
     },
     arSavedMeasurementArea: area,
-    arSavedMeasurementAreaUnit: 'mm²',
+    arSavedMeasurementAreaUnit: areaUnit,
   };
 }
 
@@ -789,13 +833,13 @@ function getSavedContourDisplayText(savedAnnotation, referencedImageId = '') {
     return length == null ? [] : [`${length >= 100 ? length.toFixed(0) : length >= 10 ? length.toFixed(1) : length.toFixed(2)} mm`];
   }
 
-  const area = getSavedContourAreaMM2(savedAnnotation, referencedImageId);
-
-  if (area == null) {
-    return [];
+  if (isSavedQuizAreaContour(savedAnnotation)) {
+    const areaCM2 = getSavedQuizAreaCM2(savedAnnotation);
+    return areaCM2 == null ? [] : [`${areaCM2.toFixed(2)} cm²`];
   }
 
-  return [`${formatSavedAreaMM2(area)} mm²`];
+  const area = getSavedContourAreaMM2(savedAnnotation, referencedImageId);
+  return area == null ? [] : [`${formatSavedAreaMM2(area)} mm²`];
 }
 
 function getToolGroupForViewportSafe(viewport, viewportId = '') {
@@ -1254,6 +1298,7 @@ function buildCornerstoneAnnotation(annotation, fallbackFrameOfReferenceUID = ''
   const data: any = {
     label: getViewportAnnotationLabel(annotation),
     ...getSavedVolumeContourMetadata(annotation),
+    ...getSavedRightHeartQuizContourMetadata(annotation),
     ...(isSavedBowelCurvedLengthAnnotation(annotation)
       ? {
           measurementKind: BOWEL_CURVED_LENGTH_MEASUREMENT_KIND,
@@ -1395,6 +1440,7 @@ function patchHydratedAnnotationFromSaved({
     ...(fallback?.data || {}),
     label: getViewportAnnotationLabel(savedAnnotation),
     ...getSavedVolumeContourMetadata(savedAnnotation),
+    ...getSavedRightHeartQuizContourMetadata(savedAnnotation),
     handles: {
       ...(target.data?.handles || {}),
       ...(fallback?.data?.handles || {}),
@@ -1647,6 +1693,7 @@ export function hydrateSavedViewerAnnotationForViewport({
     targetAnnotation.data = {
       ...(targetAnnotation.data || {}),
       ...getSavedVolumeContourMetadata(annotationToHydrate),
+      ...getSavedRightHeartQuizContourMetadata(annotationToHydrate),
     };
     patchContourCachedStatsFromSaved(
       targetAnnotation,
