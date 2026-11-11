@@ -1,4 +1,5 @@
 import { calculateRAArea, calculateRVFAC } from './rightHeartMeasurements';
+import { convertPhysicalValue } from './physicalMeasurementPresentation';
 
 type Measurement = Record<string, any>;
 type AreaSlot = 'RA_ES' | 'RV_ED' | 'RV_ES';
@@ -49,10 +50,7 @@ function isClosedContour(measurement: Measurement): boolean {
 
 function convertAreaCM2(rawValue: unknown, rawUnit: unknown): number | null {
   const n = finitePositive(rawValue);
-  const unit = clean(rawUnit).toLowerCase().replace(/\s/g, '').replace(/²/g, '2');
-  if (n === null) return null;
-  if (unit === 'mm2') return n / 100;
-  if (unit === 'cm2') return n;
+  return n === null ? null : convertPhysicalValue(n, rawUnit, 'cm²', 'area');
   return null;
 }
 
