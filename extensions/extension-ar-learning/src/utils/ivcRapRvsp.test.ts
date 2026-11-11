@@ -1,4 +1,4 @@
-import { composeIVCRapRVSP, attachLearnerRapRvspToIVCAnswer, isIVCReviewCurrent } from './ivcRapRvsp';
+import { composeIVCRapRVSP, attachLearnerRapRvspToIVCAnswer, attachLearnerRapSelectionToIVCAnswer, isIVCReviewCurrent } from './ivcRapRvsp';
 
 function target(instance: string, frame: number) {
   return {
@@ -62,6 +62,37 @@ describe('IVC review integrity checkpoint', () => {
     editedContour.compositeResult.components[1].points[1][0] = 9;
     expect(isIVCReviewCurrent(ivc, editedContour)).toBe(false);
     expect(isIVCReviewCurrent(ivc, { ...ivc, value: 65 })).toBe(false);
+  });
+});
+
+describe('independent learner RAP without a source-linked TR answer', () => {
+  it('saves an explicit RAP on verified IVC but leaves RVSP unavailable', () => {
+    const result = attachLearnerRapSelectionToIVCAnswer({
+      ivcAnswer: ivc, rapMMHG: 8,
+    });
+    expect(result.status).toBe('rap-only');
+    if (result.status !== 'rap-only') return;
+    expect(result.answer.value).toBe(60);
+    expect(result.answer.unit).toBe('%');
+    expect(result.answer.compositeResult.components).toEqual(ivc.compositeResult.components);
+    expect(result.answer.compositeResult.rapMMHG).toBe(8);
+    expect(result.answer.compositeResult.rvspMMHG).toBeNull();
+    expect(result.answer.compositeResult.trGradientMMHG).toBeNull();
+    expect(result.answer.compositeResult.rapRvsp.ivc).toBe(ivc);
+    expect(result.answer.compositeResult.rapRvsp).not.toHaveProperty('trVmax');
+  });
+  it('rejects an inferred RAP, incomplete caliper sources and invalid selection', () => {
+    expect(attachLearnerRapSelectionToIVCAnswer({ ivcAnswer: ivc }).status)
+      .toBe('unavailable');
+    expect(attachLearnerRapSelectionToIVCAnswer({
+      ivcAnswer: ivc, rapMMHG: 5,
+    }).status).toBe('unavailable');
+    expect(attachLearnerRapSelectionToIVCAnswer({
+      ivcAnswer: { ...ivc, compositeResult: {
+        ...ivc.compositeResult, components: ivc.compositeResult.components.slice(0, 1),
+      } },
+      rapMMHG: 8,
+    }).status).toBe('unavailable');
   });
 });
 
