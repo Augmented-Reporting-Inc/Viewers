@@ -12939,6 +12939,72 @@ function commandsModule({
       viewerLengthLabelMode = normalizeViewerLengthLabelMode(labelMode);
       return viewerLengthLabelMode;
     },
+    /**
+     * Quiz-only: the learner explicitly selected expiration/inspiration in
+     * the question panel, so no second Length label selection is necessary.
+     * Only a new, unlabeled Length measurement on the requested DICOM frame
+     * is eligible. This never assigns labels in general clinical or bowel UI.
+     */
+    setViewerQuizIVCPhaseLabel: ({
+      measurementId = '', slot = '', expectedTarget = null,
+    } = {}) => {
+      const id = String(measurementId || '').trim();
+      const phase = String(slot || '').trim().toUpperCase();
+      if (!id || !['IVC_EXP', 'IVC_INSP'].includes(phase)) {
+        return { ok: false, reason: 'invalid-ivc-phase-selection' };
+      }
+      const measurement = measurementService.getMeasurement?.(id);
+      if (!measurement || String(measurement.toolName || '') !== 'Length') {
+        return { ok: false, reason: 'length-measurement-unavailable' };
+      }
+      const activeLabel = String(
+        measurement.label || measurement.measurementRole || ''
+      ).trim();
+      const requestedLabel = phase === 'IVC_EXP' ? 'IVCexp' : 'IVCinsp';
+      if (activeLabel && !['Length', requestedLabel].includes(activeLabel)) {
+        return { ok: false, reason: 'already-labelled-differently' };
+      }
+      const target = expectedTarget || {};
+      if (target && Object.keys(target).length > 0) {
+        const actual = {
+          study: String(measurement.referenceStudyUID || measurement.StudyInstanceUID || ''),
+          series: String(measurement.referenceSeriesUID || measurement.SeriesInstanceUID || ''),
+          sop: String(measurement.SOPInstanceUID || measurement.metadata?.SOPInstanceUID || ''),
+          image: String(measurement.referencedImageId || measurement.metadata?.referencedImageId || ''),
+          frame: getFrameNumberFromReferencedImageId(
+            measurement.referencedImageId || measurement.metadata?.referencedImageId || ''
+          ),
+        };
+        if (!actual.study || !actual.series || !actual.sop ||
+            !target.studyInstanceUID || !target.seriesInstanceUID ||
+            !target.sopInstanceUID ||
+            actual.study !== String(target.studyInstanceUID) ||
+            actual.series !== String(target.seriesInstanceUID) ||
+            actual.sop !== String(target.sopInstanceUID) ||
+            Number(target.frameNumber) !== actual.frame ||
+            (target.referencedImageId && normalizeImageIdForCompare(actual.image) !==
+              normalizeImageIdForCompare(String(target.referencedImageId)))) {
+          return { ok: false, reason: 'ivc-source-frame-mismatch' };
+        }
+      }
+      const cornerstoneAnnotation = cornerstoneTools.annotation.state.getAnnotation?.(id);
+      if (cornerstoneAnnotation?.data?.arPendingLengthLabel === true) {
+        delete cornerstoneAnnotation.data.arPendingLengthLabel;
+      }
+      if (activeLabel !== requestedLabel) {
+        measurementService.update(id, {
+          ...measurement, label: requestedLabel,
+          measurementRole: requestedLabel,
+        }, true);
+        viewerMeasurementsModifiedInSession.add(id);
+      }
+      viewerLengthLabelMode = VIEWER_LENGTH_LABEL_MODE_PROMPT;
+      window.dispatchEvent(new CustomEvent('ar-learning:quiz-measurement-labelled', {
+        detail: { measurementId: id },
+      }));
+      dispatchLiveMeasurementsRefresh({ kind: 'ivc-quiz-phase-labelled' });
+      return { ok: true, slot: phase, label: requestedLabel };
+    },
     getViewerLengthLabelMode: () => viewerLengthLabelMode,
     resetViewerLengthLabelMode: () => {
       viewerLengthLabelMode = VIEWER_LENGTH_LABEL_MODE_PROMPT;
@@ -15470,6 +15536,134 @@ function commandsModule({
       };
     },
 
+    /**
+     * Learner composite quiz reopen: restore EACH exact, persisted learner
+     * source annotation on its own referenced DICOM image/frame. Never use
+     * educator gold or an approximate measurement lookup as a substitute.
+     * This restores drawing evidence without changing quiz scores or report.
+     */
+    showViewerQuizLearnerCompositeMeasurement: async ({
+      learnerMeasurement = {}, viewerTarget = null, questionKey = '',
+    } = {}) => {
+      const kind = String(learnerMeasurement?.measurementKind || '').trim();
+      const slots = kind === 'rvFAC' ? ['RV_ED', 'RV_ES']
+        : ['laVolumeBiplane', 'laVolumeBiplaneDisks'].includes(kind)
+          ? ['A4C', 'A2C']
+          : kind === 'ivcCollapsibility' || kind === 'ivcRapRvsp'
+            ? ['IVC_EXP', 'IVC_INSP'] : [];
+      const sourceComposite = kind === 'ivcRapRvsp'
+        ? learnerMeasurement?.compositeResult?.ivc?.compositeResult
+        : learnerMeasurement?.compositeResult;
+      const components = Array.isArray(sourceComposite?.components)
+        ? sourceComposite.components : [];
+      if (slots.length !== 2 || components.length !== slots.length ||
+          slots.some(slot => components.filter(item => item?.slot === slot).length !== 1)) {
+        return { ok: false, restoredCount: 0, reason: 'learner-composite-source-incomplete' };
+      }
+      const saveTarget = getArViewerSaveTargetFromUrl();
+      const learnerId = String(
+        saveTarget.learnerSeriesId || saveTarget.seriesId || ''
+      ).trim();
+      const { learnerSeriesDoc } = await getViewerQuizMeasurementSeriesDocs({
+        includeBaseSeries: false,
+      });
+      // A learner view can only use its isolated copy; never load a source
+      // teaching study (or a previously opened educator's measurements).
+      if (!learnerId || !learnerSeriesDoc ||
+          String(learnerSeriesDoc._id || '') !== learnerId ||
+          learnerSeriesDoc.isLearnerCopy !== true) {
+        return { ok: false, restoredCount: 0, reason: 'learner-copy-not-available' };
+      }
+      const existing = getRequestedWorkflowAnnotations(
+        learnerSeriesDoc.MeasurementAnnotations, [VIEWER_MEASUREMENTS_WORKFLOW]
+      );
+      const sources = [];
+      const sourceFrames = new Set<string>();
+      const sourceIds = new Set<string>();
+      for (const slot of slots) {
+        const component = components.find(item => item.slot === slot);
+        const expected = component?.target || {};
+        const sourceId = String(component?.annotationId || '').trim();
+        const saved = existing.filter(item =>
+          getMeasurementAnnotationId(item) === sourceId
+        );
+        const sourceFrame = [
+          expected.studyInstanceUID, expected.seriesInstanceUID,
+          expected.sopInstanceUID, expected.frameNumber,
+        ].map(value => String(value || '')).join('|');
+        if (!sourceId || sourceIds.has(sourceId) ||
+            sourceFrames.has(sourceFrame) || saved.length !== 1 ||
+            !expected.studyInstanceUID || !expected.seriesInstanceUID ||
+            !expected.sopInstanceUID ||
+            !Number.isSafeInteger(Number(expected.frameNumber)) ||
+            Number(expected.frameNumber) < 1 ||
+            !Array.isArray(component?.points) ||
+            component.points.length < (kind === 'ivcCollapsibility' || kind === 'ivcRapRvsp' ? 2 : 3)) {
+          return { ok: false, restoredCount: 0, reason: 'learner-source-annotation-unavailable', slot };
+        }
+        const annotation = saved[0];
+        const image = String(annotation.referencedImageId || '').trim();
+        const savedFrame = getFrameNumberFromReferencedImageId(image);
+        const expectedImage = String(expected.referencedImageId || '').trim();
+        if (String(annotation.StudyInstanceUID || '') !== String(expected.studyInstanceUID) ||
+            String(annotation.SeriesInstanceUID || '') !== String(expected.seriesInstanceUID) ||
+            String(annotation.SOPInstanceUID || '') !== String(expected.sopInstanceUID) ||
+            !image || !expectedImage ||
+            normalizeImageIdForCompare(image) !== normalizeImageIdForCompare(expectedImage) ||
+            savedFrame !== Number(expected.frameNumber) ||
+            (annotation.frameNumber && Number(annotation.frameNumber) !== savedFrame)) {
+          return { ok: false, restoredCount: 0, reason: 'learner-source-frame-mismatch', slot };
+        }
+        if (!Array.isArray(annotation.points) ||
+            annotation.points.length < (kind === 'ivcCollapsibility' || kind === 'ivcRapRvsp' ? 2 : 3)) {
+          return { ok: false, restoredCount: 0,
+            reason: 'learner-saved-contour-geometry-unavailable', slot };
+        }
+        sourceIds.add(sourceId);
+        sourceFrames.add(sourceFrame);
+        sources.push({ slot, annotation });
+      }
+      clearViewerQuizMeasurementComparisonAnnotations();
+      let restoredCount = 0;
+      const errors = [];
+      // Cornerstone needs the referenced frame to be available when a saved
+      // annotation is hydrated. Navigate to each in sequence, then return to
+      // the question target so learners are not stranded on the last phase.
+      for (const { slot, annotation: saved } of sources) {
+        const restored = await actions.jumpToSavedViewerAnnotation({
+          annotation: saved, selectAnnotation: false,
+          runDelayedDisplayRefresh: false,
+        });
+        if (restored?.ok !== true) {
+          errors.push({ slot, reason: restored?.reason || 'hydration-failed' });
+          continue;
+        }
+        const sourceId = getMeasurementAnnotationId(saved);
+        const hydrated = sourceId ? annotation.state.getAnnotation?.(sourceId) : null;
+        if (!hydrated ||
+            normalizeImageIdForCompare(hydrated.metadata?.referencedImageId || '') !==
+              normalizeImageIdForCompare(saved.referencedImageId || '')) {
+          errors.push({ slot, reason: 'learner-contour-viewport-hydration-mismatch' });
+          continue;
+        }
+        hydrated.isVisible = true;
+        restoredCount++;
+      }
+      if (viewerTarget) {
+        try {
+          await actions.jumpToViewerQuizTarget({ viewerTarget, questionKey });
+        } catch (error) {
+          console.warn('[ViewerQuiz] could not return to learner question frame', error);
+        }
+      }
+      return {
+        ok: errors.length === 0 && restoredCount === slots.length,
+        learnerRendered: restoredCount > 0, restoredCount,
+        expectedCount: slots.length,
+        reason: errors[0]?.reason || '',
+        failedSlots: errors.map(item => item.slot),
+      };
+    },
     showViewerQuizLearnerMeasurement: async ({
       learnerMeasurement = {},
       viewerTarget = null,
@@ -16729,6 +16923,9 @@ function commandsModule({
     getViewerLengthLabelMode: {
       commandFn: actions.getViewerLengthLabelMode,
     },
+    setViewerQuizIVCPhaseLabel: {
+      commandFn: actions.setViewerQuizIVCPhaseLabel,
+    },
     resetViewerLengthLabelMode: {
       commandFn: actions.resetViewerLengthLabelMode,
     },
@@ -17904,6 +18101,9 @@ function commandsModule({
     },
     showViewerQuizLearnerMeasurement: {
       commandFn: actions.showViewerQuizLearnerMeasurement,
+    },
+    showViewerQuizLearnerCompositeMeasurement: {
+      commandFn: actions.showViewerQuizLearnerCompositeMeasurement,
     },
     clearViewerQuizMeasurementComparison: {
       commandFn: actions.clearViewerQuizMeasurementComparison,
