@@ -37,6 +37,34 @@ export function getSavedQuizEchoAreaDisplayInfo(area: unknown, areaUnit: unknown
 }
 
 /**
+ * Gold comparison overlays are reconstructed from composite answer components,
+ * not always from the original annotation. Restore explicit source-slot
+ * metadata so the normal ROI renderer recognizes the quiz contour.
+ * Never infer a slot from a generic ROI label or cross measurement kinds.
+ */
+export function getQuizCompositeGoldContourSlotMetadata(
+  measurementKind: unknown, rawSlot: unknown
+): Record<string, any> {
+  const kind = String(measurementKind || '').trim();
+  const slot = String(rawSlot || '').trim().toUpperCase();
+  if ((kind === 'rvFAC' && (slot === 'RV_ED' || slot === 'RV_ES')) ||
+      (kind === 'raArea' && slot === 'RA_ES')) {
+    return {
+      echoArea: { measurementKind: 'echoAreaSlot', slot,
+        phase: slot === 'RV_ED' ? 'ED' : 'ES', view: 'A4C' },
+    };
+  }
+  if ((kind === 'laVolumeBiplane' || kind === 'laVolumeBiplaneDisks') &&
+      (slot === 'A4C' || slot === 'A2C')) {
+    return {
+      laVolume: { measurementKind: 'laVolumeSlot', slot,
+        view: slot, phase: 'ES' },
+    };
+  }
+  return {};
+}
+
+/**
  * Display-only formatter for RV/RA and LA quiz contour annotations.
  * Cornerstone's native ROI cachedStats may use a different physical scale.
  * Never relabel its raw number: display only the validated cm² phase value.
