@@ -1,4 +1,4 @@
-import { calculateCalibratedEchoAreaCM2, getSavedQuizEchoAreaDisplayInfo, getQuizCompositeContourViewportLines } from './quizEchoAreaCalibration';
+import { calculateCalibratedEchoAreaCM2, getSavedQuizEchoAreaDisplayInfo, getQuizCompositeContourViewportLines, getQuizCompositeGoldContourSlotMetadata } from './quizEchoAreaCalibration';
 
 describe('DICOM-calibrated quiz echo area', () => {
   it('calculates physical area in cm² from already calibrated millimetres', () => {
@@ -82,5 +82,44 @@ describe('quiz contour viewport area labels', () => {
     expect(getQuizCompositeContourViewportLines({
       echoArea: { slot: 'RV_ED' }, arSavedMeasurementDisplayText: ['19.3 mm²'],
     }, undefined)).toEqual(['RVEDA: calibrated area unavailable']);
+  });
+});
+
+describe('composite gold comparison source contours retain quiz identity', () => {
+  it('restores RV, RA and LA contour slots without inferring kinds from labels', () => {
+    expect(getQuizCompositeGoldContourSlotMetadata('rvFAC', 'RV_ED')).toEqual({
+      echoArea: { measurementKind: 'echoAreaSlot', slot: 'RV_ED', phase: 'ED', view: 'A4C' },
+    });
+    expect(getQuizCompositeGoldContourSlotMetadata('rvFAC', 'RV_ES')).toEqual({
+      echoArea: { measurementKind: 'echoAreaSlot', slot: 'RV_ES', phase: 'ES', view: 'A4C' },
+    });
+    expect(getQuizCompositeGoldContourSlotMetadata('raArea', 'RA_ES')).toEqual({
+      echoArea: { measurementKind: 'echoAreaSlot', slot: 'RA_ES', phase: 'ES', view: 'A4C' },
+    });
+    expect(getQuizCompositeGoldContourSlotMetadata('laVolumeBiplane', 'A4C')).toEqual({
+      laVolume: { measurementKind: 'laVolumeSlot', slot: 'A4C', view: 'A4C', phase: 'ES' },
+    });
+    expect(getQuizCompositeGoldContourSlotMetadata('laVolumeBiplaneDisks', 'A2C')).toEqual({
+      laVolume: { measurementKind: 'laVolumeSlot', slot: 'A2C', view: 'A2C', phase: 'ES' },
+    });
+    expect(getQuizCompositeGoldContourSlotMetadata('ivcCollapsibility', 'IVC_EXP'))
+      .toEqual({});
+    expect(getQuizCompositeGoldContourSlotMetadata('rvFAC', 'A4C')).toEqual({});
+    expect(getQuizCompositeGoldContourSlotMetadata('genericROI', 'RV_ED')).toEqual({});
+  });
+
+  it('renders a saved gold composite source from its verified cm² text, not native ROI mm²', () => {
+    const rv = {
+      ...getQuizCompositeGoldContourSlotMetadata('rvFAC', 'RV_ED'),
+      arSavedMeasurementDisplayText: ['19.31 cm²'],
+    };
+    const la = {
+      ...getQuizCompositeGoldContourSlotMetadata('laVolumeBiplane', 'A4C'),
+      arSavedMeasurementDisplayText: ['31.26 cm²'],
+    };
+    expect(getQuizCompositeContourViewportLines(rv, null)).toEqual(['19.31 cm²']);
+    expect(getQuizCompositeContourViewportLines(la, null)).toEqual(['31.26 cm²']);
+    expect(getQuizCompositeContourViewportLines(rv, 19.31)).toEqual(['RVEDA: 19.31 cm²']);
+    expect(getQuizCompositeContourViewportLines(la, 31.26)).toEqual(['LA A4C: 31.26 cm²']);
   });
 });
