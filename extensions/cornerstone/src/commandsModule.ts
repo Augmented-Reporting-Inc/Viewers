@@ -126,7 +126,7 @@ import { getEchoAreaSlot } from '../../extension-ar-measurements/src/utils/echoA
 import { resolveViewerQuizCompositeResult, resolveViewerQuizLVSimpsonForStudy, isViewerQuizCompositeReviewCurrent, getViewerQuizCompositeStatus } from '../../extension-ar-measurements/src/utils/viewerQuizCompositeResults';
 import { createGuidedMouseToolOwnership } from './utils/guidedMouseToolOwnership';
 import { calibrateUSContourPoints, worldToImageIndex } from './utils/usRegionLengthCalibration';
-import { calculateCalibratedEchoAreaCM2, getSavedQuizEchoAreaDisplayInfo, getQuizCompositeContourViewportLines } from './utils/quizEchoAreaCalibration';
+import { calculateCalibratedEchoAreaCM2, getSavedQuizEchoAreaDisplayInfo, getQuizCompositeContourViewportLines, getQuizCompositeGoldContourSlotMetadata } from './utils/quizEchoAreaCalibration';
 import { installQuizContourTextRenderer } from './utils/installQuizContourTextRenderer';
 import { resolveViewerQuizGoldAreaBackfill } from '../../extension-ar-measurements/src/utils/quizGoldAreaBackfill';
 
@@ -15830,14 +15830,9 @@ function commandsModule({
           // Temporary gold overlays need the same explicit contour slot as
           // original acquisition. Otherwise Cornerstone treats them as generic
           // ROI annotations and displays a separate native mm² measurement.
-          ...(['RV_ED', 'RV_ES', 'RA_ES'].includes(slot) ? {
-            echoArea: { measurementKind: 'echoAreaSlot', slot,
-              phase: slot === 'RV_ED' ? 'ED' : 'ES', view: 'A4C' },
-          } : {}),
-          ...(['A4C', 'A2C'].includes(slot) ? {
-            laVolume: { measurementKind: 'laVolumeSlot', slot,
-              view: slot, phase: 'ES' },
-          } : {}),
+          ...getQuizCompositeGoldContourSlotMetadata(
+            rubricMeasurement.measurementKind, slot
+          ),
           ...(hasPhysical ? {
             displayText: [slot + ': ' + physical.toFixed(2) + ' ' + unit],
             measurements: rubricMeasurement?.measurementKind === 'ivcCollapsibility'
