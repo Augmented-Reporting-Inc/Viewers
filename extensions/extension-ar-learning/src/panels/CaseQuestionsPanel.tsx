@@ -2733,14 +2733,20 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                 const displayAnswer = kind === 'ivcRapRvsp'
                   ? plainObject(plainObject(answer.compositeResult).ivc)
                   : answer;
-                const result = await runViewerCommand(commandsManager,
-                  'showViewerQuizMeasurementComparison', {
-                    rubricMeasurement: displayAnswer,
-                    compositeDisplayRole: learner ? 'learner' : 'rubric',
-                    viewerTarget: saved.target,
-                    focusedCompositeSlot: slot,
-                    questionKey: question.questionKey,
-                  });
+                const result = learner
+                  ? await runViewerCommand(
+                      commandsManager, 'showViewerQuizLearnerCompositeMeasurement', {
+                        learnerMeasurement: displayAnswer,
+                        viewerTarget: saved.target,
+                        questionKey: question.questionKey,
+                      })
+                  : await runViewerCommand(
+                      commandsManager, 'showViewerQuizMeasurementComparison', {
+                        rubricMeasurement: displayAnswer,
+                        viewerTarget: saved.target,
+                        focusedCompositeSlot: slot,
+                        questionKey: question.questionKey,
+                      });
                 if ((learner ? result?.learnerRendered : result?.rubricRendered) !== true) {
                   uiNotificationService.show({
                     title: 'Saved contour', type: 'warning', duration: 5000,
@@ -3228,20 +3234,19 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       try {
         const firstSource = learnerComponents[0].target;
         const restored = await runViewerCommand(
-          commandsManager, 'showViewerQuizMeasurementComparison', {
-            rubricMeasurement: learnerComposite,
-            compositeDisplayRole: 'learner',
+          commandsManager, 'showViewerQuizLearnerCompositeMeasurement', {
+            learnerMeasurement: learnerComposite,
             viewerTarget: firstSource,
             questionKey: question.questionKey,
           }
         );
         if (restored?.learnerRendered === true &&
-            restored?.renderedCount >= learnerComponents.length) {
+            restored?.restoredCount === learnerComponents.length) {
           return;
         }
         console.warn('[CaseQuestionsPanel] saved learner composite restoration incomplete', {
           questionKey: question.questionKey,
-          restoredCount: restored?.renderedCount || 0,
+          restoredCount: restored?.restoredCount || 0,
           expectedCount: learnerComponents.length,
           reason: restored?.reason || 'unknown',
         });
