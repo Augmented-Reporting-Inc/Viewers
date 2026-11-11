@@ -3055,6 +3055,10 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     } catch (error) {
       console.warn('[CaseQuestionsPanel] could not highlight quiz measurement toolbar', error);
     }
+    // A previous selection can finish an async viewer command after the
+    // educator/learner has already chosen another question from the dropdown.
+    // Never let its continuation restore the earlier question (e.g. LAV).
+    if (lastActivatedQuestionRef.current !== nextActiveQuestionKey) return;
     // Reopening an educator's completed composite is a review action, not
     // an instruction to start another measurement session over saved contours.
     const savedGoldComponents = authoringMode
@@ -3113,11 +3117,11 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     }
 
     try {
+    if (lastActivatedQuestionRef.current !== nextActiveQuestionKey) return;
     if (authoringMode && question.type === 'measurementNumeric') {
-      setActiveQuestionKey(nextActiveQuestionKey);
-
       try {
         const authoringMeasurementResult = await showAuthoringGoldMeasurement(question);
+        if (lastActivatedQuestionRef.current !== nextActiveQuestionKey) return;
 
         if (authoringMeasurementResult?.rubricRendered === true) {
           return;
@@ -3133,7 +3137,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       return;
     }
 
-    setActiveQuestionKey(nextActiveQuestionKey);
+    // The first selection update was synchronous, before any viewer awaits.
+    // A late continuation must not reactivate the previous question.
+    if (lastActivatedQuestionRef.current !== nextActiveQuestionKey) return;
 
     const questionAnswer = answersByQuizKey?.[quiz.quizKey]?.[question.questionKey];
     const quizScore = viewerQuizScore ? getQuizScoreItem(viewerQuizScore, quiz) : null;
@@ -3319,6 +3325,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         });
         setFrameNavigationErrors(current => ({ ...current, [nextActiveQuestionKey]: message }));
       }
+      if (lastActivatedQuestionRef.current !== nextActiveQuestionKey) return;
       if (overlayMarkers.length) {
         await runViewerCommand(commandsManager, 'showViewerQuizMarkerOptions', {
           viewerTarget: null,
@@ -3332,10 +3339,12 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     }
 
     try {
+      if (lastActivatedQuestionRef.current !== nextActiveQuestionKey) return;
       const result = await runViewerCommand(commandsManager, 'jumpToViewerQuizTarget', {
         viewerTarget,
         questionKey: question.questionKey,
       });
+      if (lastActivatedQuestionRef.current !== nextActiveQuestionKey) return;
 
       if (question.type === 'frameSelection' && !authoringMode &&
           shouldGuideFrameSelectionToInstance(question) && result?.ok !== true) {
@@ -3351,6 +3360,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         });
       }
 
+      if (lastActivatedQuestionRef.current !== nextActiveQuestionKey) return;
       if (overlayMarkers.length) {
         await runViewerCommand(commandsManager, 'showViewerQuizMarkerOptions', {
           viewerTarget: null,
