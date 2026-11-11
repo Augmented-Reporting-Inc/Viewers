@@ -237,6 +237,50 @@ export function findEditableCompositePhaseMeasurement(
   return candidates.length === 1 ? candidates[0] : null;
 }
 
+/** Clear one authoritatively saved gold phase without requiring its annotation
+ * to be hydrated on the current viewport. The saved annotation identity is the
+ * authority; never select an arbitrary same-slot live contour as a substitute.
+ * A missing/mismatched saved phase is a no-op (another edit may have won). */
+export function clearSavedCompositeGoldPhase(
+  question: any, slot: string, expectedAnnotationId: string
+): any | null {
+  const config = asObject(question?.answerConfig);
+  const gold = asObject(config.goldMeasurement);
+  const composite = asObject(gold.compositeResult);
+  const components = Array.isArray(composite.components) ? composite.components : [];
+  const matching = components.filter(part => clean(part?.slot) === slot);
+  if (!clean(expectedAnnotationId) || matching.length !== 1 ||
+      clean(matching[0]?.annotationId) !== clean(expectedAnnotationId)) return null;
+
+  const surviving = components.filter(part => clean(part?.slot) !== slot);
+  const configuredTargets = asObject(config.compositeFrameTargets);
+  const oldTarget = asObject(matching[0].target);
+  const configured = asObject(configuredTargets[slot]);
+  const sameTarget = ['studyInstanceUID', 'seriesInstanceUID', 'sopInstanceUID']
+    .every(key => clean(configured[key]) && clean(configured[key]) === clean(oldTarget[key])) &&
+    Number(configured.frameNumber) === Number(oldTarget.frameNumber);
+  const nextTargets = { ...configuredTargets };
+  // Do not discard a newer educator-selected replacement source.
+  if (sameTarget) delete nextTargets[slot];
+
+  return {
+    ...question,
+    answerConfig: {
+      ...config,
+      compositeFrameTargets: nextTargets,
+      goldValue: null,
+      goldMeasurement: surviving.length ? {
+        ...gold,
+        value: null,
+        sourceAnnotationId: clean(surviving[0]?.annotationId),
+        // Derived values are tied to the COMPLETE former contour pair.
+        // Do not retain old A2C/ED or calculated values after deletion.
+        compositeResult: { ...composite, value: null, derived: null, components: surviving },
+      } : null,
+    },
+  };
+}
+
 /** Compare the FormAPI readback to the just-saved quiz. Session storage does
  * not prove persistence, so a missing gold value or contour must be reported. */
 export function getCompositeGoldPersistenceError(expectedQuestions: any[], persistedQuestions: any[]): string {
@@ -265,7 +309,16 @@ export function getCompositeGoldPersistenceError(expectedQuestions: any[], persi
         }
       }
     }
-    if (!hasGold) continue;
+    if (!hasGold) {
+      // A successful HTTP save is not evidence of deletion if the server
+      // silently preserved an older full calculated gold answer.
+      const actualGold = asObject(remoteConfig.goldMeasurement);
+      if (actualGold.value != null && actualGold.value !== '' ||
+          remoteConfig.goldValue != null && remoteConfig.goldValue !== '') {
+        return kind + ' cleared gold answer was not persisted.';
+      }
+      continue;
+    }
     const actualGold = asObject(remoteConfig.goldMeasurement);
     const actualParts = Array.isArray(actualGold.compositeResult?.components)
       ? actualGold.compositeResult.components : [];
