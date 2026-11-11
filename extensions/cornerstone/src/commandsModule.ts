@@ -4165,14 +4165,22 @@ function getSavedContourAreaForDisplay(savedAnnotation, referencedImageId = '') 
   return rawArea;
 }
 
-function getSavedQuizEchoContourAreaDisplay(savedAnnotation) {
-  const isQuizEchoContour =
-    savedAnnotation?.measurementKind === 'echoAreaSlot' ||
+function isSavedQuizEchoContour(savedAnnotation) {
+  return savedAnnotation?.measurementKind === 'echoAreaSlot' ||
     !!getEchoAreaSlot(savedAnnotation) ||
     isLAVolumeMeasurement(savedAnnotation);
-  if (!isQuizEchoContour) return null;
+}
+
+function getSavedQuizEchoContourAreaDisplay(savedAnnotation) {
+  if (!isSavedQuizEchoContour(savedAnnotation)) return null;
   const measurements = savedAnnotation?.measurements || {};
-  return getSavedQuizEchoAreaDisplayInfo(measurements.area, measurements.areaUnit);
+  const physical = getSavedQuizEchoAreaDisplayInfo(measurements.area, measurements.areaUnit);
+  if (!physical) return null;
+  // The quiz panel uses cm². Convert only explicit physically calibrated mm².
+  const value = physical.areaUnit === 'mm²' ? physical.value / 100 : physical.value;
+  return Number.isFinite(value) && value > 0
+    ? { value, areaUnit: 'cm²', linearUnit: 'cm' }
+    : null;
 }
 
 function getSavedAnnotationDisplayText(savedAnnotation) {
@@ -4192,8 +4200,8 @@ function getSavedAnnotationDisplayText(savedAnnotation) {
   // Quiz RV/LA contour areas already carry explicit physical units from
   // calibrated measurement data. Do not reuse stale generic ROI displayText.
   const quizArea = getSavedQuizEchoContourAreaDisplay(savedAnnotation);
-  if (quizArea) {
-    return [`${quizArea.value.toFixed(2)} ${quizArea.areaUnit}`];
+  if (isSavedQuizEchoContour(savedAnnotation)) {
+    return quizArea ? [`${quizArea.value.toFixed(2)} cm²`] : ['Calibrated area unavailable'];
   }
   const measurements = savedAnnotation?.measurements || {};
   const isCurvedLength = isBowelCurvedLengthViewerMeasurement(savedAnnotation, savedAnnotation);
@@ -4269,6 +4277,9 @@ function buildSavedAnnotationStatsForMeasurementService(savedAnnotation, referen
 
   if (isViewerContourTool(savedAnnotation?.toolName)) {
     const quizArea = getSavedQuizEchoContourAreaDisplay(savedAnnotation);
+    // A quiz contour without explicit physical calibration must not fall back
+    // to native pixel-area statistics and be shown as valid millimetre area.
+    if (isSavedQuizEchoContour(savedAnnotation) && !quizArea) return {};
     const area = quizArea?.value ?? getSavedContourAreaForDisplay(
       savedAnnotation,
       referencedImageId || savedAnnotation?.referencedImageId || ''
@@ -4362,6 +4373,9 @@ function buildSavedAnnotationStatsForCornerstone(savedAnnotation, referencedImag
 
   if (isViewerContourTool(savedAnnotation?.toolName)) {
     const quizArea = getSavedQuizEchoContourAreaDisplay(savedAnnotation);
+    // A quiz contour without explicit physical calibration must not fall back
+    // to native pixel-area statistics and be shown as valid millimetre area.
+    if (isSavedQuizEchoContour(savedAnnotation) && !quizArea) return {};
     const area = quizArea?.value ?? getSavedContourAreaForDisplay(
       savedAnnotation,
       referencedImageId || savedAnnotation?.referencedImageId || ''
