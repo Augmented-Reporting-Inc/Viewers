@@ -12939,6 +12939,72 @@ function commandsModule({
       viewerLengthLabelMode = normalizeViewerLengthLabelMode(labelMode);
       return viewerLengthLabelMode;
     },
+    /**
+     * Quiz-only: the learner explicitly selected expiration/inspiration in
+     * the question panel, so no second Length label selection is necessary.
+     * Only a new, unlabeled Length measurement on the requested DICOM frame
+     * is eligible. This never assigns labels in general clinical or bowel UI.
+     */
+    setViewerQuizIVCPhaseLabel: ({
+      measurementId = '', slot = '', expectedTarget = null,
+    } = {}) => {
+      const id = String(measurementId || '').trim();
+      const phase = String(slot || '').trim().toUpperCase();
+      if (!id || !['IVC_EXP', 'IVC_INSP'].includes(phase)) {
+        return { ok: false, reason: 'invalid-ivc-phase-selection' };
+      }
+      const measurement = measurementService.getMeasurement?.(id);
+      if (!measurement || String(measurement.toolName || '') !== 'Length') {
+        return { ok: false, reason: 'length-measurement-unavailable' };
+      }
+      const activeLabel = String(
+        measurement.label || measurement.measurementRole || ''
+      ).trim();
+      const requestedLabel = phase === 'IVC_EXP' ? 'IVCexp' : 'IVCinsp';
+      if (activeLabel && !['Length', requestedLabel].includes(activeLabel)) {
+        return { ok: false, reason: 'already-labelled-differently' };
+      }
+      const target = expectedTarget || {};
+      if (target && Object.keys(target).length > 0) {
+        const actual = {
+          study: String(measurement.referenceStudyUID || measurement.StudyInstanceUID || ''),
+          series: String(measurement.referenceSeriesUID || measurement.SeriesInstanceUID || ''),
+          sop: String(measurement.SOPInstanceUID || measurement.metadata?.SOPInstanceUID || ''),
+          image: String(measurement.referencedImageId || measurement.metadata?.referencedImageId || ''),
+          frame: getFrameNumberFromReferencedImageId(
+            measurement.referencedImageId || measurement.metadata?.referencedImageId || ''
+          ),
+        };
+        if (!actual.study || !actual.series || !actual.sop ||
+            !target.studyInstanceUID || !target.seriesInstanceUID ||
+            !target.sopInstanceUID ||
+            actual.study !== String(target.studyInstanceUID) ||
+            actual.series !== String(target.seriesInstanceUID) ||
+            actual.sop !== String(target.sopInstanceUID) ||
+            Number(target.frameNumber) !== actual.frame ||
+            (target.referencedImageId && normalizeImageIdForCompare(actual.image) !==
+              normalizeImageIdForCompare(String(target.referencedImageId)))) {
+          return { ok: false, reason: 'ivc-source-frame-mismatch' };
+        }
+      }
+      const cornerstoneAnnotation = cornerstoneTools.annotation.state.getAnnotation?.(id);
+      if (cornerstoneAnnotation?.data?.arPendingLengthLabel === true) {
+        delete cornerstoneAnnotation.data.arPendingLengthLabel;
+      }
+      if (activeLabel !== requestedLabel) {
+        measurementService.update(id, {
+          ...measurement, label: requestedLabel,
+          measurementRole: requestedLabel,
+        }, true);
+        viewerMeasurementsModifiedInSession.add(id);
+      }
+      viewerLengthLabelMode = VIEWER_LENGTH_LABEL_MODE_PROMPT;
+      window.dispatchEvent(new CustomEvent('ar-learning:quiz-measurement-labelled', {
+        detail: { measurementId: id },
+      }));
+      dispatchLiveMeasurementsRefresh({ kind: 'ivc-quiz-phase-labelled' });
+      return { ok: true, slot: phase, label: requestedLabel };
+    },
     getViewerLengthLabelMode: () => viewerLengthLabelMode,
     resetViewerLengthLabelMode: () => {
       viewerLengthLabelMode = VIEWER_LENGTH_LABEL_MODE_PROMPT;
@@ -16728,6 +16794,9 @@ function commandsModule({
     },
     getViewerLengthLabelMode: {
       commandFn: actions.getViewerLengthLabelMode,
+    },
+    setViewerQuizIVCPhaseLabel: {
+      commandFn: actions.setViewerQuizIVCPhaseLabel,
     },
     resetViewerLengthLabelMode: {
       commandFn: actions.resetViewerLengthLabelMode,
