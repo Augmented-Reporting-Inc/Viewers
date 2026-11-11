@@ -4915,6 +4915,33 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
           }
         }
       }
+      // A newly drawn ROI is not yet a saved quiz gold measurement. Following
+      // an exact phase deletion, a surviving phase with no calculated scalar
+      // proves the gold is incomplete. Do not report a successful authoring
+      // save as though the replacement had been captured.
+      const incompleteReplacement = authoringQuestionsRef.current.find(question => {
+        const config = plainObject(question.answerConfig);
+        const kind = cleanString(config.measurementKind);
+        const expected = COMPOSITE_FRAME_SLOTS[kind] || [];
+        const components = plainObject(plainObject(config.goldMeasurement).compositeResult).components;
+        return expected.length > 0 && Array.isArray(components) &&
+          components.length > 0 && components.length < expected.length &&
+          (config.goldValue == null || config.goldValue === '');
+      });
+      if (incompleteReplacement) {
+        const kind = cleanString(plainObject(incompleteReplacement.answerConfig).measurementKind);
+        const components = plainObject(
+          plainObject(plainObject(incompleteReplacement.answerConfig).goldMeasurement).compositeResult
+        ).components;
+        const savedSlots = new Set(components.map(part => cleanString(part?.slot)));
+        const missing = (COMPOSITE_FRAME_SLOTS[kind] || [])
+          .filter(({ slot }) => !savedSlots.has(slot)).map(({ slot }) => slot);
+        throw new Error('The ' + kind + ' gold replacement is incomplete (' +
+          (missing.join(', ') || 'calculated value') +
+          '). A contour saved in the viewport is not a quiz gold answer. ' +
+          'Capture the replacement instance/frame, ensure both phase contours are available, ' +
+          'then use the calculated result as the gold answer before Save Draft.');
+      }
       const questionsToSave = authoringQuestionsRef.current;
       const hasMeasurementQuestions = questionsToSave.some(
         question => question.type === 'measurementNumeric'
@@ -5062,8 +5089,19 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
   async function ensureConfiguredCompositePhaseFrame(question: QuizQuestion, slot: string) {
     const config = plainObject(question.answerConfig);
     if (config.compositeFrameGuidanceEnabled !== true) return true;
-    const target = getCompleteCompositeFrameTargets(config)?.[slot];
-    if (!target) return false;
+    // A deleted phase temporarily leaves one slot without a saved source.
+    // Do not require *all* sources before allowing the educator to redraw an
+    // individually configured phase. Full uniqueness/study validation still
+    // applies when accepting the completed calculated gold answer.
+    const target = plainObject(config.compositeFrameTargets)[slot];
+    if (!target || !cleanString(target.sopInstanceUID) ||
+        !Number.isInteger(Number(target.frameNumber)) || Number(target.frameNumber) < 1) {
+      uiNotificationService.show({
+        title: 'Quiz Authoring', type: 'warning', duration: 6000,
+        message: 'Choose the replacement ' + slot + ' DICOM frame and Capture current instance/frame before drawing its gold contour.',
+      });
+      return false;
+    }
     try {
       const jumped = await runViewerCommand(commandsManager, 'jumpToViewerQuizTarget', {
         viewerTarget: target, questionKey: question.questionKey,
@@ -5158,7 +5196,6 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       { slot: 'A2C', label: 'Apical two-chamber' },
     ];
     const config = plainObject(question.answerConfig);
-    const sources = getCompleteCompositeFrameTargets(config);
     return (
       <div className="mt-2 rounded border border-cyan-700 bg-cyan-950/20 p-2 text-xs">
         <div className="mb-1 font-semibold text-cyan-100">LA volume contour technique</div>
@@ -5177,7 +5214,8 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               <button
                 key={choice.contourTechnique}
                 type="button"
-                disabled={disabled || (config.compositeFrameGuidanceEnabled === true && !sources)}
+                disabled={disabled || (config.compositeFrameGuidanceEnabled === true &&
+                  !plainObject(config.compositeFrameTargets)[slot]?.sopInstanceUID)}
                 className="rounded border border-cyan-600 px-2 py-1 text-cyan-100 disabled:opacity-40"
                 onClick={event => {
                   event.preventDefault();
@@ -5209,7 +5247,6 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       { slot: 'RV_ES', label: 'End-systolic area (RVESA)' },
     ];
     const config = plainObject(question.answerConfig);
-    const sources = getCompleteCompositeFrameTargets(config);
     return (
       <div className="mt-2 rounded border border-cyan-700 bg-cyan-950/20 p-2 text-xs">
         <div className="mb-1 font-semibold text-cyan-100">RV FAC contour technique</div>
@@ -5228,7 +5265,8 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               <button
                 key={choice.command}
                 type="button"
-                disabled={disabled || (config.compositeFrameGuidanceEnabled === true && !sources)}
+                disabled={disabled || (config.compositeFrameGuidanceEnabled === true &&
+                  !plainObject(config.compositeFrameTargets)[slot]?.sopInstanceUID)}
                 className="rounded border border-cyan-600 px-2 py-1 text-cyan-100 disabled:opacity-40"
                 onClick={event => {
                   event.preventDefault();
