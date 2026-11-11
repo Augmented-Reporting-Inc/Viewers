@@ -2644,7 +2644,8 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       <div className="mt-2 rounded border border-emerald-700/60 bg-emerald-950/10 px-2 py-2 text-xs">
         {hasLive ? (
           <div className="font-semibold text-emerald-200">
-            {sameGold ? 'Calculated and saved gold: ' : 'Calculated measurement: '}
+            {sameGold ? (authoringMode ? 'Calculated and saved gold: ' : 'Calculated and saved learner answer: ')
+              : 'Calculated measurement: '}
             {Number(status.value).toFixed(2)} {unit}
           </div>
         ) : hasGold ? (
@@ -2660,7 +2661,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         )}
         {hasGold && hasLive && !sameGold ? (
           <div className="mt-1 text-amber-200">
-            Saved gold: {Number(gold.value).toFixed(2)} {unit}. The live value has changed;
+            {authoringMode ? 'Saved gold' : 'Saved answer'}: {Number(gold.value).toFixed(2)} {unit}. The live value has changed;
             review the contours and recapture before saving changes.
           </div>
         ) : null}
@@ -2696,7 +2697,11 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     const goldAnswer = authoringMode
       ? plainObject(plainObject(question.answerConfig).goldMeasurement)
       : plainObject(answersByQuizKey?.[quiz.quizKey]?.[question.questionKey]);
-    const savedValue = hasSaved ? getSavedCompositePhaseValues(goldAnswer, kind)[slot] : null;
+    const phaseAnswer = kind === 'ivcRapRvsp'
+      ? plainObject(plainObject(goldAnswer.compositeResult).ivc) : goldAnswer;
+    const savedValue = hasSaved
+      ? getSavedCompositePhaseValues(phaseAnswer,
+        kind === 'ivcRapRvsp' ? 'ivcCollapsibility' : kind)[slot] : null;
     const liveArea = phaseValues[slot];
     const liveValue = live && liveArea != null && Number.isFinite(Number(liveArea)) &&
       Number(liveArea) > 0 ? Number(liveArea) : null;
@@ -2707,9 +2712,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     return (
       <>
         <span className={live || hasSaved ? 'text-emerald-200 text-[11px]' : 'text-amber-200 text-[11px]'}>
-          {live ? 'Measured' : hasSaved ? 'Gold saved' : 'Not measured'}
+          {live ? 'Measured' : hasSaved ? (authoringMode ? 'Gold saved' : 'Learner saved') : 'Not measured'}
           {areaLabel}
-          {hasSaved ? ' · Gold source saved' : ''}
+          {hasSaved ? (authoringMode ? ' · Gold source saved' : ' · Learner source saved') : ''}
         </span>
         {hasSaved && targetHasNavigationIdentity(saved?.target) ? (
           <button
