@@ -281,6 +281,36 @@ export function clearSavedCompositeGoldPhase(
   };
 }
 
+/** An explicit saved-gold phase deletion leaves a partial composite. An
+ * ROI in the live viewport is not proof that a replacement was accepted as
+ * quiz gold. Reject a misleading successful draft save until recaptured. */
+export function getIncompleteCompositeGoldReplacementReason(questions: any[]): string {
+  const slotsByKind: Record<string, string[]> = {
+    rvFAC: ['RV_ED', 'RV_ES'],
+    laVolumeBiplane: ['A4C', 'A2C'],
+    laVolumeBiplaneDisks: ['A4C', 'A2C'],
+    ivcCollapsibility: ['IVC_EXP', 'IVC_INSP'],
+    ivcRapRvsp: ['IVC_EXP', 'IVC_INSP'],
+  };
+  for (const question of Array.isArray(questions) ? questions : []) {
+    const config = asObject(question?.answerConfig);
+    const kind = clean(config.measurementKind);
+    const slots = slotsByKind[kind];
+    if (!slots || !slots.length) continue;
+    const gold = asObject(config.goldMeasurement);
+    const parts = asObject(gold.compositeResult).components;
+    if (!Array.isArray(parts) || parts.length === 0 ||
+        parts.length >= slots.length || config.goldValue != null && config.goldValue !== '') continue;
+    const present = new Set(parts.map(part => clean(part?.slot)));
+    return kind + ' gold replacement incomplete (' +
+      slots.filter(slot => !present.has(slot)).join(', ') +
+      '). A viewport contour is not yet a saved quiz gold answer. ' +
+      'Capture the replacement instance/frame, ensure all phases are available, ' +
+      'and accept the calculated result before Save Draft.';
+  }
+  return '';
+}
+
 /** Compare the FormAPI readback to the just-saved quiz. Session storage does
  * not prove persistence, so a missing gold value or contour must be reported. */
 export function getCompositeGoldPersistenceError(expectedQuestions: any[], persistedQuestions: any[]): string {
