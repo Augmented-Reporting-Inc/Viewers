@@ -4823,8 +4823,13 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     const captureKey = `authoring-measurement:${question.questionKey}`;
     const answerConfig = plainObject(question.answerConfig);
 
-    // Binding is always an explicit question, never inferred from the last drawing.
-    setActiveQuestionKey(`authoring:${question.questionKey}`);
+    // Capturing a completed measurement must not change which question the
+    // dropdown displays. A delayed LAV auto-capture can finish after the user
+    // selects another question; its saved gold belongs to the original key.
+    if (options.silent &&
+        lastActivatedQuestionRef.current !== `authoring:${question.questionKey}`) {
+      return false;
+    }
     setCapturingAuthoringKey(captureKey);
     lastCompositeGoldCaptureErrorRef.current = '';
 
@@ -4837,6 +4842,10 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         throw new Error(result?.reason || 'selected measurement not found');
       }
 
+      if (options.silent &&
+          lastActivatedQuestionRef.current !== `authoring:${question.questionKey}`) {
+        return false;
+      }
       const answer = result.answer;
       const captureKind = cleanString(answerConfig.measurementKind);
       const guidedSlots = COMPOSITE_FRAME_SLOTS[captureKind] || [];
