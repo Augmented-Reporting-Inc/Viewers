@@ -15827,6 +15827,17 @@ function commandsModule({
           label: slot,
           measurementRole: slot,
           measurementKind: rubricMeasurement.measurementKind,
+          // Temporary gold overlays need the same explicit contour slot as
+          // original acquisition. Otherwise Cornerstone treats them as generic
+          // ROI annotations and displays a separate native mm² measurement.
+          ...(['RV_ED', 'RV_ES', 'RA_ES'].includes(slot) ? {
+            echoArea: { measurementKind: 'echoAreaSlot', slot,
+              phase: slot === 'RV_ED' ? 'ED' : 'ES', view: 'A4C' },
+          } : {}),
+          ...(['A4C', 'A2C'].includes(slot) ? {
+            laVolume: { measurementKind: 'laVolumeSlot', slot,
+              view: slot, phase: 'ES' },
+          } : {}),
           ...(hasPhysical ? {
             displayText: [slot + ': ' + physical.toFixed(2) + ' ' + unit],
             measurements: rubricMeasurement?.measurementKind === 'ivcCollapsibility'
@@ -15910,6 +15921,18 @@ function commandsModule({
           reason: 'viewport-not-found',
           renderedCount: 0,
         };
+      }
+
+      // Gold measurement comparison is a separate hydration path from
+      // jumpToSavedViewerAnnotation. Install the scoped area renderer here too:
+      // restoring the annotation alone does not install getTextLines.
+      if (['rvFAC', 'raArea', 'laVolumeBiplane', 'laVolumeBiplaneDisks'].includes(
+        String(rubricMeasurement?.measurementKind || '')
+      )) {
+        installQuizCompositeContourTextOverrideForViewport({
+          viewport, viewportId: comparisonViewportId,
+          measurementService, viewportGridService, displaySetService, toolGroupService,
+        });
       }
 
       // Authoring gold calipers already loaded in Cornerstone should be selected
