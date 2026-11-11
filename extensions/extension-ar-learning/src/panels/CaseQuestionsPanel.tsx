@@ -2722,14 +2722,21 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                 const answer = authoringMode
                   ? plainObject(plainObject(question.answerConfig).goldMeasurement)
                   : plainObject(answersByQuizKey?.[quiz.quizKey]?.[question.questionKey]);
+                // Learner phase overlays are reconstructed ONLY from learner
+                // evidence, never the educator's gold/teaching source.
+                const learner = !authoringMode;
+                const displayAnswer = kind === 'ivcRapRvsp'
+                  ? plainObject(plainObject(answer.compositeResult).ivc)
+                  : answer;
                 const result = await runViewerCommand(commandsManager,
                   'showViewerQuizMeasurementComparison', {
-                    rubricMeasurement: answer,
+                    rubricMeasurement: displayAnswer,
+                    compositeDisplayRole: learner ? 'learner' : 'rubric',
                     viewerTarget: saved.target,
                     focusedCompositeSlot: slot,
                     questionKey: question.questionKey,
                   });
-                if (result?.rubricRendered !== true) {
+                if ((learner ? result?.learnerRendered : result?.rubricRendered) !== true) {
                   uiNotificationService.show({
                     title: 'Saved contour', type: 'warning', duration: 5000,
                     message: 'Saved source could not be displayed: ' +
@@ -3198,6 +3205,47 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       : getQuestionOverlayMarkerOptions(quiz, question, reviewQuestionAnswer, {
           reviewMode: 'learner',
         });
+
+    // The learner's composite quiz answer contains multiple independently
+    // framed annotations. A single showViewerQuizLearnerMeasurement call
+    // restores only one and hides the saved individual phase contours.
+    // Rebuild *all* of the learner's saved phase sources before the generic
+    // single-measurement path; never fetch/overlay educator gold.
+    const learnerCompositeKind = !authoringMode ? measurementKind : '';
+    const learnerComposite = learnerCompositeKind === 'ivcRapRvsp'
+      ? plainObject(plainObject(questionAnswer).compositeResult).ivc
+      : questionAnswer;
+    const learnerComponents = getLearnerCompositeSourceComponents(
+      learnerComposite,
+      learnerCompositeKind === 'ivcRapRvsp' ? 'ivcCollapsibility' : learnerCompositeKind
+    );
+    if (learnerComponents.length === 2) {
+      try {
+        const firstSource = learnerComponents[0].target;
+        const restored = await runViewerCommand(
+          commandsManager, 'showViewerQuizMeasurementComparison', {
+            rubricMeasurement: learnerComposite,
+            compositeDisplayRole: 'learner',
+            viewerTarget: firstSource,
+            questionKey: question.questionKey,
+          }
+        );
+        if (restored?.learnerRendered === true &&
+            restored?.renderedCount >= learnerComponents.length) {
+          return;
+        }
+        console.warn('[CaseQuestionsPanel] saved learner composite restoration incomplete', {
+          questionKey: question.questionKey,
+          restoredCount: restored?.renderedCount || 0,
+          expectedCount: learnerComponents.length,
+          reason: restored?.reason || 'unknown',
+        });
+      } catch (error) {
+        console.warn('[CaseQuestionsPanel] learner composite restore failed', {
+          questionKey: question.questionKey, error,
+        });
+      }
+    }
 
     // Multi-BWT answers store an array of learner calipers, not the single
     // top-level annotation reference expected by the generic review path.
