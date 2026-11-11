@@ -11512,6 +11512,14 @@ function commandsModule({
         } catch (error) {
           console.warn('[Echo Area] measurement service update failed:', error);
         }
+        const displayViewport = cornerstoneViewportService.getCornerstoneViewport(viewportId);
+        if (displayViewport) {
+          installQuizCompositeContourTextOverrideForViewport({
+            viewport: displayViewport, viewportId,
+            measurementService, viewportGridService, displaySetService, toolGroupService,
+          });
+          displayViewport.render?.();
+        }
         dispatchLiveMeasurementsRefresh({ reason: 'echo-area-created', annotationUID: annotationId });
         uiNotificationService.show({
           title: target.title,
@@ -14871,6 +14879,18 @@ function commandsModule({
         });
       }
 
+      // Reattach the renderer override on restored quiz contours as well as
+      // newly drawn ones. Saved display text metadata does not itself alter
+      // Cornerstone's native getTextLines output.
+      if (!isSpectralDopplerViewerMeasurement(savedAnnotation) &&
+          (getEchoAreaSlot(savedAnnotation) || isLAVolumeMeasurement(savedAnnotation))) {
+        installQuizCompositeContourTextOverrideForViewport({
+          viewport: hydratedViewport,
+          viewportId: hydratedViewport.id || targetViewportId,
+          measurementService, viewportGridService, displaySetService, toolGroupService,
+        });
+      }
+
       // Cornerstone-owned AR annotations (VTI traces and directional US measurements)
       // must not round-trip through MeasurementService here. Their persisted AR payload
       // and Cornerstone annotation state are the source of truth for viewport display.
@@ -15181,6 +15201,16 @@ function commandsModule({
       const jumpResult = await jumpViewportToViewerQuizTargetImage(
         viewport, target, resolveTargetViewport
       );
+
+      // Navigating between saved quiz source frames can change the viewport's
+      // tool group; keep the area renderer attached before displaying contours.
+      if (jumpResult?.ok !== false) {
+        installQuizCompositeContourTextOverrideForViewport({
+          viewport: resolveTargetViewport(),
+          viewportId: targetViewportId,
+          measurementService, viewportGridService, displaySetService, toolGroupService,
+        });
+      }
 
       return {
         ...jumpResult,
