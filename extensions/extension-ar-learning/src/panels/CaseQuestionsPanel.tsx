@@ -6062,13 +6062,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
             : ['rvFAC', 'laVolumeBiplane', 'laVolumeBiplaneDisks',
               'ivcCollapsibility'].includes(
               cleanString(plainObject(question.answerConfig).measurementKind)
-            ) ? (
-              <div className="rounded border border-emerald-700/60 bg-emerald-950/20 p-2 text-xs text-emerald-100">
-                {value?.value != null && Number.isFinite(Number(value.value))
-                  ? `Calculated answer: ${Number(value.value).toFixed(2)} ${value.unit || ''}`
-                  : 'Complete the required calibrated phases. The calculated answer will be captured automatically.'}
-              </div>
-            ) : (
+            ) ? null : (
                         <div className="flex w-full min-w-0 max-w-full items-center gap-2 overflow-hidden">
                           <input
                             className="min-w-0 flex-1 rounded border border-gray-700 bg-black px-2 py-1 text-sm text-white"
@@ -7439,9 +7433,35 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         <div className="border-b border-gray-700 p-3">
           <div className="text-base font-semibold">Quiz Authoring</div>
           <div className="mt-1 text-xs text-gray-400">
-            Use this panel only for viewer-authored answers: frames, markers, gold points, and
-            measurements. Question numbers match Manage Quiz; other question types are omitted here.
+            Select one viewer-authored question at a time. Original question numbers match Manage Quiz.
           </div>
+          <label className="mt-3 block text-xs font-semibold text-gray-200" htmlFor="quiz-authoring-question-select">
+            Question
+          </label>
+          <select
+            id="quiz-authoring-question-select"
+            className="mt-1 w-full min-w-0 rounded border border-gray-600 bg-gray-900 px-2 py-2 text-sm text-white"
+            value={authoringQuestions.some(question =>
+              isViewerNativeQuestion(question) &&
+              activeQuestionKey === `authoring:${question.questionKey}`) ? activeQuestionKey : ''}
+            disabled={loading || !canEditDraft || authoringSaving || !!capturingAuthoringKey}
+            onChange={event => {
+              const question = authoringQuestions.find(item =>
+                isViewerNativeQuestion(item) &&
+                event.target.value === `authoring:${item.questionKey}`);
+              if (question) void selectQuestion({
+                quizKey: 'authoring', quizVersion: 1,
+              }, question);
+            }}
+          >
+            <option value="">Select a question…</option>
+            {authoringQuestions.map((question, index) =>
+              isViewerNativeQuestion(question) ? (
+                <option key={question.questionKey} value={`authoring:${question.questionKey}`}>
+                  {index + 1}. {question.title || question.prompt || question.questionKey}
+                </option>
+              ) : null)}
+          </select>
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto p-3 pb-20">
@@ -7480,8 +7500,16 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
 
               <div className="space-y-3">
                 {authoringQuestions.map((question, index) =>
-                  isViewerNativeQuestion(question) ? renderAuthoringQuestion(question, index) : null
+                  isViewerNativeQuestion(question) &&
+                  activeQuestionKey === `authoring:${question.questionKey}`
+                    ? renderAuthoringQuestion(question, index) : null
                 )}
+                {!authoringQuestions.some(question => isViewerNativeQuestion(question) &&
+                  activeQuestionKey === `authoring:${question.questionKey}`) ? (
+                  <div className="text-xs text-gray-400">
+                    Choose a question above to edit its viewer sources and gold answer.
+                  </div>
+                ) : null}
               </div>
             </div>
           )}
@@ -7539,6 +7567,45 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         >
           {learnerPanelTitle}
         </div>
+        {hasLearnerQuizContent ? (
+          <>
+            <label className="mt-3 block text-xs font-semibold text-gray-200" htmlFor="quiz-learner-question-select">
+              Question
+            </label>
+            <select
+              id="quiz-learner-question-select"
+              className="mt-1 w-full min-w-0 rounded border border-gray-600 bg-gray-900 px-2 py-2 text-sm text-white"
+              value={quizzes.some(quiz => (quiz.questions || []).some(question =>
+                activeQuestionKey === `${quiz.quizKey}:${question.questionKey}`))
+                ? activeQuestionKey : ''}
+              disabled={!!capturingMeasurementKey || !!capturingFrameKey || !!capturingPointKey}
+              onChange={event => {
+                for (const quiz of quizzes) {
+                  const question = (quiz.questions || []).find(item =>
+                    event.target.value === `${quiz.quizKey}:${item.questionKey}`);
+                  if (question) {
+                    void selectQuestion(quiz, question);
+                    return;
+                  }
+                }
+              }}
+            >
+              <option value="">Select a question…</option>
+              {quizzes.map(quiz => (
+                <optgroup key={`${quiz.quizKey}:${quiz.quizVersion}`} label={quiz.title || 'Case Questions'}>
+                  {[...(quiz.questions || [])].sort((a, b) =>
+                    Number(a.sortOrder || 0) - Number(b.sortOrder || 0)
+                  ).map((question, index) => (
+                    <option key={question.questionKey}
+                      value={`${quiz.quizKey}:${question.questionKey}`}>
+                      {index + 1}. {question.title || question.prompt || question.questionKey}
+                    </option>
+                  ))}
+                </optgroup>
+              ))}
+            </select>
+          </>
+        ) : null}
       </div>
 
       <div className="min-h-0 min-w-0 max-w-full flex-1 overflow-x-hidden overflow-y-auto p-3">
@@ -7595,13 +7662,14 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                   ) : null}
 
                   <div className="bg-blue-950/30 mt-3 min-w-0 max-w-full rounded border border-blue-700 p-2 text-xs text-blue-100">
-                    Click each question before answering. Questions marked “Opens target”
-                    navigate to the assigned image or instance without revealing the correct frame.
+                    Select a question above before answering. An assigned target opens its
+                    instance without revealing the correct frame.
                   </div>
 
                   <div className="mt-3 space-y-4">
                     {questions.map((question, index) => {
                       const questionSelectionKey = `${quiz.quizKey}:${question.questionKey}`;
+                      if (activeQuestionKey !== questionSelectionKey) return null;
                       const isActiveQuestion = activeQuestionKey === questionSelectionKey;
                       const hasViewerTarget = !!getQuestionViewerTarget(question) &&
                         !(question.type === 'frameSelection' &&
