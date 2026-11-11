@@ -46,3 +46,19 @@ test('explicit learner IVC phase bypasses only the pending first label dialog', 
   assert.match(commands, /'ar-learning:quiz-measurement-added'/);
   assert.match(commands, /resetViewerLengthLabelMode:/);
 });
+
+test('late viewer navigation cannot restore a previously selected LAV question', () => {
+  const selection = panel.match(/async function selectQuestion\([\s\S]*?\n  async function captureCurrentFrameAnswer/)?.[0];
+  assert.ok(selection, 'Question selection function exists');
+  assert.match(selection, /setActiveQuestionKey\(nextActiveQuestionKey\);/);
+  assert.match(selection, /if \(lastActivatedQuestionRef\.current !== nextActiveQuestionKey\) return;/);
+  assert.equal((selection.match(/setActiveQuestionKey\(nextActiveQuestionKey\);/g) || []).length, 1,
+    'The active question is set once, before asynchronous viewer operations');
+});
+
+test('delayed educator gold capture cannot reselect its old question', () => {
+  const capture = panel.match(/async function captureAuthoringMeasurement\([\s\S]*?\n  async function /)?.[0];
+  assert.ok(capture, 'Educator capture function exists');
+  assert.doesNotMatch(capture, /setActiveQuestionKey\(`authoring:/);
+  assert.match(capture, /options\.silent &&[\s\S]*?lastActivatedQuestionRef\.current !==/);
+});
