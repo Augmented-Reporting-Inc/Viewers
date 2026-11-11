@@ -126,7 +126,7 @@ import { getEchoAreaSlot } from '../../extension-ar-measurements/src/utils/echoA
 import { resolveViewerQuizCompositeResult, resolveViewerQuizLVSimpsonForStudy, isViewerQuizCompositeReviewCurrent, getViewerQuizCompositeStatus } from '../../extension-ar-measurements/src/utils/viewerQuizCompositeResults';
 import { createGuidedMouseToolOwnership } from './utils/guidedMouseToolOwnership';
 import { calibrateUSContourPoints, worldToImageIndex } from './utils/usRegionLengthCalibration';
-import { calculateCalibratedEchoAreaCM2, getSavedQuizEchoAreaDisplayInfo } from './utils/quizEchoAreaCalibration';
+import { calculateCalibratedEchoAreaCM2, getSavedQuizEchoAreaDisplayInfo, getQuizCompositeContourViewportLines } from './utils/quizEchoAreaCalibration';
 import { resolveViewerQuizGoldAreaBackfill } from '../../extension-ar-measurements/src/utils/quizGoldAreaBackfill';
 
 const { DefaultHistoryMemo } = csUtils.HistoryMemo;
@@ -5587,34 +5587,50 @@ function sanitizeContourTextLines(lines = []) {
  * The Case Questions panel and this viewport use the exact same calculator.
  */
 function installQuizCompositeContourTextOverrideForViewport({
-  viewport, viewportId = '', measurementService, viewportGridService, displaySetService,
+  viewport, viewportId = '', measurementService, viewportGridService,
+  displaySetService, toolGroupService,
 }) {
   if (!viewport) return;
+  const resolvedViewportId = viewport.id || viewportId;
   let toolGroup = null;
   try {
-    toolGroup =
-      ToolGroupManager.getToolGroupForViewport?.(
-        viewport.id || viewportId, viewport.renderingEngineId
-      ) || ToolGroupManager.getToolGroupForViewport?.(viewport.id || viewportId);
-  } catch {}
-  const toolName = toolNames.SplineROI || 'SplineROI';
-  const toolInstance = toolGroup?.getToolInstance?.(toolName);
-  if (!toolInstance || toolInstance.__arQuizCompositePhysicalTextInstalled) return;
-  const previous = toolInstance.configuration?.getTextLines;
-  const configuration = {
-    ...(toolInstance.configuration || {}),
-    getTextLines: function (...args) {
-      const source = args.flatMap(arg =>
-        [arg?.annotation?.data, arg?.data, arg]
-      ).find(item => item?.echoArea?.slot ||
-        item?.laVolume?.slot);
-      if (source) {
-        const area = source.echoArea;
-        const la = source.laVolume;
-        const slot = String(area?.slot || la?.slot || '').trim().toUpperCase();
-        const kind = area ? (slot === 'RA_ES' ? 'raArea' : 'rvFAC') : 'laVolumeBiplane';
+    // Use the same OHIF tool-group lookup as measurement activation. The
+    // Cornerstone manager lookup alone may miss a reconfigured viewport.
+    const groupRef = toolGroupService?.getToolGroupForViewport?.(resolvedViewportId);
+    toolGroup = typeof groupRef === 'string'
+      ? toolGroupService?.getToolGroup?.(groupRef) ||
+        ToolGroupManager.getToolGroup?.(groupRef)
+      : groupRef;
+    toolGroup ||= ToolGroupManager.getToolGroupForViewport?.(
+      resolvedViewportId, viewport.renderingEngineId
+    ) || ToolGroupManager.getToolGroupForViewport?.(resolvedViewportId);
+  } catch (error) {
+    console.warn('[Quiz contour units] tool group lookup failed', error);
+  }
+  if (!toolGroup) {
+    console.warn('[Quiz contour units] no tool group for viewport', resolvedViewportId);
+    return;
+  }
+
+  // Both are used in quiz contour acquisition. Patching SplineROI alone
+  // leaves Cornerstone's PlanarFreehandROI "Area: ... mm²" text untouched.
+  for (const toolName of new Set([
+    toolNames.SplineROI || 'SplineROI',
+    toolNames.PlanarFreehandROI || 'PlanarFreehandROI',
+  ])) {
+    const toolInstance = toolGroup.getToolInstance?.(toolName);
+    if (!toolInstance || toolInstance.__arQuizCompositePhysicalTextInstalled) continue;
+    const previous = toolInstance.configuration?.getTextLines;
+    const next = function (data, ...otherArgs) {
+      const contourData = data?.annotation?.data || data?.data || data;
+      const slot = String(contourData?.echoArea?.slot ||
+        contourData?.laVolume?.slot || '').trim().toUpperCase();
+      if (slot) {
+        const kind = contourData?.echoArea
+          ? (slot === 'RA_ES' ? 'raArea' : 'rvFAC')
+          : 'laVolumeBiplane';
         const displaySet = getActiveViewportDisplaySet({
-          viewportGridService, displaySetService, viewportId: viewport.id || viewportId,
+          viewportGridService, displaySetService, viewportId: resolvedViewportId,
         });
         const study = String(displaySet?.StudyInstanceUID ||
           displaySet?.studyInstanceUID || '').trim();
@@ -5623,25 +5639,24 @@ function installQuizCompositeContourTextOverrideForViewport({
             measurement?.referenceStudyUID || measurement?.StudyInstanceUID || ''
           ).trim() === study);
         const status = getViewerQuizCompositeStatus(kind as any, current);
-        const value = status?.phaseValues?.[slot];
-        const areaLabels: Record<string, string> = {
-          RV_ED: 'RVEDA', RV_ES: 'RVESA', RA_ES: 'RA area',
-          A4C: 'LA A4C', A2C: 'LA A2C',
-        };
-        const label = areaLabels[slot] || slot;
-        return Number.isFinite(Number(value)) && value != null &&
-          Number(value) > 0
-          ? [label + ': ' + Number(value).toFixed(2) + ' cm²']
-          : [label + ': calibrated area unavailable'];
+        const textLines = getQuizCompositeContourViewportLines(
+          contourData, status?.phaseValues?.[slot]
+        );
+        if (textLines) return textLines;
       }
       const lines = typeof previous === 'function'
-        ? previous.call(this, ...args) : [];
+        ? previous.call(this, data, ...otherArgs) : [];
       return sanitizeContourTextLines(lines);
-    },
-  };
-  toolInstance.configuration = configuration;
-  toolGroup?.setToolConfiguration?.(toolName, configuration, true);
-  toolInstance.__arQuizCompositePhysicalTextInstalled = true;
+    };
+    const configuration = { ...(toolInstance.configuration || {}), getTextLines: next };
+    toolInstance.configuration = configuration;
+    toolGroup.setToolConfiguration?.(toolName, configuration, true);
+    if (toolInstance.configuration?.getTextLines !== next) {
+      console.warn('[Quiz contour units] text override not retained', toolName);
+      continue;
+    }
+    toolInstance.__arQuizCompositePhysicalTextInstalled = true;
+  }
 }
 
 function installLVSimpsonContourTextCleanupForViewport({ viewport, viewportId = '', toolName }) {
@@ -10631,7 +10646,7 @@ function commandsModule({
         });
         installQuizCompositeContourTextOverrideForViewport({
           viewport, viewportId: activeViewportId,
-          measurementService, viewportGridService, displaySetService,
+          measurementService, viewportGridService, displaySetService, toolGroupService,
         });
         viewport.render?.();
       } catch {}
@@ -11248,7 +11263,7 @@ function commandsModule({
         }, true);
         actions.markViewerMeasurementCreatedInSession?.({ uid: annotationId });
         installQuizCompositeContourTextOverrideForViewport({
-          viewport, viewportId, measurementService, viewportGridService, displaySetService,
+          viewport, viewportId, measurementService, viewportGridService, displaySetService, toolGroupService,
         });
         dispatchLiveMeasurementsRefresh({ reason: 'guided-rv-area-created', annotationUID: annotationId });
         viewport.render?.();
@@ -11402,7 +11417,7 @@ function commandsModule({
           }, true);
           actions.markViewerMeasurementCreatedInSession?.({ uid: annotationId });
           installQuizCompositeContourTextOverrideForViewport({
-            viewport, viewportId, measurementService, viewportGridService, displaySetService,
+            viewport, viewportId, measurementService, viewportGridService, displaySetService, toolGroupService,
           });
           dispatchLiveMeasurementsRefresh({ reason: 'quiz-echo-area-created', annotationUID: annotationId });
           viewport.render?.();
