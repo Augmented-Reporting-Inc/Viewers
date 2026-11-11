@@ -1,6 +1,7 @@
 import {
   getLearnerCompositeAutoCaptureSignature,
   getLearnerCompositeSourceComponents,
+  isLearnerCompositeCaptureCurrent,
 } from './quizLearnerCompositeCapture';
 
 const frame = (sop: string, number: number) => ({
@@ -121,5 +122,41 @@ describe('learner-only composite restore source contract', () => {
     },'rvFAC')).toHaveLength(0);
     expect(getLearnerCompositeSourceComponents(answer,'ivcCollapsibility')).toHaveLength(0);
     expect(getLearnerCompositeSourceComponents(answer,'unknown')).toHaveLength(0);
+  });
+});
+
+describe('automatic learner capture rejects asynchronous source/calibration drift', () => {
+  const captured = {
+    measurementKind: 'rvFAC', unit: '%', value: 50,
+    compositeResult: { components: [
+      { slot: 'RV_ED', annotationId: 'rv-ed',
+        target: frame('rv-ed', 3), points: [[0,0,0],[3,0,0],[0,3,0]] },
+      { slot: 'RV_ES', annotationId: 'rv-es',
+        target: frame('rv-es', 7), points: [[0,0,0],[2,0,0],[0,2,0]] },
+    ] },
+  };
+  const active = {
+    complete:true, value:50, unit:'%',
+    components:[
+      {slot:'RV_ED',annotationId:'rv-ed'},
+      {slot:'RV_ES',annotationId:'rv-es'},
+    ],
+  };
+  it('accepts only two exact current source IDs and matching calculated value/unit', () => {
+    expect(isLearnerCompositeCaptureCurrent(captured,active,'rvFAC')).toBe(true);
+    expect(isLearnerCompositeCaptureCurrent(captured,
+      {...active,value:49.9},'rvFAC')).toBe(false);
+    expect(isLearnerCompositeCaptureCurrent(captured,
+      {...active,unit:'cm²'},'rvFAC')).toBe(false);
+    expect(isLearnerCompositeCaptureCurrent(captured,
+      {...active,components:[active.components[0],
+        {slot:'RV_ES',annotationId:'stale-contour'}]},'rvFAC')).toBe(false);
+    expect(isLearnerCompositeCaptureCurrent(captured,
+      {...active,components:[active.components[0]]},'rvFAC')).toBe(false);
+    expect(isLearnerCompositeCaptureCurrent(captured,
+      {...active,complete:false},'rvFAC')).toBe(false);
+    expect(isLearnerCompositeCaptureCurrent({...captured,
+      compositeResult:{components:[captured.compositeResult.components[0]]}},
+      active,'rvFAC')).toBe(false);
   });
 });
