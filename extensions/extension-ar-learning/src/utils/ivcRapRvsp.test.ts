@@ -1,4 +1,4 @@
-import { composeIVCRapRVSP, attachLearnerRapRvspToIVCAnswer, attachLearnerRapSelectionToIVCAnswer, isIVCReviewCurrent } from './ivcRapRvsp';
+import { composeIVCRapRVSP, attachRapRvspEvidenceToIVCAnswer, attachLearnerRapRvspToIVCAnswer, attachLearnerRapSelectionToIVCAnswer, isIVCReviewCurrent } from './ivcRapRvsp';
 
 function target(instance: string, frame: number) {
   return {
@@ -62,6 +62,33 @@ describe('IVC review integrity checkpoint', () => {
     editedContour.compositeResult.components[1].points[1][0] = 9;
     expect(isIVCReviewCurrent(ivc, editedContour)).toBe(false);
     expect(isIVCReviewCurrent(ivc, { ...ivc, value: 65 })).toBe(false);
+  });
+});
+
+describe('educator IVC gold reference from earlier gold TR Vmax', () => {
+  it('retains the IVC scored percent and links the exact TR source', () => {
+    const composed = attachRapRvspEvidenceToIVCAnswer({
+      ...args, rapMMHG: 8,
+    });
+    expect(composed.status).toBe('complete');
+    if (composed.status !== 'complete') return;
+    expect(composed.answer.measurementKind).toBe('ivcCollapsibility');
+    expect(composed.answer.value).toBe(60);
+    expect(composed.answer.unit).toBe('%');
+    expect(composed.answer.compositeResult.components).toEqual(ivc.compositeResult.components);
+    expect(composed.answer.compositeResult.rapMMHG).toBe(8);
+    expect(composed.answer.compositeResult.rvspMMHG).toBe(39.36);
+    expect(composed.answer.compositeResult.rapRvsp.trVmax.questionKey).toBe('q-tr');
+    expect(composed.answer.compositeResult.rapRvsp.trVmax.answer.sourceAnnotationId)
+      .toBe('tr-source');
+  });
+  it('does not calculate RVSP from an unverified TR source or unsupported RAP', () => {
+    expect(attachRapRvspEvidenceToIVCAnswer({
+      ...args, trVmaxAnswer: { ...tr, viewerTarget: null },
+    }).status).toBe('unavailable');
+    expect(attachRapRvspEvidenceToIVCAnswer({
+      ...args, rapMMHG: 10,
+    }).status).toBe('unavailable');
   });
 });
 
