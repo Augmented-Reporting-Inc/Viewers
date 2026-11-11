@@ -273,6 +273,43 @@ describe('quiz composite phase evidence', () => {
     expect(getIncompleteCompositeGoldReplacementReason([rv])).toContain('RV_ED');
     expect(getIncompleteCompositeGoldReplacementReason([])).toBe('');
   });
+  it('preserves A4C evidence when replacing A2C on another frame', () => {
+    const target = (sop: string, frameNumber: number) => ({
+      studyInstanceUID: 'study', seriesInstanceUID: 'series',
+      sopInstanceUID: sop, frameNumber,
+      referencedImageId: 'wadors:study/series/' + sop + '/frames/' + frameNumber,
+    });
+    const a4c = { slot: 'A4C', annotationId: 'a4c-existing', target: target('sop-a4c', 18) };
+    const previousA2C = { slot: 'A2C', annotationId: 'a2c-old', target: target('sop-a2c-old', 8) };
+    const original = { type: 'measurementNumeric', questionKey: 'lav', answerConfig: {
+      measurementKind: 'laVolumeBiplane', compositeFrameGuidanceEnabled: true,
+      compositeFrameTargets: { A4C: a4c.target, A2C: previousA2C.target },
+      goldValue: 68.59, goldMeasurement: { value: 68.59, compositeResult: {
+        components: [a4c, previousA2C], derived: { a4cAreaCM2: 25, a2cAreaCM2: 22 },
+      } },
+    } };
+    const cleared = clearSavedCompositeGoldPhase(original, 'A2C', 'a2c-old');
+    expect(cleared.answerConfig.goldMeasurement.compositeResult.components).toEqual([a4c]);
+    expect(cleared.answerConfig.compositeFrameTargets.A4C).toEqual(a4c.target);
+    const newTarget = target('sop-a2c-new', 29);
+    const updated = { ...cleared, answerConfig: {
+      ...cleared.answerConfig,
+      compositeFrameTargets: { ...cleared.answerConfig.compositeFrameTargets, A2C: newTarget },
+    } };
+    const measurement = (slot: string, annotationId: string, source: any) => ({
+      uid: annotationId, measurementKind: 'laVolumeSlot', laVolume: { slot },
+      referenceStudyUID: 'study', referenceSeriesUID: 'series',
+      SOPInstanceUID: source.sopInstanceUID, frameNumber: source.frameNumber,
+      referencedImageId: source.referencedImageId,
+    });
+    // The prior A4C must remain eligible for a new complete calculated gold
+    // without requiring a new A4C annotation ID.
+    expect(getCompositeGoldCaptureSignature(updated, [
+      measurement('A4C', 'a4c-existing', a4c.target),
+      measurement('A2C', 'a2c-new', newTarget),
+    ])).toBe('A4C:a4c-existing|A2C:a2c-new');
+    expect(getIncompleteCompositeGoldReplacementReason([updated])).toContain('A2C');
+  });
   it('detects FormAPI gold/source evidence dropped during quiz save', () => {
     const target = { studyInstanceUID: 'study', seriesInstanceUID: 'series',
       sopInstanceUID: 'sop', frameNumber: 14 };
