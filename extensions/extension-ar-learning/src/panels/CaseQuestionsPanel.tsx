@@ -24,7 +24,7 @@ import {
   isMatchingQuizEFCompletion,
   getInitialGuidedEFQuestionTarget,
 } from '../utils/quizCompositeCaptureIntent';
-import { composeIVCRapRVSP, isIVCReviewCurrent, RAP_CHOICES_MMHG } from '../utils/ivcRapRvsp';
+import { composeIVCRapRVSP, attachLearnerRapRvspToIVCAnswer, isIVCReviewCurrent, RAP_CHOICES_MMHG } from '../utils/ivcRapRvsp';
 import {
   getLearnerCompositeAutoCaptureSignature,
   getLearnerCompositeSourceComponents,
@@ -3623,6 +3623,17 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         return true;
       }
 
+      if (cleanString(plainObject(question.answerConfig).measurementKind) === 'ivcCollapsibility') {
+        const previouslyLinked = plainObject(plainObject(currentAnswer).compositeResult).rapRvsp;
+        if (previouslyLinked?.ivc &&
+            !isIVCReviewCurrent(previouslyLinked.ivc, result.answer)) {
+          // Edited or replaced calipers invalidate an earlier RAP/RVSP
+          // interpretation. Require a fresh explicit RAP choice.
+          setRapSelectionsByQuestionKey(current => ({
+            ...current, [captureKey]: '',
+          }));
+        }
+      }
       setAnswer(quiz.quizKey, question, setObjectAnswerPart(currentAnswer, result.answer));
 
       if (!options.silent) {
@@ -5402,6 +5413,102 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     );
   }
 
+  function renderLearnerIVCRapReview(
+    quiz: QuizDefinition, question: QuizQuestion, savedAnswer: any, disabled: boolean
+  ) {
+    if (authoringMode ||
+        cleanString(plainObject(question.answerConfig).measurementKind) !== 'ivcCollapsibility') {
+      return null;
+    }
+    const answer = plainObject(savedAnswer);
+    const completeIVC = answer.measurementKind === 'ivcCollapsibility' &&
+      answer.unit === '%' &&
+      getLearnerCompositeSourceComponents(answer, 'ivcCollapsibility').length === 2;
+    const all = quiz.questions || [];
+    const index = all.findIndex(item => item.questionKey === question.questionKey);
+    const priorTR = index > 0 ? all.slice(0, index).reverse().find(item =>
+      item.type === 'measurementNumeric' &&
+      cleanString(plainObject(item.answerConfig).measurementKind) === 'trVmax') : null;
+    const trAnswer = priorTR
+      ? answersByQuizKey?.[quiz.quizKey]?.[priorTR.questionKey] : null;
+    const trValue = Number(trAnswer?.value);
+    const trIsRecorded = trAnswer?.measurementKind === 'trVmax' &&
+      trAnswer?.unit === 'm/s' &&
+      !!cleanString(trAnswer?.sourceAnnotationId) &&
+      !!cleanString(trAnswer?.viewerTarget?.sopInstanceUID) &&
+      Number.isFinite(trValue) && trValue > 0 && trValue <= 8;
+    const key = `${quiz.quizKey}:${question.questionKey}`;
+    const saved = plainObject(answer.compositeResult);
+    const reviewedRAP = saved.rapRvsp?.ivc &&
+      isIVCReviewCurrent(saved.rapRvsp.ivc, answer)
+      ? saved.rapMMHG : null;
+    const selection = rapSelectionsByQuestionKey[key] ??
+      (reviewedRAP != null ? String(reviewedRAP) : '');
+
+    return (
+      <div className="mt-2 rounded border border-cyan-700 bg-cyan-950/20 p-2 text-xs text-cyan-100">
+        <div className="font-semibold">After measuring IVC: select your RAP</div>
+        <div className="mt-1 text-gray-300">
+          AR calculates RVSP from your RAP and the TR Vmax you previously
+          captured in this quiz. RAP is not inferred from collapsibility.
+        </div>
+        <label className="mt-2 flex items-center gap-2">
+          RAP
+          <select aria-label="Learner RAP (mmHg)"
+            value={selection} disabled={disabled || !completeIVC}
+            className="rounded border border-cyan-600 bg-black px-2 py-1"
+            onClick={event => event.stopPropagation()}
+            onChange={event => {
+              const value = event.target.value;
+              setRapSelectionsByQuestionKey(current => ({ ...current, [key]: value }));
+              if (!value || !completeIVC) return;
+              const calculated = attachLearnerRapRvspToIVCAnswer({
+                ivcAnswer: answer, rapMMHG: value,
+                trVmaxAnswer: trAnswer, trVmaxQuestionKey: priorTR?.questionKey || '',
+              });
+              if (calculated.status === 'complete') {
+                setAnswer(quiz.quizKey, question, calculated.answer);
+              } else {
+                uiNotificationService.show({
+                  title: 'RAP / RVSP',
+                  type: 'warning', duration: 5500,
+                  message: calculated.reason === 'previous-tr-vmax-required'
+                    ? 'Record a calibrated TR Vmax answer earlier in this quiz before RVSP can be calculated and saved.'
+                    : 'The IVC source evidence must be current before RVSP can be calculated.',
+                });
+              }
+            }}
+          >
+            <option value="">Select RAP</option>
+            {RAP_CHOICES_MMHG.map(rap => (
+              <option key={rap} value={String(rap)}>{rap} mmHg</option>
+            ))}
+          </select>
+        </label>
+        {!completeIVC ? (
+          <div className="mt-1 text-amber-200">
+            Complete both calibrated IVC phase measurements first.
+          </div>
+        ) : !trIsRecorded ? (
+          <div className="mt-1 text-amber-200">
+            RVSP unavailable: a source-linked TR Vmax answer must be recorded earlier in this quiz.
+          </div>
+        ) : (
+          <div className="mt-1 text-green-200">
+            Recorded TR Vmax: {trValue.toFixed(2)} m/s
+          </div>
+        )}
+        {reviewedRAP != null && Number.isFinite(Number(saved.rvspMMHG)) ? (
+          <div className="mt-2 rounded border border-emerald-700 p-2 text-emerald-100">
+            Saved learner RAP: {reviewedRAP} mmHg
+            <div>Calculated RVSP: {Number(saved.rvspMMHG).toFixed(2)} mmHg</div>
+            <div className="text-gray-300">Both values are included in the quiz answer on Save or Submit.</div>
+          </div>
+        ) : null}
+      </div>
+    );
+  }
+
   function renderIVCRapRVSPControls(
     quizKey: string,
     question: QuizQuestion,
@@ -5760,6 +5867,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
             ? renderRVFACContourControls(quiz, question, disabled)
             : null}
           {renderCompositeCalculatedStatus(quiz, question)}
+          {renderLearnerIVCRapReview(quiz, question, value, disabled)}
           {bowelSet ? (
             <div className="rounded border border-blue-700 bg-blue-950/20 p-2 text-xs text-gray-200">
               <div className="font-semibold" aria-live="polite">Bowel measurements: {bowelEntries.length} / {bowelCount}</div>
