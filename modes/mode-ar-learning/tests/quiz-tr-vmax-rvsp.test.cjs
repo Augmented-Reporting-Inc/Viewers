@@ -105,3 +105,13 @@ test('quiz save refuses incomplete TR and verifies AR server readback before suc
 test('EF progress panel omits redundant active-question capture sentence', () => {
   assert.doesNotMatch(commands, /Cross-check EF = \(EDV - ESV\)/);
 });
+
+test('TR Vmax quiz clinical mapping is opt-in through existing report review only', () => {
+  assert.match(commands, /const allowReportOwnedQuizTR = quizCapture && spectralVmax &&/);
+  assert.match(commands, /selectedTarget\?\.key === 'echo\.trPeakVelocity'/);
+  assert.match(commands, /isReportOwnedLearnerMeasurementTarget\(saveTarget\)/);
+  assert.match(commands, /isClinicalReportMeasurementsSaveTarget\(saveTarget\)/);
+  assert.match(commands, /\(!quizCapture \|\| allowReportOwnedQuizTR\)/);
+  assert.match(panel, /saveViewerMeasurementsForActiveStudy/);
+  assert.match(panel, /reportFieldNames: fields/);
+});
