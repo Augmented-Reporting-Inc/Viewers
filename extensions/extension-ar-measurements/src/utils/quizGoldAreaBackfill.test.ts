@@ -1,4 +1,4 @@
-import { resolveViewerQuizGoldAreaBackfill } from './quizGoldAreaBackfill';
+import { resolveViewerQuizGoldAreaBackfill, resolveSavedEFGoldContourAreas } from './quizGoldAreaBackfill';
 
 const source = (slot: string, frame: number) => ({
   slot, annotationId: 'annotation-' + slot,
@@ -86,5 +86,69 @@ describe('validated per-phase gold area recovery from saved DICOM contours', () 
       kind: 'rvFAC', gold: conflicting,
       calibrate: async c => c.slot === 'RV_ED' ? 30 : 24,
     })).ok).toBe(false);
+  });
+});
+
+describe('EF gold physical area recovery from persisted exact annotations', () => {
+  const slots = ['A4C_ED', 'A4C_ES', 'A2C_ED', 'A2C_ES'];
+  const components = slots.map((slot, index) => source(slot, index + 1));
+  const annotations = components.map(component => ({
+    uid: component.annotationId,
+    StudyInstanceUID: component.target.studyInstanceUID,
+    SeriesInstanceUID: component.target.seriesInstanceUID,
+    SOPInstanceUID: component.target.sopInstanceUID,
+    referencedImageId: component.target.referencedImageId,
+    points: component.points,
+    lvSimpson: {
+      slot: component.slot,
+      calibratedContourPoints: component.points,
+      originalContourPoints: component.points,
+      calibrationError: null,
+    },
+  }));
+  const prior = {
+    measurementKind: 'lvSimpsonEF', value: 57.2,
+    compositeResult: {
+      components,
+      derived: { edvML: 102.1, esvML: 43.7,
+        slotLongAxisMM: { A4C_ED: 80, A4C_ES: 75, A2C_ED: 79, A2C_ES: 73 } },
+    },
+  };
+
+  it('recovers four physical areas without changing saved gold EF, contours or axes', () => {
+    const copy = JSON.parse(JSON.stringify(prior));
+    const result = resolveSavedEFGoldContourAreas({
+      gold: copy, savedAnnotations: annotations,
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(Object.keys(result.derived.slotAreaCM2)).toEqual(slots);
+      expect(result.derived.slotAreaCM2.A4C_ED).toBeGreaterThan(0);
+      expect(result.derived.edvML).toBe(102.1);
+      expect(result.derived.esvML).toBe(43.7);
+      expect(result.derived.slotLongAxisMM.A2C_ES).toBe(73);
+    }
+    expect(copy).toEqual(prior);
+  });
+
+  it('fails closed for missing annotation, calibration or changed contour', () => {
+    expect(resolveSavedEFGoldContourAreas({
+      gold: prior, savedAnnotations: annotations.slice(0, 3),
+    }).ok).toBe(false);
+    const noPhysical = annotations.map((item, index) => index === 1
+      ? { ...item, lvSimpson: { ...item.lvSimpson, calibratedContourPoints: null } }
+      : item);
+    expect(resolveSavedEFGoldContourAreas({
+      gold: prior, savedAnnotations: noPhysical,
+    }).ok).toBe(false);
+    const changed = annotations.map((item, index) => index === 0
+      ? { ...item, points: [[0, 0, 0], ...item.points.slice(1)] }
+      : item);
+    // Match status must be based on actual geometry, not just annotation ID.
+    changed[0].points = changed[0].points.map((point, index) =>
+      index === 2 ? [99, 99, 0] : point);
+    expect(resolveSavedEFGoldContourAreas({
+      gold: prior, savedAnnotations: changed,
+    }).ok).toBe(false);
   });
 });
