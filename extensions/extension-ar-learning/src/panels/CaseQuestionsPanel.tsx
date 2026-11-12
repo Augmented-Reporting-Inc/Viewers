@@ -1027,6 +1027,19 @@ function buildAnswerPayload(quiz: QuizDefinition, quizAnswers = {}) {
   });
 }
 
+/** Status of the learner's answer only, never an educator gold reference. */
+function isLearnerQuestionAnswered(question: QuizQuestion, value: any): boolean {
+  if (isAnswerEmpty(value)) return false;
+  const kind = cleanString(plainObject(question.answerConfig).measurementKind);
+  if (question.type === 'measurementNumeric' && kind === 'trVmax') {
+    return value?.measurementKind === 'trVmax' && value?.unit === 'm/s' &&
+      Number.isFinite(Number(value?.value)) && Number(value.value) > 0 &&
+      Number(value.value) <= 8 && !!cleanString(value?.sourceAnnotationId) &&
+      targetHasNavigationIdentity(value?.viewerTarget);
+  }
+  return true;
+}
+
 function hasRequiredMissing(quiz: QuizDefinition, quizAnswers = {}) {
   return (quiz.questions || []).some(question => {
     if (!question.required) {
@@ -6313,7 +6326,10 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                         </div>
             )}
 
-          {!bowelSet ? <button
+          {!bowelSet && (linkedRVSP || ['rvFAC', 'laVolumeBiplane',
+            'laVolumeBiplaneDisks', 'ivcCollapsibility', 'lvSimpsonEF'].includes(
+              cleanString(plainObject(question.answerConfig).measurementKind)
+            )) ? <button
             type="button"
             className="rounded border border-gray-600 px-2 py-1 text-[11px] text-gray-300 hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-50"
             disabled={disabled || captureInProgress}
@@ -6327,10 +6343,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               ? 'Capturing…'
               : linkedRVSP
                 ? 'Accept IVC / RAP / RVSP measurement'
-              : ['rvFAC', 'laVolumeBiplane', 'laVolumeBiplaneDisks', 'ivcCollapsibility',
-                  'lvSimpsonEF'].includes(cleanString(plainObject(question.answerConfig).measurementKind))
-                ? 'Recalculate from measured contours'
-                : 'Recapture selected measurement'}
+              : 'Recalculate from measured contours'}
           </button> : null}
 
           {cleanString(
@@ -7853,7 +7866,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                   ).map((question, index) => (
                     <option key={question.questionKey}
                       value={`${quiz.quizKey}:${question.questionKey}`}>
-                      {index + 1}. {question.title || question.prompt || question.questionKey}
+                      {index + 1}. {isLearnerQuestionAnswered(
+                        question, answersByQuizKey?.[quiz.quizKey]?.[question.questionKey]
+                      ) ? '✓ Answered' : '○ Unanswered'} — {question.title || question.prompt || question.questionKey}
                     </option>
                   ))}
                 </optgroup>
