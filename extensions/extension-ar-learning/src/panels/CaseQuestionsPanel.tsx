@@ -6295,8 +6295,8 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
             ) : null}
 
             {cleanString(answerConfig.measurementKind) === 'length' && !bowelSet ? (
-              <label className="mt-3 block text-xs text-gray-200">
-                Optional endpoint tolerance (mm; both ends)
+              <div className="mt-3 text-xs text-gray-200">
+                <label className="block">Optional endpoint tolerance (mm; both ends)</label>
                 <input
                   type="number" min="0" max="100" step="0.1"
                   className="mt-1 block w-36 rounded border border-gray-700 bg-black px-2 py-1 text-sm text-white"
@@ -6330,7 +6330,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                     Clear legacy centre radius ({plainObject(question.scoringConfig).radius} mm)
                   </button>
                 ) : null}
-              </label>
+              </div>
             ) : null}
             {cleanString(answerConfig.measurementKind) === 'ivcCollapsibility' ? (
               <div className="mt-3 text-xs text-gray-200">
