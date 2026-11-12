@@ -4,6 +4,7 @@ import {
   getLearnerCompositePersistenceSources,
   isPersistedLearnerCompositeSource,
   isLearnerCompositeCaptureCurrent,
+  getLearnerHemodynamicReadbackError,
 } from './quizLearnerCompositeCapture';
 
 const frame = (sop: string, number: number) => ({
@@ -222,5 +223,50 @@ describe('read-after-write verified learner phase annotations', () => {
     },source)).toBe(false);
     expect(isPersistedLearnerCompositeSource({...stored,annotationId:'other'},source))
       .toBe(false);
+  });
+});
+
+describe('AR response readback of learner TR Vmax / RAP / RVSP', () => {
+  const tr = {questionKey:'q-tr',type:'measurementNumeric',
+    answerConfig:{measurementKind:'trVmax'}};
+  const ivc = {questionKey:'q-ivc',type:'measurementNumeric',
+    answerConfig:{measurementKind:'ivcCollapsibility'}};
+  const target = frame('tr-sop',9);
+  const trAnswer = {
+    measurementKind:'trVmax',value:2.8,unit:'m/s',
+    sourceAnnotationId:'tr-learn',viewerTarget:target,
+  };
+  const ivcAnswer = {measurementKind:'ivcCollapsibility',value:60,unit:'%',
+    compositeResult:{rapMMHG:8,rvspMMHG:39.36,trGradientMMHG:31.36,
+      rapRvsp:{methodId:'ivc-rap-rvsp-v1',rapMMHG:8,rvspMMHG:39.36,
+        trGradientMMHG:31.36,trVmax:{questionKey:'q-tr',answer:trAnswer}}}};
+  const local = {'q-tr':trAnswer,'q-ivc':ivcAnswer};
+  const persisted = [
+    {questionKey:'q-tr',value:trAnswer},
+    {questionKey:'q-ivc',value:ivcAnswer},
+  ];
+  it('accepts correctly source-linked AR response readback', () => {
+    expect(getLearnerHemodynamicReadbackError([tr,ivc],local,persisted)).toBe('');
+  });
+  it('rejects missing TR annotation and stale DICOM frame', () => {
+    expect(getLearnerHemodynamicReadbackError([tr,ivc],local,
+      [{questionKey:'q-tr',value:{...trAnswer,sourceAnnotationId:''}},persisted[1]]))
+      .toContain('TR Vmax');
+    expect(getLearnerHemodynamicReadbackError([tr,ivc],local,
+      [{questionKey:'q-tr',value:{...trAnswer,viewerTarget:frame('tr-sop',8)}},persisted[1]]))
+      .toContain('TR Vmax');
+  });
+  it('rejects missing RVSP or wrong linked TR source', () => {
+    expect(getLearnerHemodynamicReadbackError([tr,ivc],local,
+      [persisted[0],{questionKey:'q-ivc',value:{
+        ...ivcAnswer,compositeResult:{rapMMHG:8,rapRvsp:ivcAnswer.compositeResult.rapRvsp},
+      }}])).toContain('RAP/RVSP');
+    expect(getLearnerHemodynamicReadbackError([tr,ivc],local,
+      [persisted[0],{questionKey:'q-ivc',value:{
+        ...ivcAnswer,compositeResult:{...ivcAnswer.compositeResult,
+          rapRvsp:{...ivcAnswer.compositeResult.rapRvsp,
+            trVmax:{questionKey:'q-tr',answer:{...trAnswer,sourceAnnotationId:'other'}}},
+        },
+      }}])).toContain('RAP/RVSP');
   });
 });
