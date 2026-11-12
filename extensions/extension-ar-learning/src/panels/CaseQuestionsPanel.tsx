@@ -1656,6 +1656,32 @@ function isDraftDefinition(definition: any): boolean {
   return getDefinitionStatus(definition) === 'draft';
 }
 
+/**
+ * Question keys are persisted answer/rubric identities, not presentation
+ * indices. A collision can select multiple question cards and overwrite a
+ * different question when serialized. Never guess which one to retain.
+ */
+function validateAndOrderAuthoringQuestions(questions: QuizQuestion[]): QuizQuestion[] {
+  const list = Array.isArray(questions) ? questions : [];
+  const keys = list.map(item => cleanString(item.questionKey));
+  if (keys.some(key => !key) || new Set(keys).size !== keys.length) {
+    throw new Error(
+      'The saved quiz contains duplicated or missing question identifiers. ' +
+      'Return to Manage Quiz to repair the draft; viewer authoring is disabled ' +
+      'to protect existing TR Vmax and other gold answers.'
+    );
+  }
+  return list.map((question, index) => ({ question, index }))
+    .sort((a, b) => {
+      const left = Number(a.question.sortOrder);
+      const right = Number(b.question.sortOrder);
+      const l = Number.isFinite(left) && left > 0 ? left : a.index + 1;
+      const r = Number.isFinite(right) && right > 0 ? right : b.index + 1;
+      return l - r || a.index - b.index;
+    })
+    .map(item => item.question);
+}
+
 function pickAuthoringDefinition(
   definitions: QuizDefinition[] = [],
   preferredDefinitionIdOverride = ''
@@ -2267,9 +2293,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       const selectedMeasurementDomain = resolveQuizAuthoringMeasurementDomain(selectedDefinition);
       syncQuizMeasurementDomainToUrl(selectedMeasurementDomain);
       const selectedRubric = findRubricForDefinition(rubrics, selectedDefinition);
-      const nextQuestions = Array.isArray(selectedDefinition?.questions)
-        ? selectedDefinition.questions
-        : [];
+      const nextQuestions = validateAndOrderAuthoringQuestions(
+        Array.isArray(selectedDefinition?.questions) ? selectedDefinition.questions : []
+      );
 
       if (nextPayload?.capabilities?.canManageQuizContent !== true) {
         throw new Error('Quiz authoring is not allowed for this account.');
@@ -5410,7 +5436,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         authoringQuestionsRef.current
       );
       if (incompleteReplacement) throw new Error(incompleteReplacement);
-      const questionsToSave = authoringQuestionsRef.current;
+      const questionsToSave = validateAndOrderAuthoringQuestions(
+        authoringQuestionsRef.current
+      );
       const hasMeasurementQuestions = questionsToSave.some(
         question => question.type === 'measurementNumeric'
       );
@@ -5484,7 +5512,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
           ' The existing local answers were preserved for investigation.');
       }
       const savedDefinition = persistedDefinition;
-      const savedQuestions = savedDefinition.questions;
+      const savedQuestions = validateAndOrderAuthoringQuestions(
+        savedDefinition.questions
+      );
 
       if (savedDefinition) {
         setAuthoringDefinition(savedDefinition);
