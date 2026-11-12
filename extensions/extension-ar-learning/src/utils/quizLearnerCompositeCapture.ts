@@ -212,3 +212,60 @@ export function isPersistedLearnerCompositeSource(
     clean(target.referencedImageId) === actualImage &&
     Array.isArray(saved.points) && saved.points.length >= 2;
 }
+
+/** Require server readback of the structured learner evidence that drives
+ * RVSP. A successful HTTP response is not sufficient if the backend silently
+ * drops the source-linked TR or RAP/RVSP component. */
+export function getLearnerHemodynamicReadbackError(
+  questions: any[], localAnswers: Record<string, any>,
+  responseAnswers: any[]
+): string {
+  const remote = new Map((Array.isArray(responseAnswers) ? responseAnswers : [])
+    .map(row => [clean(row?.questionKey), asObject(row?.value)]));
+  const sameTarget = (a: any, b: any) => {
+    const left = asObject(a), right = asObject(b);
+    return ['studyInstanceUID', 'seriesInstanceUID', 'sopInstanceUID'].every(
+      field => clean(left[field]) && clean(left[field]) === clean(right[field])
+    ) && Number.isInteger(Number(left.frameNumber)) &&
+      Number(left.frameNumber) > 0 &&
+      Number(left.frameNumber) === Number(right.frameNumber);
+  };
+  for (const question of Array.isArray(questions) ? questions : []) {
+    if (question?.type !== 'measurementNumeric') continue;
+    const kind = clean(question.answerConfig?.measurementKind);
+    const key = clean(question.questionKey);
+    const local = asObject(localAnswers?.[key]);
+    const saved = remote.get(key) || {};
+    if (kind === 'trVmax' && local.measurementKind === 'trVmax' &&
+        clean(local.sourceAnnotationId) && Number.isFinite(Number(local.value))) {
+      if (saved.measurementKind !== 'trVmax' ||
+          clean(saved.sourceAnnotationId) !== clean(local.sourceAnnotationId) ||
+          clean(saved.unit) !== 'm/s' ||
+          Number(saved.value) !== Number(local.value) ||
+          !sameTarget(saved.viewerTarget, local.viewerTarget)) {
+        return 'TR Vmax calibrated value or DICOM source was not persisted in the AR quiz response.';
+      }
+    }
+    if (kind === 'ivcCollapsibility') {
+      const expected = asObject(local.compositeResult);
+      const actual = asObject(saved.compositeResult);
+      const review = asObject(expected.rapRvsp);
+      if (review.methodId !== 'ivc-rap-rvsp-v1') continue;
+      const actualReview = asObject(actual.rapRvsp);
+      const expectedTR = asObject(asObject(review.trVmax).answer);
+      const actualTR = asObject(asObject(actualReview.trVmax).answer);
+      if (actualReview.methodId !== review.methodId ||
+          Number(actual.rapMMHG) !== Number(expected.rapMMHG) ||
+          clean(asObject(actualReview.trVmax).questionKey) !==
+            clean(asObject(review.trVmax).questionKey) ||
+          clean(actualTR.sourceAnnotationId) !== clean(expectedTR.sourceAnnotationId) ||
+          (expected.rvspMMHG != null && (
+            actual.rvspMMHG == null ||
+            Number(actual.rvspMMHG) !== Number(expected.rvspMMHG) ||
+            Number(actual.trGradientMMHG) !== Number(expected.trGradientMMHG)))) {
+        return 'IVC RAP/RVSP interpretation or linked TR Vmax source was not persisted in the AR quiz response.';
+      }
+    }
+  }
+  return '';
+}
