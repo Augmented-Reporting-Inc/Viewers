@@ -369,6 +369,21 @@ export function getCompositeGoldPersistenceError(expectedQuestions: any[], persi
     if (Object.keys(phaseValues).some(slot => remoteValues[slot] !== phaseValues[slot])) {
       return kind + ' calibrated gold phase values were not persisted.';
     }
+    if (kind === 'ivcCollapsibility') {
+      const reference = asObject(asObject(gold.compositeResult).rapRvsp);
+      const persisted = asObject(asObject(actualGold.compositeResult).rapRvsp);
+      if (reference.methodId === 'ivc-rap-rvsp-v1' &&
+          (persisted.methodId !== reference.methodId ||
+            Number(persisted.rapMMHG) !== Number(reference.rapMMHG) ||
+            Number(persisted.rvspMMHG) !== Number(reference.rvspMMHG) ||
+            Number(persisted.trGradientMMHG) !== Number(reference.trGradientMMHG) ||
+            clean(asObject(persisted.trVmax).questionKey) !==
+              clean(asObject(reference.trVmax).questionKey) ||
+            clean(asObject(asObject(persisted.trVmax).answer).sourceAnnotationId) !==
+              clean(asObject(asObject(reference.trVmax).answer).sourceAnnotationId))) {
+        return 'IVC accepted RAP / RVSP reference was not persisted.';
+      }
+    }
   }
   return '';
 }
