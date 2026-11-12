@@ -2834,6 +2834,13 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                         viewerTarget: saved.target,
                         focusedCompositeSlot: slot,
                         questionKey: question.questionKey,
+                        endpointToleranceMM:
+                          ['ivcCollapsibility', 'ivcRapRvsp'].includes(kind)
+                            ? plainObject(question.scoringConfig).caliperEndpointToleranceMM ?? 5
+                            : null,
+                        ivcEndpointToleranceEnabled:
+                          ['ivcCollapsibility', 'ivcRapRvsp'].includes(kind) &&
+                          plainObject(question.scoringConfig).caliperEndpointToleranceEnabled !== false,
                       });
                 if ((learner ? result?.learnerRendered : result?.rubricRendered) !== true) {
                   uiNotificationService.show({
@@ -3029,6 +3036,11 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
           questionKey: question.questionKey,
           radius: scoringConfig.radius,
           radiusUnit: cleanString(scoringConfig.radiusUnit) || 'world',
+          endpointToleranceMM: answerConfig.measurementKind === 'ivcCollapsibility'
+            ? scoringConfig.caliperEndpointToleranceMM ?? 5
+            : scoringConfig.endpointToleranceMM ?? null,
+          ivcEndpointToleranceEnabled: answerConfig.measurementKind === 'ivcCollapsibility' &&
+            scoringConfig.caliperEndpointToleranceEnabled !== false,
         });
 
     if (result?.rubricRendered !== true) {
@@ -7593,24 +7605,84 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               </div>
             ) : null}
 
-            {cleanString(answerConfig.measurementKind) === 'ivcCollapsibility' ? (
-              <label className="mt-3 block text-xs font-semibold text-gray-200">
-                Maximum caliper endpoint distance (mm)
-                <input type="number" min="0" max="100" step="0.1"
+            {cleanString(answerConfig.measurementKind) === 'length' && !bowelSet ? (
+              <div className="mt-3 text-xs text-gray-200">
+                <label className="block" htmlFor={`length-endpoint-tolerance-${question.questionKey}`}>
+                  Optional endpoint tolerance (mm; both ends)
+                </label>
+                <input
+                  id={`length-endpoint-tolerance-${question.questionKey}`}
+                  type="number" min="0" max="100" step="0.1"
                   className="mt-1 block w-36 rounded border border-gray-700 bg-black px-2 py-1 text-sm text-white"
-                  value={numberOrEmpty(plainObject(question.scoringConfig).caliperEndpointToleranceMM ?? 5)}
+                  value={numberOrEmpty(plainObject(question.scoringConfig).endpointToleranceMM)}
                   disabled={authoringSaving || !isDraftDefinition(authoringDefinition)}
-                  onChange={event => patchAuthoringQuestion(question, {
-                    scoringConfig: {
-                      ...plainObject(question.scoringConfig),
-                      caliperEndpointToleranceMM: event.target.value,
-                    },
-                  })}
+                  onChange={event => {
+                    const scoring = { ...plainObject(question.scoringConfig) };
+                    if (!event.target.value) delete scoring.endpointToleranceMM;
+                    else {
+                      delete scoring.radius;
+                      delete scoring.radiusUnit;
+                      scoring.endpointToleranceMM = Number(event.target.value);
+                    }
+                    patchAuthoringQuestion(question, { scoringConfig: scoring });
+                  }}
                 />
-              </label>
+                <p className="mt-1 text-gray-400">
+                  When set, view both gold endpoint circles; leave empty for numeric-only
+                  grading unless a legacy centre radius is configured.
+                </p>
+                {numberOrEmpty(plainObject(question.scoringConfig).radius) !== '' ? (
+                  <button type="button"
+                    className="mt-2 block rounded border border-slate-500 px-2 py-1 text-slate-100"
+                    disabled={authoringSaving || !isDraftDefinition(authoringDefinition)}
+                    onClick={() => {
+                      const scoring = { ...plainObject(question.scoringConfig) };
+                      delete scoring.radius;
+                      delete scoring.radiusUnit;
+                      patchAuthoringQuestion(question, { scoringConfig: scoring });
+                    }}>
+                    Clear legacy centre radius ({plainObject(question.scoringConfig).radius} mm)
+                  </button>
+                ) : null}
+              </div>
             ) : null}
 
-            {!['lvSimpsonEF', 'laVolumeBiplane', 'laVolumeBiplaneDisks', 'rvFAC', 'raArea', 'ivcCollapsibility'].includes(cleanString(answerConfig.measurementKind)) ? (
+            {cleanString(answerConfig.measurementKind) === 'ivcCollapsibility' ? (
+              <div className="mt-3 space-y-2 text-xs text-gray-200">
+                <label className="flex items-center gap-2">
+                  <input type="checkbox"
+                    checked={plainObject(question.scoringConfig).caliperEndpointToleranceEnabled !== false}
+                    disabled={authoringSaving || !isDraftDefinition(authoringDefinition)}
+                    onChange={event => patchAuthoringQuestion(question, {
+                      scoringConfig: {
+                        ...plainObject(question.scoringConfig),
+                        caliperEndpointToleranceEnabled: event.target.checked,
+                      },
+                    })}
+                  />
+                  Grade IVC expiration and inspiration endpoint placement
+                </label>
+                {plainObject(question.scoringConfig).caliperEndpointToleranceEnabled !== false ? (
+                  <label className="block">
+                    Tolerance around each gold endpoint (mm)
+                    <input type="number" min="0" max="100" step="0.1"
+                      className="mt-1 block w-36 rounded border border-gray-700 bg-black px-2 py-1 text-sm text-white"
+                      value={plainObject(question.scoringConfig).caliperEndpointToleranceMM ?? 5}
+                      disabled={authoringSaving || !isDraftDefinition(authoringDefinition)}
+                      onChange={event => patchAuthoringQuestion(question, {
+                        scoringConfig: {
+                          ...plainObject(question.scoringConfig),
+                          caliperEndpointToleranceMM: event.target.value === ''
+                            ? 5 : Number(event.target.value),
+                        },
+                      })}
+                    />
+                  </label>
+                ) : null}
+              </div>
+            ) : null}
+
+            {!['lvSimpsonEF', 'laVolumeBiplane', 'laVolumeBiplaneDisks', 'rvFAC', 'raArea', 'ivcCollapsibility', 'length'].includes(cleanString(answerConfig.measurementKind)) || bowelSet ? (
               <>
             <label className="mt-3 block text-xs font-semibold text-gray-200">
               {bowelSet ? 'Reference location radius (mm; visual guide)' : 'Position radius tolerance'}
