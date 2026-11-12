@@ -124,7 +124,7 @@ import {
 } from '../../extension-ar-measurements/src/utils/bowelMeasurementTargets';
 import { calculateLVSimpson } from '../../extension-ar-measurements/src/utils/lvSimpson';
 import { getEchoAreaSlot } from '../../extension-ar-measurements/src/utils/echoAreaMeasurements';
-import { resolveViewerQuizCompositeResult, resolveViewerQuizLVSimpsonForStudy, isViewerQuizCompositeReviewCurrent, getViewerQuizCompositeStatus } from '../../extension-ar-measurements/src/utils/viewerQuizCompositeResults';
+import { resolveViewerQuizCompositeResult, resolveViewerQuizLVSimpsonForStudy, isViewerQuizCompositeReviewCurrent, getViewerQuizCompositeStatus, calibratedLVContourAreaCM2 } from '../../extension-ar-measurements/src/utils/viewerQuizCompositeResults';
 import { createGuidedMouseToolOwnership } from './utils/guidedMouseToolOwnership';
 import { calibrateUSContourPoints, worldToImageIndex } from './utils/usRegionLengthCalibration';
 import { getQuizEchoAreaSourceMetadata, calculateCalibratedEchoAreaCM2, getSavedQuizEchoAreaDisplayInfo, getQuizCompositeContourViewportLines, getQuizCompositeGoldContourSlotMetadata } from './utils/quizEchoAreaCalibration';
@@ -5794,7 +5794,19 @@ function installLVSimpsonContourTextCleanupForViewport({ viewport, viewportId = 
     getTextLines: function (...args) {
       const lines =
         typeof previousGetTextLines === 'function' ? previousGetTextLines.call(this, ...args) : [];
-
+      const raw = args[0];
+      const data = raw?.annotation?.data || raw?.data || raw;
+      const lv = data?.lvSimpson || {};
+      // Cornerstone's native ROI statistics can be expressed in image pixels.
+      // EF's physical contour coordinates were independently calibrated in mm.
+      // Display a physical area only when those exact coordinates exist.
+      if (['A4C_ED', 'A4C_ES', 'A2C_ED', 'A2C_ES'].includes(String(lv.slot || '')) &&
+          !lv.calibrationError) {
+        const area = calibratedLVContourAreaCM2(lv.calibratedContourPoints);
+        return area !== null
+          ? [`LV contour area: ${area.toFixed(2)} cm²`]
+          : ['Calibrated LV contour area unavailable'];
+      }
       return sanitizeContourTextLines(lines);
     },
   };
@@ -16257,6 +16269,15 @@ function commandsModule({
           viewport, viewportId: comparisonViewportId,
           measurementService, viewportGridService, displaySetService, toolGroupService,
         });
+      }
+
+      if (rubricMeasurement?.measurementKind === 'lvSimpsonEF') {
+        for (const toolName of [toolNames.SplineROI || 'SplineROI',
+          toolNames.PlanarFreehandROI || 'PlanarFreehandROI']) {
+          installLVSimpsonContourTextCleanupForViewport({
+            viewport, viewportId: comparisonViewportId, toolName,
+          });
+        }
       }
 
       // Authoring gold calipers already loaded in Cornerstone should be selected
