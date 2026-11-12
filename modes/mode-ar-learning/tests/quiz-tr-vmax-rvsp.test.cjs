@@ -39,3 +39,22 @@ test('educator IVC gold links earlier validated TR and preserves the IVC score s
   assert.match(panel, /attachRapRvspEvidenceToIVCAnswer\(/);
   assert.match(panel, /trVmaxQuestionKey: priorTR\?\.questionKey/);
 });
+
+test('reviewing a valid saved TR Vmax does not auto-start a new spectral drawing session', () => {
+  assert.match(panel, /const reviewSavedTR = authoringMode && measurementKind === 'trVmax'/);
+  assert.match(panel, /existingTRGold\.sourceAnnotationId/);
+  assert.match(panel, /targetHasNavigationIdentity\(existingTRGold\.viewerTarget\)/);
+  assert.match(panel, /!isGuidedQuizCompositeKind\(measurementKind\) && !reviewSavedTR/);
+  assert.match(commands, /startSpectralVmaxWorkflow:[\s\S]*?startUltrasoundDirectionalWorkflow\(\{ spectralVmax: true \}\)/);
+});
+test('EF gold keeps exact frame identity when InstanceNumber is missing', () => {
+  assert.match(panel, /const sop = cleanString\(target\?\.sopInstanceUID \|\| target\?\.SOPInstanceUID\)/);
+  assert.match(panel, /'SOP ' \+ sop\.slice\(-12\)/);
+  assert.doesNotMatch(panel, /return 'Instance unavailable';/);
+});
+test('EF gold summary no longer repeats the calculated answer or gold scalar', () => {
+  assert.match(panel, /Saved biplane measurements/);
+  assert.match(panel, /Saved biplane EDV:/);
+  assert.match(panel, /\{renderCompositeCalculatedStatus\(quiz, question\)\}/);
+  assert.doesNotMatch(panel, /<div className="border-t border-gray-700 pt-2 text-xs text-emerald-100">\s*Saved result:/);
+});
