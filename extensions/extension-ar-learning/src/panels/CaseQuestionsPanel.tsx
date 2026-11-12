@@ -5971,13 +5971,26 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                     event.preventDefault();
                     event.stopPropagation();
                     setActiveQuestionKey(`authoring:${question.questionKey}`);
-                    void runViewerCommand(commandsManager, 'jumpToViewerQuizTarget', {
-                      viewerTarget: component.target,
-                      questionKey: question.questionKey,
-                    });
+                    const isIVCGold = cleanString(answerConfig.measurementKind) === 'ivcCollapsibility';
+                    void runViewerCommand(
+                      commandsManager,
+                      isIVCGold ? 'showViewerQuizMeasurementComparison' : 'jumpToViewerQuizTarget',
+                      isIVCGold ? {
+                        rubricMeasurement: plainObject(answerConfig.goldMeasurement),
+                        viewerTarget: component.target,
+                        questionKey: question.questionKey,
+                        endpointToleranceMM:
+                          plainObject(question.scoringConfig).caliperEndpointToleranceMM ?? 5,
+                        ivcEndpointToleranceEnabled:
+                          plainObject(question.scoringConfig).caliperEndpointToleranceEnabled !== false,
+                      } : {
+                        viewerTarget: component.target,
+                        questionKey: question.questionKey,
+                      }
+                    );
                   }}
                 >
-                  {component.label}{component.complete ? ' · View saved contour' : ' · Source unavailable'}
+                  {component.label}{component.complete ? (cleanString(answerConfig.measurementKind) === 'ivcCollapsibility' ? ' · View saved caliper' : ' · View saved contour') : ' · Source unavailable'}
                 </button>
               ))}
             </div>
