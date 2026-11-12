@@ -338,6 +338,35 @@ describe('quiz composite phase evidence', () => {
       .toContain('calibrated gold phase values');
     expect(getCompositeGoldPersistenceError([enriched], [enriched])).toBe('');
   });
+  it('detects a saved IVC gold RAP/RVSP reference dropped in FormAPI readback', () => {
+    const target = { studyInstanceUID:'study', seriesInstanceUID:'series',
+      sopInstanceUID:'sop', frameNumber:4 };
+    const components = [
+      { slot:'IVC_EXP', annotationId:'exp', target,
+        points:[[0,0,0],[0,13,0]] },
+      { slot:'IVC_INSP', annotationId:'insp',
+        target:{...target,frameNumber:5}, points:[[0,0,0],[0,7,0]] },
+    ];
+    const reviewed = { measurementKind:'ivcCollapsibility', unit:'%', value:46.15,
+      compositeResult:{ methodId:'ivc-collapsibility-v1', components } };
+    const reference = { methodId:'ivc-rap-rvsp-v1', ivc:reviewed,
+      rapMMHG:8,rvspMMHG:24,trGradientMMHG:16,
+      trVmax:{ questionKey:'q-tr', answer:{sourceAnnotationId:'tr-ann'} } };
+    const original = { questionKey:'q-ivc', type:'measurementNumeric',
+      answerConfig:{ measurementKind:'ivcCollapsibility',goldValue:46.15,
+        goldMeasurement:{value:46.15,measurementKind:'ivcCollapsibility',
+          compositeResult:{methodId:'ivc-collapsibility-v1',components,
+            rapMMHG:8,rvspMMHG:24,trGradientMMHG:16,rapRvsp:reference } }
+      }
+    };
+    expect(getCompositeGoldPersistenceError([original],[original])).toBe('');
+    const lost = {...original,answerConfig:{...original.answerConfig,
+      goldMeasurement:{...original.answerConfig.goldMeasurement,
+        compositeResult:{methodId:'ivc-collapsibility-v1',components}}
+    }};
+    expect(getCompositeGoldPersistenceError([original],[lost]))
+      .toContain('RAP / RVSP reference was not persisted');
+  });
   it('formats physical geometry as approximate and does not treat missing geometry as numeric', () => {
     expect(getGoldPhaseMeasurementSummary({
       points: [[0,0,0],[10,0,0],[10,10,0],[0,10,0]],
