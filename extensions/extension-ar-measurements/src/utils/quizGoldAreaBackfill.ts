@@ -1,3 +1,5 @@
+import { boundEFQuizEvidencePoints, calibratedLVContourAreaCM2 } from './viewerQuizCompositeResults';
+
 /**
  * Revalidate the immutable quiz gold contours against their exact DICOM
  * ultrasound-region calibration. This repairs *display evidence*, never
@@ -118,4 +120,81 @@ export async function resolveViewerQuizGoldAreaBackfill({
     derived.volumeML = value;
   }
   return { ok: true as const, derived, calibratedSlots: [...spec.slots] };
+}
+
+/**
+ * Recover four EF contour areas from persisted, physically calibrated source
+ * annotations. Only exact immutable gold annotation IDs, source frames and
+ * retained contour evidence qualify. Does not recalculate EF or change gold.
+ */
+export function resolveSavedEFGoldContourAreas({
+  gold, savedAnnotations,
+}: { gold: GoldAnswer; savedAnnotations: any[] }) {
+  if (clean(gold?.measurementKind) !== 'lvSimpsonEF' ||
+      finitePositive(gold?.value) === null) return failure('EF gold result unavailable');
+  const composite = gold?.compositeResult || {};
+  const slots = ['A4C_ED', 'A4C_ES', 'A2C_ED', 'A2C_ES'];
+  const components: GoldComponent[] = composite.components;
+  if (!Array.isArray(components) || components.length !== 4 ||
+      !Array.isArray(savedAnnotations)) return failure('EF gold sources incomplete');
+  const selected = slots.map(slot =>
+    components.filter(component => clean(component?.slot) === slot));
+  if (selected.some(matches => matches.length !== 1 ||
+      !validSource(matches[0]))) return failure('EF gold source frames invalid');
+  const studyIds = new Set(selected.map(matches =>
+    clean(matches[0].target?.studyInstanceUID)));
+  const annotationIds = new Set(selected.map(matches => clean(matches[0].annotationId)));
+  if (studyIds.size !== 1 || annotationIds.size !== 4) {
+    return failure('EF gold source identity conflict');
+  }
+
+  const areas: Record<string, number> = {};
+  for (let index = 0; index < slots.length; index++) {
+    const component = selected[index][0];
+    const target = component.target || {};
+    const matches = savedAnnotations.filter(item =>
+      clean(item.uid || item.annotationId || item.annotationUID) ===
+        clean(component.annotationId));
+    if (matches.length !== 1) return failure(slots[index] + ': saved source missing');
+    const annotation = matches[0];
+    const annotationStudy = clean(annotation.StudyInstanceUID || annotation.referenceStudyUID);
+    const annotationSeries = clean(annotation.SeriesInstanceUID || annotation.referenceSeriesUID);
+    const annotationSop = clean(annotation.SOPInstanceUID);
+    const annotationImage = clean(annotation.referencedImageId);
+    if (annotationStudy !== clean(target.studyInstanceUID) ||
+        annotationSeries !== clean(target.seriesInstanceUID) ||
+        annotationSop !== clean(target.sopInstanceUID) ||
+        annotationImage !== clean(target.referencedImageId)) {
+      return failure(slots[index] + ': saved source image/frame mismatch');
+    }
+    const geometry = annotation.lvSimpson || annotation.measurements?.lvSimpson || {};
+    if (clean(geometry.slot) !== slots[index] || geometry.calibrationError ||
+        !Array.isArray(geometry.calibratedContourPoints) ||
+        !Array.isArray(geometry.originalContourPoints) ||
+        geometry.calibratedContourPoints.length !== geometry.originalContourPoints.length) {
+      return failure(slots[index] + ': verified physical calibration unavailable');
+    }
+    // The bounded gold polygon must still match the persisted annotation.
+    const annotationPoints = annotation.points;
+    if (!Array.isArray(annotationPoints) ||
+        JSON.stringify(boundEFQuizEvidencePoints(annotationPoints)) !==
+          JSON.stringify(component.points)) {
+      return failure(slots[index] + ': gold contour changed after capture');
+    }
+    const value = calibratedLVContourAreaCM2(geometry.calibratedContourPoints);
+    if (value === null) return failure(slots[index] + ': physical area unavailable');
+    const oldValue = finitePositive(composite.derived?.slotAreaCM2?.[slots[index]]);
+    if (oldValue !== null && Math.abs(oldValue - value) > 0.02) {
+      return failure(slots[index] + ': saved physical area mismatch');
+    }
+    areas[slots[index]] = value;
+  }
+  return {
+    ok: true as const,
+    derived: {
+      ...(composite.derived || {}),
+      slotAreaCM2: areas,
+    },
+    calibratedSlots: [...slots],
+  };
 }
