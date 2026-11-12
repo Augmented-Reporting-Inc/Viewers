@@ -617,6 +617,15 @@ function getCurrentViewerMeasurementSnapshot(
     }
   }
 
+  // Native hydrate does not emit a completed measurement. MeasurementService
+  // update ignores unknown IDs, so new guided RV contours must also be read
+  // directly from annotation state before any adapter entry exists.
+  for (const native of getAllCornerstoneViewerAnnotations()) {
+    const source = getCornerstoneEchoAreaMeasurementFallback(native);
+    if (!source) continue;
+    measurementsById.set(source.uid, { ...(measurementsById.get(source.uid) || {}), ...source });
+  }
+
   // Cine comments intentionally have no Cornerstone geometry. MeasurementService.update()
   // only updates IDs it already owns, so newly-created comments live in this small
   // session map until the normal viewerMeasurements/reviewerMeasurements save succeeds.
@@ -684,8 +693,13 @@ function getCurrentViewerMeasurementSnapshot(
             annotation.cachedStats || {};
           const contourPoints = annotation.data?.contour?.polyline ||
             annotation.data?.handles?.points;
-          const regions = annotation.data?.echoArea?.calibrationRegions ||
+          const storedRegions = annotation.data?.echoArea?.calibrationRegions ||
             measurement?.echoArea?.calibrationRegions;
+          const regions = Array.isArray(storedRegions) && storedRegions.length
+            ? storedRegions : isRightHeartContour ? getEchoAreaCalibrationRegions({
+                displaySet: null, imageId: sourceImage || measuredImage,
+                sopInstanceId: measurement.SOPInstanceUID,
+              }) : [];
           // Once a contour is edited, the original area is stale. Recalculate
           // from the currently drawn contour and its previously verified DICOM
           // region rather than trusting an old MeasurementService value.
@@ -702,6 +716,7 @@ function getCurrentViewerMeasurementSnapshot(
             ...measurement,
             ...echoAreaSource,
             ...(hasAreaCalibration ? {
+              echoArea: { ...(echoAreaSource.echoArea || measurement.echoArea), calibrationRegions: regions },
               points: contourPoints,
               area: updatedArea,
               measurements: {
@@ -741,6 +756,36 @@ function getCurrentViewerMeasurementSnapshot(
   );
 
   return restoredMeasurements;
+}
+
+/** Guided RV/RA acquisition can precede the OHIF adapter's first entry.
+ * Read only explicitly tagged native contours, as for LV/LA and Doppler. */
+function getCornerstoneEchoAreaMeasurementFallback(stateAnnotation: any = {}) {
+  const source = getQuizEchoAreaSourceMetadata(stateAnnotation.data);
+  if (!source.measurementKind) return null;
+  const metadata = stateAnnotation.metadata || {};
+  const points = stateAnnotation.data?.contour?.polyline;
+  const image = String(metadata.referencedImageId || '');
+  const id = getMeasurementAnnotationId(stateAnnotation);
+  if (!id || id.startsWith('ar-viewer-quiz-') ||
+      metadata.arMeasurementWorkflow === 'viewerQuizGoldDisplay' ||
+      !image || !Array.isArray(points) || points.length < 3 ||
+      !['SplineROI', 'PlanarFreehandROI', 'LivewireContour'].includes(metadata.toolName)) return null;
+  const parsed = parseDicomWebIdsFromReferencedImageId(image);
+  if (metadata.SOPInstanceUID && parsed.sopInstanceId &&
+      String(metadata.SOPInstanceUID) !== parsed.sopInstanceId) return null;
+  return {
+    uid: id, annotationUID: id, metadata, ...source,
+    toolName: metadata.toolName, label: stateAnnotation.data.label || '',
+    referenceStudyUID: metadata.StudyInstanceUID || parsed.studyInstanceId || '',
+    referenceSeriesUID: metadata.SeriesInstanceUID || parsed.seriesInstanceId || '',
+    SOPInstanceUID: metadata.SOPInstanceUID || parsed.sopInstanceId || '',
+    FrameOfReferenceUID: metadata.FrameOfReferenceUID || '',
+    referencedImageId: image, frameNumber: parsed.frameNumber || getFrameNumberFromReferencedImageId(image),
+    points, data: stateAnnotation.data.cachedStats || {},
+    isLocked: !!stateAnnotation.isLocked, isVisible: stateAnnotation.isVisible !== false,
+    arMeasurementReadOnly: !!metadata.arMeasurementReadOnly || !!stateAnnotation.data.arMeasurementReadOnly,
+  };
 }
 
 function getAllCornerstoneViewerAnnotations() {
@@ -3893,17 +3938,27 @@ function calibratedEchoAreaFromRegions({
   return calculateCalibratedEchoAreaCM2(physical);
 }
 
+/** Resolve calibration for the exact image, including metadata populated by
+ * the image loader after the display set's lightweight instance was created. */
+function getEchoAreaCalibrationRegions({ displaySet, imageId, sopInstanceId }) {
+  if (!imageId || !sopInstanceId ||
+      getSopInstanceIdFromImageId(imageId) !== String(sopInstanceId)) return [];
+  const sources = getDisplaySetInstances(displaySet).filter(instance =>
+    String(getSopInstanceIdFromSource(instance) || '') === String(sopInstanceId));
+  const loaded = metaData.get?.('instance', imageId);
+  const loadedSOP = String(getSopInstanceIdFromSource(loaded) || '');
+  if (loaded && (!loadedSOP || loadedSOP === String(sopInstanceId))) sources.push(loaded);
+  const direct = metaData.get?.('ultrasoundRegions', imageId);
+  const raw = sources.flatMap(getUltrasoundRegionsFromSource);
+  raw.push(...(Array.isArray(direct) ? direct : getUltrasoundRegionsFromSource(direct)));
+  return raw.map(normalizeUltrasoundRegion).filter(Boolean);
+}
+
 function getVerifiedEchoAreaCalibration({
   displaySet, imageId, sopInstanceId, points,
 }: { displaySet: any; imageId: string; sopInstanceId: string; points: number[][] }) {
   if (!imageId || !sopInstanceId) return null;
-  const instances = getDisplaySetInstances(displaySet);
-  const source = instances.find(instance =>
-    String(getSopInstanceIdFromSource(instance) || '') === sopInstanceId
-  );
-  if (!source) return null;
-  const regions = getUltrasoundRegionsFromSource(source)
-    .map(normalizeUltrasoundRegion).filter(Boolean);
+  const regions = getEchoAreaCalibrationRegions({ displaySet, imageId, sopInstanceId });
   const areaCM2 = calibratedEchoAreaFromRegions({ points, imageId, regions });
   return areaCM2 == null ? null : { areaCM2, regions };
 }

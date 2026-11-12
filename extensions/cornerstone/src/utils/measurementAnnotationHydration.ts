@@ -14,7 +14,7 @@ import {
   buildSpectralDopplerDisplayText,
 } from './spectralDoppler';
 import { BOWEL_CURVED_LENGTH_MEASUREMENT_KIND } from '../../../extension-ar-measurements/src/utils/bowelMeasurementTargets';
-import { getSavedQuizEchoAreaDisplayInfo } from './quizEchoAreaCalibration';
+import { calculateCalibratedEchoAreaCM2, getSavedQuizEchoAreaDisplayInfo } from './quizEchoAreaCalibration';
 
 const CONTOUR_TOOL_NAMES = new Set(['SplineROI', 'PlanarFreehandROI', 'LivewireContour']);
 const ULTRASOUND_DIRECTIONAL_TOOL_NAME = 'UltrasoundDirectionalTool';
@@ -591,6 +591,7 @@ function hasCornerstoneCachedStatsShape(cachedStats) {
 }
 
 function finiteNumberOrNull(value) {
+  if (value == null || (typeof value === 'string' && !value.trim())) return null;
   const numberValue = Number(value);
   return Number.isFinite(numberValue) ? numberValue : null;
 }
@@ -653,6 +654,7 @@ function getSavedRightHeartQuizContourMetadata(savedAnnotation: any = {}) {
 }
 
 function isSavedQuizAreaContour(savedAnnotation: any = {}) {
+  if (getSavedVolumeContourMetadata(savedAnnotation).measurementKind === 'lvSimpsonSlot') return true;
   if (getSavedRightHeartQuizContourMetadata(savedAnnotation).measurementKind) return true;
   const la = savedAnnotation?.laVolume || savedAnnotation?.measurements?.laVolume || {};
   const kind = String(savedAnnotation?.measurementKind ||
@@ -665,6 +667,17 @@ function isSavedQuizAreaContour(savedAnnotation: any = {}) {
 
 function getSavedQuizAreaCM2(savedAnnotation: any = {}) {
   if (!isSavedQuizAreaContour(savedAnnotation)) return null;
+  const volume = getSavedVolumeContourMetadata(savedAnnotation);
+  if (volume.measurementKind === 'lvSimpsonSlot') {
+    // Guided EF already stores its verified physical contour in millimetres.
+    // Native ROI area can be null (or zero) on restore; it is not that source.
+    const geometry = volume.lvSimpson;
+    const controls = getSavedLVSimpsonControlPoints(savedAnnotation);
+    const physical = geometry?.calibratedContourPoints;
+    if (geometry?.calibrationError || !controls || !Array.isArray(physical) ||
+        physical.length !== controls.length) return null;
+    return calculateCalibratedEchoAreaCM2(physical);
+  }
   const measurements = savedAnnotation?.measurements || {};
   const physical = getSavedQuizEchoAreaDisplayInfo(
     measurements.area, measurements.areaUnit
@@ -838,6 +851,11 @@ function getSavedContourDisplayText(savedAnnotation, referencedImageId = '') {
 
   if (isSavedQuizAreaContour(savedAnnotation)) {
     const areaCM2 = getSavedQuizAreaCM2(savedAnnotation);
+    const volume = getSavedVolumeContourMetadata(savedAnnotation);
+    if (volume.measurementKind === 'lvSimpsonSlot') {
+      const slot = String(volume.lvSimpson?.slot || 'EF contour').replace('_', ' ');
+      return [areaCM2 == null ? `${slot}: area unavailable` : `${slot}: ${areaCM2.toFixed(2)} cm²`];
+    }
     return areaCM2 == null ? [] : [`${areaCM2.toFixed(2)} cm²`];
   }
 
@@ -874,7 +892,8 @@ function installSavedContourTextOverrideForViewport({ viewport, viewportId = '',
   const toolGroup = getToolGroupForViewportSafe(viewport, viewportId);
   const toolInstance = toolGroup?.getToolInstance?.(toolName);
 
-  if (!toolInstance || toolInstance.__arSavedContourTextOverrideInstalled) {
+  if (!toolInstance ||
+      (toolInstance.configuration?.getTextLines as any)?.__arSavedContourTextOverride === true) {
     return;
   }
 
@@ -915,12 +934,13 @@ function installSavedContourTextOverrideForViewport({ viewport, viewportId = '',
     },
   };
 
+  (nextConfiguration.getTextLines as any).__arSavedContourTextOverride = true;
+
   // Set both. Some Cornerstone versions mutate through the tool group; others
   // read directly from the existing tool instance.
   toolInstance.configuration = nextConfiguration;
   toolGroup?.setToolConfiguration?.(toolName, nextConfiguration, true);
 
-  toolInstance.__arSavedContourTextOverrideInstalled = true;
 }
 
 function applySavedContourDisplayTextOverride({

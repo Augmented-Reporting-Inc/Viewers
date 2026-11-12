@@ -50,6 +50,7 @@ function sourceContext(annotations: any[]) {
     getMeasurementAnnotationId:(m: any)=>m.uid || m.annotationUID,
     cornerstoneTools:{annotation:{state:{getAnnotation:(id: string)=>annotations.find(a=>a.annotationUID === id)}}},
     getQuizEchoAreaSourceMetadata,calibrateUSContourPoints,calculateCalibratedEchoAreaCM2,
+    getAllCornerstoneViewerAnnotations:()=>annotations,getEchoAreaCalibrationRegions:()=>[],
     getSplinePersistence,compactOversampledSpline,
     isViewerContourTool:()=>true,parseLVTraceLabel:()=>null,
     getLVSimpsonGeometry:()=>null,getLAVolumeGeometry:()=>null,getSpectralDopplerGeometry:()=>null,
@@ -63,7 +64,7 @@ function sourceContext(annotations: any[]) {
     getMeasurementDisplayText:()=>[],normalizeDisplayTextUnits:(text: any)=>text,
     getImagePixelSpacingMMForMeasurement:()=>null,
   });
-  for (const name of ['calibratedEchoAreaFromRegions','getCurrentViewerMeasurementSnapshot',
+  for (const name of ['parseDicomWebIdsFromReferencedImageId','getCornerstoneEchoAreaMeasurementFallback','calibratedEchoAreaFromRegions','getCurrentViewerMeasurementSnapshot',
     'getMeasurementStats','finiteNumberOrNull','buildContourMeasurementPayload','serializeViewerMeasurement']) loadFunction(name,context);
   return context;
 }
@@ -115,4 +116,50 @@ test('edited and out-of-region contours cannot reuse an old saved area', () => {
   live = context.getCurrentViewerMeasurementSnapshot(service)[0];
   expect(live.measurements.area).toBeNull();
   expect(context.buildContourMeasurementPayload(live,{measurements:{area:90,areaUnit:'cm²'}}).area).toBeNull();
+});
+
+
+test('native RV acquisition is available before OHIF creates any measurement entry', () => {
+  const ed = makeAnnotation('RV_ED',1,40), es = makeAnnotation('RV_ES',2,20);
+  const context = sourceContext([ed,es]);
+  const emptyService = {getMeasurements:()=>[]};
+  context.getAllCornerstoneViewerAnnotations = () => [ed,es];
+  const snapshot = context.getCurrentViewerMeasurementSnapshot(emptyService);
+  expect(snapshot).toHaveLength(2);
+  expect(getViewerQuizCompositeStatus('rvFAC',snapshot)).toMatchObject({
+    complete:true,value:50,phaseValues:{RV_ED:8,RV_ES:4},
+  });
+});
+
+
+test('RV source can calibrate from exact image metadata when display-set instances lack US regions', () => {
+  const ed = makeAnnotation('RV_ED',1,40), es = makeAnnotation('RV_ES',2,20);
+  delete ed.data.echoArea.calibrationRegions; delete es.data.echoArea.calibrationRegions;
+  const context = sourceContext([ed,es]);
+  const region = {RegionLocationMinX0:0,RegionLocationMinY0:0,
+    RegionLocationMaxX1:100,RegionLocationMaxY1:100,
+    PhysicalUnitsXDirection:3,PhysicalUnitsYDirection:3,PhysicalDeltaX:0.1,PhysicalDeltaY:0.1};
+  context.metaData = {get:(module: string) => module === 'instance'
+    ? {SOPInstanceUID:'sop',SequenceOfUltrasoundRegions:[region]}
+    : module === 'imagePlaneModule' ? {columnPixelSpacing:1,rowPixelSpacing:1} : null};
+  context.getSopInstanceIdFromImageId = (image: string)=>image.match(/instances\/([^/]+)/)?.[1];
+  for (const name of ['readRawDicomValue','readDicomValue','readDicomNumber','getDicomSequenceValues',
+    'normalizePhysicalUnitCode','getPhysicalUnitScaleToMM','getDisplaySetInstances','getSopInstanceIdFromSource',
+    'getUltrasoundRegionsFromSource','normalizeUltrasoundRegion','getEchoAreaCalibrationRegions']) loadFunction(name,context);
+  const snapshot = context.getCurrentViewerMeasurementSnapshot({getMeasurements:()=>[]});
+  expect(getViewerQuizCompositeStatus('rvFAC',snapshot)).toMatchObject({complete:true,value:50});
+  expect(snapshot[0].echoArea.calibrationRegions[0]).toMatchObject({column:1,row:1});
+  expect(context.getEchoAreaCalibrationRegions({displaySet:null,
+    imageId:ed.metadata.referencedImageId,sopInstanceId:'different-sop'})).toHaveLength(0);
+});
+
+
+test('native RV fallback excludes rubric overlays and mismatched image identity', () => {
+  const source = makeAnnotation('RV_ED',1), context = sourceContext([source]);
+  expect(context.getCornerstoneEchoAreaMeasurementFallback({...source,
+    annotationUID:'ar-viewer-quiz-rubric-q'})).toBeNull();
+  expect(context.getCornerstoneEchoAreaMeasurementFallback({...source,
+    metadata:{...source.metadata,arMeasurementWorkflow:'viewerQuizGoldDisplay'}})).toBeNull();
+  expect(context.getCornerstoneEchoAreaMeasurementFallback({...source,
+    metadata:{...source.metadata,SOPInstanceUID:'wrong-sop'}})).toBeNull();
 });

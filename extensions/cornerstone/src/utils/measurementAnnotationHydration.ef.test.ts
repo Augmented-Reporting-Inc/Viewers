@@ -280,3 +280,50 @@ test('reopening an RV spline repeatedly keeps original controls separate from di
     delete tools.SplineROITool.hydrate;
   }
 });
+
+
+test('reopened EF uses saved physical calibration instead of converting a null native area to zero', () => {
+  const tools = require('@cornerstonejs/tools');
+  const cm = [[0,0,0],[20,0,0],[40,0,0],[40,20,0],[20,20,0],[0,20,0]];
+  const contour = {...saved(slots[0]),uid:'ef-null-area',annotationId:'ef-null-area',
+    measurements:{area:null,areaUnit:'mm²'},
+    lvSimpson:{...saved(slots[0]).lvSimpson,calibratedContourPoints:cm,originalContourPoints:cm,calibrationError:null}};
+  const hydrated = hydrateSavedViewerAnnotationForViewport({annotation:contour,
+    viewport:{getCurrentImageId:()=>image('sop-a',4)},viewportId:'viewport',selectAnnotation:false});
+  expect(hydrated.data.cachedStats['imageId:' + image('sop-a',4)])
+    .toMatchObject({area:8,areaUnit:'cm²'});
+  expect(hydrated.data.arSavedMeasurementDisplayText.join(' ')).toContain('8.00 cm²');
+  expect(hydrated.data.arSavedMeasurementDisplayText.join(' ')).not.toContain('0.00 mm');
+});
+
+
+test('saved EF display hook is restored when viewport navigation replaces tool configuration', () => {
+  const tools = require('@cornerstonejs/tools');
+  const tool = {configuration:{getTextLines:()=>['0.00 mm²']}};
+  tools.ToolGroupManager.getToolGroupForViewport.mockReturnValue({getToolInstance:()=>tool,
+    setToolConfiguration:(_name: string,config: any)=>{tool.configuration=config;}});
+  const physical = [[0,0,0],[20,0,0],[40,0,0],[40,20,0],[20,20,0],[0,20,0]];
+  const source = {...saved(slots[0]),uid:'ef-label-hook',annotationId:'ef-label-hook',
+    measurements:{area:null,areaUnit:'mm²'},lvSimpson:{...saved(slots[0]).lvSimpson,
+      originalContourPoints:physical,calibratedContourPoints:physical}};
+  try {
+    for (let i=0;i<2;i++) {
+      tool.configuration = {getTextLines:()=>['0.00 mm²']};
+      const restored = hydrateSavedViewerAnnotationForViewport({annotation:source,
+        viewport:{id:'viewport',getCurrentImageId:()=>image('sop-a',4)},viewportId:'viewport',selectAnnotation:false});
+      expect(tool.configuration.getTextLines(restored.data)).toEqual(['A4C ED: 8.00 cm²']);
+    }
+  } finally {
+    tools.ToolGroupManager.getToolGroupForViewport.mockReturnValue(null);
+  }
+});
+
+test('missing EF physical calibration is shown as unavailable rather than a zero area', () => {
+  const source = {...saved(slots[0]),uid:'ef-missing-calibration',annotationId:'ef-missing-calibration',
+    measurements:{area:null,areaUnit:'mm²'},lvSimpson:{...saved(slots[0]).lvSimpson,
+      calibratedContourPoints:null,calibrationError:'ultrasound_regions_missing'}};
+  const restored = hydrateSavedViewerAnnotationForViewport({annotation:source,
+    viewport:{getCurrentImageId:()=>image('sop-a',4)},viewportId:'viewport',selectAnnotation:false});
+  expect(restored.data.arSavedMeasurementDisplayText).toEqual(['A4C ED: area unavailable']);
+  expect(restored.data.cachedStats['imageId:' + image('sop-a',4)]?.area).toBeUndefined();
+});
