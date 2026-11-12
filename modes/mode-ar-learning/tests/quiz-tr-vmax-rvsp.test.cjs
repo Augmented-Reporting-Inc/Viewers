@@ -58,3 +58,25 @@ test('EF gold summary no longer repeats the calculated answer or gold scalar', (
   assert.match(panel, /\{renderCompositeCalculatedStatus\(quiz, question\)\}/);
   assert.doesNotMatch(panel, /<div className="border-t border-gray-700 pt-2 text-xs text-emerald-100">\s*Saved result:/);
 });
+
+test('learner retries the exact calibrated TR Vmax annotation before IVC RVSP linking', () => {
+  assert.match(panel, /const kind = cleanString\(plainObject\(question\.answerConfig\)\.measurementKind\);\s*if \(kind === 'trVmax'\)/);
+  assert.match(panel, /autoSpectralLearnerCaptureInFlightRef\.current\.has\(captureId\)/);
+  assert.match(panel, /\[100, 350, 900, 1800, 3200\]/);
+  assert.match(panel, /captureSelectedMeasurementAnswer\(quiz, question, \{\s*measurementId, silent: true/);
+  assert.match(panel, /lastActivatedQuestionRef\.current !== key/);
+  assert.match(panel, /TR Vmax not recorded/);
+  assert.match(panel, /Saved learner TR Vmax:/);
+  assert.match(panel, /Available for IVC \/ RVSP calculation/);
+  assert.match(panel, /targetHasNavigationIdentity\(value\?\.viewerTarget\)/);
+  assert.match(panel, /'ivcCollapsibility'\)\s*\{[\s\S]*?setAnswer\(quiz\.quizKey, question/);
+});
+
+test('learner TR Vmax uses only a calibrated annotation, never a typed scalar or gold', () => {
+  assert.match(panel, /cleanString\(plainObject\(question\.answerConfig\)\.measurementKind\) === 'trVmax'\s*\? null :/);
+  assert.match(panel, /Complete a calibrated TR spectral peak measurement/);
+  assert.match(panel, /priorTR\.questionKey/);
+  assert.match(panel, /trAnswer\?\.sourceAnnotationId/);
+  assert.match(commands, /directional\?\.acquisitionMode === 'spectralVmax'/);
+  assert.match(commands, /directional\?\.reportUnit === 'm\/s'/);
+});
