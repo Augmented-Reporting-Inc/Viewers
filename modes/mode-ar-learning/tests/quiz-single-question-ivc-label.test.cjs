@@ -67,7 +67,7 @@ test('learner question dropdown shows answer status without exposing educator go
   assert.match(panel, /id="quiz-learner-question-select"/);
   assert.match(panel, /function isLearnerQuestionAnswered\(/);
   assert.match(panel, /isLearnerQuestionAnswered\(\s*question, answersByQuizKey\?\.\[quiz\.quizKey\]/);
-  assert.match(panel, /'✓ Answered' : '○ Unanswered'/);
+  assert.match(panel, /'✓ ' : ''/);
   assert.doesNotMatch(panel, /An assigned target opens its/);
   assert.doesNotMatch(panel, /'Opens target instance' : 'Opens target'/);
 });

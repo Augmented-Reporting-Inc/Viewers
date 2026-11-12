@@ -1,3 +1,4 @@
+import { getSplinePersistence } from '../splinePersistence';
 import SUPPORTED_TOOLS from './constants/supportedTools';
 import getSOPInstanceAttributes from './utils/getSOPInstanceAttributes';
 import { utils } from '@ohif/core';
@@ -68,6 +69,7 @@ const SplineROI = {
       SOPInstanceUID,
       FrameOfReferenceUID,
       points: data.contour.polyline,
+      ...getSplinePersistence({ toolName }, annotation),
       textBox: data.handles.textBox,
       metadata,
       frameNumber,

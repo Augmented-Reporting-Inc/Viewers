@@ -1097,6 +1097,14 @@ function getLearnerHemodynamicQuizReviewRows(
   return result;
 }
 
+function getLearnerHemodynamicTransferEvidence(quiz: QuizDefinition, answers: Record<string, any>) {
+  const find = (kind: string) => quiz.questions.find(question =>
+    question.type === 'measurementNumeric' &&
+    cleanString(plainObject(question.answerConfig).measurementKind) === kind);
+  const tr = find('trVmax'), ivc = find('ivcCollapsibility');
+  return { trVmax: tr ? answers[tr.questionKey] : null, ivc: ivc ? answers[ivc.questionKey] : null };
+}
+
 function hasRequiredMissing(quiz: QuizDefinition, quizAnswers = {}) {
   return (quiz.questions || []).some(question => {
     if (!question.required) {
@@ -4179,12 +4187,6 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
 
   const applyQuizMeasurementReview = async () => {
     if (!quizMeasurementReview || quizMeasurementApplying) return;
-    // An informational quiz-only review has no clinical report fields to
-    // overwrite. The subsequent quiz response save performs persistence.
-    if (!quizMeasurementReview.rows?.length) {
-      finishQuizMeasurementReview(true);
-      return;
-    }
     const fields = Array.from(new Set(
       quizMeasurementReview.rows
         .filter(row => quizMeasurementSelectedRows.includes(row.key))
@@ -4194,9 +4196,21 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     try {
       const result = await Promise.resolve(commandsManager.runCommand(
         'saveViewerMeasurementsForActiveStudy',
-        { domain: 'echo', scoringIntent: 'draft', educationAttemptIntent: 'draft', reportFieldNames: fields }
+        { domain: 'echo', scoringIntent: 'draft', educationAttemptIntent: 'draft', reportFieldNames: fields,
+          educationQuizHemodynamics: quizMeasurementReview.educationQuizHemodynamics,
+          suppressSuccessNotification: true }
       ));
       if (!result || result?.ok === false) throw new Error('Measurement save did not succeed.');
+      const fieldsByEvidence = { 'quiz-tr': 'TRVel', 'quiz-rap': 'RASP', 'quiz-rvsp': 'RVSP' };
+      for (const row of quizMeasurementReview.quizEvidenceRows || []) {
+        const field = fieldsByEvidence[row.key.split(':')[0]];
+        if (!row.recorded || !fields.includes(field)) continue;
+        const saved = result.seriesDoc?.[field];
+        if (saved == null || !Number.isFinite(Number(saved)) ||
+            Math.abs(Number(saved) - Number.parseFloat(row.display)) > 0.01) {
+          throw new Error(`AR did not confirm the selected ${row.label} value. Please retry.`);
+        }
+      }
       finishQuizMeasurementReview(true);
     } catch (error) {
       console.error('[CaseQuestionsPanel] measurement save failed:', error);
@@ -4206,7 +4220,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         type: 'error',
         duration: 5000,
       });
-      finishQuizMeasurementReview(false);
+      // Keep the review and selections open so the learner can retry.
     } finally {
       setQuizMeasurementApplying(false);
     }
@@ -4216,31 +4230,30 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     quiz: QuizDefinition, quizAnswers: Record<string, any>
   ): Promise<void> {
     const quizEvidenceRows = getLearnerHemodynamicQuizReviewRows(quiz, quizAnswers);
+    const educationQuizHemodynamics = getLearnerHemodynamicTransferEvidence(quiz, quizAnswers);
     await ensureViewerQuizSaveSeriesDoc();
     const preview = await Promise.resolve(commandsManager.runCommand(
       'saveViewerMeasurementsForActiveStudy',
-      { domain: 'echo', scoringIntent: 'draft', educationAttemptIntent: 'draft', previewOnly: true }
+      { domain: 'echo', scoringIntent: 'draft', educationAttemptIntent: 'draft', previewOnly: true, educationQuizHemodynamics }
     ));
     if (!preview?.previewOnly || preview?.isClinicalReportSave !== true) {
       throw new Error('Measurement review is unavailable for this learner report. Answers were not saved.');
     }
+    if (quizEvidenceRows.some(row => row.recorded) && preview.educationQuizHemodynamicsSupported !== true) {
+      throw new Error('AR requires the learner hemodynamic review update before TR Vmax, RAP and RVSP can be transferred.');
+    }
+    const fieldForEvidence = { 'quiz-tr': 'TRVel', 'quiz-rap': 'RASP', 'quiz-rvsp': 'RVSP' };
+    if (quizEvidenceRows.some(row => row.recorded &&
+      !preview.educationQuizHemodynamicFields?.includes(fieldForEvidence[row.key.split(':')[0]]))) {
+      throw new Error('AR could not verify the learner TR/IVC measurement sources for transfer. Review the source measurements and retry.');
+    }
     const rows = buildClinicalReportReviewRows(preview);
     if (!rows.length && preview?.measurementAnnotationsChanged === false &&
         !quizEvidenceRows.length) return;
-    // If annotations changed without mapped report fields, save annotations explicitly.
-    if (!rows.length) {
-      const result = await Promise.resolve(commandsManager.runCommand(
-        'saveViewerMeasurementsForActiveStudy',
-        { domain: 'echo', scoringIntent: 'draft', educationAttemptIntent: 'draft', reportFieldNames: [] }
-      ));
-      if (!result || result?.ok === false) {
-        throw new Error('Viewer annotations could not be saved.');
-      }
-      if (!quizEvidenceRows.length) return;
-    }
     setQuizMeasurementSelectedRows(rows.filter(row => row.changed).map(row => row.key));
     setQuizMeasurementReview({
       rows, derivedConsequences: preview?.derivedConsequences, quizEvidenceRows,
+      educationQuizHemodynamics, educationWorkflow: true,
     });
     const approved = await new Promise<boolean>(resolve => {
       quizMeasurementResolveRef.current = resolve;
@@ -6410,8 +6423,8 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                         </div>
             )}
 
-          {!bowelSet && (linkedRVSP || ['rvFAC', 'laVolumeBiplane',
-            'laVolumeBiplaneDisks', 'ivcCollapsibility', 'lvSimpsonEF'].includes(
+          {!bowelSet && (linkedRVSP || ['laVolumeBiplane',
+            'laVolumeBiplaneDisks', 'lvSimpsonEF'].includes(
               cleanString(plainObject(question.answerConfig).measurementKind)
             )) ? <button
             type="button"
@@ -6420,14 +6433,22 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
             onClick={event => {
               event.preventDefault();
               event.stopPropagation();
-              captureSelectedMeasurementAnswer(quiz, question);
+              if (cleanString(plainObject(question.answerConfig).measurementKind) === 'lvSimpsonEF') {
+                void runViewerCommand(commandsManager, 'activateViewerQuizMeasurementTool', {
+                  measurementKind: 'lvSimpsonEF', questionKey: question.questionKey,
+                  efContourTargets: getCompleteEFContourFrameTargets(question.answerConfig),
+                });
+              } else {
+                void captureSelectedMeasurementAnswer(quiz, question);
+              }
             }}
           >
             {captureInProgress
               ? 'Capturing…'
               : linkedRVSP
                 ? 'Accept IVC / RAP / RVSP measurement'
-              : 'Recalculate from measured contours'}
+              : cleanString(plainObject(question.answerConfig).measurementKind) === 'lvSimpsonEF'
+                ? 'Open EF panel' : 'Recalculate from measured contours'}
           </button> : null}
 
           {cleanString(
@@ -7952,7 +7973,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                       value={`${quiz.quizKey}:${question.questionKey}`}>
                       {index + 1}. {isLearnerQuestionAnswered(
                         question, answersByQuizKey?.[quiz.quizKey]?.[question.questionKey]
-                      ) ? '✓ Answered' : '○ Unanswered'} — {question.title || question.prompt || question.questionKey}
+                      ) ? '✓ ' : ''} {question.title || question.prompt || question.questionKey}
                     </option>
                   ))}
                 </optgroup>

@@ -254,3 +254,29 @@ describe('saved gold comparison overlays retain measured units', () => {
     }
   });
 });
+
+test('reopening an RV spline repeatedly keeps original controls separate from display samples', () => {
+  const tools = require('@cornerstonejs/tools');
+  const controls = Array.from({length:12}, (_,i) => [Math.cos(i),Math.sin(i),0]);
+  const sampled = Array.from({length:240}, (_,i) => [Math.cos(i/20),Math.sin(i/20),0]);
+  const savedRV = {...saved(slots[0]),uid:'rv-controls',annotationId:'rv-controls',
+    lvSimpson:null,measurementKind:'echoAreaSlot',echoArea:{slot:'RV_ED'},
+    points:sampled,splineControlPoints:controls,splineType:'CATMULLROM'};
+  tools.SplineROITool.hydrate = jest.fn((_viewport, handles, options) => {
+    tools.annotation.state.addAnnotation({annotationUID:options.annotationUID,
+      metadata:{},data:{handles:{points:handles},spline:{type:options.splineType}}});
+  });
+  try {
+    for (let reopen = 0; reopen < 4; reopen++) {
+      hydrateSavedViewerAnnotationForViewport({annotation:savedRV,
+        viewport:{getCurrentImageId:()=>image('sop-a',4)},viewportId:'viewport',selectAnnotation:false});
+      const restored = tools.annotation.state.getAnnotation('rv-controls');
+      expect(restored.data.handles.points).toEqual(controls);
+      expect(restored.data.contour.polyline).toEqual(sampled);
+    }
+    expect(tools.SplineROITool.hydrate).toHaveBeenCalledTimes(1);
+    expect(tools.SplineROITool.hydrate.mock.calls[0][1]).toHaveLength(12);
+  } finally {
+    delete tools.SplineROITool.hydrate;
+  }
+});

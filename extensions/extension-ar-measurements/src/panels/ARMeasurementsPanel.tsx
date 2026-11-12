@@ -1297,8 +1297,9 @@ export function ClinicalReportMeasurementReviewModal({
                 Quiz measurements — saved with the learner's AR quiz response
               </div>
               <div className="mt-1 text-xs text-gray-300">
-                These are educational answer values, not clinical report-field changes.
-                Only the selectable report rows below can update the clinical report.
+                {review.educationWorkflow
+                  ? 'Select the applicable TR Vmax, RAP and RVSP rows below to apply them to your AR learner report.'
+                  : 'Quiz answer evidence is saved with the learner response.'}
               </div>
               <div className="mt-2 space-y-1 text-sm">
                 {review.quizEvidenceRows.map((row: any) => (

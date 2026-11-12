@@ -84,14 +84,14 @@ test('learner TR Vmax uses only a calibrated annotation, never a typed scalar or
   assert.match(commands, /directional\?\.reportUnit === 'm\/s'/);
 });
 
-test('learner review displays quiz TR/RAP/RVSP separately from clinical report proposals', () => {
+test('learner review offers TR/RAP/RVSP transfer to the AR learner report', () => {
   assert.match(panel, /function getLearnerHemodynamicQuizReviewRows\(/);
   assert.match(panel, /confirmReportOwnedMeasurementSave\(quiz, quizAnswers\)/);
-  assert.match(panel, /quizEvidenceRows,\s*\}/);
+  assert.match(panel, /quizEvidenceRows,\s*educationQuizHemodynamics/);
   assert.match(reviewModal, /Quiz measurements — saved with the learner's AR quiz response/);
-  assert.match(reviewModal, /not clinical report-field changes/);
+  assert.match(reviewModal, /Select the applicable TR Vmax, RAP and RVSP rows below/);
   assert.match(reviewModal, /review\.quizEvidenceRows\.map/);
-  assert.match(reviewModal, /Only the selectable report rows below can update the clinical report/);
+  assert.match(reviewModal, /apply them to your AR learner report/);
 });
 
 test('quiz save refuses incomplete TR and verifies AR server readback before success', () => {

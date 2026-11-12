@@ -1,3 +1,4 @@
+import { getSavedSplineType } from './splinePersistence';
 import { metaData } from '@cornerstonejs/core';
 import { getSavedVolumeContourMetadata, getSavedLVSimpsonControlPoints, resolveSavedLVSimpsonHydrationImage } from './savedVolumeContourMetadata';
 import { annotation as csToolsAnnotation, ToolGroupManager } from '@cornerstonejs/tools';
@@ -1168,6 +1169,9 @@ function getSavedContourHandlePoints(annotation: any = {}, points = []) {
   const savedEFControls = getSavedLVSimpsonControlPoints(annotation);
   if (savedEFControls) return savedEFControls;
 
+  if (annotation?.splineControlPoints?.length >= 3) {
+    return cloneAnnotationPoints(annotation.splineControlPoints);
+  }
   const clonedPoints = cloneAnnotationPoints(points);
 
   if (getSavedContourClosed(annotation)) {
@@ -1525,6 +1529,12 @@ function hydrateWithToolClass({
     const existing = csToolsAnnotation.state.getAnnotation?.(annotationUID);
 
     if (existing) {
+      if (toolName === 'SplineROI' && existing.data?.spline?.type !== getSavedSplineType(savedAnnotation)) {
+        const group = ToolGroupManager.getToolGroupForViewport?.(viewportId);
+        group?.getToolInstance?.(toolName)?.createSplineObjectFromType?.(
+          existing, getSavedSplineType(savedAnnotation)
+        );
+      }
       return patchHydratedAnnotationFromSaved({
         hydrated: existing,
         fallback: fallbackAnnotation,
@@ -1542,8 +1552,10 @@ function hydrateWithToolClass({
             viewplaneNormal: getSavedAnnotationMetadataVector(savedAnnotation, 'viewPlaneNormal'),
             viewUp: getSavedAnnotationMetadataVector(savedAnnotation, 'viewUp'),
           })
-        : ToolClass.hydrate(viewportId, points, {
+        : ToolClass.hydrate(viewportId,
+            toolName === 'SplineROI' ? getSavedContourHandlePoints(savedAnnotation, points) : points, {
             annotationUID,
+            ...(toolName === 'SplineROI' ? { splineType: getSavedSplineType(savedAnnotation) } : {}),
           });
 
     return patchHydratedAnnotationFromSaved({

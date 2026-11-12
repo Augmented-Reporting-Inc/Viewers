@@ -1,3 +1,4 @@
+import { getSplinePersistence, compactOversampledSpline } from './utils/splinePersistence';
 import {
   getEnabledElement,
   metaData,
@@ -3073,7 +3074,10 @@ function serializeViewerMeasurement(measurement, domain, existingAnnotation = nu
     referenceSeriesUID: measurement.referenceSeriesUID,
     referencedImageId: measurement.referencedImageId,
     frameNumber,
-    points: measurement.points,
+    points: measurement.toolName === 'SplineROI' && isEchoArea
+      ? compactOversampledSpline(measurement.points) : measurement.points,
+    ...getSplinePersistence(measurement,
+      cornerstoneTools.annotation.state.getAnnotation?.(measurement.uid)),
     viewPlaneNormal: getViewerMeasurementMetadataVector(
       measurement,
       existingAnnotation,
@@ -13195,6 +13199,19 @@ function commandsModule({
       };
     },
     setViewerQuizMeasurementContext: ({ measurementKind = '' } = {}) => {
+      if (activeQuizMeasurementKind !== String(measurementKind || '').trim()) {
+        // A question switch ends the previous acquisition before the next tool
+        // activates. Otherwise EF/LA can retain primary mouse ownership while
+        // TR or an IVC caliper is being started in the new question.
+        clearEchoAreaWorkflowListeners();
+        clearUltrasoundDirectionalWorkflowListeners();
+        if (activeLVSimpsonWorkflowSessionId) {
+          clearLVSimpsonWorkflowIfCurrent(activeLVSimpsonWorkflowSessionId);
+        }
+        if (activeLAVolumeWorkflowSessionId) {
+          clearLAVolumeWorkflowIfCurrent(activeLAVolumeWorkflowSessionId);
+        }
+      }
       setQuizToolbarMeasurementKind(measurementKind);
       return { ok: true, measurementKind: activeQuizMeasurementKind };
     },
@@ -17253,6 +17270,7 @@ function commandsModule({
         quizSpatialEvidenceByAnnotationId = null,
         previewOnly = false,
         reportFieldNames = null,
+        educationQuizHemodynamics = null,
         suppressSuccessNotification = false,
       } = {}) => {
         const { measurementService, uiNotificationService } = servicesManager.services;
@@ -17786,6 +17804,7 @@ function commandsModule({
                   accessType: 'update',
                   viewerMeasurementIntent: 'clinical-report',
                   viewerMeasurementReviewOnly: true,
+                  ...(isReportOwnedMeasurementSave ? { educationQuizHemodynamics } : {}),
                   viewerReportFieldUpdates: clinicalReportFieldUpdates,
                   MeasurementAnnotations: nextMeasurementAnnotations,
                   scoringIntent: shouldSubmitForScore ? 'score-attempt' : 'draft',
@@ -17844,6 +17863,7 @@ function commandsModule({
               ...(shouldSyncReportFields
                 ? {
                     viewerMeasurementIntent: 'clinical-report',
+                    ...(isReportOwnedMeasurementSave ? { educationQuizHemodynamics } : {}),
                     viewerReportFieldUpdates: clinicalReportFieldUpdates,
                     ...(clinicalReportApprovedFieldNames !== null
                       ? { viewerMeasurementApprovedFields: clinicalReportApprovedFieldNames }
@@ -17892,7 +17912,8 @@ function commandsModule({
             );
 
             if (!response.ok) {
-              throw new Error(`Save failed: ${response.status}`);
+              const failure = await response.json().catch(() => null);
+              throw new Error(`Save failed (${response.status}): ${failure?.errorMsg || failure?.error || response.statusText}`);
             }
 
             const updatedSeries = await response.json().catch(() => null);
