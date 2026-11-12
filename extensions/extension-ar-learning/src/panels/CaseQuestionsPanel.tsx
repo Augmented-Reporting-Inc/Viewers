@@ -2280,13 +2280,23 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       // Retain unsaved edits only while the draft revision on the server is unchanged.
       // A save from another viewer/tab must not be hidden by stale in-memory questions.
       const serverUpdatedAt = String(selectedDefinition?.updatedAt || '');
+      const serverKeys = nextQuestions.map(item => cleanString(item.questionKey));
+      const sessionQuestions = Array.isArray(sessionState?.authoringQuestions)
+        ? sessionState.authoringQuestions as QuizQuestion[] : [];
+      const sessionKeys = sessionQuestions.map(item => cleanString(item.questionKey));
+      // A timestamp match does not prove a locally cached question list is
+      // current. A new LAV question must never disappear when the viewer opens.
+      const identicalQuestionKeys = serverKeys.length === sessionKeys.length &&
+        new Set(serverKeys).size === serverKeys.length &&
+        new Set(sessionKeys).size === sessionKeys.length &&
+        serverKeys.every((key, index) => !!key && key === sessionKeys[index]);
       const questionsToUse =
         definitionId &&
         serverUpdatedAt &&
         sessionState?.authoringDefinitionId === definitionId &&
         sessionState?.authoringServerUpdatedAt === serverUpdatedAt &&
-        Array.isArray(sessionState.authoringQuestions)
-          ? (sessionState.authoringQuestions as QuizQuestion[])
+        identicalQuestionKeys
+          ? sessionQuestions
           : nextQuestions;
 
       // Restored session edits are still unsaved until FormAPI confirms a save.
@@ -4535,9 +4545,23 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
   ) {
     // Keep the save source synchronous. Capturing gold and pressing Save
     // immediately must not serialize the previous React render's questions.
-    const nextQuestions = authoringQuestionsRef.current.map(question =>
+    const before = authoringQuestionsRef.current;
+    const matches = before.filter(item => item.questionKey === questionKey);
+    if (matches.length !== 1 ||
+        new Set(before.map(item => item.questionKey)).size !== before.length) {
+      uiNotificationService.show({
+        title: 'Quiz Authoring', type: 'error', duration: 6500,
+        message: 'Question identity is ambiguous. Changes were not applied; reload the draft.',
+      });
+      return;
+    }
+    const nextQuestions = before.map(question =>
       question.questionKey === questionKey ? updater(question) : question
     );
+    if (nextQuestions.length !== before.length ||
+        nextQuestions.some((item, index) => item.questionKey !== before[index].questionKey)) {
+      throw new Error('A question edit attempted to modify question identity or count.');
+    }
     authoringQuestionsRef.current = nextQuestions;
     setAuthoringQuestions(nextQuestions);
     reportEducationChange('authoring');
@@ -5438,6 +5462,19 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       );
       if (!persistedDefinition || !Array.isArray(persistedDefinition.questions)) {
         throw new Error('Draft saved but its contents could not be verified in FormAPI. Refresh before publishing.');
+      }
+      // The readback must preserve every question, not just questions with
+      // completed composite gold. Reject a missing new LAV draft immediately.
+      const requestedKeys = questionsToSave.map(item => cleanString(item.questionKey));
+      const persistedKeys = persistedDefinition.questions.map(item =>
+        cleanString(item.questionKey));
+      if (requestedKeys.length !== persistedKeys.length ||
+          new Set(requestedKeys).size !== requestedKeys.length ||
+          new Set(persistedKeys).size !== persistedKeys.length ||
+          requestedKeys.some((key, index) => !key || key !== persistedKeys[index])) {
+        throw new Error(
+          'Draft readback changed question identities/count. Local questions were preserved; do not publish.'
+        );
       }
       const persistenceError = getCompositeGoldPersistenceError(
         questionsToSave, persistedDefinition.questions
@@ -7232,7 +7269,8 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
 
         {compositePhaseSlots.length > 0 ? (
           <div className="mt-2 rounded border border-slate-600 bg-slate-900/60 p-2">
-            <label className="flex items-center gap-2 text-xs font-semibold text-gray-100">
+            <label className="flex items-center gap-2 text-xs font-semibold text-gray-100"
+              onClick={event => event.stopPropagation()}>
               <input
                 type="checkbox"
                 checked={answerConfig.compositeFrameGuidanceEnabled === true}
