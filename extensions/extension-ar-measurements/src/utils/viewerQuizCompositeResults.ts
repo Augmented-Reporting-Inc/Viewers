@@ -215,6 +215,23 @@ export function resolveViewerQuizCompositeResult(
     unit: kind === 'lvSimpsonEF' || kind === 'rvFAC' || kind === 'ivcCollapsibility'
       ? '%' : kind === 'raArea' ? 'cm2' : 'mL',
     components,
+    // Save the independently calibrated per-contour LV long axes with the
+    // approved biplane EF result. A biplane EDV/ESV is not an individual
+    // contour area or a single-view volume: never invent those quantities.
+    ...(kind === 'lvSimpsonEF' && (result as any)?.slots ? {
+      derived: {
+        slotLongAxisMM: Object.fromEntries(
+          LV_SIMPSON_SLOT_ORDER.flatMap(slot => {
+            const geometry = (result as any).slots[slot];
+            const length = Number(geometry?.longAxisLengthMM);
+            return geometry?.complete === true &&
+              Number.isFinite(length) && length > 0 ? [[slot, length]] : [];
+          })
+        ),
+        edvML: (result as any).values?.edvML,
+        esvML: (result as any).values?.esvML,
+      },
+    } : {}),
     ...(kind === 'ivcCollapsibility' && result?.values ? {
       derived: {
         expirationDiameterMM: (result.values as any).expirationDiameterMM,
