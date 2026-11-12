@@ -1785,7 +1785,11 @@ function getDisplayInstanceFromTarget(target: any) {
   if (Number.isFinite(instanceIndex) && instanceIndex >= 0) {
     return `Instance ${instanceIndex + 1}`;
   }
-  return 'Instance unavailable';
+  // A valid DICOM SOP/frame may lack optional display InstanceNumber.
+  // Show a safe shortened source identifier instead of implying the actual
+  // saved DICOM target is unavailable.
+  const sop = cleanString(target?.sopInstanceUID || target?.SOPInstanceUID);
+  return sop ? 'SOP ' + sop.slice(-12) : 'Instance number unavailable';
 }
 
 function getViewerTargetSummary(target: any) {
@@ -3097,7 +3101,20 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
 
       // Length still activates immediately. Guided workflows are deferred
       // until the saved question target has been navigated into view.
-      if (!isGuidedQuizCompositeKind(measurementKind)) {
+      // Selecting an already-authored TR Vmax is a review action. Do not
+      // launch a fresh spectral workflow or display drawing instructions until
+      // the educator explicitly clicks the Vmax toolbar to replace the gold.
+      const existingTRGold = plainObject(
+        plainObject(question.answerConfig).goldMeasurement
+      );
+      const reviewSavedTR = authoringMode && measurementKind === 'trVmax' &&
+        existingTRGold.measurementKind === 'trVmax' &&
+        existingTRGold.unit === 'm/s' &&
+        Number.isFinite(Number(existingTRGold.value)) &&
+        Number(existingTRGold.value) > 0 &&
+        !!cleanString(existingTRGold.sourceAnnotationId) &&
+        targetHasNavigationIdentity(existingTRGold.viewerTarget);
+      if (!isGuidedQuizCompositeKind(measurementKind) && !reviewSavedTR) {
         const activationResult = await runViewerCommand(
           commandsManager,
           'activateViewerQuizMeasurementTool',
@@ -6961,7 +6978,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                 ) : null}
                 {savedGoldComponents.length > 0 ? (
                   <div className="border-t border-gray-700 pt-2 text-xs text-emerald-100">
-                    Saved result: {answerConfig.goldValue ?? plainObject(answerConfig.goldMeasurement).value ?? '—'} {answerConfig.unit || plainObject(answerConfig.goldMeasurement).unit || ''}
+                    <div className="font-semibold">Saved biplane measurements</div>
                     {(() => {
                       const derived = plainObject(plainObject(
                         plainObject(answerConfig.goldMeasurement).compositeResult
@@ -7303,7 +7320,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               </button>
             ) : null}
 
-            {!bowelSet && !['rvFAC', 'raArea', 'laVolumeBiplane', 'laVolumeBiplaneDisks', 'ivcCollapsibility'].includes(
+            {!bowelSet && !['lvSimpsonEF', 'rvFAC', 'raArea', 'laVolumeBiplane', 'laVolumeBiplaneDisks', 'ivcCollapsibility'].includes(
               cleanString(answerConfig.measurementKind)
             ) && (answerConfig.goldValue !== null &&
             typeof answerConfig.goldValue !== 'undefined' &&
