@@ -8,6 +8,9 @@ const panel = fs.readFileSync(path.join(repoRoot,
   'extensions/extension-ar-learning/src/panels/CaseQuestionsPanel.tsx'), 'utf8');
 const commands = fs.readFileSync(path.join(repoRoot,
   'extensions/cornerstone/src/commandsModule.ts'), 'utf8');
+const reviewModal = fs.readFileSync(path.join(repoRoot,
+  'extensions/extension-ar-measurements/src/panels/ARMeasurementsPanel.tsx'), 'utf8');
+
 const toolbar = fs.readFileSync(path.join(repoRoot,
   'modes/longitudinal/src/toolbarButtons.ts'), 'utf8');
 
@@ -79,4 +82,26 @@ test('learner TR Vmax uses only a calibrated annotation, never a typed scalar or
   assert.match(panel, /trAnswer\?\.sourceAnnotationId/);
   assert.match(commands, /directional\?\.acquisitionMode === 'spectralVmax'/);
   assert.match(commands, /directional\?\.reportUnit === 'm\/s'/);
+});
+
+test('learner review displays quiz TR/RAP/RVSP separately from clinical report proposals', () => {
+  assert.match(panel, /function getLearnerHemodynamicQuizReviewRows\(/);
+  assert.match(panel, /confirmReportOwnedMeasurementSave\(quiz, quizAnswers\)/);
+  assert.match(panel, /quizEvidenceRows,\s*\}/);
+  assert.match(reviewModal, /Quiz measurements — saved with the learner's AR quiz response/);
+  assert.match(reviewModal, /not clinical report-field changes/);
+  assert.match(reviewModal, /review\.quizEvidenceRows\.map/);
+  assert.match(reviewModal, /Only the selectable report rows below can update the clinical report/);
+});
+
+test('quiz save refuses incomplete TR and verifies AR server readback before success', () => {
+  assert.match(panel, /autoSpectralLearnerCaptureInFlightRef\.current/);
+  assert.match(panel, /getLearnerHemodynamicReadbackError\(/);
+  assert.match(panel, /result\?\.response\?\.answers/);
+  assert.match(panel, /if \(evidenceError\) throw new Error\(evidenceError\)/);
+  assert.match(panel, /getLearnerCompositePersistenceSources\(/);
+});
+
+test('EF progress panel omits redundant active-question capture sentence', () => {
+  assert.doesNotMatch(commands, /Cross-check EF = \(EDV - ESV\)/);
 });
