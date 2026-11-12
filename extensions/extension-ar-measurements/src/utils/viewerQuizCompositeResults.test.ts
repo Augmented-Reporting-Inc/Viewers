@@ -1,4 +1,4 @@
-import { boundEFQuizEvidencePoints, isViewerQuizCompositeReviewCurrent, resolveViewerQuizCompositeResult, resolveViewerQuizLVSimpsonForStudy, getViewerQuizCompositeStatus } from './viewerQuizCompositeResults';
+import { boundEFQuizEvidencePoints, calibratedLVContourAreaCM2, isViewerQuizCompositeReviewCurrent, resolveViewerQuizCompositeResult, resolveViewerQuizLVSimpsonForStudy, getViewerQuizCompositeStatus } from './viewerQuizCompositeResults';
 
 describe('viewer quiz composite result evidence', () => {
   it('rejects missing required Simpson slots', () => {
@@ -344,5 +344,19 @@ describe('study-scoped educator/learner EF parity', () => {
       ...measurements,
       { ...measurements[0], uid: 'duplicate-slot' },
     ])).toBeNull();
+  });
+});
+
+describe('EF physically calibrated contour area', () => {
+  it('converts a planar 10 by 20 mm calibrated contour to 2 cm²', () => {
+    const points = [[0, 0, 0], [10, 0, 0], [10, 20, 0], [0, 20, 0]];
+    expect(calibratedLVContourAreaCM2(points)).toBeCloseTo(2);
+    expect(calibratedLVContourAreaCM2([...points].reverse())).toBeCloseTo(2);
+  });
+
+  it('rejects missing or invalid physical geometry rather than guessing area', () => {
+    expect(calibratedLVContourAreaCM2([[0, 0, 0], [10, 20, 0]])).toBeNull();
+    expect(calibratedLVContourAreaCM2([[0, 0, 0], [10, NaN, 0], [10, 20, 0]])).toBeNull();
+    expect(calibratedLVContourAreaCM2([[0, 0, 0], [10, 0, 0], [20, 0, 0]])).toBeNull();
   });
 });
