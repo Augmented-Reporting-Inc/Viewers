@@ -5471,7 +5471,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       if (requestedKeys.length !== persistedKeys.length ||
           new Set(requestedKeys).size !== requestedKeys.length ||
           new Set(persistedKeys).size !== persistedKeys.length ||
-          requestedKeys.some((key, index) => !key || key !== persistedKeys[index])) {
+          requestedKeys.some(key => !key || !persistedKeys.includes(key))) {
         throw new Error(
           'Draft readback changed question identities/count. Local questions were preserved; do not publish.'
         );
