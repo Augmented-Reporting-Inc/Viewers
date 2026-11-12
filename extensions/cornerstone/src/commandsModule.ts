@@ -9770,7 +9770,7 @@ function commandsModule({
           ],
           instruction: isClinicalReportWorkflow
             ? 'Review the four contours and calculated EF. Save through AR Measurements to review and apply EF, EDV and ESV to the clinical report.'
-            : 'Cross-check EF = (EDV - ESV) / EDV × 100, then capture this result in the active EF question.',
+            : 'EF calculation complete.',
           onCapture: isClinicalReportWorkflow ? null : () => requestLVSimpsonQuizCapture({
             studyInstanceId: currentStudyId, value: resolved.composite.value, mode: 'manual',
           }),
