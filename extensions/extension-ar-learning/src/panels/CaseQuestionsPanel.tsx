@@ -1105,7 +1105,9 @@ function hasRequiredMissing(quiz: QuizDefinition, quizAnswers = {}) {
 
     const value = quizAnswers[question.questionKey];
 
-    return isAnswerEmpty(value);
+    // A typed TR velocity is not a source-linked answer and must not satisfy
+    // a required calibrated spectral question at submission.
+    return !isLearnerQuestionAnswered(question, value);
   });
 }
 
