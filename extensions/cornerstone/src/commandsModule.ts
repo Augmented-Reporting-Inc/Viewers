@@ -129,7 +129,7 @@ import { createGuidedMouseToolOwnership } from './utils/guidedMouseToolOwnership
 import { calibrateUSContourPoints, worldToImageIndex } from './utils/usRegionLengthCalibration';
 import { getQuizEchoAreaSourceMetadata, calculateCalibratedEchoAreaCM2, getSavedQuizEchoAreaDisplayInfo, getQuizCompositeContourViewportLines, getQuizCompositeGoldContourSlotMetadata } from './utils/quizEchoAreaCalibration';
 import { installQuizContourTextRenderer } from './utils/installQuizContourTextRenderer';
-import { resolveViewerQuizGoldAreaBackfill } from '../../extension-ar-measurements/src/utils/quizGoldAreaBackfill';
+import { resolveViewerQuizGoldAreaBackfill, resolveSavedEFGoldContourAreas } from '../../extension-ar-measurements/src/utils/quizGoldAreaBackfill';
 
 const { DefaultHistoryMemo } = csUtils.HistoryMemo;
 const toggleSyncFunctions = {
@@ -16683,6 +16683,17 @@ function commandsModule({
       rubricMeasurement = {}, questionKey = '',
     } = {}) => {
       const kind = String(rubricMeasurement?.measurementKind || '').trim();
+      if (kind === 'lvSimpsonEF') {
+        // EF is already calculated and educator-approved. Recover display
+        // areas only from the matching persisted calibrated annotations.
+        const { baseSeriesDoc } = await getViewerQuizMeasurementSeriesDocs();
+        const sources = baseSeriesDoc
+          ? getRequestedWorkflowAnnotations(baseSeriesDoc.MeasurementAnnotations)
+          : [];
+        return resolveSavedEFGoldContourAreas({
+          gold: rubricMeasurement, savedAnnotations: sources,
+        });
+      }
       const previousFrame = await actions.getCurrentViewerQuizFrameAnswer();
       const previousTarget = previousFrame?.ok ? previousFrame.answer?.selectedTarget : null;
       const previousViewportId = viewportGridService.getActiveViewportId();
