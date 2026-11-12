@@ -2456,6 +2456,11 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
           questionKey: question.questionKey,
           radius: scoringConfig.radius,
           radiusUnit: cleanString(scoringConfig.radiusUnit) || 'world',
+          endpointToleranceMM: answerConfig.measurementKind === 'ivcCollapsibility'
+            ? scoringConfig.caliperEndpointToleranceMM ?? 5
+            : scoringConfig.endpointToleranceMM ?? null,
+          ivcEndpointToleranceEnabled: answerConfig.measurementKind === 'ivcCollapsibility' &&
+            scoringConfig.caliperEndpointToleranceEnabled !== false,
         });
 
     if (result?.rubricRendered !== true) {
@@ -6276,7 +6281,69 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               </div>
             ) : null}
 
-            {cleanString(answerConfig.measurementKind) !== 'lvSimpsonEF' && cleanString(answerConfig.measurementKind) !== 'laVolumeBiplane' ? (
+            {cleanString(answerConfig.measurementKind) === 'length' && !bowelSet ? (
+              <label className="mt-3 block text-xs text-gray-200">
+                Optional endpoint tolerance (mm; both ends)
+                <input
+                  type="number" min="0" max="100" step="0.1"
+                  className="mt-1 block w-36 rounded border border-gray-700 bg-black px-2 py-1 text-sm text-white"
+                  value={numberOrEmpty(plainObject(question.scoringConfig).endpointToleranceMM)}
+                  disabled={authoringSaving || !isDraftDefinition(authoringDefinition)}
+                  onChange={event => {
+                    const scoring = { ...plainObject(question.scoringConfig) };
+                    if (!event.target.value) delete scoring.endpointToleranceMM;
+                    else {
+                      delete scoring.radius;
+                      delete scoring.radiusUnit;
+                      scoring.endpointToleranceMM = Number(event.target.value);
+                    }
+                    patchAuthoringQuestion(question, { scoringConfig: scoring });
+                  }}
+                />
+                Gold endpoint circles are displayed when enabled.
+                Leave blank for numeric-only grading.
+              </label>
+            ) : null}
+            {cleanString(answerConfig.measurementKind) === 'ivcCollapsibility' ? (
+              <div className="mt-3 text-xs text-gray-200">
+                <label className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={plainObject(question.scoringConfig).caliperEndpointToleranceEnabled !== false}
+                    disabled={authoringSaving || !isDraftDefinition(authoringDefinition)}
+                    onChange={event => patchAuthoringQuestion(question, {
+                      scoringConfig: {
+                        ...plainObject(question.scoringConfig),
+                        caliperEndpointToleranceEnabled: event.target.checked,
+                      },
+                    })}
+                  />
+                  Grade IVC phase caliper endpoint placement
+                </label>
+                {plainObject(question.scoringConfig).caliperEndpointToleranceEnabled !== false ? (
+                  <label className="mt-2 block">
+                    Tolerance around each endpoint (mm)
+                    <input
+                      type="number" min="0" max="100" step="0.1"
+                      className="mt-1 block w-36 rounded border border-gray-700 bg-black px-2 py-1 text-sm text-white"
+                      value={plainObject(question.scoringConfig).caliperEndpointToleranceMM ?? 5}
+                      disabled={authoringSaving || !isDraftDefinition(authoringDefinition)}
+                      onChange={event => patchAuthoringQuestion(question, {
+                        scoringConfig: {
+                          ...plainObject(question.scoringConfig),
+                          caliperEndpointToleranceMM: event.target.value === ''
+                            ? 5 : Number(event.target.value),
+                        },
+                      })}
+                    />
+                  </label>
+                ) : null}
+              </div>
+            ) : null}
+            {cleanString(answerConfig.measurementKind) !== 'lvSimpsonEF' &&
+              cleanString(answerConfig.measurementKind) !== 'laVolumeBiplane' &&
+              cleanString(answerConfig.measurementKind) !== 'length' &&
+              cleanString(answerConfig.measurementKind) !== 'ivcCollapsibility' ? (
               <>
             <label className="mt-3 block text-xs font-semibold text-gray-200">
               {bowelSet ? 'Reference location radius (mm; visual guide)' : 'Position radius tolerance'}
