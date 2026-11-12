@@ -6314,7 +6314,22 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                   }}
                 />
                 Gold endpoint circles are displayed when enabled.
-                Leave blank for numeric-only grading.
+                Leave blank to skip endpoint grading.
+                {numberOrEmpty(plainObject(question.scoringConfig).radius) !== '' ? (
+                  <button
+                    type="button"
+                    className="mt-2 block rounded border border-slate-500 px-2 py-1 text-slate-100"
+                    disabled={authoringSaving || !isDraftDefinition(authoringDefinition)}
+                    onClick={() => {
+                      const scoring = { ...plainObject(question.scoringConfig) };
+                      delete scoring.radius;
+                      delete scoring.radiusUnit;
+                      patchAuthoringQuestion(question, { scoringConfig: scoring });
+                    }}
+                  >
+                    Clear legacy centre radius ({plainObject(question.scoringConfig).radius} mm)
+                  </button>
+                ) : null}
               </label>
             ) : null}
             {cleanString(answerConfig.measurementKind) === 'ivcCollapsibility' ? (
