@@ -6946,6 +6946,11 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     const savedGoldComponents = getSavedGoldCompositeNavigationComponents(answerConfig);
     const efGoldRows = hasGuidedEFFrames
       ? getEFGoldContourAuthoringRows(answerConfig, savedGoldComponents) : [];
+    const savedEFGold = hasGuidedEFFrames
+      ? [answerConfig.goldValue, plainObject(answerConfig.goldMeasurement).value]
+          .find(value => value != null && cleanString(value) !== '' &&
+            Number.isFinite(Number(value)) && Number(value) > 0)
+      : undefined;
     const guidedEFFramesComplete = !!getCompleteEFContourFrameTargets(answerConfig);
     const targetSummary = getViewerTargetSummary(viewerTarget);
     const isCapturing = capturingAuthoringKey.endsWith(`:${question.questionKey}`);
@@ -7105,14 +7110,11 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
           <div className="mt-2 rounded border border-slate-600 bg-slate-900/60 p-2">
             <div className="text-xs font-semibold text-gray-100">EF gold measurements</div>
             <div className="mt-2 rounded border border-emerald-700 bg-emerald-950/30 p-2 text-sm font-semibold text-emerald-100">
-              Gold EF: {Number.isFinite(Number(
-                answerConfig.goldValue ?? plainObject(answerConfig.goldMeasurement).value
-              )) && (answerConfig.goldValue ?? plainObject(answerConfig.goldMeasurement).value) != null
-                ? Number(answerConfig.goldValue ??
-                  plainObject(answerConfig.goldMeasurement).value).toFixed(2) + '%'
-                : 'Not captured'}
+              Gold EF: {savedEFGold !== undefined
+                ? Number(savedEFGold).toFixed(2) + '%' : 'Not captured'}
             </div>
-            <label className="mt-2 flex items-center gap-2 text-xs font-semibold text-gray-100">
+            <label className="mt-2 flex items-center gap-2 text-xs font-semibold text-gray-100"
+              onClick={event => event.stopPropagation()}>
               <input type="checkbox"
                 checked={answerConfig.efContourFrameGuidanceEnabled === true}
                 disabled={isCapturing || authoringSaving || !isDraftDefinition(authoringDefinition)}
