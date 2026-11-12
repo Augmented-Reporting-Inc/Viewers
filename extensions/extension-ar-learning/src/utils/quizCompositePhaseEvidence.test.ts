@@ -338,6 +338,31 @@ describe('quiz composite phase evidence', () => {
       .toContain('calibrated gold phase values');
     expect(getCompositeGoldPersistenceError([enriched], [enriched])).toBe('');
   });
+  it('rejects silently dropped EF per-contour calibrated long axes on readback', () => {
+    const target = { studyInstanceUID:'study', seriesInstanceUID:'series',
+      sopInstanceUID:'sop', frameNumber:6 };
+    const components = ['A4C_ED','A4C_ES','A2C_ED','A2C_ES'].map((slot, index) =>
+      ({ slot, annotationId:'ef-'+index,
+        target:{ ...target, frameNumber: 6 + index },
+        points:[[0,0,0],[1,0,0],[1,1,0]] })
+    );
+    const question = { questionKey:'q-ef', type:'measurementNumeric',
+      answerConfig: { measurementKind:'lvSimpsonEF', goldValue:57,
+        goldMeasurement:{value:57,compositeResult:{
+          components, derived:{ slotLongAxisMM:{
+            A4C_ED:90,A4C_ES:85,A2C_ED:95,A2C_ES:88,
+          },edvML:120,esvML:51.6 }
+        }}
+      }
+    };
+    expect(getCompositeGoldPersistenceError([question],[question])).toBe('');
+    const remote = { ...question, answerConfig:{ ...question.answerConfig,
+      goldMeasurement: { ...question.answerConfig.goldMeasurement,
+        compositeResult:{components} }
+    } };
+    expect(getCompositeGoldPersistenceError([question],[remote]))
+      .toContain('EF calibrated per-contour lengths');
+  });
   it('detects a saved IVC gold RAP/RVSP reference dropped in FormAPI readback', () => {
     const target = { studyInstanceUID:'study', seriesInstanceUID:'series',
       sopInstanceUID:'sop', frameNumber:4 };
