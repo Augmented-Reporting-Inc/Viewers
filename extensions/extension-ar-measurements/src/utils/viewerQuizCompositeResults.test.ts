@@ -227,6 +227,15 @@ describe('study-scoped educator/learner EF parity', () => {
     expect(snapshot!.result.status).toBe('complete');
     expect(snapshot!.composite.unit).toBe('%');
     expect(snapshot!.composite.components).toHaveLength(4);
+    const derived = (snapshot!.composite as any).derived;
+    for (const slot of ['A4C_ED', 'A4C_ES', 'A2C_ED', 'A2C_ES']) {
+      expect(Number(derived.slotLongAxisMM[slot])).toBeGreaterThan(0);
+      expect(derived.slotLongAxisMM[slot]).toBeCloseTo(
+        (snapshot!.result.slots as any)[slot].longAxisLengthMM, 6
+      );
+    }
+    expect(derived.edvML).toBeCloseTo(snapshot!.result.values!.edvML, 6);
+    expect(derived.esvML).toBeCloseTo(snapshot!.result.values!.esvML, 6);
     expect(isViewerQuizCompositeReviewCurrent(
       snapshot!.result.values!.ejectionFraction,
       snapshot!.composite.value
