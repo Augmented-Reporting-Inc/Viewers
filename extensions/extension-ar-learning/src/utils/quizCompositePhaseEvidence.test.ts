@@ -6,6 +6,44 @@ import {
   getCompositeGoldPersistenceError, getIncompleteCompositeGoldReplacementReason,
 } from './quizCompositePhaseEvidence';
 
+describe('saved EF gold area completeness', () => {
+  const slots = ['A4C_ED', 'A4C_ES', 'A2C_ED', 'A2C_ES'];
+  const components = slots.map((slot, index) => ({
+    slot, annotationId: 'ann-' + slot,
+    points: [[0,0,0],[10,0,0],[10,10,0],[0,10,0]],
+    target: {
+      studyInstanceUID: 'study', seriesInstanceUID: 'series',
+      sopInstanceUID: 'sop-' + slot, frameNumber: index + 1,
+    },
+  }));
+  const gold = { measurementKind: 'lvSimpsonEF', value: 54.8, unit: '%',
+    compositeResult: {
+      components,
+      derived: { slotLongAxisMM: { A4C_ED: 80, A4C_ES: 70,
+        A2C_ED: 79, A2C_ES: 68 } },
+    },
+  };
+  const question = { type: 'measurementNumeric', answerConfig: {
+    measurementKind: 'lvSimpsonEF', goldMeasurement: gold,
+  } };
+  it('requests recovery of four missing physical gold contour areas', () => {
+    expect(needsSavedCalibratedGoldAreas(question)).toBe(true);
+    const complete = { ...question, answerConfig: {
+      ...question.answerConfig, goldMeasurement: {
+        ...gold, compositeResult: {
+          ...gold.compositeResult, derived: {
+            ...gold.compositeResult.derived,
+            slotAreaCM2: Object.fromEntries(slots.map(slot => [slot, 20])),
+          },
+        },
+      },
+    } };
+    expect(needsSavedCalibratedGoldAreas(complete)).toBe(false);
+    expect(getSavedCompositePhaseValues(complete.answerConfig.goldMeasurement,
+      'lvSimpsonEF')).toEqual(Object.fromEntries(slots.map(slot => [slot, 20])));
+  });
+});
+
 describe('quiz composite phase evidence', () => {
   it('matches only explicitly tagged right-heart contours', () => {
     const rv = { uid: 'rv-ed', measurementKind: 'echoAreaSlot', echoArea: { slot: 'RV_ED' } };
