@@ -4846,8 +4846,27 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
           lastActivatedQuestionRef.current !== `authoring:${question.questionKey}`) {
         return false;
       }
-      const answer = result.answer;
+      let answer = result.answer;
       const captureKind = cleanString(answerConfig.measurementKind);
+      if (captureKind === 'ivcCollapsibility') {
+        const latest = authoringQuestionsRef.current.find(item =>
+          item.questionKey === question.questionKey);
+        const prior = plainObject(plainObject(latest?.answerConfig).goldMeasurement);
+        const review = plainObject(plainObject(prior.compositeResult).rapRvsp).ivc;
+        if (review && isIVCReviewCurrent(review, answer)) {
+          const previousComposite = plainObject(prior.compositeResult);
+          answer = {
+            ...answer,
+            compositeResult: {
+              ...plainObject(answer.compositeResult),
+              rapMMHG: previousComposite.rapMMHG,
+              trGradientMMHG: previousComposite.trGradientMMHG,
+              rvspMMHG: previousComposite.rvspMMHG,
+              rapRvsp: previousComposite.rapRvsp,
+            },
+          };
+        }
+      }
       const guidedSlots = COMPOSITE_FRAME_SLOTS[captureKind] || [];
       if (guidedSlots.length && answerConfig.compositeFrameGuidanceEnabled === true) {
         const configured = getCompleteCompositeFrameTargets(answerConfig);
@@ -5164,7 +5183,16 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
             (saved.value != null && diagnostic.value != null &&
              Math.round(Number(saved.value) * 100) ===
              Math.round(Number(diagnostic.value) * 100));
-          const accepted = safeBackfill
+          const ivcGold = plainObject(plainObject(currentQuestion.answerConfig).goldMeasurement);
+          const priorReview = plainObject(plainObject(ivcGold.compositeResult).rapRvsp).ivc;
+          // Recapturing an unchanged IVC as a bare percent would discard the
+          // educator's already-accepted RAP/RVSP reference.
+          const preserveReviewedIVC = kind === 'ivcCollapsibility' &&
+            priorReview && isIVCReviewCurrent(priorReview, ivcGold) &&
+            diagnostic?.complete === true &&
+            Number.isFinite(Number(diagnostic.value)) &&
+            Math.abs(Number(diagnostic.value) - Number(ivcGold.value)) <= 0.005;
+          const accepted = preserveReviewedIVC ? true : safeBackfill
             ? await captureAuthoringMeasurement(currentQuestion, { silent: true })
             : true;
           if (accepted !== true) {
