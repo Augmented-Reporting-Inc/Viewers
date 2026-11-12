@@ -319,7 +319,7 @@ export function getCompositeGoldPersistenceError(expectedQuestions: any[], persi
   for (const question of Array.isArray(expectedQuestions) ? expectedQuestions : []) {
     const config = asObject(question?.answerConfig);
     const kind = clean(config.measurementKind);
-    if (!['rvFAC', 'laVolumeBiplane', 'laVolumeBiplaneDisks', 'ivcCollapsibility', 'raArea']
+    if (!['lvSimpsonEF', 'rvFAC', 'laVolumeBiplane', 'laVolumeBiplaneDisks', 'ivcCollapsibility', 'raArea']
       .includes(kind)) continue;
     const gold = asObject(config.goldMeasurement);
     const parts = Array.isArray(gold.compositeResult?.components)
@@ -368,6 +368,22 @@ export function getCompositeGoldPersistenceError(expectedQuestions: any[], persi
     const remoteValues = getSavedCompositePhaseValues(actualGold, kind);
     if (Object.keys(phaseValues).some(slot => remoteValues[slot] !== phaseValues[slot])) {
       return kind + ' calibrated gold phase values were not persisted.';
+    }
+    if (kind === 'lvSimpsonEF') {
+      // EF uses a separate four-slot source contract but its per-contour
+      // values must still survive versioned FormAPI storage.
+      const expectedDerived = asObject(asObject(gold.compositeResult).derived);
+      const actualDerived = asObject(asObject(actualGold.compositeResult).derived);
+      const expectedAxes = asObject(expectedDerived.slotLongAxisMM);
+      const actualAxes = asObject(actualDerived.slotLongAxisMM);
+      if (Object.keys(expectedAxes).some(slot =>
+        Number(actualAxes[slot]) !== Number(expectedAxes[slot])
+      ) || (expectedDerived.edvML != null &&
+        Number(actualDerived.edvML) !== Number(expectedDerived.edvML)) ||
+        (expectedDerived.esvML != null &&
+        Number(actualDerived.esvML) !== Number(expectedDerived.esvML))) {
+        return 'EF calibrated per-contour lengths or EDV/ESV were not persisted.';
+      }
     }
     if (kind === 'ivcCollapsibility') {
       const reference = asObject(asObject(gold.compositeResult).rapRvsp);
