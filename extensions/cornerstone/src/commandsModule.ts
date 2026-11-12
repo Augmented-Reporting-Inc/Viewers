@@ -10893,7 +10893,17 @@ function commandsModule({
           selectedTarget = normalizeUltrasoundDirectionalTargetSelection('generic', rawUnit);
         }
 
-        const reportMapping = !quizCapture && isClinicalReportMeasurementsSaveTarget(saveTarget)
+        // A learner measurement captured inside a report-owned assessment may
+        // be offered as a *reviewable* clinical report value. This does not
+        // write TRVel automatically: the existing report preview/selection
+        // still decides which mapped fields are applied. Standalone learning
+        // quizzes continue to have no clinical mapping.
+        const allowReportOwnedQuizTR = quizCapture && spectralVmax &&
+          selectedTarget?.key === 'echo.trPeakVelocity' &&
+          isReportOwnedLearnerMeasurementTarget(saveTarget) &&
+          isClinicalReportMeasurementsSaveTarget(saveTarget);
+        const reportMapping = isClinicalReportMeasurementsSaveTarget(saveTarget) &&
+          (!quizCapture || allowReportOwnedQuizTR)
           ? buildUltrasoundDirectionalReportMapping(selectedTarget)
           : null;
         const convertedReportValue = convertUltrasoundDirectionalValueForTarget({
