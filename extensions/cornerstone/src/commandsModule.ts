@@ -15338,6 +15338,8 @@ function commandsModule({
       questionKey = '',
       radius = null,
       radiusUnit = 'world',
+      endpointToleranceMM = null,
+      ivcEndpointToleranceEnabled = false,
     } = {}) => {
       clearViewerQuizMeasurementComparisonAnnotations();
       clearAllViewerQuizMarkerOverlays();
@@ -15499,7 +15501,8 @@ function commandsModule({
       // Authoring gold calipers already loaded in Cornerstone should be selected
       // directly. Reconstructing a temporary comparison overlay can fail when
       // the saved source annotation has not yet been rehydrated into this viewport.
-      if (goldSourceId && !getViewerQuizMeasurementSourceAnnotationId(learnerMeasurement)) {
+      if (goldSourceId && !getViewerQuizMeasurementSourceAnnotationId(learnerMeasurement) &&
+          !(Number(endpointToleranceMM) > 0)) {
         const liveGold = annotation.state.getAnnotation?.(goldSourceId);
         const goldTarget = getViewerQuizMeasurementReferenceTarget(rubricMeasurement, rubricAnnotation);
         const expectedImage = normalizeImageIdForCompare(
@@ -15664,9 +15667,49 @@ function commandsModule({
         getViewerQuizMeasurementCenterPoint(rubricAnnotation) ||
         getViewerQuizMeasurementCenterPoint(rubricMeasurement);
       const numericRadius = Number(radius);
+      const endpointRadiusMM = Number(
+        endpointToleranceMM
+      );
+      const isIVC = rubricMeasurement?.measurementKind === 'ivcCollapsibility';
+      const endpointsEnabled = isIVC ? ivcEndpointToleranceEnabled === true :
+        rubricMeasurement?.measurementKind === 'length' &&
+        endpointToleranceMM !== null && endpointToleranceMM !== '';
       let toleranceCircleRendered = false;
-
-      if (rubricCenter && Number.isFinite(numericRadius) && numericRadius > 0) {
+      let endpointCirclesRendered = 0;
+      if (endpointsEnabled && Number.isFinite(endpointRadiusMM) &&
+          endpointRadiusMM > 0) {
+        const activeImageId = normalizeImageIdForCompare(
+          viewport.getCurrentImageId?.() || ''
+        );
+        const components = isIVC
+          ? (Array.isArray(rubricMeasurement?.compositeResult?.components)
+              ? rubricMeasurement.compositeResult.components : [])
+          : [rubricAnnotation || rubricMeasurement];
+        for (const component of components) {
+          const referenceImageId = normalizeImageIdForCompare(
+            component?.target?.referencedImageId || component?.referencedImageId ||
+            component?.annotation?.referencedImageId || ''
+          );
+          // Never show a phase's gold endpoints on another phase/image.
+          if (isIVC && (!activeImageId || !referenceImageId ||
+              activeImageId !== referenceImageId)) continue;
+          const points = getViewerQuizMeasurementPoints(component);
+          if (points.length !== 2) continue;
+          for (const coordinates of points) {
+            const point = {
+              x: Number(coordinates[0]),
+              y: Number(coordinates[1]),
+              z: Number(coordinates[2] || 0),
+              coordinateSpace: 'world',
+            };
+            if (appendViewerQuizToleranceCircle({
+              viewport, point, radius: endpointRadiusMM, radiusUnit: 'mm',
+            })) endpointCirclesRendered += 1;
+          }
+        }
+        toleranceCircleRendered = endpointCirclesRendered > 0;
+      } else if (rubricCenter && Number.isFinite(numericRadius) && numericRadius > 0) {
+        // Preserve legacy centre-radius overlays only for older authored rules.
         toleranceCircleRendered = appendViewerQuizToleranceCircle({
           viewport,
           point: rubricCenter,
@@ -15704,6 +15747,7 @@ function commandsModule({
         compositeContoursExpected: compositeRubric ? expectedSlots.length : 0,
         compositeContoursResolved: resolvedRubricContours.length,
         toleranceCircleRendered,
+        endpointCirclesRendered,
       };
     },
     getCurrentViewerQuizFrameAnswer: async () => {
