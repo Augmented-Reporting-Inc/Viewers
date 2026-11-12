@@ -62,3 +62,23 @@ test('delayed educator gold capture cannot reselect its old question', () => {
   assert.doesNotMatch(capture, /setActiveQuestionKey\(`authoring:/);
   assert.match(capture, /options\.silent &&[\s\S]*?lastActivatedQuestionRef\.current !==/);
 });
+
+test('learner question dropdown shows answer status without exposing educator gold', () => {
+  assert.match(panel, /id="quiz-learner-question-select"/);
+  assert.match(panel, /function isLearnerQuestionAnswered\(/);
+  assert.match(panel, /isLearnerQuestionAnswered\(\s*question, answersByQuizKey\?\.\[quiz\.quizKey\]/);
+  assert.match(panel, /'✓ Answered' : '○ Unanswered'/);
+  assert.doesNotMatch(panel, /An assigned target opens its/);
+  assert.doesNotMatch(panel, /'Opens target instance' : 'Opens target'/);
+});
+
+test('learner removes redundant text and generic recapture while retaining calculated result', () => {
+  assert.doesNotMatch(panel, /Recapture selected measurement/);
+  assert.doesNotMatch(panel, /then use it as the answer/);
+  assert.doesNotMatch(panel, /Navigate to the required DICOM instance and frame for each phase/);
+  assert.doesNotMatch(panel, /Learner source saved/);
+  assert.doesNotMatch(panel, /Calculated and saved learner answer/);
+  assert.doesNotMatch(panel, /The selected phase is assigned automatically/);
+  assert.doesNotMatch(panel, /Both values are included in the quiz answer on Save or Submit/);
+  assert.match(panel, /Recalculate from measured contours/);
+});
