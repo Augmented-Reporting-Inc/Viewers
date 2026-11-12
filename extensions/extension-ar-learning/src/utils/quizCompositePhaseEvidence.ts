@@ -53,8 +53,11 @@ export function needsSavedCalibratedGoldAreas(question: any): boolean {
   if (question?.type !== 'measurementNumeric') return false;
   const config = asObject(question.answerConfig);
   const kind = clean(config.measurementKind);
-  const expectedSlots = kind === 'rvFAC' ? ['RV_ED', 'RV_ES'] :
-    ['laVolumeBiplane', 'laVolumeBiplaneDisks'].includes(kind) ? ['A4C', 'A2C'] : null;
+  const expectedSlots = kind === 'lvSimpsonEF'
+    ? ['A4C_ED', 'A4C_ES', 'A2C_ED', 'A2C_ES']
+    : kind === 'rvFAC' ? ['RV_ED', 'RV_ES']
+      : ['laVolumeBiplane', 'laVolumeBiplaneDisks'].includes(kind)
+        ? ['A4C', 'A2C'] : null;
   if (!expectedSlots) return false;
   const gold = asObject(config.goldMeasurement);
   if (!Number.isFinite(Number(gold.value)) || gold.value == null || gold.value === '') return false;
@@ -73,6 +76,16 @@ export function getSavedCompositePhaseValues(answer: any, kind: string): Record<
   const result = asObject(asObject(answer).compositeResult);
   const derived = asObject(result.derived);
   const resultValues: Record<string, number> = {};
+  if (kind === 'lvSimpsonEF') {
+    const savedAreas = asObject(derived.slotAreaCM2);
+    for (const slot of ['A4C_ED', 'A4C_ES', 'A2C_ED', 'A2C_ES']) {
+      const value = savedAreas[slot];
+      if (value == null || clean(value) === '') continue;
+      const numeric = Number(value);
+      if (Number.isFinite(numeric) && numeric > 0) resultValues[slot] = numeric;
+    }
+    return resultValues;
+  }
   for (const [slot, field] of Object.entries(PHASE_VALUE_FIELDS[kind] || {})) {
     const value = derived[field];
     if (value == null || clean(value) === '') continue;
