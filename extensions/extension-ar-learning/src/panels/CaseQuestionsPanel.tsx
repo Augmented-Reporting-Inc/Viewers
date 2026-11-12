@@ -31,6 +31,7 @@ import {
   getLearnerCompositePersistenceSources,
   isPersistedLearnerCompositeSource,
   isLearnerCompositeCaptureCurrent,
+  getLearnerHemodynamicReadbackError,
 } from '../utils/quizLearnerCompositeCapture';
 import {
   isBowelMeasurementSetQuestion,
@@ -4190,6 +4191,15 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       return null;
     }
 
+    if (Array.from(autoSpectralLearnerCaptureInFlightRef.current).some(
+      key => key.startsWith(quiz.quizKey + ':')
+    )) {
+      uiNotificationService.show({
+        title: 'TR Vmax capture in progress', type: 'warning', duration: 5000,
+        message: 'The calibrated TR Vmax is still being recorded. Complete that capture before saving this quiz.',
+      });
+      return null;
+    }
     setSavingQuizKey(quiz.quizKey);
     if (status === 'submitted') {
       setSubmitting(true);
@@ -4311,7 +4321,11 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
           status,
           answers: buildAnswerPayload(quiz, quizAnswers),
         });
-        // Scoring is a separate operation from answer persistence.
+        const evidenceError = getLearnerHemodynamicReadbackError(
+          quiz.questions || [], quizAnswers, result?.response?.answers
+        );
+        if (evidenceError) throw new Error(evidenceError);
+        // Scoring is a separate operation from verified answer persistence.
         reportEducationSaveResult(saveSource, saveRequestId, true);
       } catch (saveError) {
         reportEducationSaveResult(saveSource, saveRequestId, false);
