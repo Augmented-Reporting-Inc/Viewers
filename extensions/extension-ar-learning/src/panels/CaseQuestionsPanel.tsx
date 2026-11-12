@@ -5482,6 +5482,24 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         silent: true,
         preferredDefinitionId: definitionId,
       });
+      // Saving changed the educator's rubric, not the active selection. Render
+      // the updated gold immediately instead of requiring a question switch.
+      const savedActiveQuestion = savedQuestions.find(
+        item => item.questionKey === activeAuthoringKey
+      );
+      if (savedActiveQuestion?.type === 'measurementNumeric' &&
+          lastActivatedQuestionRef.current === `authoring:${activeAuthoringKey}`) {
+        try {
+          await showAuthoringGoldMeasurement(savedActiveQuestion);
+        } catch (overlayError) {
+          console.warn('[CaseQuestionsPanel] saved gold overlay refresh failed', overlayError);
+          uiNotificationService.show({
+            title: 'Quiz Authoring',
+            message: 'Saved successfully, but the viewport overlay could not be refreshed.',
+            type: 'warning', duration: 4500,
+          });
+        }
+      }
       return result;
     } catch (error) {
       const message = `Authoring save failed: ${error?.message || error}`;
@@ -7048,7 +7066,15 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
 
         {hasGuidedEFFrames ? (
           <div className="mt-2 rounded border border-slate-600 bg-slate-900/60 p-2">
-            <div className="text-xs font-semibold text-gray-100">EF contour frames and saved gold</div>
+            <div className="text-xs font-semibold text-gray-100">EF gold measurements</div>
+            <div className="mt-2 rounded border border-emerald-700 bg-emerald-950/30 p-2 text-sm font-semibold text-emerald-100">
+              Gold EF: {Number.isFinite(Number(
+                answerConfig.goldValue ?? plainObject(answerConfig.goldMeasurement).value
+              )) && (answerConfig.goldValue ?? plainObject(answerConfig.goldMeasurement).value) != null
+                ? Number(answerConfig.goldValue ??
+                  plainObject(answerConfig.goldMeasurement).value).toFixed(2) + '%'
+                : 'Not captured'}
+            </div>
             <label className="mt-2 flex items-center gap-2 text-xs font-semibold text-gray-100">
               <input type="checkbox"
                 checked={answerConfig.efContourFrameGuidanceEnabled === true}
@@ -7064,7 +7090,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               <div className="mt-2 space-y-2">
                 <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px]">
                   <span className="text-emerald-200">
-                    Saved gold: {efGoldRows.filter(row => row.goldVerified).length}/4 verified source references
+                    Saved gold contours: {efGoldRows.filter(row => row.goldVerified).length}/4
                   </span>
                   {answerConfig.efContourFrameGuidanceEnabled === true ? (
                     <span className={guidedEFFramesComplete ? 'text-green-200' : 'text-amber-200'}>
@@ -7090,25 +7116,31 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                             : targetCaptured ? 'Incomplete frame source' : 'Not configured'}
                         </div>
                       ) : null}
-                      <div className={row.goldVerified
-                        ? row.sourceMismatch ? 'mt-1 text-amber-200' : 'mt-1 text-emerald-200'
-                        : 'mt-1 text-amber-200'}>
-                        Gold: {row.goldVerified
-                          ? `Saved · ${getViewerTargetSummary(row.savedTarget)}${row.sourceMismatch ? ' · Does not match target' : ' · Source verified'}`
-                          : 'No verified saved contour'}
-                      </div>
+                      {!row.goldVerified ? (
+                        <div className="mt-1 text-amber-200">No saved gold contour</div>
+                      ) : null}
                       {row.goldVerified ? (() => {
                         const derived = plainObject(plainObject(
                           plainObject(answerConfig.goldMeasurement).compositeResult
                         ).derived);
                         const raw = plainObject(derived.slotLongAxisMM)[row.slot];
                         const measured = raw == null || raw === '' ? NaN : Number(raw);
+                        const areaRaw = plainObject(derived.slotAreaCM2)[row.slot];
+                        const area = areaRaw == null || areaRaw === '' ? NaN : Number(areaRaw);
                         return (
-                          <div className={Number.isFinite(measured) && measured > 0
-                            ? 'mt-1 text-emerald-200' : 'mt-1 text-amber-200'}>
-                            Calibrated LV long axis: {Number.isFinite(measured) && measured > 0
-                              ? measured.toFixed(2) + ' mm'
-                              : 'not stored for this gold contour'}
+                          <div className="mt-1 space-y-1">
+                            <div className={Number.isFinite(area) && area > 0
+                              ? 'font-semibold text-emerald-200' : 'text-amber-200'}>
+                              Calibrated LV contour area: {Number.isFinite(area) && area > 0
+                                ? area.toFixed(2) + ' cm²'
+                                : 'not stored; recapture or validate the gold contour'}
+                            </div>
+                            <div className={Number.isFinite(measured) && measured > 0
+                              ? 'text-emerald-200' : 'text-amber-200'}>
+                              LV long axis: {Number.isFinite(measured) && measured > 0
+                                ? measured.toFixed(2) + ' mm'
+                                : 'not stored'}
+                            </div>
                           </div>
                         );
                       })() : null}
