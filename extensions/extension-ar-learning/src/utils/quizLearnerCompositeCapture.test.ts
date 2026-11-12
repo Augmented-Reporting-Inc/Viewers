@@ -180,6 +180,27 @@ describe('read-after-write verified learner phase annotations', () => {
     expect(getLearnerCompositePersistenceSources([q], {'q-rv':{value:50,unit:'%'}}))
       .toHaveLength(0);
   });
+  it('includes a source-linked calibrated TR Vmax annotation for learner-series persistence', () => {
+    const question = {questionKey:'q-tr',type:'measurementNumeric',
+      answerConfig:{measurementKind:'trVmax'}};
+    const target = frame('tr-sop',9);
+    const answer = {measurementKind:'trVmax',value:2.75,unit:'m/s',
+      sourceAnnotationId:'tr-ann',viewerTarget:target};
+    expect(getLearnerCompositePersistenceSources([question],{'q-tr':answer}))
+      .toEqual([{annotationId:'tr-ann',target}]);
+    expect(getLearnerCompositePersistenceSources([question],{
+      'q-tr':{...answer,sourceAnnotationId:''},
+    })).toHaveLength(0);
+    expect(getLearnerCompositePersistenceSources([question],{
+      'q-tr':{...answer,unit:'cm/s'},
+    })).toHaveLength(0);
+    const stored = {uid:'tr-ann',StudyInstanceUID:'study',
+      SeriesInstanceUID:'series',SOPInstanceUID:'tr-sop',
+      referencedImageId:target.referencedImageId,
+      points:[[0,0,0],[3,2,0]]};
+    expect(isPersistedLearnerCompositeSource(stored,{annotationId:'tr-ann',target}))
+      .toBe(true);
+  });
   it('rejects wrong learner DICOM identity, frame or missing contour geometry', () => {
     const source = {annotationId:parts[0].annotationId,target:parts[0].target};
     const stored = {
