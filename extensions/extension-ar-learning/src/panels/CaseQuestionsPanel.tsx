@@ -5183,16 +5183,11 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
             (saved.value != null && diagnostic.value != null &&
              Math.round(Number(saved.value) * 100) ===
              Math.round(Number(diagnostic.value) * 100));
-          const ivcGold = plainObject(plainObject(currentQuestion.answerConfig).goldMeasurement);
-          const priorReview = plainObject(plainObject(ivcGold.compositeResult).rapRvsp).ivc;
-          // Recapturing an unchanged IVC as a bare percent would discard the
-          // educator's already-accepted RAP/RVSP reference.
-          const preserveReviewedIVC = kind === 'ivcCollapsibility' &&
-            priorReview && isIVCReviewCurrent(priorReview, ivcGold) &&
-            diagnostic?.complete === true &&
-            Number.isFinite(Number(diagnostic.value)) &&
-            Math.abs(Number(diagnostic.value) - Number(ivcGold.value)) <= 0.005;
-          const accepted = preserveReviewedIVC ? true : safeBackfill
+          // Always recapture from the authoritative viewer on Save Draft.
+          // captureAuthoringMeasurement retains a reviewed RAP/RVSP only if
+          // every IVC contour annotation, source frame, point and percentage
+          // still matches. A coincidentally equal percent is never enough.
+          const accepted = safeBackfill
             ? await captureAuthoringMeasurement(currentQuestion, { silent: true })
             : true;
           if (accepted !== true) {
