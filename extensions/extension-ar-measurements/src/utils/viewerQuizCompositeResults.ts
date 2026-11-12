@@ -69,6 +69,33 @@ export function boundEFQuizEvidencePoints(points: number[][]): number[][] {
   return output;
 }
 
+/**
+ * Calculate an LV cavity contour's physical area ONLY from its already
+ * calibrated millimetre coordinates. This is not a Cornerstone pixel ROI
+ * statistic and must not be computed from the quiz evidence world points.
+ */
+export function calibratedLVContourAreaCM2(points: unknown): number | null {
+  if (!Array.isArray(points) || points.length < 3 ||
+      points.length > 50000) return null;
+  const vectors = points.map(point =>
+    Array.isArray(point) && point.length >= 2 && point.length <= 3
+      ? [Number(point[0]), Number(point[1]), Number(point[2] ?? 0)]
+      : null);
+  if (vectors.some(point => !point || point.some(value => !Number.isFinite(value)))) {
+    return null;
+  }
+  const cross = [0, 0, 0];
+  for (let i = 0; i < vectors.length; i += 1) {
+    const a = vectors[i]!, b = vectors[(i + 1) % vectors.length]!;
+    cross[0] += a[1] * b[2] - a[2] * b[1];
+    cross[1] += a[2] * b[0] - a[0] * b[2];
+    cross[2] += a[0] * b[1] - a[1] * b[0];
+  }
+  // Polygon cross-product is twice its area in mm².
+  const cm2 = Math.hypot(...cross) / 200;
+  return Number.isFinite(cm2) && cm2 > 0 ? cm2 : null;
+}
+
 function collectComponents(measurements: Measurement[], kind: CompositeKind) {
   const isIVC = kind === 'ivcCollapsibility';
   const isRightHeart = kind === 'rvFAC' || kind === 'raArea' || isIVC;
@@ -226,6 +253,19 @@ export function resolveViewerQuizCompositeResult(
             const length = Number(geometry?.longAxisLengthMM);
             return geometry?.complete === true &&
               Number.isFinite(length) && length > 0 ? [[slot, length]] : [];
+          })
+        ),
+        slotAreaCM2: Object.fromEntries(
+          LV_SIMPSON_SLOT_ORDER.flatMap(slot => {
+            const sources = measurements.filter(m =>
+              sourceKind(m) === 'lvSimpsonSlot' && slotOf(m, 'lvSimpsonEF') === slot);
+            if (sources.length !== 1 ||
+                (result as any).slots[slot]?.complete !== true) return [];
+            const sourceGeometry = geometry(sources[0], 'lvSimpsonEF');
+            if (sourceGeometry.calibrationError) return [];
+            const value = calibratedLVContourAreaCM2(
+              sourceGeometry.calibratedContourPoints);
+            return value !== null ? [[slot, value]] : [];
           })
         ),
         edvML: (result as any).values?.edvML,
