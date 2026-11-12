@@ -15690,9 +15690,21 @@ function commandsModule({
             component?.target?.referencedImageId || component?.referencedImageId ||
             component?.annotation?.referencedImageId || ''
           );
-          // Never show a phase's gold endpoints on another phase/image.
-          if (isIVC && (!activeImageId || !referenceImageId ||
-              activeImageId !== referenceImageId)) continue;
+          // Each IVC phase can be on a different SOP/frame. Match the saved
+          // source reference or the DICOM instance/frame encoded in the
+          // current DICOMweb image ID; never draw another phase's circles.
+          const componentTarget = component?.target || {};
+          const expectedInstanceFrame = componentTarget.sopInstanceUID &&
+            Number.isInteger(Number(componentTarget.frameNumber)) &&
+            Number(componentTarget.frameNumber) >= 1
+            ? `/instances/${String(componentTarget.sopInstanceUID).toLowerCase()}/frames/${Number(componentTarget.frameNumber)}`
+            : '';
+          const frameMatches = activeImageId && (
+            (referenceImageId && (activeImageId === referenceImageId ||
+              activeImageId.endsWith(referenceImageId))) ||
+            (expectedInstanceFrame && activeImageId.includes(expectedInstanceFrame))
+          );
+          if (isIVC && !frameMatches) continue;
           const points = getViewerQuizMeasurementPoints(component);
           if (points.length !== 2) continue;
           for (const coordinates of points) {
