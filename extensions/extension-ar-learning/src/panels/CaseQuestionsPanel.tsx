@@ -1041,6 +1041,62 @@ function isLearnerQuestionAnswered(question: QuizQuestion, value: any): boolean 
   return true;
 }
 
+/** Informational educational evidence for the clinician's existing review
+ * modal. No quiz value is automatically mapped into a clinical report field.
+ * These summaries never fall back to the educator's gold measurements. */
+function getLearnerHemodynamicQuizReviewRows(
+  quiz: QuizDefinition, quizAnswers: Record<string, any> = {}
+) {
+  const result: Array<{ key: string; label: string; display: string; recorded: boolean }> = [];
+  const questions = Array.isArray(quiz?.questions) ? quiz.questions : [];
+  const tr = questions.find(question =>
+    question.type === 'measurementNumeric' &&
+    cleanString(plainObject(question.answerConfig).measurementKind) === 'trVmax'
+  );
+  const trAnswer = tr ? plainObject(quizAnswers[tr.questionKey]) : {};
+  const trRecorded = !!tr && isLearnerQuestionAnswered(tr, trAnswer);
+  if (tr) result.push({
+    key: 'quiz-tr:' + tr.questionKey,
+    label: 'Learner TR Vmax',
+    display: trRecorded ? Number(trAnswer.value).toFixed(2) + ' m/s (source-linked)' : 'Not recorded',
+    recorded: trRecorded,
+  });
+  const ivc = questions.find(question =>
+    question.type === 'measurementNumeric' &&
+    cleanString(plainObject(question.answerConfig).measurementKind) === 'ivcCollapsibility'
+  );
+  if (ivc) {
+    const answer = plainObject(quizAnswers[ivc.questionKey]);
+    const composite = plainObject(answer.compositeResult);
+    const review = plainObject(composite.rapRvsp);
+    const rap = Number(composite.rapMMHG);
+    const ivcVerified = review.methodId === 'ivc-rap-rvsp-v1' &&
+      review.ivc && isIVCReviewCurrent(review.ivc, answer);
+    const rapRecorded = Boolean(ivcVerified && [3, 8, 15].includes(rap));
+    const trSource = plainObject(plainObject(review.trVmax).answer);
+    const linked = trRecorded && rapRecorded &&
+      cleanString(plainObject(review.trVmax).questionKey) === tr?.questionKey &&
+      cleanString(trSource.sourceAnnotationId) === cleanString(trAnswer.sourceAnnotationId) &&
+      Number(trSource.value) === Number(trAnswer.value);
+    const expectedRVSP = linked ? Number((4 * Number(trAnswer.value) ** 2 + rap).toFixed(2)) : NaN;
+    const rvspRecorded = Boolean(linked && composite.rvspMMHG != null &&
+      Number.isFinite(Number(composite.rvspMMHG)) &&
+      Math.abs(Number(composite.rvspMMHG) - expectedRVSP) <= 0.01);
+    result.push({
+      key: 'quiz-rap:' + ivc.questionKey,
+      label: 'Learner RAP interpretation',
+      display: rapRecorded ? rap + ' mmHg' : 'Not recorded',
+      recorded: rapRecorded,
+    }, {
+      key: 'quiz-rvsp:' + ivc.questionKey,
+      label: 'Learner calculated RVSP',
+      display: rvspRecorded ? Number(composite.rvspMMHG).toFixed(2) + ' mmHg' : 'Not recorded / missing linked TR Vmax',
+      recorded: rvspRecorded,
+    });
+  }
+  return result;
+}
+
 function hasRequiredMissing(quiz: QuizDefinition, quizAnswers = {}) {
   return (quiz.questions || []).some(question => {
     if (!question.required) {
@@ -4121,6 +4177,12 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
 
   const applyQuizMeasurementReview = async () => {
     if (!quizMeasurementReview || quizMeasurementApplying) return;
+    // An informational quiz-only review has no clinical report fields to
+    // overwrite. The subsequent quiz response save performs persistence.
+    if (!quizMeasurementReview.rows?.length) {
+      finishQuizMeasurementReview(true);
+      return;
+    }
     const fields = Array.from(new Set(
       quizMeasurementReview.rows
         .filter(row => quizMeasurementSelectedRows.includes(row.key))
@@ -4148,7 +4210,10 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     }
   };
 
-  async function confirmReportOwnedMeasurementSave(): Promise<void> {
+  async function confirmReportOwnedMeasurementSave(
+    quiz: QuizDefinition, quizAnswers: Record<string, any>
+  ): Promise<void> {
+    const quizEvidenceRows = getLearnerHemodynamicQuizReviewRows(quiz, quizAnswers);
     await ensureViewerQuizSaveSeriesDoc();
     const preview = await Promise.resolve(commandsManager.runCommand(
       'saveViewerMeasurementsForActiveStudy',
@@ -4158,7 +4223,8 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       throw new Error('Measurement review is unavailable for this learner report. Answers were not saved.');
     }
     const rows = buildClinicalReportReviewRows(preview);
-    if (!rows.length && preview?.measurementAnnotationsChanged === false) return;
+    if (!rows.length && preview?.measurementAnnotationsChanged === false &&
+        !quizEvidenceRows.length) return;
     // If annotations changed without mapped report fields, save annotations explicitly.
     if (!rows.length) {
       const result = await Promise.resolve(commandsManager.runCommand(
@@ -4168,10 +4234,12 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       if (!result || result?.ok === false) {
         throw new Error('Viewer annotations could not be saved.');
       }
-      return;
+      if (!quizEvidenceRows.length) return;
     }
     setQuizMeasurementSelectedRows(rows.filter(row => row.changed).map(row => row.key));
-    setQuizMeasurementReview({ rows, derivedConsequences: preview?.derivedConsequences });
+    setQuizMeasurementReview({
+      rows, derivedConsequences: preview?.derivedConsequences, quizEvidenceRows,
+    });
     const approved = await new Promise<boolean>(resolve => {
       quizMeasurementResolveRef.current = resolve;
     });
@@ -4241,7 +4309,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       // Combined report assessment: measurement review and persistence precede quiz answer save.
       // Ordinary imaging quizzes retain their existing independent save/score workflow.
       if (deferredReportScoring && quiz.questions.some(q => q.type === 'measurementNumeric')) {
-        await confirmReportOwnedMeasurementSave();
+        await confirmReportOwnedMeasurementSave(quiz, quizAnswers);
       }
       // A quiz JSON answer is not proof its individual phase annotations were
       // saved. Persist only the exact missing source contours on the learner's
