@@ -166,6 +166,21 @@ export function getLearnerCompositePersistenceSources(
     if (question?.type !== 'measurementNumeric') continue;
     const kind = clean(question?.answerConfig?.measurementKind);
     const answer = asObject(answers[question.questionKey]);
+    // A learner's spectral TR Vmax must persist as an actual source
+    // annotation on the isolated learner Series, not merely as an answer
+    // scalar in quiz JSON. Use the same exact DICOM source verifier as
+    // composite phase measurements.
+    if (kind === 'trVmax') {
+      const value = Number(answer.value);
+      const annotationId = clean(answer.sourceAnnotationId);
+      const target = asObject(answer.viewerTarget);
+      if (answer.measurementKind === 'trVmax' && answer.unit === 'm/s' &&
+          Number.isFinite(value) && value > 0 && value <= 8 &&
+          annotationId && !sources.some(source => source.annotationId === annotationId)) {
+        sources.push({ annotationId, target });
+      }
+      continue;
+    }
     const phases = getLearnerCompositeSourceComponents(answer, kind);
     for (const part of phases) {
       const annotationId = clean(part.annotationId);
