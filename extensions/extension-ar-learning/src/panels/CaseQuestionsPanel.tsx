@@ -6888,6 +6888,21 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                           ? `Saved · ${getViewerTargetSummary(row.savedTarget)}${row.sourceMismatch ? ' · Does not match target' : ' · Source verified'}`
                           : 'No verified saved contour'}
                       </div>
+                      {row.goldVerified ? (() => {
+                        const derived = plainObject(plainObject(
+                          plainObject(answerConfig.goldMeasurement).compositeResult
+                        ).derived);
+                        const raw = plainObject(derived.slotLongAxisMM)[row.slot];
+                        const measured = raw == null || raw === '' ? NaN : Number(raw);
+                        return (
+                          <div className={Number.isFinite(measured) && measured > 0
+                            ? 'mt-1 text-emerald-200' : 'mt-1 text-amber-200'}>
+                            Calibrated LV long axis: {Number.isFinite(measured) && measured > 0
+                              ? measured.toFixed(2) + ' mm'
+                              : 'not stored for this gold contour'}
+                          </div>
+                        );
+                      })() : null}
                       <div className="mt-2 flex flex-wrap gap-2">
                         {guidanceEnabled ? (
                           <button type="button"
@@ -6950,9 +6965,20 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                   </div>
                 ) : null}
                 {savedGoldComponents.length > 0 ? (
-                  <p className="border-t border-gray-700 pt-2 text-xs text-emerald-100">
+                  <div className="border-t border-gray-700 pt-2 text-xs text-emerald-100">
                     Saved result: {answerConfig.goldValue ?? plainObject(answerConfig.goldMeasurement).value ?? '—'} {answerConfig.unit || plainObject(answerConfig.goldMeasurement).unit || ''}
-                  </p>
+                    {(() => {
+                      const derived = plainObject(plainObject(
+                        plainObject(answerConfig.goldMeasurement).compositeResult
+                      ).derived);
+                      const edv = derived.edvML == null ? NaN : Number(derived.edvML);
+                      const esv = derived.esvML == null ? NaN : Number(derived.esvML);
+                      return Number.isFinite(edv) && edv > 0 &&
+                        Number.isFinite(esv) && esv >= 0 ? (
+                          <div>Saved biplane EDV: {edv.toFixed(2)} mL · ESV: {esv.toFixed(2)} mL</div>
+                        ) : null;
+                    })()}
+                  </div>
                 ) : null}
               </div>
             ) : (
