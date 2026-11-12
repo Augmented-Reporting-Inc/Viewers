@@ -2011,6 +2011,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
   const lastCompositeGoldCaptureErrorRef = useRef('');
   // Serialize source-ID captures so two calipers cannot race a gold-set update.
   const autoBowelGoldCaptureQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const autoSpectralLearnerCaptureInFlightRef = useRef(new Set<string>());
+  const [spectralLearnerCaptureErrors, setSpectralLearnerCaptureErrors] =
+    useState<Record<string, string>>({});
   const autoBowelLearnerCaptureInFlightRef = useRef(new Set<string>());
   const autoBowelLearnerCaptureQueueRef = useRef<Promise<void>>(Promise.resolve());
   const autoCompositeLearnerCaptureInFlightRef = useRef(new Set<string>());
@@ -3928,8 +3931,49 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
           autoBowelLearnerCaptureQueueRef.current.then(captureQueuedCaliper, captureQueuedCaliper);
         return;
       }
+      // Calibrated Vmax annotation completion can precede OHIF's async
+      // MeasurementService adapter. Retry capture by the *same* annotation
+      // ID only, and never use the educator gold or a different selected ROI.
+      const kind = cleanString(plainObject(question.answerConfig).measurementKind);
+      if (kind === 'trVmax') {
+        if (labelCompleted) return;
+        const key = quizKey + ':' + questionKey;
+        const captureId = key + ':' + measurementId;
+        if (autoSpectralLearnerCaptureInFlightRef.current.has(captureId)) return;
+        autoSpectralLearnerCaptureInFlightRef.current.add(captureId);
+        void (async () => {
+          try {
+            for (const delayMs of [100, 350, 900, 1800, 3200]) {
+              await new Promise(resolve => window.setTimeout(resolve, delayMs));
+              if (lastActivatedQuestionRef.current !== key) return;
+              const accepted = await captureSelectedMeasurementAnswer(quiz, question, {
+                measurementId, silent: true,
+              });
+              if (accepted) {
+                setSpectralLearnerCaptureErrors(current => {
+                  if (!current[key]) return current;
+                  const next = { ...current }; delete next[key]; return next;
+                });
+                return;
+              }
+            }
+            if (lastActivatedQuestionRef.current !== key) return;
+            setSpectralLearnerCaptureErrors(current => ({
+              ...current,
+              [key]: 'TR Vmax was not recorded from the calibrated spectral annotation. Verify its measurement label and DICOM calibration, then recapture before the IVC question.',
+            }));
+            uiNotificationService.show({
+              title: 'TR Vmax not recorded', type: 'warning', duration: 6500,
+              message: 'The calibrated TR Vmax could not be linked to this quiz answer. Recheck the spectral measurement before continuing to RVSP.',
+            });
+          } finally {
+            autoSpectralLearnerCaptureInFlightRef.current.delete(captureId);
+          }
+        })();
+        return;
+      }
       if (labelCompleted || isGuidedQuizCompositeKind(
-        cleanString(plainObject(question.answerConfig).measurementKind)
+        kind
       )) {
         // Composite calculations are captured only when complete.
         return;
@@ -6140,6 +6184,26 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
             ? renderRVFACContourControls(quiz, question, disabled)
             : null}
           {renderCompositeCalculatedStatus(quiz, question)}
+          {cleanString(plainObject(question.answerConfig).measurementKind) === 'trVmax'
+            ? (() => {
+                const captured = value?.measurementKind === 'trVmax' &&
+                  value?.unit === 'm/s' &&
+                  Number.isFinite(Number(value?.value)) &&
+                  Number(value?.value) > 0 && Number(value?.value) <= 8 &&
+                  !!cleanString(value?.sourceAnnotationId) &&
+                  targetHasNavigationIdentity(value?.viewerTarget);
+                const issue = spectralLearnerCaptureErrors[captureKey];
+                return (
+                  <div className={captured
+                    ? 'rounded border border-emerald-700 bg-emerald-950/20 p-2 text-xs text-emerald-100'
+                    : 'rounded border border-amber-700 bg-amber-950/20 p-2 text-xs text-amber-100'}>
+                    {captured
+                      ? 'Saved learner TR Vmax: ' + Number(value.value).toFixed(2) +
+                        ' m/s · Available for IVC / RVSP calculation'
+                      : (issue || 'No source-linked learner TR Vmax is recorded yet. Complete the calibrated spectral Vmax measurement before proceeding to IVC.')}
+                  </div>
+                );
+              })() : null}
           {renderLearnerIVCRapReview(quiz, question, value, disabled)}
           {bowelSet ? (
             <div className="rounded border border-blue-700 bg-blue-950/20 p-2 text-xs text-gray-200">
@@ -6220,7 +6284,8 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
             : ['rvFAC', 'laVolumeBiplane', 'laVolumeBiplaneDisks',
               'ivcCollapsibility'].includes(
               cleanString(plainObject(question.answerConfig).measurementKind)
-            ) ? null : (
+            ) ? null : cleanString(plainObject(question.answerConfig).measurementKind) === 'trVmax'
+              ? null : (
                         <div className="flex w-full min-w-0 max-w-full items-center gap-2 overflow-hidden">
                           <input
                             className="min-w-0 flex-1 rounded border border-gray-700 bg-black px-2 py-1 text-sm text-white"
@@ -6295,7 +6360,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                 ? 'Complete four LV contours, select Calculate EF in the EF panel, then capture the calculated result.'
                 : cleanString(plainObject(question.answerConfig).measurementKind) === 'laVolumeBiplane'
                   ? 'Complete both LA contours, then capture the calculated volume.'
-                  : 'Draw or select a measurement annotation in the viewport, then use it as the answer.'}
+                  : cleanString(plainObject(question.answerConfig).measurementKind) === 'trVmax'
+                    ? 'Complete a calibrated TR spectral peak measurement; the quiz will capture its velocity and DICOM source automatically.'
+                    : 'Draw or select a measurement annotation in the viewport, then use it as the answer.'}
             </div>
           ) : null}
         </div>
