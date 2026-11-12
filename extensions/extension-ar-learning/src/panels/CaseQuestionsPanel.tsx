@@ -4497,10 +4497,26 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               onClick={event => {
                 event.preventDefault();
                 event.stopPropagation();
-                void runViewerCommand(commandsManager, 'jumpToViewerQuizTarget', {
-                  viewerTarget: targets[slot],
-                  questionKey: question.questionKey,
-                });
+                const gold = plainObject(config.goldMeasurement);
+                const savedIVCCalipers = authoringMode &&
+                  cleanString(config.measurementKind) === 'ivcCollapsibility' &&
+                  Array.isArray(gold.compositeResult?.components) &&
+                  gold.compositeResult.components.length === 2;
+                void runViewerCommand(commandsManager,
+                  savedIVCCalipers ? 'showViewerQuizMeasurementComparison' : 'jumpToViewerQuizTarget',
+                  savedIVCCalipers ? {
+                    rubricMeasurement: gold,
+                    viewerTarget: targets[slot],
+                    questionKey: question.questionKey,
+                    endpointToleranceMM:
+                      plainObject(question.scoringConfig).caliperEndpointToleranceMM ?? 5,
+                    ivcEndpointToleranceEnabled:
+                      plainObject(question.scoringConfig).caliperEndpointToleranceEnabled !== false,
+                  } : {
+                    viewerTarget: targets[slot],
+                    questionKey: question.questionKey,
+                  }
+                );
               }}
             >
               {label} · Open source
