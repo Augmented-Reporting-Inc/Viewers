@@ -2652,7 +2652,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       <div className="mt-2 rounded border border-emerald-700/60 bg-emerald-950/10 px-2 py-2 text-xs">
         {hasLive ? (
           <div className="font-semibold text-emerald-200">
-            {sameGold ? (authoringMode ? 'Calculated and saved gold: ' : 'Calculated and saved learner answer: ')
+            {sameGold ? (authoringMode ? 'Calculated and saved gold: ' : 'Calculated: ')
               : 'Calculated measurement: '}
             {Number(status.value).toFixed(2)} {unit}
           </div>
@@ -2722,7 +2722,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         <span className={live || hasSaved ? 'text-emerald-200 text-[11px]' : 'text-amber-200 text-[11px]'}>
           {live ? 'Measured' : hasSaved ? (authoringMode ? 'Gold saved' : 'Learner saved') : 'Not measured'}
           {areaLabel}
-          {hasSaved ? (authoringMode ? ' · Gold source saved' : ' · Learner source saved') : ''}
+          {hasSaved ? (authoringMode ? ' · Gold source saved' : '') : ''}
         </span>
         {hasSaved && targetHasNavigationIdentity(saved?.target) ? (
           <button
@@ -3615,7 +3615,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
             title: 'Case Questions',
             message:
               reason === 'no-selected-measurement'
-                ? 'Select the measurement annotation in the viewport first, then use it as the answer.'
+                ? 'Select the measurement annotation in the viewport first.'
                 : `Could not use selected measurement: ${reason}`,
             type: 'warning',
             duration: 4500,
@@ -5465,7 +5465,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         <div className="mb-1 font-semibold text-cyan-100">IVC phase measurements</div>
         <p className="mb-2 text-gray-300">
           Choose expiration or inspiration below, then draw the calibrated
-          Length caliper. The selected phase is assigned automatically.
+          Length caliper.
         </p>
         <div className="space-y-2">
           {[
@@ -5583,8 +5583,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       <div className="mt-2 rounded border border-cyan-700 bg-cyan-950/20 p-2 text-xs">
         <div className="mb-1 font-semibold text-cyan-100">RV FAC contour technique</div>
         <div className="mb-2 text-gray-300">
-          Navigate to the required DICOM instance and frame for each phase, then
-          choose either freehand tracing or annulus-axis + apex placement.
+          Choose either freehand tracing or annulus-axis + apex placement.
           The measurement result, not the drawing technique, is scored.
         </div>
         {slots.map(({ slot, label }) => (
@@ -5720,7 +5719,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
           <div className="mt-2 rounded border border-emerald-700 p-2 text-emerald-100">
             Saved learner RAP: {reviewedRAP} mmHg
             <div>Calculated RVSP: {Number(saved.rvspMMHG).toFixed(2)} mmHg</div>
-            <div className="text-gray-300">Both values are included in the quiz answer on Save or Submit.</div>
+
           </div>
         ) : null}
       </div>
@@ -6362,7 +6361,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                   ? 'Complete both LA contours, then capture the calculated volume.'
                   : cleanString(plainObject(question.answerConfig).measurementKind) === 'trVmax'
                     ? 'Complete a calibrated TR spectral peak measurement; the quiz will capture its velocity and DICOM source automatically.'
-                    : 'Draw or select a measurement annotation in the viewport, then use it as the answer.'}
+                    : 'Draw or select a measurement annotation in the viewport.'}
             </div>
           ) : null}
         </div>
@@ -7918,8 +7917,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                   ) : null}
 
                   <div className="bg-blue-950/30 mt-3 min-w-0 max-w-full rounded border border-blue-700 p-2 text-xs text-blue-100">
-                    Select a question above before answering. An assigned target opens its
-                    instance without revealing the correct frame.
+                    Select a question above before answering.
                   </div>
 
                   <div className="mt-3 space-y-4">
@@ -7963,12 +7961,6 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                             {index + 1}. {question.title || question.prompt}
                             {question.required ? <span className="text-red-300"> *</span> : null}
                           </div>
-
-                          {hasViewerTarget ? (
-                            <div className="mt-1 text-[11px] uppercase tracking-wide text-blue-300">
-                              {question.type === 'frameSelection' ? 'Opens target instance' : 'Opens target'}
-                            </div>
-                          ) : null}
 
                           {question.title ? (
                             <div
