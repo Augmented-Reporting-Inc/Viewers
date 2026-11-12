@@ -115,3 +115,13 @@ export function getQuizCompositeContourViewportLines(
   }
   return [`${labels[slot]}: calibrated area unavailable`];
 }
+
+
+/** Carry explicit guided RV/RA identity through native ROI remapping.
+ * A similar free-text label alone never establishes an Echo Area source. */
+export function getQuizEchoAreaSourceMetadata(data: any = {}): Record<string, any> {
+  const source = data?.echoArea;
+  const slot = String(source?.slot || '').trim().toUpperCase();
+  if (!['RV_ED', 'RV_ES', 'RA_ES'].includes(slot)) return {};
+  return { measurementKind: 'echoAreaSlot', echoArea: { ...source, slot } };
+}

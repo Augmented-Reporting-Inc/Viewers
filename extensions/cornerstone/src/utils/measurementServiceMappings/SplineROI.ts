@@ -1,3 +1,4 @@
+import { getQuizEchoAreaSourceMetadata } from '../quizEchoAreaCalibration';
 import { getSplinePersistence } from '../splinePersistence';
 import SUPPORTED_TOOLS from './constants/supportedTools';
 import getSOPInstanceAttributes from './utils/getSOPInstanceAttributes';
@@ -69,6 +70,7 @@ const SplineROI = {
       SOPInstanceUID,
       FrameOfReferenceUID,
       points: data.contour.polyline,
+      ...getQuizEchoAreaSourceMetadata(data),
       ...getSplinePersistence({ toolName }, annotation),
       textBox: data.handles.textBox,
       metadata,

@@ -127,7 +127,7 @@ import { getEchoAreaSlot } from '../../extension-ar-measurements/src/utils/echoA
 import { resolveViewerQuizCompositeResult, resolveViewerQuizLVSimpsonForStudy, isViewerQuizCompositeReviewCurrent, getViewerQuizCompositeStatus } from '../../extension-ar-measurements/src/utils/viewerQuizCompositeResults';
 import { createGuidedMouseToolOwnership } from './utils/guidedMouseToolOwnership';
 import { calibrateUSContourPoints, worldToImageIndex } from './utils/usRegionLengthCalibration';
-import { calculateCalibratedEchoAreaCM2, getSavedQuizEchoAreaDisplayInfo, getQuizCompositeContourViewportLines, getQuizCompositeGoldContourSlotMetadata } from './utils/quizEchoAreaCalibration';
+import { getQuizEchoAreaSourceMetadata, calculateCalibratedEchoAreaCM2, getSavedQuizEchoAreaDisplayInfo, getQuizCompositeContourViewportLines, getQuizCompositeGoldContourSlotMetadata } from './utils/quizEchoAreaCalibration';
 import { installQuizContourTextRenderer } from './utils/installQuizContourTextRenderer';
 import { resolveViewerQuizGoldAreaBackfill } from '../../extension-ar-measurements/src/utils/quizGoldAreaBackfill';
 
@@ -665,7 +665,9 @@ function getCurrentViewerMeasurementSnapshot(
       // calibrated cachedStats, never infer an area/diameter from polygon pixels.
       const sourceKind = String(measurement?.measurementKind ||
         measurement?.measurements?.measurementKind || '').trim();
-      const isRightHeartContour = sourceKind === 'echoAreaSlot';
+      const echoAreaSource = getQuizEchoAreaSourceMetadata(annotation?.data);
+      const isRightHeartContour = sourceKind === 'echoAreaSlot' ||
+        echoAreaSource.measurementKind === 'echoAreaSlot';
       const ivcLabel = String(measurement?.label ||
         measurement?.measurementRole || measurement?.role || '')
         .toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -698,6 +700,7 @@ function getCurrentViewerMeasurementSnapshot(
             : null;
           return {
             ...measurement,
+            ...echoAreaSource,
             ...(hasAreaCalibration ? {
               points: contourPoints,
               area: updatedArea,
@@ -3028,6 +3031,8 @@ function serializeViewerMeasurement(measurement, domain, existingAnnotation = nu
             view: 'A4C',
             phase: echoAreaSlot === 'RV_ED' ? 'ED' : 'ES',
             method: echoArea?.method || 'closed-contour-planimetry',
+            ...(Array.isArray(echoArea?.calibrationRegions)
+              ? { calibrationRegions: echoArea.calibrationRegions } : {}),
           },
         }
       : {}),
@@ -4115,9 +4120,16 @@ function buildContourMeasurementPayload(
       : existingAnnotation?.measurements?.displayText || existingAnnotation?.displayText || [];
   const displayText = normalizeDisplayTextUnits(rawDisplayText, 'area');
 
-  const rawArea =
-    finiteNumberOrNull(stats?.area) ?? finiteNumberOrNull(existingAnnotation?.measurements?.area);
-  const rawAreaUnit = stats?.areaUnit || existingAnnotation?.measurements?.areaUnit || '';
+  // The snapshot recomputes guided areas from the current source contour and
+  // DICOM region. Prefer that value over native ROI statistics and old saves.
+  const hasVerifiedArea = !!getEchoAreaSlot(measurement) &&
+    Object.prototype.hasOwnProperty.call(measurement?.measurements || {}, 'area');
+  const rawArea = hasVerifiedArea
+    ? (measurement.measurements.area == null ? null : finiteNumberOrNull(measurement.measurements.area))
+    : finiteNumberOrNull(stats?.area) ?? finiteNumberOrNull(existingAnnotation?.measurements?.area);
+  const rawAreaUnit = hasVerifiedArea
+    ? measurement.measurements.areaUnit || ''
+    : stats?.areaUnit || existingAnnotation?.measurements?.areaUnit || '';
 
   if (rawArea == null) {
     return {

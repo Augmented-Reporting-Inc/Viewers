@@ -4243,9 +4243,10 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       throw new Error('AR requires the learner hemodynamic review update before TR Vmax, RAP and RVSP can be transferred.');
     }
     const fieldForEvidence = { 'quiz-tr': 'TRVel', 'quiz-rap': 'RASP', 'quiz-rvsp': 'RVSP' };
-    if (quizEvidenceRows.some(row => row.recorded &&
-      !preview.educationQuizHemodynamicFields?.includes(fieldForEvidence[row.key.split(':')[0]]))) {
-      throw new Error('AR could not verify the learner TR/IVC measurement sources for transfer. Review the source measurements and retry.');
+    const unverified = quizEvidenceRows.filter(row => row.recorded &&
+      !preview.educationQuizHemodynamicFields?.includes(fieldForEvidence[row.key.split(':')[0]]));
+    if (unverified.length) {
+      throw new Error(`AR could not verify ${unverified.map(row => row.label).join(', ')} for transfer. Review those source measurements and retry.`);
     }
     const rows = buildClinicalReportReviewRows(preview);
     if (!rows.length && preview?.measurementAnnotationsChanged === false &&
