@@ -16058,6 +16058,8 @@ function commandsModule({
       questionKey = '',
       radius = null,
       radiusUnit = 'world',
+      endpointToleranceMM = null,
+      ivcEndpointToleranceEnabled = false,
     } = {}) => {
       clearViewerQuizMeasurementComparisonAnnotations();
       clearAllViewerQuizMarkerOverlays();
@@ -16260,7 +16262,10 @@ function commandsModule({
       // Authoring gold calipers already loaded in Cornerstone should be selected
       // directly. Reconstructing a temporary comparison overlay can fail when
       // the saved source annotation has not yet been rehydrated into this viewport.
-      if (!compositeRubric && goldSourceId && !getViewerQuizMeasurementSourceAnnotationId(learnerMeasurement)) {
+      if (!compositeRubric && goldSourceId &&
+          !getViewerQuizMeasurementSourceAnnotationId(learnerMeasurement) &&
+          !(endpointToleranceMM !== null && endpointToleranceMM !== '' &&
+            Number.isFinite(Number(endpointToleranceMM)) && Number(endpointToleranceMM) > 0)) {
         const liveGold = annotation.state.getAnnotation?.(goldSourceId);
         const goldTarget = getViewerQuizMeasurementReferenceTarget(rubricMeasurement, rubricAnnotation);
         const expectedImage = normalizeImageIdForCompare(
@@ -16444,9 +16449,62 @@ function commandsModule({
         getViewerQuizMeasurementCenterPoint(rubricAnnotation) ||
         getViewerQuizMeasurementCenterPoint(rubricMeasurement);
       const numericRadius = Number(radius);
+      const endpointRadius = endpointToleranceMM === null || endpointToleranceMM === ''
+        ? null : Number(endpointToleranceMM);
+      const isIVC = rubricMeasurement?.measurementKind === 'ivcCollapsibility';
+      const useEndpointTolerance =
+        isIVC ? ivcEndpointToleranceEnabled === true
+          : rubricMeasurement?.measurementKind === 'length' &&
+            endpointRadius !== null;
       let toleranceCircleRendered = false;
+      let endpointCirclesRendered = 0;
 
-      if (rubricCenter && Number.isFinite(numericRadius) && numericRadius > 0) {
+      if (useEndpointTolerance && endpointRadius !== null &&
+          Number.isFinite(endpointRadius) && endpointRadius > 0) {
+        const activeImage = normalizeImageIdForCompare(
+          viewport.getCurrentImageId?.() || ''
+        );
+        const goldParts = isIVC
+          ? (Array.isArray(rubricMeasurement?.compositeResult?.components)
+              ? rubricMeasurement.compositeResult.components : [])
+          : [rubricAnnotation || rubricMeasurement];
+        for (const part of goldParts) {
+          if (isIVC && focusedCompositeSlot && part?.slot !== focusedCompositeSlot) continue;
+          const sourceTarget = part?.target ||
+            getViewerQuizMeasurementReferenceTarget(rubricMeasurement, rubricAnnotation) || {};
+          const expectedImage = normalizeImageIdForCompare(
+            sourceTarget.referencedImageId || part?.referencedImageId || ''
+          );
+          const expectedInstanceFrame = sourceTarget.sopInstanceUID &&
+            Number.isInteger(Number(sourceTarget.frameNumber)) &&
+            Number(sourceTarget.frameNumber) > 0
+            ? `/instances/${String(sourceTarget.sopInstanceUID).toLowerCase()}/frames/${Number(sourceTarget.frameNumber)}`
+            : '';
+          const frameMatches = activeImage && (
+            (expectedImage && (activeImage === expectedImage ||
+              activeImage.endsWith(expectedImage))) ||
+            (expectedInstanceFrame && activeImage.includes(expectedInstanceFrame))
+          );
+          // Composite phase geometry must only appear on its exact gold image/frame.
+          if (isIVC && !frameMatches) continue;
+          const points = getViewerQuizMeasurementPoints(part);
+          if (points.length !== 2) continue;
+          for (const coordinates of points) {
+            const point = {
+              x: Number(coordinates[0]),
+              y: Number(coordinates[1]),
+              z: Number(coordinates[2] || 0),
+              coordinateSpace: 'world',
+            };
+            if (appendViewerQuizToleranceCircle({
+              viewport, point, radius: endpointRadius, radiusUnit: 'mm',
+            })) endpointCirclesRendered += 1;
+          }
+        }
+        toleranceCircleRendered = endpointCirclesRendered > 0;
+      } else if (!useEndpointTolerance && rubricCenter &&
+          Number.isFinite(numericRadius) && numericRadius > 0) {
+        // Retain the older centre-radius display for saved legacy questions.
         toleranceCircleRendered = appendViewerQuizToleranceCircle({
           viewport,
           point: rubricCenter,
@@ -16484,6 +16542,7 @@ function commandsModule({
         compositeContoursExpected: compositeRubric ? expectedSlots.length : 0,
         compositeContoursResolved: resolvedRubricContours.length,
         toleranceCircleRendered,
+        endpointCirclesRendered,
       };
     },
     getCurrentViewerQuizFrameAnswer: async () => {
