@@ -4311,8 +4311,8 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       if (deferredReportScoring && quiz.questions.some(q => q.type === 'measurementNumeric')) {
         await confirmReportOwnedMeasurementSave(quiz, quizAnswers);
       }
-      // A quiz JSON answer is not proof its individual phase annotations were
-      // saved. Persist only the exact missing source contours on the learner's
+      // A quiz JSON answer is not proof its source annotations were
+      // saved. Persist only the exact missing source annotations on the learner's
       // own Series before saving the answer. In combined report workflows the
       // existing reviewed report-owned save runs first (above).
       const compositeSources = getLearnerCompositePersistenceSources(
@@ -4352,7 +4352,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
             )
           )) {
             throw new Error(
-              'Some learner composite contours are not available with their saved DICOM frame. Reopen and verify the affected measurements before saving.'
+              'Some learner measurements, including spectral or contour sources, are not available with their saved DICOM frame. Reopen and verify the affected measurements before saving.'
             );
           }
           const result = await runViewerCommand(
@@ -4365,14 +4365,14 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
           );
           if (!result || result.ok === false) {
             throw new Error(
-              'The learner phase contours could not be saved to AR. Quiz answers were not saved.'
+              'The learner source measurements could not be saved to AR. Quiz answers were not saved.'
             );
           }
           persisted = await readSaved();
           if (!persisted?.seriesDoc?.isLearnerCopy ||
               getMissing(persisted.annotations).length) {
             throw new Error(
-              'AR did not confirm persistence of every learner phase contour. Quiz answers were not saved.'
+              'AR did not confirm persistence of every learner measurement source. Quiz answers were not saved.'
             );
           }
         }
