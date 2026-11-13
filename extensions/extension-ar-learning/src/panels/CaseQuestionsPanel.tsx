@@ -7099,6 +7099,11 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         {hasGuidedEFFrames ? (
           <div className="mt-2 rounded border border-cyan-700 bg-cyan-950/20 p-2">
             <div className="text-xs font-semibold text-cyan-100">EF contour measurements</div>
+            <p className="mt-1 text-xs text-gray-300">
+              Choose an individual A4C/A2C systolic or diastolic contour, then draw with
+              Freehand or Axis + apex. View saved opens that contour's original DICOM frame;
+              Delete clears only the selected draft contour and requires a new EF calculation.
+            </p>
             <div className="mt-2 rounded border border-emerald-700 bg-emerald-950/30 p-2 text-sm font-semibold text-emerald-100">
               Gold EF: {savedEFGold !== undefined
                 ? Number(savedEFGold).toFixed(2) + '%' : 'Not captured'}
