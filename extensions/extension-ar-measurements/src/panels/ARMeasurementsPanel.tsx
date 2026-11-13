@@ -1291,6 +1291,28 @@ export function ClinicalReportMeasurementReviewModal({
             shown with their measurements. Viewer annotations are saved even when a report value is
             not selected.
           </div>
+          {Array.isArray(review.quizEvidenceRows) && review.quizEvidenceRows.length > 0 ? (
+            <div className="mt-3 rounded border border-cyan-800 bg-cyan-950/20 p-3">
+              <div className="text-sm font-semibold text-cyan-100">
+                Quiz measurements — saved with the learner's AR quiz response
+              </div>
+              <div className="mt-1 text-xs text-gray-300">
+                {review.educationWorkflow
+                  ? 'Select the applicable TR Vmax, RAP and RVSP rows below to apply them to your AR learner report.'
+                  : 'Quiz answer evidence is saved with the learner response.'}
+              </div>
+              <div className="mt-2 space-y-1 text-sm">
+                {review.quizEvidenceRows.map((row: any) => (
+                  <div key={row.key} className="flex flex-wrap justify-between gap-x-3">
+                    <span className="font-medium text-gray-200">{row.label}</span>
+                    <span className={row.recorded ? 'text-emerald-200' : 'text-amber-200'}>
+                      {row.display}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
           {hasDerivedConsequences ? (
             <div className="mt-2 text-xs text-gray-400">
               AR will also recalculate dependent indexed values from any selected source

@@ -1,7 +1,7 @@
 import { calculateLVSimpson, LV_SIMPSON_SLOT_ORDER } from './lvSimpson';
 import { calculateLAVolume, calculateLABiplaneDisks, LA_VOLUME_SLOT_ORDER, LA_VOLUME_AREA_LENGTH_METHOD, LA_VOLUME_DISKS_METHOD } from './laVolume';
-import { calculateRVFACFromMeasurements, calculateRAAreaFromMeasurements, getEchoAreaSlot } from './echoAreaMeasurements';
-import { calculateIVCFromMeasurements, isIVCDiameterMeasurement } from './rightHeartMeasurements';
+import { calculateRVFACFromMeasurements, calculateRAAreaFromMeasurements, getEchoAreaSlot, getCalibratedEchoAreaCM2 } from './echoAreaMeasurements';
+import { calculateIVCFromMeasurements, isIVCDiameterMeasurement, getMeasurementDICOMFrameNumber } from './rightHeartMeasurements';
 
 type Measurement = Record<string, any>;
 type CompositeKind = 'lvSimpsonEF' | 'laVolumeBiplane' | 'laVolumeBiplaneDisks' | 'rvFAC' | 'raArea' | 'ivcCollapsibility';
@@ -47,26 +47,6 @@ function slotOf(measurement: Measurement, kind: CompositeKind): string {
   return slot || '';
 }
 
-/**
- * For multiframe EF contours, the referenced image is the actual viewed
- * frame. Some legacy annotations retain a default frameNumber=1 despite
- * referencing another /frames/N image. Do not transfer that stale number
- * into newly authored gold/scored composite evidence.
- *
- * Restrict this correction to EF; other measurement contracts are unchanged.
- */
-function efSourceFrameNumber(measurement: Measurement): number {
-  const imageId = clean(
-    measurement?.referencedImageId || measurement?.metadata?.referencedImageId
-  );
-  const match = imageId.match(/\/frames\/([1-9][0-9]*)(?:[/?#]|$)/);
-  if (match) {
-    const referencedFrame = Number(match[1]);
-    if (Number.isSafeInteger(referencedFrame)) return referencedFrame;
-  }
-  return Number(measurement?.frameNumber || measurement?.metadata?.frameNumber || 0);
-}
-
 // The FormAPI EF evidence contract rejects contours above 5,000 points.
 // Keep a margin for future protocol metadata and leave clinical/source contours
 // untouched. This reduces only the polygon sent as spatial quiz evidence.
@@ -87,6 +67,33 @@ export function boundEFQuizEvidencePoints(points: number[][]): number[][] {
     output.push(points[sourceIndex]);
   }
   return output;
+}
+
+/**
+ * Calculate an LV cavity contour's physical area ONLY from its already
+ * calibrated millimetre coordinates. This is not a Cornerstone pixel ROI
+ * statistic and must not be computed from the quiz evidence world points.
+ */
+export function calibratedLVContourAreaCM2(points: unknown): number | null {
+  if (!Array.isArray(points) || points.length < 3 ||
+      points.length > 50000) return null;
+  const vectors = points.map(point =>
+    Array.isArray(point) && point.length >= 2 && point.length <= 3
+      ? [Number(point[0]), Number(point[1]), Number(point[2] ?? 0)]
+      : null);
+  if (vectors.some(point => !point || point.some(value => !Number.isFinite(value)))) {
+    return null;
+  }
+  const cross = [0, 0, 0];
+  for (let i = 0; i < vectors.length; i += 1) {
+    const a = vectors[i]!, b = vectors[(i + 1) % vectors.length]!;
+    cross[0] += a[1] * b[2] - a[2] * b[1];
+    cross[1] += a[2] * b[0] - a[0] * b[2];
+    cross[2] += a[0] * b[1] - a[1] * b[0];
+  }
+  // Polygon cross-product is twice its area in mm².
+  const cm2 = Math.hypot(...cross) / 200;
+  return Number.isFinite(cm2) && cm2 > 0 ? cm2 : null;
 }
 
 function collectComponents(measurements: Measurement[], kind: CompositeKind) {
@@ -133,9 +140,9 @@ function collectComponents(measurements: Measurement[], kind: CompositeKind) {
         seriesInstanceUID: clean(measurement.referenceSeriesUID || measurement.SeriesInstanceUID),
         sopInstanceUID: clean(measurement.SOPInstanceUID || measurement.metadata?.SOPInstanceUID),
         referencedImageId: clean(measurement.referencedImageId || measurement.metadata?.referencedImageId),
-        frameNumber: kind === 'lvSimpsonEF'
-          ? efSourceFrameNumber(measurement)
-          : Number(measurement.frameNumber || measurement.metadata?.frameNumber || 0),
+        // Use the actual DICOM image frame for every composite, including
+        // RV FAC and LA, without weakening the same-SOP/frame prohibition.
+        frameNumber: getMeasurementDICOMFrameNumber(measurement),
       },
     });
   }
@@ -235,6 +242,36 @@ export function resolveViewerQuizCompositeResult(
     unit: kind === 'lvSimpsonEF' || kind === 'rvFAC' || kind === 'ivcCollapsibility'
       ? '%' : kind === 'raArea' ? 'cm2' : 'mL',
     components,
+    // Save the independently calibrated per-contour LV long axes with the
+    // approved biplane EF result. A biplane EDV/ESV is not an individual
+    // contour area or a single-view volume: never invent those quantities.
+    ...(kind === 'lvSimpsonEF' && (result as any)?.slots ? {
+      derived: {
+        slotLongAxisMM: Object.fromEntries(
+          LV_SIMPSON_SLOT_ORDER.flatMap(slot => {
+            const geometry = (result as any).slots[slot];
+            const length = Number(geometry?.longAxisLengthMM);
+            return geometry?.complete === true &&
+              Number.isFinite(length) && length > 0 ? [[slot, length]] : [];
+          })
+        ),
+        slotAreaCM2: Object.fromEntries(
+          LV_SIMPSON_SLOT_ORDER.flatMap(slot => {
+            const sources = measurements.filter(m =>
+              sourceKind(m) === 'lvSimpsonSlot' && slotOf(m, 'lvSimpsonEF') === slot);
+            if (sources.length !== 1 ||
+                (result as any).slots[slot]?.complete !== true) return [];
+            const sourceGeometry = geometry(sources[0], 'lvSimpsonEF');
+            if (sourceGeometry.calibrationError) return [];
+            const value = calibratedLVContourAreaCM2(
+              sourceGeometry.calibratedContourPoints);
+            return value !== null ? [[slot, value]] : [];
+          })
+        ),
+        edvML: (result as any).values?.edvML,
+        esvML: (result as any).values?.esvML,
+      },
+    } : {}),
     ...(kind === 'ivcCollapsibility' && result?.values ? {
       derived: {
         expirationDiameterMM: (result.values as any).expirationDiameterMM,
@@ -242,6 +279,120 @@ export function resolveViewerQuizCompositeResult(
         collapsibilityPercent: (result.values as any).collapsibilityPercent,
       },
     } : {}),
+    ...(kind === 'rvFAC' && result?.values ? {
+      derived: {
+        edaCM2: (result.values as any).edaCM2,
+        esaCM2: (result.values as any).esaCM2,
+        facPercent: (result.values as any).facPercent,
+      },
+    } : {}),
+    ...((kind === 'laVolumeBiplane' || kind === 'laVolumeBiplaneDisks') &&
+      (result as any)?.slots ? {
+      derived: {
+        a4cAreaCM2: (result as any).slots.A4C?.areaCM2,
+        a2cAreaCM2: (result as any).slots.A2C?.areaCM2,
+        volumeML: value,
+      },
+    } : {}),
+  };
+}
+
+/**
+ * Read-only status for the Case Questions panel and educator Save Draft
+ * preflight. Uses the exact same validated composite resolver as gold capture,
+ * but exposes actionable missing-calibration/geometry diagnostics without
+ * disclosing study identifiers or treating incomplete evidence as a gold value.
+ */
+/** Preview verified physical phase areas; never infer area from image pixels. */
+function getCompositeCalibratedPhaseAreas(kind: CompositeKind, measurements: Measurement[]) {
+  const phaseValues: Record<string, number> = {};
+  if (kind === 'rvFAC' || kind === 'raArea') {
+    for (const slot of (kind === 'rvFAC' ? ['RV_ED', 'RV_ES'] : ['RA_ES'])) {
+      const found = measurements.filter(m => getEchoAreaSlot(m) === slot);
+      if (found.length !== 1) continue;
+      const area = getCalibratedEchoAreaCM2(found[0]);
+      if (area != null && Number.isFinite(area) && area > 0) phaseValues[slot] = area;
+    }
+  }
+  if (kind === 'ivcCollapsibility') {
+    const result = calculateIVCFromMeasurements(measurements);
+    const measured = result?.values;
+    if (measured) {
+      const phases = {
+        IVC_EXP: measured.expirationDiameterMM,
+        IVC_INSP: measured.inspirationDiameterMM,
+      };
+      for (const [slot, diameter] of Object.entries(phases)) {
+        if (diameter != null && Number.isFinite(diameter) && diameter > 0) {
+          phaseValues[slot] = diameter;
+        }
+      }
+    }
+  }
+  if (kind === 'laVolumeBiplane' || kind === 'laVolumeBiplaneDisks') {
+    const la = calculateLAVolume(measurements);
+    for (const slot of LA_VOLUME_SLOT_ORDER) {
+      const phase = la?.slots?.[slot];
+      const area = Number(phase?.areaCM2);
+      if (phase?.complete && Number.isFinite(area) && area > 0) phaseValues[slot] = area;
+    }
+  }
+  return phaseValues;
+}
+
+export function getViewerQuizCompositeStatus(
+  kind: CompositeKind,
+  measurements: Measurement[] = []
+) {
+  const supported: CompositeKind[] = [
+    'lvSimpsonEF', 'laVolumeBiplane', 'laVolumeBiplaneDisks',
+    'rvFAC', 'raArea', 'ivcCollapsibility',
+  ];
+  if (!supported.includes(kind)) {
+    return { complete: false, value: null, unit: '',
+      message: 'Unsupported measurement type.', phaseValues: {} as Record<string, number> };
+  }
+  const measurementList = Array.isArray(measurements) ? measurements : [];
+  const phaseValues = getCompositeCalibratedPhaseAreas(kind, measurementList);
+  const composite = resolveViewerQuizCompositeResult(kind, measurementList);
+  if (composite) {
+    return {
+      complete: true,
+      value: composite.value,
+      unit: composite.unit,
+      message: '',
+      phaseValues,
+      components: composite.components.map(component => ({
+        slot: component.slot,
+        annotationId: component.annotationId,
+      })),
+    };
+  }
+  const result = kind === 'lvSimpsonEF'
+    ? calculateLVSimpson(measurementList)
+    : kind === 'laVolumeBiplane'
+      ? calculateLAVolume(measurementList)
+      : kind === 'laVolumeBiplaneDisks'
+        ? calculateLABiplaneDisks(measurementList)
+        : kind === 'rvFAC'
+          ? calculateRVFACFromMeasurements(measurementList)
+          : kind === 'raArea'
+            ? calculateRAAreaFromMeasurements(measurementList)
+            : calculateIVCFromMeasurements(measurementList);
+  const messages = Array.isArray((result as any)?.messages)
+    ? (result as any).messages
+    : [(result as any)?.message].filter(Boolean);
+  const message = result?.status === 'complete'
+    ? 'The calculated result is available but its annotation geometry or DICOM frame evidence is incomplete. Check source frames and saved contours.'
+    : messages.length
+      ? messages.map(clean).filter(Boolean).join(' ')
+      : 'Complete the required calibrated measurements in the same study.';
+  return {
+    complete: false,
+    value: null,
+    unit: '',
+    message,
+    phaseValues,
   };
 }
 

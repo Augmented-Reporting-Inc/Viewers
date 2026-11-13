@@ -1,4 +1,5 @@
-import { calculateRAArea, calculateRVFAC } from './rightHeartMeasurements';
+import { calculateRAArea, calculateRVFAC, getMeasurementDICOMFrameNumber } from './rightHeartMeasurements';
+import { convertPhysicalValue } from './physicalMeasurementPresentation';
 
 type Measurement = Record<string, any>;
 type AreaSlot = 'RA_ES' | 'RV_ED' | 'RV_ES';
@@ -49,11 +50,7 @@ function isClosedContour(measurement: Measurement): boolean {
 
 function convertAreaCM2(rawValue: unknown, rawUnit: unknown): number | null {
   const n = finitePositive(rawValue);
-  const unit = clean(rawUnit).toLowerCase().replace(/\s/g, '').replace(/²/g, '2');
-  if (n === null) return null;
-  if (unit === 'mm2') return n / 100;
-  if (unit === 'cm2') return n;
-  return null;
+  return n === null ? null : convertPhysicalValue(n, rawUnit, 'cm²', 'area');
 }
 
 /**
@@ -73,12 +70,28 @@ export function getCalibratedEchoAreaCM2(measurement: Measurement): number | nul
   );
   if (direct !== null) return direct;
 
-  const cached = measurement?.data || measurement?.cachedStats || {};
-  if (!cached || typeof cached !== 'object') return null;
-  const candidateValues = Object.values(cached)
-    .filter((value): value is Record<string, any> =>
-      !!value && typeof value === 'object' && !Array.isArray(value))
-    .map(value => convertAreaCM2(value.area, value.areaUnit ?? value.areaUnits))
+  // The Cornerstone annotation stores calibrated SplineROI statistics at
+  // annotation.data.cachedStats[targetId], whereas OHIF MeasurementService may
+  // expose them at measurement.cachedStats or measurement.data.cachedStats.
+  // Read only explicit area values with mm²/cm² units; never turn a pixel
+  // polygon's area into a clinical measurement.
+  const caches = [
+    measurement?.cachedStats,
+    measurement?.data?.cachedStats,
+    measurement?.measurements?.cachedStats,
+    measurement?.data,
+  ];
+  const candidates: Record<string, any>[] = [];
+  for (const cache of caches) {
+    if (!cache || typeof cache !== 'object' || Array.isArray(cache)) continue;
+    if (cache.area != null) candidates.push(cache);
+    for (const value of Object.values(cache)) {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) continue;
+      if ((value as any).area != null) candidates.push(value as Record<string, any>);
+    }
+  }
+  const candidateValues = candidates
+    .map(value => convertAreaCM2(value.area, value.areaUnit ?? value.areaUnits ?? value.unit))
     .filter((value): value is number => value !== null);
 
   if (!candidateValues.length) return null;
@@ -97,7 +110,7 @@ function evidence(measurement: Measurement) {
     studyInstanceUID: clean(measurement?.referenceStudyUID || measurement?.StudyInstanceUID),
     seriesInstanceUID: clean(measurement?.referenceSeriesUID || measurement?.SeriesInstanceUID),
     sopInstanceUID: clean(measurement?.SOPInstanceUID || measurement?.metadata?.SOPInstanceUID),
-    frameNumber: Number(measurement?.frameNumber || measurement?.metadata?.frameNumber || 0),
+    frameNumber: getMeasurementDICOMFrameNumber(measurement),
     referencedImageId: clean(measurement?.referencedImageId || measurement?.metadata?.referencedImageId),
   };
 }

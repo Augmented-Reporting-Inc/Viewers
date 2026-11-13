@@ -60,3 +60,40 @@ export function getEFGoldContourAuthoringRows(answerConfig: any, savedComponents
     };
   });
 }
+
+
+/**
+ * EF readiness (approved scalar) is distinct from complete physical display
+ * evidence. Legacy gold questions may remain published with missing axes.
+ * Never derive a hinge-to-apex measurement from an area or world-space pixels.
+ * New educator captures must supply all four independently calibrated axes.
+ */
+export function getEFGoldDerivedEvidenceStatus(gold: any) {
+  const derived = gold?.compositeResult?.derived || {};
+  const axes = derived.slotLongAxisMM || {};
+  const areas = derived.slotAreaCM2 || {};
+  const positive = (value: unknown): boolean =>
+    value !== null && value !== undefined && value !== '' &&
+    Number.isFinite(Number(value)) && Number(value) > 0;
+  const nonNegative = (value: unknown): boolean =>
+    value !== null && value !== undefined && value !== '' &&
+    Number.isFinite(Number(value)) && Number(value) >= 0;
+  const missingLongAxisSlots = EF_CONTOUR_FRAME_SLOTS
+    .filter(({ slot }) => !positive(axes[slot]))
+    .map(({ slot }) => slot);
+  const missingAreaSlots = EF_CONTOUR_FRAME_SLOTS
+    .filter(({ slot }) => !positive(areas[slot]))
+    .map(({ slot }) => slot);
+  const hasBiplaneVolumes = positive(derived.edvML) && nonNegative(derived.esvML);
+  const hasEF = positive(gold?.value);
+  return {
+    hasEF,
+    missingLongAxisSlots,
+    missingAreaSlots,
+    hasBiplaneVolumes,
+    complete: hasEF &&
+      missingLongAxisSlots.length === 0 &&
+      missingAreaSlots.length === 0 &&
+      hasBiplaneVolumes,
+  };
+}

@@ -1,4 +1,4 @@
-import { boundEFQuizEvidencePoints, isViewerQuizCompositeReviewCurrent, resolveViewerQuizCompositeResult, resolveViewerQuizLVSimpsonForStudy } from './viewerQuizCompositeResults';
+import { boundEFQuizEvidencePoints, calibratedLVContourAreaCM2, isViewerQuizCompositeReviewCurrent, resolveViewerQuizCompositeResult, resolveViewerQuizLVSimpsonForStudy, getViewerQuizCompositeStatus } from './viewerQuizCompositeResults';
 
 describe('viewer quiz composite result evidence', () => {
   it('rejects missing required Simpson slots', () => {
@@ -37,6 +37,112 @@ describe('viewer quiz composite result evidence', () => {
   });
 });
 
+
+describe('live composite preview uses the gold-capture validation contract', () => {
+  const rv = (slot: string, areaMM2: number, frameNumber: number) => ({
+    uid: slot, measurementKind: 'echoAreaSlot',
+    toolName: 'SplineROI', echoArea: { slot },
+    points: [[0, 0, 0], [30, 0, 0], [30, 30, 0], [0, 30, 0]],
+    measurements: { area: areaMM2, areaUnit: 'mm²' },
+    referenceStudyUID: 'study', referenceSeriesUID: 'series',
+    SOPInstanceUID: 'sop', referencedImageId: 'wadors:studies/study/series/series/instances/sop/frames/' + frameNumber,
+    frameNumber,
+  });
+  it('previews both physically calibrated IVC diameters, including incomplete pairs', () => {
+    const ivc = (label: string, mm: number, frameNumber: number) => ({
+      uid: label, toolName: 'Length', label,
+      points: [[0, 0, 0], [mm, 0, 0]],
+      measurements: { length: mm, lengthUnit: 'mm' },
+      referenceStudyUID: 'study', referenceSeriesUID: 'series',
+      SOPInstanceUID: 'sop', frameNumber,
+      referencedImageId: 'wadors:studies/study/series/series/instances/sop/frames/' + frameNumber,
+    });
+    const exp = ivc('IVCexp', 20, 14);
+    const insp = ivc('IVCinsp', 10, 17);
+    const partial = getViewerQuizCompositeStatus('ivcCollapsibility', [exp]);
+    expect(partial.complete).toBe(false);
+    expect(partial.phaseValues).toEqual({ IVC_EXP: 20 });
+    const full = getViewerQuizCompositeStatus('ivcCollapsibility', [exp, insp]);
+    expect(full.complete).toBe(true);
+    expect(full.value).toBeCloseTo(50);
+    expect(full.phaseValues).toEqual({ IVC_EXP: 20, IVC_INSP: 10 });
+    expect(resolveViewerQuizCompositeResult('ivcCollapsibility', [exp, insp])?.derived)
+      .toEqual({ expirationDiameterMM: 20, inspirationDiameterMM: 10,
+        collapsibilityPercent: 50 });
+  });
+
+  it('provides validated RV phase areas in the saved composite for portal display', () => {
+    const gold = resolveViewerQuizCompositeResult('rvFAC', [
+      rv('RV_ED', 3000, 14), rv('RV_ES', 1800, 17),
+    ]);
+    expect(gold?.derived).toEqual({ edaCM2: 30, esaCM2: 18, facPercent: 40 });
+  });
+
+  it('shows a calibrated RV FAC live result before it is captured as gold', () => {
+    const status = getViewerQuizCompositeStatus('rvFAC', [
+      rv('RV_ED', 3000, 14), rv('RV_ES', 1800, 17),
+    ]);
+    expect(status.complete).toBe(true);
+    expect(status.value).toBeCloseTo(40);
+    expect(status.unit).toBe('%');
+  });
+  it('shows verified RV phase areas even when both contours reference the same frame', () => {
+    const ed = { ...rv('RV_ED', 3000, 14), frameNumber: 1 };
+    const es = { ...rv('RV_ES', 1800, 14), frameNumber: 17 };
+    const status = getViewerQuizCompositeStatus('rvFAC', [ed, es]);
+    expect(status.complete).toBe(false);
+    expect(status.phaseValues).toEqual({ RV_ED: 30, RV_ES: 18 });
+    expect(status.message).toMatch(/same cine frame/i);
+  });
+  it('captures RV gold source frames from DICOM references despite stale metadata', () => {
+    const source = [ { ...rv('RV_ED', 3000, 14), frameNumber: 1 },
+      { ...rv('RV_ES', 1800, 17), frameNumber: 1 } ];
+    const answer = resolveViewerQuizCompositeResult('rvFAC', source);
+    expect(answer?.value).toBeCloseTo(40);
+    expect(answer?.components.map(c => c.target.frameNumber)).toEqual([14, 17]);
+  });
+  it('shows LA per-view physical area when both apical contours are complete', () => {
+    const points = [
+      [-10, 0, 0], [-10, 15, 0], [-7, 40, 0], [0, 60, 0],
+      [7, 40, 0], [10, 15, 0], [10, 0, 0],
+    ];
+    const phase = (slot: string) => ({
+      uid: slot, toolName: 'SplineROI', measurementKind: 'laVolumeSlot',
+      slot, points,
+      laVolume: { measurementKind: 'laVolumeSlot', slot, contourPoints: points,
+        baseLeftPoint: [-10, 0, 0], baseRightPoint: [10, 0, 0],
+        superiorPoint: [0, 60, 0], longAxisLengthMM: 60 },
+      referenceStudyUID: 'study', referenceSeriesUID: 'series',
+      SOPInstanceUID: 'sop-' + slot, frameNumber: 1,
+      referencedImageId: 'wadors:studies/study/series/series/instances/sop-' + slot + '/frames/1',
+    });
+    const status = getViewerQuizCompositeStatus('laVolumeBiplane', [phase('A4C'), phase('A2C')]);
+    expect(status.complete).toBe(true);
+    expect(status.value).toBeGreaterThan(0);
+    expect(status.phaseValues.A4C).toBeGreaterThan(0);
+    expect(status.phaseValues.A2C).toBeGreaterThan(0);
+    const saved = resolveViewerQuizCompositeResult('laVolumeBiplane', [
+      phase('A4C'), phase('A2C'),
+    ]);
+    expect(saved?.derived?.a4cAreaCM2).toBeCloseTo(status.phaseValues.A4C);
+    expect(saved?.derived?.a2cAreaCM2).toBeCloseTo(status.phaseValues.A2C);
+  });
+  it('explains missing calibration rather than showing an unverified number', () => {
+    const es = rv('RV_ES', 1800, 17);
+    es.measurements.area = 0;
+    const status = getViewerQuizCompositeStatus('rvFAC', [rv('RV_ED', 3000, 14), es]);
+    expect(status.complete).toBe(false);
+    expect(status.value).toBeNull();
+    expect(status.message).toMatch(/calibrated/i);
+  });
+  it('does not invent LA volume from incomplete apical sources', () => {
+    const status = getViewerQuizCompositeStatus('laVolumeBiplane', [
+      { uid: 'a4c', measurementKind: 'laVolumeSlot', slot: 'A4C' },
+    ]);
+    expect(status.complete).toBe(false);
+    expect(status.value).toBeNull();
+  });
+});
 
 describe('LV EF progress versus quiz capture precision', () => {
   it('accepts a capture when both values round to the same reviewed hundredth', () => {
@@ -121,6 +227,15 @@ describe('study-scoped educator/learner EF parity', () => {
     expect(snapshot!.result.status).toBe('complete');
     expect(snapshot!.composite.unit).toBe('%');
     expect(snapshot!.composite.components).toHaveLength(4);
+    const derived = (snapshot!.composite as any).derived;
+    for (const slot of ['A4C_ED', 'A4C_ES', 'A2C_ED', 'A2C_ES']) {
+      expect(Number(derived.slotLongAxisMM[slot])).toBeGreaterThan(0);
+      expect(derived.slotLongAxisMM[slot]).toBeCloseTo(
+        (snapshot!.result.slots as any)[slot].longAxisLengthMM, 6
+      );
+    }
+    expect(derived.edvML).toBeCloseTo(snapshot!.result.values!.edvML, 6);
+    expect(derived.esvML).toBeCloseTo(snapshot!.result.values!.esvML, 6);
     expect(isViewerQuizCompositeReviewCurrent(
       snapshot!.result.values!.ejectionFraction,
       snapshot!.composite.value
@@ -229,5 +344,19 @@ describe('study-scoped educator/learner EF parity', () => {
       ...measurements,
       { ...measurements[0], uid: 'duplicate-slot' },
     ])).toBeNull();
+  });
+});
+
+describe('EF physically calibrated contour area', () => {
+  it('converts a planar 10 by 20 mm calibrated contour to 2 cm²', () => {
+    const points = [[0, 0, 0], [10, 0, 0], [10, 20, 0], [0, 20, 0]];
+    expect(calibratedLVContourAreaCM2(points)).toBeCloseTo(2);
+    expect(calibratedLVContourAreaCM2([...points].reverse())).toBeCloseTo(2);
+  });
+
+  it('rejects missing or invalid physical geometry rather than guessing area', () => {
+    expect(calibratedLVContourAreaCM2([[0, 0, 0], [10, 20, 0]])).toBeNull();
+    expect(calibratedLVContourAreaCM2([[0, 0, 0], [10, NaN, 0], [10, 20, 0]])).toBeNull();
+    expect(calibratedLVContourAreaCM2([[0, 0, 0], [10, 0, 0], [20, 0, 0]])).toBeNull();
   });
 });

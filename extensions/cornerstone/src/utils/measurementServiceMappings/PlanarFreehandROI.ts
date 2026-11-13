@@ -1,3 +1,4 @@
+import { getQuizEchoAreaSourceMetadata } from '../quizEchoAreaCalibration';
 import SUPPORTED_TOOLS from './constants/supportedTools';
 import getSOPInstanceAttributes from './utils/getSOPInstanceAttributes';
 import { utils } from '@ohif/core';
@@ -76,6 +77,7 @@ const PlanarFreehandROI = {
       SOPInstanceUID,
       FrameOfReferenceUID,
       points: data.contour.polyline,
+      ...getQuizEchoAreaSourceMetadata(data),
       textBox: data.handles.textBox,
       metadata,
       frameNumber,

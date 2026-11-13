@@ -1,3 +1,5 @@
+import { getQuizEchoAreaSourceMetadata } from '../quizEchoAreaCalibration';
+import { getSplinePersistence } from '../splinePersistence';
 import SUPPORTED_TOOLS from './constants/supportedTools';
 import getSOPInstanceAttributes from './utils/getSOPInstanceAttributes';
 import { utils } from '@ohif/core';
@@ -62,14 +64,24 @@ const SplineROI = {
 
     const mappedAnnotations = getMappedAnnotations(annotation, displaySetService);
     const displayText = getDisplayText(mappedAnnotations, displaySet);
+    // OHIF MeasurementService validates top-level keys and rejects the custom
+    // splineControlPoints/splineType fields. Retain editable controls inside
+    // the already-supported metadata field, then promote them only when
+    // serializing the application's persisted measurement annotation.
+    const splinePersistence = getSplinePersistence({ toolName }, annotation);
 
     return {
       uid: annotationUID,
       SOPInstanceUID,
       FrameOfReferenceUID,
       points: data.contour.polyline,
+      ...getQuizEchoAreaSourceMetadata(data),
       textBox: data.handles.textBox,
-      metadata,
+      metadata: {
+        ...metadata,
+        ...(Object.keys(splinePersistence).length
+          ? { arSplinePersistence: splinePersistence } : {}),
+      },
       frameNumber,
       referenceSeriesUID: SeriesInstanceUID,
       referenceStudyUID: StudyInstanceUID,

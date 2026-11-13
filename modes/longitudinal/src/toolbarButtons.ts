@@ -617,7 +617,7 @@ const toolbarButtons: Button[] = [
       tooltip:
         'Start guided biplane LA volume. Trace maximum LA volume in A4C and A2C; exclude pulmonary veins and the LA appendage. Press Esc to cancel.',
       commands: 'startLAVolumeWorkflow',
-      evaluate: 'evaluate.action',
+      evaluate: ['evaluate.action', 'evaluate.arQuizLAVolume'],
     },
   },
   {
@@ -628,7 +628,7 @@ const toolbarButtons: Button[] = [
       label: 'RA Area',
       tooltip: 'Trace right-atrial area at end-systole using a closed freehand contour.',
       commands: 'startRAAreaWorkflow',
-      evaluate: 'evaluate.action',
+      evaluate: ['evaluate.action', 'evaluate.arQuizRAArea'],
     },
   },
   {
@@ -639,7 +639,7 @@ const toolbarButtons: Button[] = [
       label: 'RV FAC',
       tooltip: 'Capture RV end-diastolic and end-systolic area contours from the same A4C cine.',
       commands: 'startRVFACWorkflow',
-      evaluate: 'evaluate.action',
+      evaluate: ['evaluate.action', 'evaluate.arQuizRVFAC'],
     },
   },
   {
@@ -650,7 +650,7 @@ const toolbarButtons: Button[] = [
       label: 'Vmax',
       tooltip: 'Measure calibrated peak spectral velocity from the zero baseline to the dense envelope peak. Choose the Doppler target.',
       commands: 'startSpectralVmaxWorkflow',
-      evaluate: 'evaluate.action',
+      evaluate: ['evaluate.action', 'evaluate.arQuizSpectralVmax'],
     },
   },
   {

@@ -24,7 +24,15 @@ import {
   isMatchingQuizEFCompletion,
   getInitialGuidedEFQuestionTarget,
 } from '../utils/quizCompositeCaptureIntent';
-import { composeIVCRapRVSP, isIVCReviewCurrent, RAP_CHOICES_MMHG } from '../utils/ivcRapRvsp';
+import { composeIVCRapRVSP, attachRapRvspEvidenceToIVCAnswer, attachLearnerRapRvspToIVCAnswer, attachLearnerRapSelectionToIVCAnswer, isIVCReviewCurrent, RAP_CHOICES_MMHG } from '../utils/ivcRapRvsp';
+import {
+  getLearnerCompositeAutoCaptureSignature,
+  getLearnerCompositeSourceComponents,
+  getLearnerCompositePersistenceSources,
+  isPersistedLearnerCompositeSource,
+  isLearnerCompositeCaptureCurrent,
+  getLearnerHemodynamicReadbackError,
+} from '../utils/quizLearnerCompositeCapture';
 import {
   isBowelMeasurementSetQuestion,
   getBowelMeasurementSetEntries,
@@ -39,7 +47,12 @@ import {
   getCompleteCompositeFrameTargets,
   matchesConfiguredCompositeFrame,
 } from '../utils/compositeFrameTargets';
-import { EF_CONTOUR_FRAME_SLOTS, getEFGoldContourAuthoringRows } from '../utils/efGoldContourAuthoring';
+import { EF_CONTOUR_FRAME_SLOTS, getEFGoldContourAuthoringRows, getEFGoldDerivedEvidenceStatus } from '../utils/efGoldContourAuthoring';
+import { validateAndOrderAuthoringQuestions } from '../utils/quizAuthoringQuestionIdentity';
+import { hasAllRequiredViewerGoldValues } from '../utils/quizAuthoringGoldReadiness';
+import { getViewerQuizRouteMeasurementDomain } from '../utils/viewerQuizMeasurementDomain';
+import { getCompositePhaseSlot, getCompositePhaseMeasurementId, matchesCompositePhaseSource, getCompositeGoldCaptureSignature, getSavedCompositePhaseValues, needsSavedCalibratedGoldAreas,
+  findEditableCompositePhaseMeasurement, clearSavedCompositeGoldPhase, getCompositeGoldPersistenceError, getIncompleteCompositeGoldReplacementReason } from '../utils/quizCompositePhaseEvidence';
 
 const AR_QUIZ_MEASUREMENT_ADDED_EVENT = 'ar-learning:quiz-measurement-added';
 const AR_QUIZ_MEASUREMENT_LABELLED_EVENT = 'ar-learning:quiz-measurement-labelled';
@@ -181,7 +194,8 @@ function getLearnerQuizMeasurementDomain(quiz: QuizDefinition | undefined, sourc
     normalizeQuizMeasurementDomain(source?.seriesDoc?.measurementDomain) ||
     normalizeQuizMeasurementDomain(source?.measurementDomain) ||
     inferLegacyQuizMeasurementDomain(quiz) ||
-    getQuizAuthoringMeasurementDomainFromUrl();
+    getQuizAuthoringMeasurementDomainFromUrl() ||
+    getViewerQuizRouteMeasurementDomain(window.location?.pathname);
 }
 
 function getQuizQuestionMeasurementDomain(
@@ -201,7 +215,8 @@ function resolveQuizAuthoringMeasurementDomain(
   return (
     getQuizAuthoringMeasurementDomainFromUrl() ||
     normalizeQuizMeasurementDomain(definition?.domain) ||
-    inferLegacyQuizMeasurementDomain(definition)
+    inferLegacyQuizMeasurementDomain(definition) ||
+    getViewerQuizRouteMeasurementDomain(window.location?.pathname)
   );
 }
 
@@ -1018,6 +1033,83 @@ function buildAnswerPayload(quiz: QuizDefinition, quizAnswers = {}) {
   });
 }
 
+/** Status of the learner's answer only, never an educator gold reference. */
+function isLearnerQuestionAnswered(question: QuizQuestion, value: any): boolean {
+  if (isAnswerEmpty(value)) return false;
+  const kind = cleanString(plainObject(question.answerConfig).measurementKind);
+  if (question.type === 'measurementNumeric' && kind === 'trVmax') {
+    return value?.measurementKind === 'trVmax' && value?.unit === 'm/s' &&
+      Number.isFinite(Number(value?.value)) && Number(value.value) > 0 &&
+      Number(value.value) <= 8 && !!cleanString(value?.sourceAnnotationId) &&
+      targetHasNavigationIdentity(value?.viewerTarget);
+  }
+  return true;
+}
+
+/** Informational educational evidence for the clinician's existing review
+ * modal. No quiz value is automatically mapped into a clinical report field.
+ * These summaries never fall back to the educator's gold measurements. */
+function getLearnerHemodynamicQuizReviewRows(
+  quiz: QuizDefinition, quizAnswers: Record<string, any> = {}
+) {
+  const result: Array<{ key: string; label: string; display: string; recorded: boolean }> = [];
+  const questions = Array.isArray(quiz?.questions) ? quiz.questions : [];
+  const tr = questions.find(question =>
+    question.type === 'measurementNumeric' &&
+    cleanString(plainObject(question.answerConfig).measurementKind) === 'trVmax'
+  );
+  const trAnswer = tr ? plainObject(quizAnswers[tr.questionKey]) : {};
+  const trRecorded = !!tr && isLearnerQuestionAnswered(tr, trAnswer);
+  if (tr) result.push({
+    key: 'quiz-tr:' + tr.questionKey,
+    label: 'Learner TR Vmax',
+    display: trRecorded ? Number(trAnswer.value).toFixed(2) + ' m/s (source-linked)' : 'Not recorded',
+    recorded: trRecorded,
+  });
+  const ivc = questions.find(question =>
+    question.type === 'measurementNumeric' &&
+    cleanString(plainObject(question.answerConfig).measurementKind) === 'ivcCollapsibility'
+  );
+  if (ivc) {
+    const answer = plainObject(quizAnswers[ivc.questionKey]);
+    const composite = plainObject(answer.compositeResult);
+    const review = plainObject(composite.rapRvsp);
+    const rap = Number(composite.rapMMHG);
+    const ivcVerified = review.methodId === 'ivc-rap-rvsp-v1' &&
+      review.ivc && isIVCReviewCurrent(review.ivc, answer);
+    const rapRecorded = Boolean(ivcVerified && [3, 8, 15].includes(rap));
+    const trSource = plainObject(plainObject(review.trVmax).answer);
+    const linked = trRecorded && rapRecorded &&
+      cleanString(plainObject(review.trVmax).questionKey) === tr?.questionKey &&
+      cleanString(trSource.sourceAnnotationId) === cleanString(trAnswer.sourceAnnotationId) &&
+      Number(trSource.value) === Number(trAnswer.value);
+    const expectedRVSP = linked ? Number((4 * Number(trAnswer.value) ** 2 + rap).toFixed(2)) : NaN;
+    const rvspRecorded = Boolean(linked && composite.rvspMMHG != null &&
+      Number.isFinite(Number(composite.rvspMMHG)) &&
+      Math.abs(Number(composite.rvspMMHG) - expectedRVSP) <= 0.01);
+    result.push({
+      key: 'quiz-rap:' + ivc.questionKey,
+      label: 'Learner RAP interpretation',
+      display: rapRecorded ? rap + ' mmHg' : 'Not recorded',
+      recorded: rapRecorded,
+    }, {
+      key: 'quiz-rvsp:' + ivc.questionKey,
+      label: 'Learner calculated RVSP',
+      display: rvspRecorded ? Number(composite.rvspMMHG).toFixed(2) + ' mmHg' : 'Not recorded / missing linked TR Vmax',
+      recorded: rvspRecorded,
+    });
+  }
+  return result;
+}
+
+function getLearnerHemodynamicTransferEvidence(quiz: QuizDefinition, answers: Record<string, any>) {
+  const find = (kind: string) => quiz.questions.find(question =>
+    question.type === 'measurementNumeric' &&
+    cleanString(plainObject(question.answerConfig).measurementKind) === kind);
+  const tr = find('trVmax'), ivc = find('ivcCollapsibility');
+  return { trVmax: tr ? answers[tr.questionKey] : null, ivc: ivc ? answers[ivc.questionKey] : null };
+}
+
 function hasRequiredMissing(quiz: QuizDefinition, quizAnswers = {}) {
   return (quiz.questions || []).some(question => {
     if (!question.required) {
@@ -1026,7 +1118,9 @@ function hasRequiredMissing(quiz: QuizDefinition, quizAnswers = {}) {
 
     const value = quizAnswers[question.questionKey];
 
-    return isAnswerEmpty(value);
+    // A typed TR velocity is not a source-linked answer and must not satisfy
+    // a required calibrated spectral question at submission.
+    return !isLearnerQuestionAnswered(question, value);
   });
 }
 
@@ -1776,7 +1870,11 @@ function getDisplayInstanceFromTarget(target: any) {
   if (Number.isFinite(instanceIndex) && instanceIndex >= 0) {
     return `Instance ${instanceIndex + 1}`;
   }
-  return 'Instance unavailable';
+  // A valid DICOM SOP/frame may lack optional display InstanceNumber.
+  // Show a safe shortened source identifier instead of implying the actual
+  // saved DICOM target is unavailable.
+  const sop = cleanString(target?.sopInstanceUID || target?.SOPInstanceUID);
+  return sop ? 'SOP ' + sop.slice(-12) : 'Instance number unavailable';
 }
 
 function getViewerTargetSummary(target: any) {
@@ -1960,7 +2058,7 @@ function getOverlayMarkerOptionsForQuestion(
 }
 
 function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsPanelProps) {
-  const { uiNotificationService } = servicesManager.services;
+  const { uiNotificationService, measurementService } = servicesManager.services;
   const authoringMode = isViewerQuizAuthoringMode();
   // The backend authorizes the launch and supplies this scoring mode. Combined
   // report assessments collect answers here but release scores in the report.
@@ -1994,10 +2092,17 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
   // Only newly captured BWT calipers need an annotation save before quiz save.
   const pendingBowelQuizMeasurementIdsRef = useRef(new Set<string>());
   const autoBowelGoldCaptureInFlightRef = useRef(new Set<string>());
+  const autoCompositeGoldCaptureInFlightRef = useRef(new Set<string>());
+  const lastCompositeGoldCaptureErrorRef = useRef('');
   // Serialize source-ID captures so two calipers cannot race a gold-set update.
   const autoBowelGoldCaptureQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const autoSpectralLearnerCaptureInFlightRef = useRef(new Set<string>());
+  const [spectralLearnerCaptureErrors, setSpectralLearnerCaptureErrors] =
+    useState<Record<string, string>>({});
   const autoBowelLearnerCaptureInFlightRef = useRef(new Set<string>());
   const autoBowelLearnerCaptureQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const autoCompositeLearnerCaptureInFlightRef = useRef(new Set<string>());
+  const autoCompositeLearnerCapturedSignatureRef = useRef<Record<string, string>>({});
   const bowelCaptureFailureReasonRef = useRef<Record<string, string>>({});
   const [bowelCaptureErrors, setBowelCaptureErrors] = useState<Record<string, string>>({});
   // Geometry is intentionally absent from saved quiz responses. This cache
@@ -2011,6 +2116,10 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
   const latestLearnerAnswersRef = useRef(answersByQuizKey);
   useEffect(() => { latestLearnerAnswersRef.current = answersByQuizKey; }, [answersByQuizKey]);
   const [capturingMeasurementKey, setCapturingMeasurementKey] = useState('');
+  const [liveCompositeMeasurements, setLiveCompositeMeasurements] = useState<any[]>([]);
+  const [liveCompositeStatus, setLiveCompositeStatus] = useState<any>({
+    questionKey: '', complete: false, value: null, unit: '', message: '',
+  });
   // Explicit educator/learner interpretation only. No default RAP is selected.
   const [rapSelectionsByQuestionKey, setRapSelectionsByQuestionKey] =
     useState<Record<string, string>>({});
@@ -2032,6 +2141,11 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
   const restoredSessionDirtyCheckedRef = useRef(false);
   const nextEducationSaveRequestId = () => String(++educationSaveRequestCounter.current);
   const [capturingAuthoringKey, setCapturingAuthoringKey] = useState('');
+  const [restoringCompositeAreaKey, setRestoringCompositeAreaKey] = useState('');
+  const [compositeAreaRecoveryError, setCompositeAreaRecoveryError] =
+    useState<Record<string, string>>({});
+  const attemptedAreaRecoveryRef = useRef<Set<string>>(new Set());
+  const previousAreaRecoveryQuestionRef = useRef('');
   const [authoringMeasurementDomain, setAuthoringMeasurementDomain] = useState('');
 
   // Notify only on validation state transitions, never on every pointer move.
@@ -2155,9 +2269,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       const selectedMeasurementDomain = resolveQuizAuthoringMeasurementDomain(selectedDefinition);
       syncQuizMeasurementDomainToUrl(selectedMeasurementDomain);
       const selectedRubric = findRubricForDefinition(rubrics, selectedDefinition);
-      const nextQuestions = Array.isArray(selectedDefinition?.questions)
-        ? selectedDefinition.questions
-        : [];
+      const nextQuestions = validateAndOrderAuthoringQuestions(
+        Array.isArray(selectedDefinition?.questions) ? selectedDefinition.questions : []
+      );
 
       if (nextPayload?.capabilities?.canManageQuizContent !== true) {
         throw new Error('Quiz authoring is not allowed for this account.');
@@ -2168,13 +2282,23 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       // Retain unsaved edits only while the draft revision on the server is unchanged.
       // A save from another viewer/tab must not be hidden by stale in-memory questions.
       const serverUpdatedAt = String(selectedDefinition?.updatedAt || '');
+      const serverKeys = nextQuestions.map(item => cleanString(item.questionKey));
+      const sessionQuestions = Array.isArray(sessionState?.authoringQuestions)
+        ? sessionState.authoringQuestions as QuizQuestion[] : [];
+      const sessionKeys = sessionQuestions.map(item => cleanString(item.questionKey));
+      // A timestamp match does not prove a locally cached question list is
+      // current. A new LAV question must never disappear when the viewer opens.
+      const identicalQuestionKeys = serverKeys.length === sessionKeys.length &&
+        new Set(serverKeys).size === serverKeys.length &&
+        new Set(sessionKeys).size === sessionKeys.length &&
+        serverKeys.every((key, index) => !!key && key === sessionKeys[index]);
       const questionsToUse =
         definitionId &&
         serverUpdatedAt &&
         sessionState?.authoringDefinitionId === definitionId &&
         sessionState?.authoringServerUpdatedAt === serverUpdatedAt &&
-        Array.isArray(sessionState.authoringQuestions)
-          ? (sessionState.authoringQuestions as QuizQuestion[])
+        identicalQuestionKeys
+          ? sessionQuestions
           : nextQuestions;
 
       // Restored session edits are still unsaved until FormAPI confirms a save.
@@ -2287,6 +2411,478 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       authoringQuestions,
     });
   }, [authoringDefinition, authoringMode, authoringQuestions, sessionStateKey]);
+
+  const compositeSnapshotRequestRef = useRef(0);
+  async function refreshLiveCompositeMeasurements() {
+    const request = ++compositeSnapshotRequestRef.current;
+    try {
+      const response = await runViewerCommand(commandsManager, 'getViewerMeasurementSnapshotForPanel', {});
+      // Ignore an older viewport snapshot that returned after a new contour
+      // completed or a user switched to another source image.
+      if (request === compositeSnapshotRequestRef.current) {
+        setLiveCompositeMeasurements(Array.isArray(response) ? response : []);
+      }
+      // Read the same clinical composite calculator used by the quiz gold
+      // capture command. A drawn contour is not necessarily calibrated.
+      const activeKey = activeQuestionKey;
+      const selectedQuestion = authoringMode
+        ? authoringQuestionsRef.current.find(item =>
+            activeKey === 'authoring:' + item.questionKey
+          )
+        : quizzes.flatMap(quiz => quiz.questions || []).find(item =>
+            activeKey.endsWith(':' + item.questionKey)
+          );
+      const selectedKind = cleanString(
+        plainObject(selectedQuestion?.answerConfig).measurementKind
+      );
+      if (['rvFAC', 'raArea', 'laVolumeBiplane', 'laVolumeBiplaneDisks',
+        'ivcCollapsibility'].includes(selectedKind)) {
+        const status = await runViewerCommand(
+          commandsManager, 'getViewerQuizCompositeStatusForActiveStudy',
+          { measurementKind: selectedKind }
+        );
+        if (request === compositeSnapshotRequestRef.current &&
+            activeKey === activeQuestionKey) {
+          setLiveCompositeStatus({ ...plainObject(status), questionKey: activeKey });
+        }
+      } else if (request === compositeSnapshotRequestRef.current) {
+        setLiveCompositeStatus({ questionKey: activeKey,
+          complete: false, value: null, unit: '', message: '' });
+      }
+    } catch (error) {
+      console.warn('[CaseQuestionsPanel] composite measurement refresh failed', error);
+    }
+  }
+
+  useEffect(() => {
+    let quickRefresh: number | null = null;
+    let settledRefresh: number | null = null;
+    const refresh = () => {
+      // MeasurementService can emit updates during every contour pointer move.
+      // Coalesce them to avoid repeatedly querying the viewer and rerendering.
+      if (quickRefresh === null) {
+        quickRefresh = window.setTimeout(() => {
+          quickRefresh = null;
+          void refreshLiveCompositeMeasurements();
+        }, 80);
+      }
+      // Annotation-created/labelled events may precede the final service
+      // entry. Refresh again after its updates settle.
+      if (settledRefresh !== null) window.clearTimeout(settledRefresh);
+      settledRefresh = window.setTimeout(() => {
+        settledRefresh = null;
+        void refreshLiveCompositeMeasurements();
+      }, 400);
+    };
+    const events = measurementService?.EVENTS || {};
+    const subscriptions = [
+      events.MEASUREMENT_ADDED,
+      events.MEASUREMENT_UPDATED,
+      events.MEASUREMENT_REMOVED,
+      events.MEASUREMENTS_CLEARED,
+      events.RAW_MEASUREMENT_ADDED,
+    ].filter(Boolean).map(eventName => measurementService.subscribe(eventName, refresh));
+    const windowEvents = [
+      'ar-measurements:live-measurements-updated',
+      'ar-measurements:saved-annotations-updated',
+      AR_QUIZ_MEASUREMENT_ADDED_EVENT,
+      AR_QUIZ_MEASUREMENT_LABELLED_EVENT,
+    ];
+    windowEvents.forEach(name => window.addEventListener(name, refresh));
+    refresh();
+    return () => {
+      subscriptions.forEach(subscription => subscription?.unsubscribe?.());
+      windowEvents.forEach(name => window.removeEventListener(name, refresh));
+      if (quickRefresh !== null) window.clearTimeout(quickRefresh);
+      if (settledRefresh !== null) window.clearTimeout(settledRefresh);
+      compositeSnapshotRequestRef.current++;
+    };
+  }, [commandsManager, measurementService, activeQuestionKey, authoringMode, quizzes]);
+
+  useEffect(() => {
+    // Switching quiz questions can change the measurement kind without
+    // producing a MeasurementService event. Load its calculated status now.
+    void refreshLiveCompositeMeasurements();
+  }, [activeQuestionKey]);
+
+  function getActiveCompositePhaseMeasurement(
+    kind: string, slot: string, source: { annotationId?: string; target?: any } = {}
+  ) {
+    return findEditableCompositePhaseMeasurement(liveCompositeMeasurements, kind, slot, source);
+  }
+
+  function getCompositePhaseDisplayEvidence(
+    quiz: QuizDefinition, question: QuizQuestion, slot: string
+  ) {
+    const config = plainObject(question.answerConfig);
+    const kind = cleanString(config.measurementKind);
+    const answer = authoringMode
+      ? plainObject(config.goldMeasurement)
+      : plainObject(answersByQuizKey?.[quiz.quizKey]?.[question.questionKey]);
+    const composite = kind === 'ivcRapRvsp'
+      ? plainObject(plainObject(answer.compositeResult).ivc?.compositeResult)
+      : plainObject(answer.compositeResult);
+    const saved = (Array.isArray(composite.components) ? composite.components : [])
+      .find(part => cleanString(part?.slot) === slot);
+    const configured = plainObject(config.compositeFrameTargets)[slot];
+    const sourceTarget = authoringMode
+      ? saved?.target || configured
+      : saved?.target || (config.compositeFrameGuidanceEnabled === true ? configured : null);
+    const phaseSource = { annotationId: cleanString(saved?.annotationId), target: sourceTarget };
+    const live = getActiveCompositePhaseMeasurement(kind, slot, phaseSource);
+    return { kind, saved, live, phaseSource };
+  }
+
+  async function deleteCompositePhaseMeasurement(
+    quiz: QuizDefinition, question: QuizQuestion, slot: string,
+    phaseSource: { annotationId?: string; target?: any }
+  ) {
+    const kind = cleanString(plainObject(question.answerConfig).measurementKind);
+    if (authoringMode && (!isDraftDefinition(authoringDefinition) || authoringSaving)) return;
+    const savedId = cleanString(phaseSource.annotationId);
+    const latestQuestion = authoringMode
+      ? authoringQuestionsRef.current.find(item => item.questionKey === question.questionKey)
+      : null;
+    const savedPhase = authoringMode && savedId
+      ? clearSavedCompositeGoldPhase(latestQuestion, slot, savedId) : null;
+
+    // The current viewport may contain the replacement contour, while the
+    // saved gold still refers to a previous instance/frame. Never delete a
+    // different same-slot live contour to make the stale gold disappear.
+    const refreshed = await runViewerCommand(commandsManager, 'getViewerMeasurementSnapshotForPanel', {});
+    let record = findEditableCompositePhaseMeasurement(
+      Array.isArray(refreshed) ? refreshed : [], kind, slot, phaseSource
+    );
+    if (!record && savedPhase && targetHasNavigationIdentity(phaseSource.target)) {
+      const jumped = await runViewerCommand(commandsManager, 'jumpToViewerQuizTarget', {
+        viewerTarget: phaseSource.target, questionKey: question.questionKey,
+      });
+      if (jumped?.ok) {
+        if (cleanString(jumped.viewportId)) {
+          await runViewerCommand(commandsManager, 'setViewportActive', {
+            viewportId: jumped.viewportId,
+          });
+        }
+        const hydrated = await runViewerCommand(commandsManager,
+          'getViewerMeasurementSnapshotForPanel', {});
+        record = findEditableCompositePhaseMeasurement(
+          Array.isArray(hydrated) ? hydrated : [], kind, slot, phaseSource
+        );
+      }
+    }
+    const measurementId = getCompositePhaseMeasurementId(record);
+    if (!measurementId && !savedPhase) {
+      uiNotificationService.show({
+        title: 'Delete measurement', type: 'warning', duration: 5500,
+        message: 'This phase cannot be uniquely identified. Open its source or resolve duplicate contours first.',
+      });
+      return;
+    }
+
+    const prompt = measurementId
+      ? 'Delete ' + slot + '? The calculated quiz answer must be captured again.'
+      : 'Clear the saved ' + slot + ' gold reference? Its old annotation is not loaded and will not be deleted from the viewer.';
+    if (!window.confirm(prompt)) return;
+
+    if (measurementId) {
+      await runViewerCommand(commandsManager, 'removeMeasurement', { uid: measurementId });
+      const after = await runViewerCommand(commandsManager, 'getViewerMeasurementSnapshotForPanel', {});
+      if (!Array.isArray(after) || after.some(item =>
+        getCompositePhaseMeasurementId(item) === measurementId)) {
+        uiNotificationService.show({
+          title: 'Delete measurement', type: 'warning', duration: 5000,
+          message: 'The source measurement could not be removed. No gold answer was changed.',
+        });
+        return;
+      }
+    }
+
+    if (authoringMode && savedPhase) {
+      // Recheck the exact saved annotation at commit time; a concurrent
+      // authoring edit must not be replaced by an older delete action.
+      updateAuthoringQuestion(question.questionKey, current =>
+        clearSavedCompositeGoldPhase(current, slot, savedId) || current
+      );
+      // Saved gold contours use temporary, read-only comparison overlays.
+      // Clear the old four-contour presentation immediately: a deleted gold
+      // source must not remain visible while the educator redraws its slot.
+      await runViewerCommand(commandsManager, 'clearViewerQuizMeasurementComparison', {});
+    } else if (!authoringMode) {
+      // A partial learner composite must never remain gradeable.
+      setAnswer(quiz.quizKey, question, null);
+    }
+
+    await refreshLiveCompositeMeasurements();
+    uiNotificationService.show({
+      title: savedPhase ? 'Gold phase cleared' : 'Measurement deleted',
+      type: 'info', duration: 4500,
+      message: savedPhase
+        ? slot + ' removed from saved gold. Other phases remain. Capture the replacement source if needed, then recapture the calculated result and Save Draft.'
+        : slot + ' removed. Recapture the calculated result.',
+    });
+  }
+
+  async function restoreAuthoringGoldAreas(question: QuizQuestion) {
+    if (!authoringMode || !isDraftDefinition(authoringDefinition) ||
+        authoringSaving || restoringCompositeAreaKey) return;
+    const gold = plainObject(plainObject(question.answerConfig).goldMeasurement);
+    const originalValue = Number(gold.value);
+    const originalComponents = JSON.stringify(plainObject(gold.compositeResult).components || []);
+    const kind = cleanString(plainObject(question.answerConfig).measurementKind);
+    setRestoringCompositeAreaKey(question.questionKey);
+    try {
+      const recovered = await runViewerCommand(commandsManager,
+        'recoverViewerQuizGoldAreas', {
+          rubricMeasurement: gold,
+          questionKey: question.questionKey,
+        });
+      if (recovered?.ok !== true || !recovered.derived) {
+        setCompositeAreaRecoveryError(previous => ({
+          ...previous,
+          [question.questionKey]: cleanString(recovered?.reason) ||
+            'Exact saved DICOM contour calibration is unavailable.',
+        }));
+        return;
+      }
+      const latest = authoringQuestionsRef.current.find(item =>
+        item.questionKey === question.questionKey);
+      const latestGold = plainObject(plainObject(latest?.answerConfig).goldMeasurement);
+      if (Number(latestGold.value) !== originalValue ||
+          JSON.stringify(plainObject(latestGold.compositeResult).components || []) !== originalComponents ||
+          cleanString(plainObject(latest?.answerConfig).measurementKind) !== kind) {
+        uiNotificationService.show({
+          title: 'Gold changed while recovering areas', type: 'warning', duration: 6000,
+          message: 'The saved source contours changed. Retry with the current gold measurement.',
+        });
+        return;
+      }
+      updateAuthoringQuestion(question.questionKey, current => {
+        const config = plainObject(current.answerConfig);
+        const prior = plainObject(config.goldMeasurement);
+        return {
+          ...current,
+          answerConfig: {
+            ...config,
+            goldMeasurement: {
+              ...prior,
+              compositeResult: {
+                ...plainObject(prior.compositeResult),
+                derived: recovered.derived,
+              },
+            },
+          },
+        };
+      });
+      setCompositeAreaRecoveryError(previous => ({
+        ...previous, [question.questionKey]: '',
+      }));
+      // Persist with the normal educator Save Draft; never silently publish
+      // or overwrite the saved gold scalar while simply opening a question.
+    } catch (error) {
+      console.warn('[CaseQuestionsPanel] gold-area recovery error', error);
+      setCompositeAreaRecoveryError(previous => ({
+        ...previous,
+        [question.questionKey]: 'Saved contour calibration could not be loaded.',
+      }));
+    } finally {
+      setRestoringCompositeAreaKey('');
+    }
+  }
+
+  // Same open-and-display behavior as other gold measurement questions.
+  // A valid, saved RV/LA source is re-calibrated without educator interaction,
+  // only when the legacy answer lacks per-phase physical areas.
+  useEffect(() => {
+    if (!authoringMode || !isDraftDefinition(authoringDefinition) ||
+        authoringSaving || restoringCompositeAreaKey) return;
+    const questionKey = activeQuestionKey.startsWith('authoring:')
+      ? activeQuestionKey.slice('authoring:'.length) : '';
+    if (previousAreaRecoveryQuestionRef.current !== questionKey) {
+      attemptedAreaRecoveryRef.current.clear();
+      previousAreaRecoveryQuestionRef.current = questionKey;
+    }
+    const question = authoringQuestions.find(item => item.questionKey === questionKey);
+    if (!question || !needsSavedCalibratedGoldAreas(question)) return;
+    const gold = plainObject(plainObject(question.answerConfig).goldMeasurement);
+    const attemptKey = questionKey + ':' + String(gold.value) + ':' +
+      JSON.stringify(plainObject(gold.compositeResult).components || []);
+    if (attemptedAreaRecoveryRef.current.has(attemptKey)) return;
+    const timeout = window.setTimeout(() => {
+      // The authoring question and its source contours may have changed while
+      // loading. Do not recover an outdated gold or navigate another question.
+      const current = authoringQuestionsRef.current.find(item =>
+        item.questionKey === questionKey);
+      const currentGold = plainObject(plainObject(current?.answerConfig).goldMeasurement);
+      const currentAttemptKey = questionKey + ':' + String(currentGold.value) + ':' +
+        JSON.stringify(plainObject(currentGold.compositeResult).components || []);
+      if (currentAttemptKey !== attemptKey || !needsSavedCalibratedGoldAreas(current)) return;
+      attemptedAreaRecoveryRef.current.add(attemptKey);
+      void restoreAuthoringGoldAreas(current);
+    }, 450);
+    return () => window.clearTimeout(timeout);
+  }, [activeQuestionKey, authoringQuestions, authoringDefinition, authoringMode,
+    authoringSaving, restoringCompositeAreaKey]);
+
+  function renderCompositeCalculatedStatus(
+    quiz: QuizDefinition, question: QuizQuestion
+  ) {
+    const config = plainObject(question.answerConfig);
+    const kind = cleanString(config.measurementKind);
+    if (!['rvFAC', 'raArea', 'laVolumeBiplane', 'laVolumeBiplaneDisks',
+      'ivcCollapsibility'].includes(kind)) return null;
+    const key = authoringMode ? 'authoring:' + question.questionKey
+      : quiz.quizKey + ':' + question.questionKey;
+    const status = liveCompositeStatus.questionKey === key
+      ? plainObject(liveCompositeStatus) : {};
+    const gold = authoringMode ? plainObject(config.goldMeasurement)
+      : plainObject(answersByQuizKey?.[quiz.quizKey]?.[question.questionKey]);
+    const hasGold = gold.value != null && cleanString(gold.value) !== '' &&
+      Number.isFinite(Number(gold.value));
+    const hasLive = status.complete === true && status.value != null &&
+      Number.isFinite(Number(status.value));
+    const sameGold = hasLive && hasGold &&
+      Math.abs(Number(status.value) - Number(gold.value)) < 0.005;
+    const unit = cleanString(status.unit || gold.unit || config.unit);
+    const needsAreaRecovery = authoringMode && needsSavedCalibratedGoldAreas(question);
+    return (
+      <div className="mt-2 rounded border border-emerald-700/60 bg-emerald-950/10 px-2 py-2 text-xs">
+        {hasLive ? (
+          <div className="font-semibold text-emerald-200">
+            {sameGold ? (authoringMode ? 'Calculated and saved gold: ' : 'Calculated: ')
+              : 'Calculated measurement: '}
+            {Number(status.value).toFixed(2)} {unit}
+          </div>
+        ) : hasGold ? (
+          <div className="font-semibold text-emerald-200">
+            {authoringMode ? 'Saved gold: ' : 'Saved answer: '}
+            {Number(gold.value).toFixed(2)} {unit}
+          </div>
+        ) : (
+          <div className="text-amber-200">
+            Calculation not ready: {cleanString(status.message) ||
+              'Complete both calibrated measurements and their source references.'}
+          </div>
+        )}
+        {hasGold && hasLive && !sameGold ? (
+          <div className="mt-1 text-amber-200">
+            {authoringMode ? 'Saved gold' : 'Saved answer'}: {Number(gold.value).toFixed(2)} {unit}. The live value has changed;
+            review the contours and recapture before saving changes.
+          </div>
+        ) : null}
+        {!hasGold && hasLive && authoringMode ? (
+          <div className="mt-1 text-gray-300">
+            Result is ready for capture; Save Draft persists it.
+          </div>
+        ) : null}
+        {needsAreaRecovery ? (
+          <div className="mt-2 text-amber-200" aria-live="polite">
+            {restoringCompositeAreaKey === question.questionKey
+              ? 'Loading calibrated areas from the saved DICOM contours…'
+              : compositeAreaRecoveryError[question.questionKey]
+                ? 'Individual area values unavailable: ' +
+                  compositeAreaRecoveryError[question.questionKey]
+                : 'Checking saved DICOM contour calibration…'}
+          </div>
+        ) : null}
+      </div>
+    );
+  }
+
+  function renderCompositePhaseStatusAndDelete(
+    quiz: QuizDefinition, question: QuizQuestion, slot: string, disabled: boolean
+  ) {
+    const { kind, saved, live, phaseSource } =
+      getCompositePhaseDisplayEvidence(quiz, question, slot);
+    const hasSaved = !!cleanString(saved?.annotationId);
+    const statusKey = authoringMode ? 'authoring:' + question.questionKey
+      : quiz.quizKey + ':' + question.questionKey;
+    const phaseValues = liveCompositeStatus.questionKey === statusKey
+      ? plainObject(liveCompositeStatus.phaseValues) : {};
+    const goldAnswer = authoringMode
+      ? plainObject(plainObject(question.answerConfig).goldMeasurement)
+      : plainObject(answersByQuizKey?.[quiz.quizKey]?.[question.questionKey]);
+    const phaseAnswer = kind === 'ivcRapRvsp'
+      ? plainObject(plainObject(goldAnswer.compositeResult).ivc) : goldAnswer;
+    const savedValue = hasSaved
+      ? getSavedCompositePhaseValues(phaseAnswer,
+        kind === 'ivcRapRvsp' ? 'ivcCollapsibility' : kind)[slot] : null;
+    const liveArea = phaseValues[slot];
+    const liveValue = live && liveArea != null && Number.isFinite(Number(liveArea)) &&
+      Number(liveArea) > 0 ? Number(liveArea) : null;
+    const phaseValue = liveValue ?? savedValue;
+    const units = kind === 'ivcCollapsibility' || kind === 'ivcRapRvsp' ? 'mm' : 'cm²';
+    const areaLabel = phaseValue != null && Number.isFinite(phaseValue)
+      ? ' · ' + phaseValue.toFixed(2) + ' ' + units : '';
+    return (
+      <>
+        <span className={live || hasSaved ? 'text-emerald-200 text-[11px]' : 'text-amber-200 text-[11px]'}>
+          {live ? 'Measured' : hasSaved ? (authoringMode ? 'Gold saved' : 'Learner saved') : 'Not measured'}
+          {areaLabel}
+          {hasSaved ? (authoringMode ? ' · Gold source saved' : '') : ''}
+        </span>
+        {hasSaved && targetHasNavigationIdentity(saved?.target) ? (
+          <button
+            type="button"
+            className="rounded border border-emerald-600 px-2 py-1 text-emerald-100"
+            onClick={event => {
+              event.preventDefault();
+              event.stopPropagation();
+              void (async () => {
+                const answer = authoringMode
+                  ? plainObject(plainObject(question.answerConfig).goldMeasurement)
+                  : plainObject(answersByQuizKey?.[quiz.quizKey]?.[question.questionKey]);
+                // Learner phase overlays are reconstructed ONLY from learner
+                // evidence, never the educator's gold/teaching source.
+                const learner = !authoringMode;
+                const displayAnswer = kind === 'ivcRapRvsp'
+                  ? plainObject(plainObject(answer.compositeResult).ivc)
+                  : answer;
+                const result = learner
+                  ? await runViewerCommand(
+                      commandsManager, 'showViewerQuizLearnerCompositeMeasurement', {
+                        learnerMeasurement: displayAnswer,
+                        viewerTarget: saved.target,
+                        questionKey: question.questionKey,
+                      })
+                  : await runViewerCommand(
+                      commandsManager, 'showViewerQuizMeasurementComparison', {
+                        rubricMeasurement: displayAnswer,
+                        viewerTarget: saved.target,
+                        focusedCompositeSlot: slot,
+                        questionKey: question.questionKey,
+                        endpointToleranceMM:
+                          ['ivcCollapsibility', 'ivcRapRvsp'].includes(kind)
+                            ? plainObject(question.scoringConfig).caliperEndpointToleranceMM ?? 5
+                            : null,
+                        ivcEndpointToleranceEnabled:
+                          ['ivcCollapsibility', 'ivcRapRvsp'].includes(kind) &&
+                          plainObject(question.scoringConfig).caliperEndpointToleranceEnabled !== false,
+                      });
+                if ((learner ? result?.learnerRendered : result?.rubricRendered) !== true) {
+                  uiNotificationService.show({
+                    title: 'Saved contour', type: 'warning', duration: 5000,
+                    message: 'Saved source could not be displayed: ' +
+                      cleanString(result?.reason || 'source unavailable'),
+                  });
+                }
+              })().catch(error => console.warn(
+                '[CaseQuestionsPanel] composite gold phase navigation failed', error
+              ));
+            }}
+          >View saved</button>
+        ) : null}
+        <button
+          type="button"
+          className="rounded border border-red-600 px-2 py-1 text-red-100 disabled:opacity-40"
+          disabled={disabled || (!getCompositePhaseMeasurementId(live) && !hasSaved)}
+          onClick={event => {
+            event.preventDefault(); event.stopPropagation();
+            void deleteCompositePhaseMeasurement(quiz, question, slot, phaseSource);
+          }}
+        >Delete</button>
+      </>
+    );
+  }
 
   function setAnswer(quizKey: string, question: QuizQuestion, value: any) {
     reportEducationChange(`quiz:${quizKey}`);
@@ -2456,6 +3052,11 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
           questionKey: question.questionKey,
           radius: scoringConfig.radius,
           radiusUnit: cleanString(scoringConfig.radiusUnit) || 'world',
+          endpointToleranceMM: answerConfig.measurementKind === 'ivcCollapsibility'
+            ? scoringConfig.caliperEndpointToleranceMM ?? 5
+            : scoringConfig.endpointToleranceMM ?? null,
+          ivcEndpointToleranceEnabled: answerConfig.measurementKind === 'ivcCollapsibility' &&
+            scoringConfig.caliperEndpointToleranceEnabled !== false,
         });
 
     if (result?.rubricRendered !== true) {
@@ -2542,6 +3143,17 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       return;
     }
     lastActivatedQuestionRef.current = nextActiveQuestionKey;
+    if (isNewQuestion) {
+      // The IVC measure-only setting must never leak into ordinary learner
+      // Length questions, including when the phase binding already finished.
+      try {
+        await runViewerCommand(commandsManager, 'resetViewerLengthLabelMode', {});
+      } catch (error) {
+        console.warn('[CaseQuestionsPanel] Length label-mode reset failed', error);
+      }
+      // Do not allow an older selection to resume after a newer one.
+      if (lastActivatedQuestionRef.current !== nextActiveQuestionKey) return;
+    }
     if (question.type === 'frameSelection') {
       setFrameNavigationErrors(current => {
         if (!current[nextActiveQuestionKey]) return current;
@@ -2556,6 +3168,19 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     const measurementKind = question.type === 'measurementNumeric'
       ? cleanString(plainObject(question.answerConfig).measurementKind)
       : '';
+    // The toolbar reflects the selected quiz measurement workflow even when
+    // saved contours are being reviewed and no drawing should start.
+    try {
+      await runViewerCommand(commandsManager, 'setViewerQuizMeasurementContext', {
+        measurementKind,
+      });
+    } catch (error) {
+      console.warn('[CaseQuestionsPanel] could not highlight quiz measurement toolbar', error);
+    }
+    // A previous selection can finish an async viewer command after the
+    // educator/learner has already chosen another question from the dropdown.
+    // Never let its continuation restore the earlier question (e.g. LAV).
+    if (lastActivatedQuestionRef.current !== nextActiveQuestionKey) return;
     // Reopening an educator's completed composite is a review action, not
     // an instruction to start another measurement session over saved contours.
     const savedGoldComponents = authoringMode
@@ -2594,7 +3219,20 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
 
       // Length still activates immediately. Guided workflows are deferred
       // until the saved question target has been navigated into view.
-      if (!isGuidedQuizCompositeKind(measurementKind)) {
+      // Selecting an already-authored TR Vmax is a review action. Do not
+      // launch a fresh spectral workflow or display drawing instructions until
+      // the educator explicitly clicks the Vmax toolbar to replace the gold.
+      const existingTRGold = plainObject(
+        plainObject(question.answerConfig).goldMeasurement
+      );
+      const reviewSavedTR = authoringMode && measurementKind === 'trVmax' &&
+        existingTRGold.measurementKind === 'trVmax' &&
+        existingTRGold.unit === 'm/s' &&
+        Number.isFinite(Number(existingTRGold.value)) &&
+        Number(existingTRGold.value) > 0 &&
+        !!cleanString(existingTRGold.sourceAnnotationId) &&
+        targetHasNavigationIdentity(existingTRGold.viewerTarget);
+      if (!isGuidedQuizCompositeKind(measurementKind) && !reviewSavedTR) {
         const activationResult = await runViewerCommand(
           commandsManager,
           'activateViewerQuizMeasurementTool',
@@ -2614,11 +3252,11 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     }
 
     try {
+    if (lastActivatedQuestionRef.current !== nextActiveQuestionKey) return;
     if (authoringMode && question.type === 'measurementNumeric') {
-      setActiveQuestionKey(nextActiveQuestionKey);
-
       try {
         const authoringMeasurementResult = await showAuthoringGoldMeasurement(question);
+        if (lastActivatedQuestionRef.current !== nextActiveQuestionKey) return;
 
         if (authoringMeasurementResult?.rubricRendered === true) {
           return;
@@ -2634,7 +3272,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       return;
     }
 
-    setActiveQuestionKey(nextActiveQuestionKey);
+    // The first selection update was synchronous, before any viewer awaits.
+    // A late continuation must not reactivate the previous question.
+    if (lastActivatedQuestionRef.current !== nextActiveQuestionKey) return;
 
     const questionAnswer = answersByQuizKey?.[quiz.quizKey]?.[question.questionKey];
     const quizScore = viewerQuizScore ? getQuizScoreItem(viewerQuizScore, quiz) : null;
@@ -2719,6 +3359,46 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
           reviewMode: 'learner',
         });
 
+    // The learner's composite quiz answer contains multiple independently
+    // framed annotations. A single showViewerQuizLearnerMeasurement call
+    // restores only one and hides the saved individual phase contours.
+    // Rebuild *all* of the learner's saved phase sources before the generic
+    // single-measurement path; never fetch/overlay educator gold.
+    const learnerCompositeKind = !authoringMode ? measurementKind : '';
+    const learnerComposite = learnerCompositeKind === 'ivcRapRvsp'
+      ? plainObject(plainObject(questionAnswer).compositeResult).ivc
+      : questionAnswer;
+    const learnerComponents = getLearnerCompositeSourceComponents(
+      learnerComposite,
+      learnerCompositeKind === 'ivcRapRvsp' ? 'ivcCollapsibility' : learnerCompositeKind
+    );
+    if (learnerComponents.length === 2) {
+      try {
+        const firstSource = learnerComponents[0].target;
+        const restored = await runViewerCommand(
+          commandsManager, 'showViewerQuizLearnerCompositeMeasurement', {
+            learnerMeasurement: learnerComposite,
+            viewerTarget: firstSource,
+            questionKey: question.questionKey,
+          }
+        );
+        if (restored?.learnerRendered === true &&
+            restored?.restoredCount === learnerComponents.length) {
+          return;
+        }
+        console.warn('[CaseQuestionsPanel] saved learner composite restoration incomplete', {
+          questionKey: question.questionKey,
+          restoredCount: restored?.restoredCount || 0,
+          expectedCount: learnerComponents.length,
+          reason: restored?.reason || 'unknown',
+        });
+      } catch (error) {
+        console.warn('[CaseQuestionsPanel] learner composite restore failed', {
+          questionKey: question.questionKey, error,
+        });
+      }
+    }
+
     // Multi-BWT answers store an array of learner calipers, not the single
     // top-level annotation reference expected by the generic review path.
     // Restore every learner-owned Length overlay, including unscored drafts.
@@ -2780,6 +3460,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         });
         setFrameNavigationErrors(current => ({ ...current, [nextActiveQuestionKey]: message }));
       }
+      if (lastActivatedQuestionRef.current !== nextActiveQuestionKey) return;
       if (overlayMarkers.length) {
         await runViewerCommand(commandsManager, 'showViewerQuizMarkerOptions', {
           viewerTarget: null,
@@ -2793,10 +3474,12 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     }
 
     try {
+      if (lastActivatedQuestionRef.current !== nextActiveQuestionKey) return;
       const result = await runViewerCommand(commandsManager, 'jumpToViewerQuizTarget', {
         viewerTarget,
         questionKey: question.questionKey,
       });
+      if (lastActivatedQuestionRef.current !== nextActiveQuestionKey) return;
 
       if (question.type === 'frameSelection' && !authoringMode &&
           shouldGuideFrameSelectionToInstance(question) && result?.ok !== true) {
@@ -2812,6 +3495,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         });
       }
 
+      if (lastActivatedQuestionRef.current !== nextActiveQuestionKey) return;
       if (overlayMarkers.length) {
         await runViewerCommand(commandsManager, 'showViewerQuizMarkerOptions', {
           viewerTarget: null,
@@ -3023,7 +3707,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
   async function captureSelectedMeasurementAnswer(
     quiz: QuizDefinition,
     question: QuizQuestion,
-    options: { measurementId?: string; silent?: boolean } = {}
+    options: { measurementId?: string; silent?: boolean; verifyCompositeStatus?: boolean } = {}
   ) {
     const captureKey = `${quiz.quizKey}:${question.questionKey}`;
 
@@ -3046,7 +3730,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
             title: 'Case Questions',
             message:
               reason === 'no-selected-measurement'
-                ? 'Select the measurement annotation in the viewport first, then use it as the answer.'
+                ? 'Select the measurement annotation in the viewport first.'
                 : `Could not use selected measurement: ${reason}`,
             type: 'warning',
             duration: 4500,
@@ -3054,6 +3738,17 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         }
 
         return false;
+      }
+
+      // Validate after async capture against the current authoritative physical
+      // calculation and exact source annotation IDs, not a stale UI status.
+      if (options.verifyCompositeStatus) {
+        const kind = cleanString(plainObject(question.answerConfig).measurementKind);
+        const verified = await runViewerCommand(commandsManager,
+          'getViewerQuizCompositeStatusForActiveStudy', { measurementKind: kind });
+        if (!isLearnerCompositeCaptureCurrent(result.answer, verified, kind)) {
+          return false;
+        }
       }
 
       const currentAnswer = latestLearnerAnswersRef.current[quiz.quizKey]?.[question.questionKey];
@@ -3095,6 +3790,17 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         return true;
       }
 
+      if (cleanString(plainObject(question.answerConfig).measurementKind) === 'ivcCollapsibility') {
+        const previouslyLinked = plainObject(plainObject(currentAnswer).compositeResult).rapRvsp;
+        if (previouslyLinked?.ivc &&
+            !isIVCReviewCurrent(previouslyLinked.ivc, result.answer)) {
+          // Edited or replaced calipers invalidate an earlier RAP/RVSP
+          // interpretation. Require a fresh explicit RAP choice.
+          setRapSelectionsByQuestionKey(current => ({
+            ...current, [captureKey]: '',
+          }));
+        }
+      }
       setAnswer(quiz.quizKey, question, setObjectAnswerPart(currentAnswer, result.answer));
 
       if (!options.silent) {
@@ -3122,6 +3828,49 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       setCapturingMeasurementKey('');
     }
   }
+
+  useEffect(() => {
+    if (authoringMode || !activeQuestionKey ||
+        liveCompositeStatus.questionKey !== activeQuestionKey ||
+        liveCompositeStatus.complete !== true) return;
+    const [quizKey, questionKey] = activeQuestionKey.split(':');
+    const quiz = quizzes.find(entry => entry.quizKey === quizKey);
+    const question = quiz?.questions?.find(entry => entry.questionKey === questionKey);
+    if (!quiz || !question || question.type !== 'measurementNumeric' ||
+        getQuizScoreItem(viewerQuizScore, quiz)) return;
+    const captureKey = `${quizKey}:${questionKey}`;
+    const signature = getLearnerCompositeAutoCaptureSignature({
+      question, liveMeasurements: liveCompositeMeasurements,
+      status: liveCompositeStatus,
+      savedAnswer: latestLearnerAnswersRef.current[quizKey]?.[questionKey],
+    });
+    if (!signature ||
+        autoCompositeLearnerCapturedSignatureRef.current[captureKey] === signature ||
+        autoCompositeLearnerCaptureInFlightRef.current.has(captureKey)) return;
+
+    // Cornerstone sends provisional updates while contour drawing finishes.
+    // Capture a settled, validated complete composite from the authoritative
+    // viewer command; never reuse a typed scalar or educator gold result.
+    const timer = window.setTimeout(() => {
+      if (lastActivatedQuestionRef.current &&
+          lastActivatedQuestionRef.current !== captureKey) return;
+      if (autoCompositeLearnerCaptureInFlightRef.current.has(captureKey)) return;
+      autoCompositeLearnerCaptureInFlightRef.current.add(captureKey);
+      void (async () => {
+        try {
+          if (await captureSelectedMeasurementAnswer(quiz, question, {
+            silent: true, verifyCompositeStatus: true,
+          })) {
+            autoCompositeLearnerCapturedSignatureRef.current[captureKey] = signature;
+          }
+        } finally {
+          autoCompositeLearnerCaptureInFlightRef.current.delete(captureKey);
+        }
+      })();
+    }, 650);
+    return () => window.clearTimeout(timer);
+  }, [activeQuestionKey, authoringMode, liveCompositeStatus,
+    liveCompositeMeasurements, quizzes, viewerQuizScore]);
 
   useEffect(() => {
     function handleQuizMeasurementAdded(event: Event) {
@@ -3262,8 +4011,49 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
           autoBowelLearnerCaptureQueueRef.current.then(captureQueuedCaliper, captureQueuedCaliper);
         return;
       }
+      // Calibrated Vmax annotation completion can precede OHIF's async
+      // MeasurementService adapter. Retry capture by the *same* annotation
+      // ID only, and never use the educator gold or a different selected ROI.
+      const kind = cleanString(plainObject(question.answerConfig).measurementKind);
+      if (kind === 'trVmax') {
+        if (labelCompleted) return;
+        const key = quizKey + ':' + questionKey;
+        const captureId = key + ':' + measurementId;
+        if (autoSpectralLearnerCaptureInFlightRef.current.has(captureId)) return;
+        autoSpectralLearnerCaptureInFlightRef.current.add(captureId);
+        void (async () => {
+          try {
+            for (const delayMs of [100, 350, 900, 1800, 3200]) {
+              await new Promise(resolve => window.setTimeout(resolve, delayMs));
+              if (lastActivatedQuestionRef.current !== key) return;
+              const accepted = await captureSelectedMeasurementAnswer(quiz, question, {
+                measurementId, silent: true,
+              });
+              if (accepted) {
+                setSpectralLearnerCaptureErrors(current => {
+                  if (!current[key]) return current;
+                  const next = { ...current }; delete next[key]; return next;
+                });
+                return;
+              }
+            }
+            if (lastActivatedQuestionRef.current !== key) return;
+            setSpectralLearnerCaptureErrors(current => ({
+              ...current,
+              [key]: 'TR Vmax was not recorded from the calibrated spectral annotation. Verify its measurement label and DICOM calibration, then recapture before the IVC question.',
+            }));
+            uiNotificationService.show({
+              title: 'TR Vmax not recorded', type: 'warning', duration: 6500,
+              message: 'The calibrated TR Vmax could not be linked to this quiz answer. Recheck the spectral measurement before continuing to RVSP.',
+            });
+          } finally {
+            autoSpectralLearnerCaptureInFlightRef.current.delete(captureId);
+          }
+        })();
+        return;
+      }
       if (labelCompleted || isGuidedQuizCompositeKind(
-        cleanString(plainObject(question.answerConfig).measurementKind)
+        kind
       )) {
         // Composite calculations are captured only when complete.
         return;
@@ -3406,9 +4196,21 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     try {
       const result = await Promise.resolve(commandsManager.runCommand(
         'saveViewerMeasurementsForActiveStudy',
-        { domain: 'echo', scoringIntent: 'draft', educationAttemptIntent: 'draft', reportFieldNames: fields }
+        { domain: 'echo', scoringIntent: 'draft', educationAttemptIntent: 'draft', reportFieldNames: fields,
+          educationQuizHemodynamics: quizMeasurementReview.educationQuizHemodynamics,
+          suppressSuccessNotification: true }
       ));
       if (!result || result?.ok === false) throw new Error('Measurement save did not succeed.');
+      const fieldsByEvidence = { 'quiz-tr': 'TRVel', 'quiz-rap': 'RASP', 'quiz-rvsp': 'RVSP' };
+      for (const row of quizMeasurementReview.quizEvidenceRows || []) {
+        const field = fieldsByEvidence[row.key.split(':')[0]];
+        if (!row.recorded || !fields.includes(field)) continue;
+        const saved = result.seriesDoc?.[field];
+        if (saved == null || !Number.isFinite(Number(saved)) ||
+            Math.abs(Number(saved) - Number.parseFloat(row.display)) > 0.01) {
+          throw new Error(`AR did not confirm the selected ${row.label} value. Please retry.`);
+        }
+      }
       finishQuizMeasurementReview(true);
     } catch (error) {
       console.error('[CaseQuestionsPanel] measurement save failed:', error);
@@ -3418,36 +4220,42 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         type: 'error',
         duration: 5000,
       });
-      finishQuizMeasurementReview(false);
+      // Keep the review and selections open so the learner can retry.
     } finally {
       setQuizMeasurementApplying(false);
     }
   };
 
-  async function confirmReportOwnedMeasurementSave(): Promise<void> {
+  async function confirmReportOwnedMeasurementSave(
+    quiz: QuizDefinition, quizAnswers: Record<string, any>
+  ): Promise<void> {
+    const quizEvidenceRows = getLearnerHemodynamicQuizReviewRows(quiz, quizAnswers);
+    const educationQuizHemodynamics = getLearnerHemodynamicTransferEvidence(quiz, quizAnswers);
     await ensureViewerQuizSaveSeriesDoc();
     const preview = await Promise.resolve(commandsManager.runCommand(
       'saveViewerMeasurementsForActiveStudy',
-      { domain: 'echo', scoringIntent: 'draft', educationAttemptIntent: 'draft', previewOnly: true }
+      { domain: 'echo', scoringIntent: 'draft', educationAttemptIntent: 'draft', previewOnly: true, educationQuizHemodynamics }
     ));
     if (!preview?.previewOnly || preview?.isClinicalReportSave !== true) {
       throw new Error('Measurement review is unavailable for this learner report. Answers were not saved.');
     }
-    const rows = buildClinicalReportReviewRows(preview);
-    if (!rows.length && preview?.measurementAnnotationsChanged === false) return;
-    // If annotations changed without mapped report fields, save annotations explicitly.
-    if (!rows.length) {
-      const result = await Promise.resolve(commandsManager.runCommand(
-        'saveViewerMeasurementsForActiveStudy',
-        { domain: 'echo', scoringIntent: 'draft', educationAttemptIntent: 'draft', reportFieldNames: [] }
-      ));
-      if (!result || result?.ok === false) {
-        throw new Error('Viewer annotations could not be saved.');
-      }
-      return;
+    if (quizEvidenceRows.some(row => row.recorded) && preview.educationQuizHemodynamicsSupported !== true) {
+      throw new Error('AR requires the learner hemodynamic review update before TR Vmax, RAP and RVSP can be transferred.');
     }
+    const fieldForEvidence = { 'quiz-tr': 'TRVel', 'quiz-rap': 'RASP', 'quiz-rvsp': 'RVSP' };
+    const unverified = quizEvidenceRows.filter(row => row.recorded &&
+      !preview.educationQuizHemodynamicFields?.includes(fieldForEvidence[row.key.split(':')[0]]));
+    if (unverified.length) {
+      throw new Error(`AR could not verify ${unverified.map(row => row.label).join(', ')} for transfer. Review those source measurements and retry.`);
+    }
+    const rows = buildClinicalReportReviewRows(preview);
+    if (!rows.length && preview?.measurementAnnotationsChanged === false &&
+        !quizEvidenceRows.length) return;
     setQuizMeasurementSelectedRows(rows.filter(row => row.changed).map(row => row.key));
-    setQuizMeasurementReview({ rows, derivedConsequences: preview?.derivedConsequences });
+    setQuizMeasurementReview({
+      rows, derivedConsequences: preview?.derivedConsequences, quizEvidenceRows,
+      educationQuizHemodynamics, educationWorkflow: true,
+    });
     const approved = await new Promise<boolean>(resolve => {
       quizMeasurementResolveRef.current = resolve;
     });
@@ -3467,6 +4275,15 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       return null;
     }
 
+    if (Array.from(autoSpectralLearnerCaptureInFlightRef.current).some(
+      key => key.startsWith(quiz.quizKey + ':')
+    )) {
+      uiNotificationService.show({
+        title: 'TR Vmax capture in progress', type: 'warning', duration: 5000,
+        message: 'The calibrated TR Vmax is still being recorded. Complete that capture before saving this quiz.',
+      });
+      return null;
+    }
     setSavingQuizKey(quiz.quizKey);
     if (status === 'submitted') {
       setSubmitting(true);
@@ -3508,8 +4325,75 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       // Combined report assessment: measurement review and persistence precede quiz answer save.
       // Ordinary imaging quizzes retain their existing independent save/score workflow.
       if (deferredReportScoring && quiz.questions.some(q => q.type === 'measurementNumeric')) {
-        await confirmReportOwnedMeasurementSave();
+        await confirmReportOwnedMeasurementSave(quiz, quizAnswers);
       }
+      // A quiz JSON answer is not proof its source annotations were
+      // saved. Persist only the exact missing source annotations on the learner's
+      // own Series before saving the answer. In combined report workflows the
+      // existing reviewed report-owned save runs first (above).
+      const compositeSources = getLearnerCompositePersistenceSources(
+        quiz.questions || [], quizAnswers
+      );
+      if (compositeSources.length) {
+        await ensureViewerQuizSaveSeriesDoc();
+        const readSaved = async () => await runViewerCommand(
+          commandsManager, 'getViewerMeasurementAnnotationsForActiveStudy',
+          { domain: 'echo', workflows: ['viewerMeasurements'] }
+        );
+        let persisted = await readSaved();
+        if (!persisted?.seriesDoc?.isLearnerCopy ||
+            !persisted?.saveTarget?.learnerSeriesId ||
+            String(persisted.seriesDoc._id || '') !==
+              String(persisted.saveTarget.learnerSeriesId)) {
+          throw new Error(
+            'Learner measurement evidence could not be verified on the isolated learner Series. No quiz answers were saved.'
+          );
+        }
+        const getMissing = (records: any[]) => compositeSources.filter(source =>
+          !(Array.isArray(records) ? records : []).some(annotation =>
+            isPersistedLearnerCompositeSource(annotation, source)
+          )
+        );
+        const missing = getMissing(persisted.annotations);
+        if (missing.length) {
+          // An exact quiz annotation ID in the learner's active viewer session
+          // is required. Never fetch educator/base gold or save an approximate
+          // contour from another question/frame.
+          const live = await runViewerCommand(
+            commandsManager, 'getViewerMeasurementSnapshotForPanel', {}
+          );
+          if (missing.some(source =>
+            !(Array.isArray(live) ? live : []).some(item =>
+              isPersistedLearnerCompositeSource(item, source)
+            )
+          )) {
+            throw new Error(
+              'Some learner measurements, including spectral or contour sources, are not available with their saved DICOM frame. Reopen and verify the affected measurements before saving.'
+            );
+          }
+          const result = await runViewerCommand(
+            commandsManager, 'saveViewerMeasurementsForActiveStudy', {
+              domain: 'echo',
+              measurementIds: missing.map(source => source.annotationId),
+              scoringIntent: 'draft', educationAttemptIntent: 'draft',
+              suppressSuccessNotification: true,
+            }
+          );
+          if (!result || result.ok === false) {
+            throw new Error(
+              'The learner source measurements could not be saved to AR. Quiz answers were not saved.'
+            );
+          }
+          persisted = await readSaved();
+          if (!persisted?.seriesDoc?.isLearnerCopy ||
+              getMissing(persisted.annotations).length) {
+            throw new Error(
+              'AR did not confirm persistence of every learner measurement source. Quiz answers were not saved.'
+            );
+          }
+        }
+      }
+
       const saveSource = `quiz:${quiz.quizKey}`;
       const saveRequestId = nextEducationSaveRequestId();
       reportEducationSaveStart(saveSource, saveRequestId);
@@ -3521,7 +4405,11 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
           status,
           answers: buildAnswerPayload(quiz, quizAnswers),
         });
-        // Scoring is a separate operation from answer persistence.
+        const evidenceError = getLearnerHemodynamicReadbackError(
+          quiz.questions || [], quizAnswers, result?.response?.answers
+        );
+        if (evidenceError) throw new Error(evidenceError);
+        // Scoring is a separate operation from verified answer persistence.
         reportEducationSaveResult(saveSource, saveRequestId, true);
       } catch (saveError) {
         reportEducationSaveResult(saveSource, saveRequestId, false);
@@ -3633,15 +4521,28 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     questionKey: string,
     updater: (question: QuizQuestion) => QuizQuestion
   ) {
+    // Keep the save source synchronous. Capturing gold and pressing Save
+    // immediately must not serialize the previous React render's questions.
+    const before = authoringQuestionsRef.current;
+    const matches = before.filter(item => item.questionKey === questionKey);
+    if (matches.length !== 1 ||
+        new Set(before.map(item => item.questionKey)).size !== before.length) {
+      uiNotificationService.show({
+        title: 'Quiz Authoring', type: 'error', duration: 6500,
+        message: 'Question identity is ambiguous. Changes were not applied; reload the draft.',
+      });
+      return;
+    }
+    const nextQuestions = before.map(question =>
+      question.questionKey === questionKey ? updater(question) : question
+    );
+    if (nextQuestions.length !== before.length ||
+        nextQuestions.some((item, index) => item.questionKey !== before[index].questionKey)) {
+      throw new Error('A question edit attempted to modify question identity or count.');
+    }
+    authoringQuestionsRef.current = nextQuestions;
+    setAuthoringQuestions(nextQuestions);
     reportEducationChange('authoring');
-    setAuthoringQuestions(current => {
-      const nextQuestions = current.map(question =>
-        question.questionKey === questionKey ? updater(question) : question
-      );
-
-      authoringQuestionsRef.current = nextQuestions;
-      return nextQuestions;
-    });
   }
 
   function patchAuthoringQuestion(question: QuizQuestion, patch: Partial<QuizQuestion>) {
@@ -4108,9 +5009,15 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     const captureKey = `authoring-measurement:${question.questionKey}`;
     const answerConfig = plainObject(question.answerConfig);
 
-    // Binding is always an explicit question, never inferred from the last drawing.
-    setActiveQuestionKey(`authoring:${question.questionKey}`);
+    // Capturing a completed measurement must not change which question the
+    // dropdown displays. A delayed LAV auto-capture can finish after the user
+    // selects another question; its saved gold belongs to the original key.
+    if (options.silent &&
+        lastActivatedQuestionRef.current !== `authoring:${question.questionKey}`) {
+      return false;
+    }
     setCapturingAuthoringKey(captureKey);
+    lastCompositeGoldCaptureErrorRef.current = '';
 
     try {
       const result = await captureQuizMeasurementResult(question, {
@@ -4121,7 +5028,63 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         throw new Error(result?.reason || 'selected measurement not found');
       }
 
-      const answer = result.answer;
+      if (options.silent &&
+          lastActivatedQuestionRef.current !== `authoring:${question.questionKey}`) {
+        return false;
+      }
+      let answer = result.answer;
+      const captureKind = cleanString(answerConfig.measurementKind);
+      if (captureKind === 'lvSimpsonEF') {
+        const evidence = getEFGoldDerivedEvidenceStatus(answer);
+        if (!evidence.complete) {
+          const missing = [
+            ...(evidence.missingLongAxisSlots.length
+              ? [`LV long axes: ${evidence.missingLongAxisSlots.join(', ')}`] : []),
+            ...(evidence.missingAreaSlots.length
+              ? [`calibrated contour areas: ${evidence.missingAreaSlots.join(', ')}`] : []),
+            ...(!evidence.hasBiplaneVolumes ? ['biplane EDV/ESV'] : []),
+          ];
+          throw new Error(
+            'Cannot capture new EF gold without complete calibrated measurements (' +
+              missing.join('; ') +
+              '). Finish the four LV EF contours and review the calculated result. ' +
+              'Existing historical gold and learner attempts were not changed.'
+          );
+        }
+      }
+      if (captureKind === 'ivcCollapsibility') {
+        const latest = authoringQuestionsRef.current.find(item =>
+          item.questionKey === question.questionKey);
+        const prior = plainObject(plainObject(latest?.answerConfig).goldMeasurement);
+        const review = plainObject(plainObject(prior.compositeResult).rapRvsp).ivc;
+        if (review && isIVCReviewCurrent(review, answer)) {
+          const previousComposite = plainObject(prior.compositeResult);
+          answer = {
+            ...answer,
+            compositeResult: {
+              ...plainObject(answer.compositeResult),
+              rapMMHG: previousComposite.rapMMHG,
+              trGradientMMHG: previousComposite.trGradientMMHG,
+              rvspMMHG: previousComposite.rvspMMHG,
+              rapRvsp: previousComposite.rapRvsp,
+            },
+          };
+        }
+      }
+      const guidedSlots = COMPOSITE_FRAME_SLOTS[captureKind] || [];
+      if (guidedSlots.length && answerConfig.compositeFrameGuidanceEnabled === true) {
+        const configured = getCompleteCompositeFrameTargets(answerConfig);
+        const components = plainObject(answer.compositeResult).components;
+        if (!configured || !Array.isArray(components) || components.length !== guidedSlots.length ||
+            guidedSlots.some(({ slot }) => {
+              const component = components.find(item => cleanString(item?.slot) === slot);
+              return !component || !matchesConfiguredCompositeFrame(
+                plainObject(component.target), configured[slot]
+              );
+            })) {
+          throw new Error('The calculated measurement must contain all required gold contours on their configured DICOM instance/frames.');
+        }
+      }
       if (isBowelMeasurementSetQuestion(question)) {
         const latest = authoringQuestionsRef.current.find(
           item => item.questionKey === question.questionKey
@@ -4172,8 +5135,10 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       // Composite results use fixed clinical units supplied by the viewer.
       const configuredKind = cleanString(answerConfig.measurementKind);
       const compositeUnit =
-        configuredKind === 'lvSimpsonEF' ? '%' :
-        configuredKind === 'laVolumeBiplane' ? 'mL' : '';
+        ['lvSimpsonEF', 'rvFAC', 'ivcCollapsibility'].includes(configuredKind) ? '%' :
+        ['laVolumeBiplane', 'laVolumeBiplaneDisks'].includes(configuredKind) ? 'mL' :
+        configuredKind === 'raArea' ? 'cm2' :
+        configuredKind === 'ivcRapRvsp' ? 'mmHg' : '';
       const expectedUnit = cleanString(compositeUnit || answerConfig.unit).toLowerCase();
       const capturedUnit = cleanString(answer.unit).toLowerCase();
       if (compositeUnit && cleanString(answer.measurementKind) !== configuredKind) {
@@ -4219,17 +5184,22 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         );
       }
 
-      try {
-        const displayResult = await showAuthoringGoldMeasurement(nextQuestion);
-
-        if (displayResult?.rubricRendered !== true) {
-          console.warn('[CaseQuestionsPanel] newly captured gold measurement was not displayed', {
-            questionKey: question.questionKey,
-            result: displayResult,
-          });
+      // A composite gold capture may finish on phase 2. Its two contours
+      // belong to separate frames; do not automatically navigate back to
+      // phase 1 or put comparison overlays on top of the editable sources.
+      // The phase-specific "View saved" action navigates explicitly.
+      if (!['rvFAC', 'raArea', 'laVolumeBiplane', 'laVolumeBiplaneDisks',
+        'ivcCollapsibility'].includes(configuredKind)) {
+        try {
+          const displayResult = await showAuthoringGoldMeasurement(nextQuestion);
+          if (displayResult?.rubricRendered !== true) {
+            console.warn('[CaseQuestionsPanel] newly captured gold measurement was not displayed', {
+              questionKey: question.questionKey, result: displayResult,
+            });
+          }
+        } catch (error) {
+          console.warn('[CaseQuestionsPanel] newly captured gold measurement display failed:', error);
         }
-      } catch (error) {
-        console.warn('[CaseQuestionsPanel] newly captured gold measurement display failed:', error);
       }
 
       if (!options.silent) {
@@ -4240,13 +5210,16 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
           duration: 3000,
         });
       }
+      return true;
     } catch (error) {
       if (options.silent) {
-        console.warn('[CaseQuestionsPanel] automatic gold measurement capture failed:', error);
+        // Automatic capture attempts during incomplete measurements must not
+        // generate failure toasts or modify existing versioned gold evidence.
+        lastCompositeGoldCaptureErrorRef.current =
+          cleanString(error?.message || error);
+        console.warn('[CaseQuestionsPanel] automatic gold measurement capture unavailable:', error);
+        return false;
       }
-      // Bowel sets use the explicit capture button; do not surface a
-      // stale annotation-added event as an educator failure toast.
-      if (options.silent && isBowelMeasurementSetQuestion(question)) return false;
       uiNotificationService.show({
         title: 'Quiz Authoring',
         message: `Measurement capture failed: ${error?.message || error}`,
@@ -4257,6 +5230,45 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       setCapturingAuthoringKey('');
     }
   }
+
+  // Completed composite phases become a gold answer through the existing
+  // validated Viewer capture command, never from a client-calculated scalar.
+  // The educator must still Save draft to persist the versioned answer.
+  useEffect(() => {
+    if (!authoringMode || !isDraftDefinition(authoringDefinition) || authoringSaving) return;
+    if (!activeQuestionKey.startsWith('authoring:')) return;
+    const questionKey = activeQuestionKey.slice('authoring:'.length);
+    const question = authoringQuestionsRef.current.find(item => item.questionKey === questionKey);
+    if (!question) return;
+    const signature = getCompositeGoldCaptureSignature(question, liveCompositeMeasurements);
+    // Phase labels/annotation IDs alone do not prove that the clinical
+    // calculation is calibrated or ready. Never auto-capture on that basis.
+    if (!signature || liveCompositeStatus.questionKey !== activeQuestionKey ||
+        liveCompositeStatus.complete !== true) return;
+    if (signature.startsWith('backfill:')) {
+      const previous = plainObject(plainObject(question.answerConfig).goldMeasurement);
+      if (previous.value == null || liveCompositeStatus.value == null ||
+          Math.round(Number(previous.value) * 100) !==
+          Math.round(Number(liveCompositeStatus.value) * 100)) return;
+    }
+    const captureKey = questionKey + ':' + signature;
+    if (autoCompositeGoldCaptureInFlightRef.current.has(captureKey)) return;
+    autoCompositeGoldCaptureInFlightRef.current.add(captureKey);
+    const timer = window.setTimeout(async () => {
+      try {
+        const current = authoringQuestionsRef.current.find(item => item.questionKey === questionKey);
+        if (!current || activeQuestionKey !== 'authoring:' + questionKey ||
+            getCompositeGoldCaptureSignature(current, liveCompositeMeasurements) !== signature) return;
+        await captureAuthoringMeasurement(current, { silent: true });
+      } finally {
+        autoCompositeGoldCaptureInFlightRef.current.delete(captureKey);
+      }
+    }, 300);
+    return () => {
+      window.clearTimeout(timer);
+      autoCompositeGoldCaptureInFlightRef.current.delete(captureKey);
+    };
+  }, [liveCompositeMeasurements, liveCompositeStatus, activeQuestionKey, authoringMode, authoringDefinition, authoringSaving]);
 
   async function captureBowelQuizLumenCenter(question: QuizQuestion) {
     const current = authoringQuestionsRef.current.find(
@@ -4329,12 +5341,74 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       return;
     }
 
+    if (restoringCompositeAreaKey) {
+      uiNotificationService.show({
+        title: 'Save Draft', type: 'warning', duration: 4000,
+        message: 'Complete the calibrated gold-area recovery before saving.',
+      });
+      return;
+    }
     setAuthoringSaving(true);
     setErrorMessage('');
 
     try {
       const definitionId = getDefinitionId(authoringDefinition);
-      const questionsToSave = authoringQuestionsRef.current;
+      // In an educator's active composite question, Save Draft accepts the
+      // completed viewer-calculated gold result before serializing question
+      // JSON. A frame-incomplete or mismatched measurement is never inferred.
+      const activeAuthoringKey = activeQuestionKey.startsWith('authoring:')
+        ? activeQuestionKey.slice('authoring:'.length) : '';
+      const currentQuestion = authoringQuestionsRef.current.find(
+        item => item.questionKey === activeAuthoringKey
+      );
+      if (currentQuestion && !capturingAuthoringKey) {
+        const snapshot = await runViewerCommand(
+          commandsManager, 'getViewerMeasurementSnapshotForPanel', {}
+        );
+        const captureSignature = getCompositeGoldCaptureSignature(currentQuestion, snapshot);
+        if (captureSignature) {
+          const kind = cleanString(
+            plainObject(currentQuestion.answerConfig).measurementKind
+          );
+          const diagnostic = await runViewerCommand(
+            commandsManager, 'getViewerQuizCompositeStatusForActiveStudy',
+            { measurementKind: kind }
+          );
+          if (diagnostic?.complete !== true) {
+            throw new Error('Calculated ' + kind + ' gold is not ready: ' +
+              (cleanString(diagnostic?.message) ||
+                'the phase measurements are not calibrated or their source evidence is incomplete.') +
+              ' No invalid gold value has been saved.');
+          }
+          const saved = plainObject(plainObject(currentQuestion.answerConfig).goldMeasurement);
+          // A display-only backfill must never silently alter the gold scalar
+          // or previously verified source contours.
+          const safeBackfill = !captureSignature.startsWith('backfill:') ||
+            (saved.value != null && diagnostic.value != null &&
+             Math.round(Number(saved.value) * 100) ===
+             Math.round(Number(diagnostic.value) * 100));
+          // Always recapture from the authoritative viewer on Save Draft.
+          // captureAuthoringMeasurement retains a reviewed RAP/RVSP only if
+          // every IVC contour annotation, source frame, point and percentage
+          // still matches. A coincidentally equal percent is never enough.
+          const accepted = safeBackfill
+            ? await captureAuthoringMeasurement(currentQuestion, { silent: true })
+            : true;
+          if (accepted !== true) {
+            throw new Error('The ' + kind + ' calculation is complete but cannot be captured as gold: ' +
+              (lastCompositeGoldCaptureErrorRef.current ||
+                'check that every contour uses the required DICOM source frame.') +
+              ' No invalid gold value has been saved.');
+          }
+        }
+      }
+      const incompleteReplacement = getIncompleteCompositeGoldReplacementReason(
+        authoringQuestionsRef.current
+      );
+      if (incompleteReplacement) throw new Error(incompleteReplacement);
+      const questionsToSave = validateAndOrderAuthoringQuestions(
+        authoringQuestionsRef.current
+      );
       const hasMeasurementQuestions = questionsToSave.some(
         question => question.type === 'measurementNumeric'
       );
@@ -4376,10 +5450,41 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         throw saveError;
       }
 
-      const savedDefinition = result?.definition || result?.quizDefinition || null;
-      const savedQuestions = Array.isArray(savedDefinition?.questions)
-        ? savedDefinition.questions
-        : questionsToSave;
+      // The server response alone does not prove the versioned gold survived
+      // sanitization. Read back the draft from FormAPI before notifying the
+      // portal or replacing local editor evidence.
+      const persistedPayload = await getViewerQuizAuthoringContent();
+      const persistedDefinition = (Array.isArray(persistedPayload?.definitions)
+        ? persistedPayload.definitions : []).find(definition =>
+        getDefinitionId(definition) === definitionId
+      );
+      if (!persistedDefinition || !Array.isArray(persistedDefinition.questions)) {
+        throw new Error('Draft saved but its contents could not be verified in FormAPI. Refresh before publishing.');
+      }
+      // The readback must preserve every question, not just questions with
+      // completed composite gold. Reject a missing new LAV draft immediately.
+      const requestedKeys = questionsToSave.map(item => cleanString(item.questionKey));
+      const persistedKeys = persistedDefinition.questions.map(item =>
+        cleanString(item.questionKey));
+      if (requestedKeys.length !== persistedKeys.length ||
+          new Set(requestedKeys).size !== requestedKeys.length ||
+          new Set(persistedKeys).size !== persistedKeys.length ||
+          requestedKeys.some(key => !key || !persistedKeys.includes(key))) {
+        throw new Error(
+          'Draft readback changed question identities/count. Local questions were preserved; do not publish.'
+        );
+      }
+      const persistenceError = getCompositeGoldPersistenceError(
+        questionsToSave, persistedDefinition.questions
+      );
+      if (persistenceError) {
+        throw new Error('Draft save verification failed: ' + persistenceError +
+          ' The existing local answers were preserved for investigation.');
+      }
+      const savedDefinition = persistedDefinition;
+      const savedQuestions = validateAndOrderAuthoringQuestions(
+        savedDefinition.questions
+      );
 
       if (savedDefinition) {
         setAuthoringDefinition(savedDefinition);
@@ -4414,6 +5519,24 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         silent: true,
         preferredDefinitionId: definitionId,
       });
+      // Saving changed the educator's rubric, not the active selection. Render
+      // the updated gold immediately instead of requiring a question switch.
+      const savedActiveQuestion = savedQuestions.find(
+        item => item.questionKey === activeAuthoringKey
+      );
+      if (savedActiveQuestion?.type === 'measurementNumeric' &&
+          lastActivatedQuestionRef.current === `authoring:${activeAuthoringKey}`) {
+        try {
+          await showAuthoringGoldMeasurement(savedActiveQuestion);
+        } catch (overlayError) {
+          console.warn('[CaseQuestionsPanel] saved gold overlay refresh failed', overlayError);
+          uiNotificationService.show({
+            title: 'Quiz Authoring',
+            message: 'Saved successfully, but the viewport overlay could not be refreshed.',
+            type: 'warning', duration: 4500,
+          });
+        }
+      }
       return result;
     } catch (error) {
       const message = `Authoring save failed: ${error?.message || error}`;
@@ -4462,55 +5585,22 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     }));
   }
 
-  function renderCompositePhaseNavigation(question: QuizQuestion, disabled: boolean) {
-    const config = plainObject(question.answerConfig);
-    if (config.compositeFrameGuidanceEnabled !== true) return null;
-    const slots = COMPOSITE_FRAME_SLOTS[cleanString(config.measurementKind)] || [];
-    if (!slots.length) return null;
-    const targets = getCompleteCompositeFrameTargets(config);
-    if (!targets) {
-      return (
-        <div className="mt-2 text-xs text-amber-200" role="alert">
-          Measurement phase instances/frames are not fully configured in the educational asset.
-          Ask the educator to complete the source targets before measuring.
-        </div>
-      );
-    }
-    return (
-      <div className="mt-2 rounded border border-blue-700 bg-blue-950/20 p-2 text-xs">
-        <div className="mb-1 font-semibold text-blue-100">Required measurement image/frame</div>
-        <div className="mb-2 text-gray-300">
-          Open each specified DICOM instance and frame before capturing its measurement.
-        </div>
-        <div className="flex flex-wrap gap-2">
-          {slots.map(({ slot, label }) => (
-            <button
-              key={slot}
-              type="button"
-              disabled={disabled}
-              className="rounded border border-blue-600 px-2 py-1 text-blue-100 disabled:opacity-40"
-              onClick={event => {
-                event.preventDefault();
-                event.stopPropagation();
-                void runViewerCommand(commandsManager, 'jumpToViewerQuizTarget', {
-                  viewerTarget: targets[slot],
-                  questionKey: question.questionKey,
-                });
-              }}
-            >
-              {label} · Open source
-            </button>
-          ))}
-        </div>
-      </div>
-    );
-  }
-
   async function ensureConfiguredCompositePhaseFrame(question: QuizQuestion, slot: string) {
     const config = plainObject(question.answerConfig);
     if (config.compositeFrameGuidanceEnabled !== true) return true;
-    const target = getCompleteCompositeFrameTargets(config)?.[slot];
-    if (!target) return false;
+    // A deleted phase temporarily leaves one slot without a saved source.
+    // Do not require *all* sources before allowing the educator to redraw an
+    // individually configured phase. Full uniqueness/study validation still
+    // applies when accepting the completed calculated gold answer.
+    const target = plainObject(config.compositeFrameTargets)[slot];
+    if (!target || !cleanString(target.sopInstanceUID) ||
+        !Number.isInteger(Number(target.frameNumber)) || Number(target.frameNumber) < 1) {
+      uiNotificationService.show({
+        title: 'Quiz Authoring', type: 'warning', duration: 6000,
+        message: 'Choose the replacement ' + slot + ' DICOM frame and Capture current instance/frame before drawing its gold contour.',
+      });
+      return false;
+    }
     try {
       const jumped = await runViewerCommand(commandsManager, 'jumpToViewerQuizTarget', {
         viewerTarget: target, questionKey: question.questionKey,
@@ -4552,16 +5642,16 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       <div className="mt-2 rounded border border-cyan-700/70 p-2 text-xs">
         <div className="mb-1 font-semibold text-cyan-100">IVC phase measurements</div>
         <p className="mb-2 text-gray-300">
-          Use the expiration and inspiration source images independently.
-          After drawing each calibrated Length caliper, label it IVCexp or IVCinsp.
+          Choose a phase below and draw the calibrated Length caliper.
+          When prompted, label it IVCexp or IVCinsp respectively.
         </p>
-        <div className="flex flex-wrap gap-2">
+        <div className="space-y-2">
           {[
             { slot: 'IVC_EXP', label: 'Measure expiration (IVCexp)' },
             { slot: 'IVC_INSP', label: 'Measure inspiration (IVCinsp)' },
           ].map(phase => (
+            <div key={phase.slot} className="flex flex-wrap items-center gap-2">
             <button
-              key={phase.slot}
               type="button"
               disabled={disabled}
               className="rounded border border-cyan-600 px-2 py-1 text-cyan-100 disabled:opacity-40"
@@ -4571,9 +5661,10 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                 void (async () => {
                   await activateQuestionForPhaseCapture(quiz, question);
                   if (!(await ensureConfiguredCompositePhaseFrame(question, phase.slot))) return;
-                  await runViewerCommand(commandsManager, 'setViewerLengthLabelMode', {
-                    labelMode: 'prompt',
-                  });
+                  // Learners explicitly choose IVCexp / IVCinsp in the
+                  // ordinary Length dialog. Avoid a global measure-only flag:
+                  // it could suppress labels in other quiz questions.
+                  await runViewerCommand(commandsManager, 'resetViewerLengthLabelMode', {});
                   const activation = await runViewerCommand(
                     commandsManager, 'activateViewerMeasurementTool', {
                       toolName: 'Length', stopCine: true,
@@ -4591,6 +5682,8 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
             >
               {phase.label}
             </button>
+            {renderCompositePhaseStatusAndDelete(quiz, question, phase.slot, disabled)}
+            </div>
           ))}
         </div>
       </div>
@@ -4603,14 +5696,13 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       { slot: 'A2C', label: 'Apical two-chamber' },
     ];
     const config = plainObject(question.answerConfig);
-    const sources = getCompleteCompositeFrameTargets(config);
     return (
       <div className="mt-2 rounded border border-cyan-700 bg-cyan-950/20 p-2 text-xs">
         <div className="mb-1 font-semibold text-cyan-100">LA volume contour technique</div>
         <p className="mb-2 text-gray-300">
           For each apical view, navigate to its selected end-systolic DICOM frame.
-          Both techniques preserve calibrated annular and superior-wall landmarks;
-          freehand additionally requires tracing the closed LA cavity.
+          Freehand: click a mitral hinge, trace the LA cavity without holding the mouse,
+          and finish at the opposite hinge. Axis + apex: draw the annular line and superior LA axis.
         </p>
         {views.map(({ slot, label }) => (
           <div key={slot} className="mb-2 flex flex-wrap items-center gap-2">
@@ -4622,7 +5714,8 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               <button
                 key={choice.contourTechnique}
                 type="button"
-                disabled={disabled || (config.compositeFrameGuidanceEnabled === true && !sources)}
+                disabled={disabled || (config.compositeFrameGuidanceEnabled === true &&
+                  !plainObject(config.compositeFrameTargets)[slot]?.sopInstanceUID)}
                 className="rounded border border-cyan-600 px-2 py-1 text-cyan-100 disabled:opacity-40"
                 onClick={event => {
                   event.preventDefault();
@@ -4641,6 +5734,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                 {choice.text}
               </button>
             ))}
+            {renderCompositePhaseStatusAndDelete(quiz, question, slot, disabled)}
           </div>
         ))}
       </div>
@@ -4653,13 +5747,11 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       { slot: 'RV_ES', label: 'End-systolic area (RVESA)' },
     ];
     const config = plainObject(question.answerConfig);
-    const sources = getCompleteCompositeFrameTargets(config);
     return (
       <div className="mt-2 rounded border border-cyan-700 bg-cyan-950/20 p-2 text-xs">
         <div className="mb-1 font-semibold text-cyan-100">RV FAC contour technique</div>
         <div className="mb-2 text-gray-300">
-          Navigate to the required DICOM instance and frame for each phase, then
-          choose either freehand tracing or annulus-axis + apex placement.
+          Choose either freehand tracing or annulus-axis + apex placement.
           The measurement result, not the drawing technique, is scored.
         </div>
         {slots.map(({ slot, label }) => (
@@ -4672,7 +5764,8 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               <button
                 key={choice.command}
                 type="button"
-                disabled={disabled || (config.compositeFrameGuidanceEnabled === true && !sources)}
+                disabled={disabled || (config.compositeFrameGuidanceEnabled === true &&
+                  !plainObject(config.compositeFrameTargets)[slot]?.sopInstanceUID)}
                 className="rounded border border-cyan-600 px-2 py-1 text-cyan-100 disabled:opacity-40"
                 onClick={event => {
                   event.preventDefault();
@@ -4680,15 +5773,222 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                   void (async () => {
                     await activateQuestionForPhaseCapture(quiz, question);
                     if (!(await ensureConfiguredCompositePhaseFrame(question, slot))) return;
-                    await runViewerCommand(commandsManager, choice.command, { slot });
+                    await runViewerCommand(commandsManager, choice.command, {
+                      slot, clickTrace: choice.command === 'startEchoAreaContourWorkflow',
+                    });
                   })();
                 }}
               >
                 {choice.text}
               </button>
             ))}
+            {renderCompositePhaseStatusAndDelete(quiz, question, slot, disabled)}
           </div>
         ))}
+      </div>
+    );
+  }
+
+  function renderLearnerIVCRapReview(
+    quiz: QuizDefinition, question: QuizQuestion, savedAnswer: any, disabled: boolean
+  ) {
+    if (authoringMode ||
+        cleanString(plainObject(question.answerConfig).measurementKind) !== 'ivcCollapsibility') {
+      return null;
+    }
+    const answer = plainObject(savedAnswer);
+    const completeIVC = answer.measurementKind === 'ivcCollapsibility' &&
+      answer.unit === '%' &&
+      getLearnerCompositeSourceComponents(answer, 'ivcCollapsibility').length === 2;
+    const all = quiz.questions || [];
+    const index = all.findIndex(item => item.questionKey === question.questionKey);
+    const priorTR = index > 0 ? all.slice(0, index).reverse().find(item =>
+      item.type === 'measurementNumeric' &&
+      cleanString(plainObject(item.answerConfig).measurementKind) === 'trVmax') : null;
+    const trAnswer = priorTR
+      ? answersByQuizKey?.[quiz.quizKey]?.[priorTR.questionKey] : null;
+    const trValue = Number(trAnswer?.value);
+    const trIsRecorded = trAnswer?.measurementKind === 'trVmax' &&
+      trAnswer?.unit === 'm/s' &&
+      !!cleanString(trAnswer?.sourceAnnotationId) &&
+      !!cleanString(trAnswer?.viewerTarget?.sopInstanceUID) &&
+      Number.isFinite(trValue) && trValue > 0 && trValue <= 8;
+    const key = `${quiz.quizKey}:${question.questionKey}`;
+    const saved = plainObject(answer.compositeResult);
+    const reviewedRAP = saved.rapRvsp?.ivc &&
+      isIVCReviewCurrent(saved.rapRvsp.ivc, answer)
+      ? saved.rapMMHG : null;
+    const selection = rapSelectionsByQuestionKey[key] ??
+      (reviewedRAP != null ? String(reviewedRAP) : '');
+
+    return (
+      <div className="mt-2 rounded border border-cyan-700 bg-cyan-950/20 p-2 text-xs text-cyan-100">
+        <div className="font-semibold">After measuring IVC: select your RAP</div>
+        <div className="mt-1 text-gray-300">
+          AR calculates RVSP from your RAP and the TR Vmax you previously
+          captured in this quiz. RAP is not inferred from collapsibility.
+        </div>
+        <label className="mt-2 flex items-center gap-2">
+          RAP
+          <select aria-label="Learner RAP (mmHg)"
+            value={selection} disabled={disabled || !completeIVC}
+            className="rounded border border-cyan-600 bg-black px-2 py-1"
+            onClick={event => event.stopPropagation()}
+            onChange={event => {
+              const value = event.target.value;
+              setRapSelectionsByQuestionKey(current => ({ ...current, [key]: value }));
+              if (!value || !completeIVC) return;
+              const calculated = attachLearnerRapRvspToIVCAnswer({
+                ivcAnswer: answer, rapMMHG: value,
+                trVmaxAnswer: trAnswer, trVmaxQuestionKey: priorTR?.questionKey || '',
+              });
+              if (calculated.status === 'complete') {
+                setAnswer(quiz.quizKey, question, calculated.answer);
+              } else if (calculated.reason === 'previous-tr-vmax-required') {
+                const rapOnly = attachLearnerRapSelectionToIVCAnswer({
+                  ivcAnswer: answer, rapMMHG: value,
+                });
+                if (rapOnly.status === 'rap-only') {
+                  setAnswer(quiz.quizKey, question, rapOnly.answer);
+                  uiNotificationService.show({
+                    title: 'RAP recorded', type: 'info', duration: 5000,
+                    message: 'Your RAP selection is saved. RVSP remains unavailable until a calibrated earlier TR Vmax answer is recorded.',
+                  });
+                }
+              } else {
+                uiNotificationService.show({
+                  title: 'RAP / RVSP',
+                  type: 'warning', duration: 5500,
+                  message: 'The IVC source evidence must be current before RVSP can be calculated.',
+                });
+              }
+            }}
+          >
+            <option value="">Select RAP</option>
+            {RAP_CHOICES_MMHG.map(rap => (
+              <option key={rap} value={String(rap)}>{rap} mmHg</option>
+            ))}
+          </select>
+        </label>
+        {!completeIVC ? (
+          <div className="mt-1 text-amber-200">
+            Complete both calibrated IVC phase measurements first.
+          </div>
+        ) : !trIsRecorded ? (
+          <div className="mt-1 text-amber-200">
+            RVSP unavailable: a source-linked TR Vmax answer must be recorded earlier in this quiz.
+          </div>
+        ) : (
+          <div className="mt-1 text-green-200">
+            Recorded TR Vmax: {trValue.toFixed(2)} m/s
+          </div>
+        )}
+        {reviewedRAP != null && Number.isFinite(Number(saved.rvspMMHG)) ? (
+          <div className="mt-2 rounded border border-emerald-700 p-2 text-emerald-100">
+            Saved learner RAP: {reviewedRAP} mmHg
+            <div>Calculated RVSP: {Number(saved.rvspMMHG).toFixed(2)} mmHg</div>
+
+          </div>
+        ) : null}
+      </div>
+    );
+  }
+
+  function renderAuthoringIVCRapRVSPReference(question: QuizQuestion, disabled: boolean) {
+    const answer = plainObject(plainObject(question.answerConfig).goldMeasurement);
+    const current = plainObject(answer.compositeResult);
+    const questions = authoringQuestionsRef.current;
+    const index = questions.findIndex(item => item.questionKey === question.questionKey);
+    const priorTR = index > 0 ? questions.slice(0, index).reverse().find(item =>
+      item.type === 'measurementNumeric' &&
+      cleanString(plainObject(item.answerConfig).measurementKind) === 'trVmax'
+    ) : null;
+    const trGold = plainObject(plainObject(priorTR?.answerConfig).goldMeasurement);
+    const selectionKey = 'authoring:' + question.questionKey;
+    const savedRAP = current.rapRvsp?.ivc &&
+      isIVCReviewCurrent(current.rapRvsp.ivc, answer) ? current.rapMMHG : null;
+    const selection = rapSelectionsByQuestionKey[selectionKey] ??
+      (savedRAP == null ? '' : String(savedRAP));
+    const validIVC = answer.measurementKind === 'ivcCollapsibility' &&
+      answer.unit === '%' &&
+      Array.isArray(current.components) && current.components.length === 2;
+    const validTR = trGold.measurementKind === 'trVmax' && trGold.unit === 'm/s' &&
+      Number.isFinite(Number(trGold.value)) && Number(trGold.value) > 0 &&
+      !!cleanString(trGold.sourceAnnotationId) &&
+      !!cleanString(trGold.viewerTarget?.sopInstanceUID);
+    const calculated = validIVC && validTR
+      ? composeIVCRapRVSP({
+          ivcAnswer: answer, rapMMHG: selection, trVmaxAnswer: trGold,
+          trVmaxQuestionKey: priorTR?.questionKey || '',
+        })
+      : { status: 'unavailable' as const };
+    return (
+      <div className="mt-2 space-y-2 rounded border border-cyan-700 bg-cyan-950/20 p-2 text-xs">
+        <div className="font-semibold text-cyan-100">RAP / RVSP reference (educator)</div>
+        <div className={validTR ? 'text-green-200' : 'text-amber-200'}>
+          {validTR ? 'Recorded TR Vmax: ' + Number(trGold.value).toFixed(2) + ' m/s'
+            : 'Capture a calibrated TR Vmax gold measurement in an earlier quiz question first.'}
+        </div>
+        <label className="flex flex-wrap items-center gap-2">
+          RAP interpretation
+          <select aria-label="Educator RAP interpretation (mmHg)"
+            className="rounded border border-cyan-600 bg-black px-2 py-1 text-white"
+            value={selection} disabled={disabled || !validIVC}
+            onChange={event => setRapSelectionsByQuestionKey(currentSelections => ({
+              ...currentSelections, [selectionKey]: event.target.value,
+            }))}>
+            <option value="">Select RAP</option>
+            {RAP_CHOICES_MMHG.map(rap => (
+              <option key={rap} value={String(rap)}>{rap} mmHg</option>
+            ))}
+          </select>
+        </label>
+        {calculated.status === 'complete' ? (
+          <div className="text-green-200">
+            TR gradient: {calculated.compositeResult.trGradientMMHG} mmHg.
+            Calculated RVSP: {calculated.value} mmHg.
+          </div>
+        ) : <div className="text-amber-200">
+          Complete the gold IVC phases, choose RAP and capture an earlier source-linked TR Vmax.
+        </div>}
+        <button type="button" className="rounded border border-cyan-500 px-2 py-1 text-cyan-100 disabled:opacity-40"
+          disabled={disabled || calculated.status !== 'complete'}
+          onClick={event => {
+            event.preventDefault();
+            event.stopPropagation();
+            const latest = authoringQuestionsRef.current.find(item =>
+              item.questionKey === question.questionKey);
+            const latestAnswer = plainObject(plainObject(latest?.answerConfig).goldMeasurement);
+            const freshTR = plainObject(plainObject(authoringQuestionsRef.current.find(item =>
+              item.questionKey === priorTR?.questionKey)?.answerConfig).goldMeasurement);
+            const accepted = attachRapRvspEvidenceToIVCAnswer({
+              ivcAnswer: latestAnswer, rapMMHG: selection, trVmaxAnswer: freshTR,
+              trVmaxQuestionKey: priorTR?.questionKey || '',
+            });
+            if (accepted.status !== 'complete') {
+              uiNotificationService.show({
+                title: 'RAP / RVSP', type: 'warning', duration: 5000,
+                message: 'The IVC or TR Vmax gold source changed. Review and recalculate before saving.',
+              });
+              return;
+            }
+            updateAuthoringQuestion(question.questionKey, currentQuestion => ({
+              ...currentQuestion,
+              answerConfig: {
+                ...plainObject(currentQuestion.answerConfig),
+                goldMeasurement: accepted.answer,
+                // IVC remains the scored percentage, never RVSP mmHg.
+                goldValue: accepted.answer.value,
+              },
+            }));
+          }}>
+          Save RAP / RVSP reference with IVC gold
+        </button>
+        {savedRAP != null && Number.isFinite(Number(current.rvspMMHG)) ? (
+          <div className="text-green-200">
+            Saved reference: RAP {savedRAP} mmHg · RVSP {Number(current.rvspMMHG).toFixed(2)} mmHg
+          </div>
+        ) : null}
       </div>
     );
   }
@@ -5041,7 +6341,6 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
 
       return (
         <div className="mt-2 w-full min-w-0 max-w-full space-y-2 overflow-hidden">
-          {renderCompositePhaseNavigation(question, disabled)}
           {['ivcCollapsibility', 'ivcRapRvsp'].includes(
             cleanString(plainObject(question.answerConfig).measurementKind)
           ) ? renderIVCCaliperControls(quiz, question, disabled) : null}
@@ -5051,6 +6350,28 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
           {cleanString(plainObject(question.answerConfig).measurementKind) === 'rvFAC'
             ? renderRVFACContourControls(quiz, question, disabled)
             : null}
+          {renderCompositeCalculatedStatus(quiz, question)}
+          {cleanString(plainObject(question.answerConfig).measurementKind) === 'trVmax'
+            ? (() => {
+                const captured = value?.measurementKind === 'trVmax' &&
+                  value?.unit === 'm/s' &&
+                  Number.isFinite(Number(value?.value)) &&
+                  Number(value?.value) > 0 && Number(value?.value) <= 8 &&
+                  !!cleanString(value?.sourceAnnotationId) &&
+                  targetHasNavigationIdentity(value?.viewerTarget);
+                const issue = spectralLearnerCaptureErrors[captureKey];
+                return (
+                  <div className={captured
+                    ? 'rounded border border-emerald-700 bg-emerald-950/20 p-2 text-xs text-emerald-100'
+                    : 'rounded border border-amber-700 bg-amber-950/20 p-2 text-xs text-amber-100'}>
+                    {captured
+                      ? 'Saved learner TR Vmax: ' + Number(value.value).toFixed(2) +
+                        ' m/s · Available for IVC / RVSP calculation'
+                      : (issue || 'No source-linked learner TR Vmax is recorded yet. Complete the calibrated spectral Vmax measurement before proceeding to IVC.')}
+                  </div>
+                );
+              })() : null}
+          {renderLearnerIVCRapReview(quiz, question, value, disabled)}
           {bowelSet ? (
             <div className="rounded border border-blue-700 bg-blue-950/20 p-2 text-xs text-gray-200">
               <div className="font-semibold" aria-live="polite">Bowel measurements: {bowelEntries.length} / {bowelCount}</div>
@@ -5127,7 +6448,11 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
             </div>
           ) : linkedRVSP
             ? renderIVCRapRVSPControls(quiz.quizKey, question, value, disabled)
-            : (
+            : ['rvFAC', 'laVolumeBiplane', 'laVolumeBiplaneDisks',
+              'ivcCollapsibility'].includes(
+              cleanString(plainObject(question.answerConfig).measurementKind)
+            ) ? null : cleanString(plainObject(question.answerConfig).measurementKind) === 'trVmax'
+              ? null : (
                         <div className="flex w-full min-w-0 max-w-full items-center gap-2 overflow-hidden">
                           <input
                             className="min-w-0 flex-1 rounded border border-gray-700 bg-black px-2 py-1 text-sm text-white"
@@ -5156,24 +6481,32 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                         </div>
             )}
 
-          {!bowelSet ? <button
+          {!bowelSet && (linkedRVSP || ['laVolumeBiplane',
+            'laVolumeBiplaneDisks', 'lvSimpsonEF'].includes(
+              cleanString(plainObject(question.answerConfig).measurementKind)
+            )) ? <button
             type="button"
             className="rounded border border-gray-600 px-2 py-1 text-[11px] text-gray-300 hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-50"
             disabled={disabled || captureInProgress}
             onClick={event => {
               event.preventDefault();
               event.stopPropagation();
-              captureSelectedMeasurementAnswer(quiz, question);
+              if (cleanString(plainObject(question.answerConfig).measurementKind) === 'lvSimpsonEF') {
+                void runViewerCommand(commandsManager, 'activateViewerQuizMeasurementTool', {
+                  measurementKind: 'lvSimpsonEF', questionKey: question.questionKey,
+                  efContourTargets: getCompleteEFContourFrameTargets(question.answerConfig),
+                });
+              } else {
+                void captureSelectedMeasurementAnswer(quiz, question);
+              }
             }}
           >
             {captureInProgress
               ? 'Capturing…'
               : linkedRVSP
                 ? 'Accept IVC / RAP / RVSP measurement'
-              : cleanString(plainObject(question.answerConfig).measurementKind) === 'lvSimpsonEF' ||
-                  cleanString(plainObject(question.answerConfig).measurementKind) === 'laVolumeBiplane'
-                ? 'Capture calculated measurement'
-                : 'Recapture selected measurement'}
+              : cleanString(plainObject(question.answerConfig).measurementKind) === 'lvSimpsonEF'
+                ? 'Open EF panel' : 'Recalculate from measured contours'}
           </button> : null}
 
           {cleanString(
@@ -5202,7 +6535,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                 ? 'Complete four LV contours, select Calculate EF in the EF panel, then capture the calculated result.'
                 : cleanString(plainObject(question.answerConfig).measurementKind) === 'laVolumeBiplane'
                   ? 'Complete both LA contours, then capture the calculated volume.'
-                  : 'Draw or select a measurement annotation in the viewport, then use it as the answer.'}
+                  : cleanString(plainObject(question.answerConfig).measurementKind) === 'trVmax'
+                    ? 'Complete a calibrated TR spectral peak measurement; the quiz will capture its velocity and DICOM source automatically.'
+                    : 'Draw or select a measurement annotation in the viewport.'}
             </div>
           ) : null}
         </div>
@@ -5601,6 +6936,11 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     const savedGoldComponents = getSavedGoldCompositeNavigationComponents(answerConfig);
     const efGoldRows = hasGuidedEFFrames
       ? getEFGoldContourAuthoringRows(answerConfig, savedGoldComponents) : [];
+    const savedEFGold = hasGuidedEFFrames
+      ? [answerConfig.goldValue, plainObject(answerConfig.goldMeasurement).value]
+          .find(value => value != null && cleanString(value) !== '' &&
+            Number.isFinite(Number(value)) && Number(value) > 0)
+      : undefined;
     const guidedEFFramesComplete = !!getCompleteEFContourFrameTargets(answerConfig);
     const targetSummary = getViewerTargetSummary(viewerTarget);
     const isCapturing = capturingAuthoringKey.endsWith(`:${question.questionKey}`);
@@ -5618,15 +6958,17 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         className={`bg-gray-950/50 rounded border p-2 ${isActiveAuthoringQuestion ? 'border-blue-400' : 'border-gray-700'}`}
         onClick={() => selectQuestion({ quizKey: 'authoring', quizVersion: 1 }, question)}
       >
+        {isActiveAuthoringQuestion ? (
+          <div className="mb-1 inline-flex rounded bg-blue-600 px-2 py-0.5 text-[11px] font-semibold text-white">Active Question</div>
+        ) : null}
         <div className="text-sm font-semibold">
           {index + 1}. {question.title || question.prompt || question.questionKey}
-          {isActiveAuthoringQuestion ? <span className="ml-2 text-xs text-blue-300">Active question</span> : null}
         </div>
         <div className="mt-1 text-[11px] uppercase tracking-wide text-gray-400">
           {question.type}
         </div>
 
-        {targetHasNavigationIdentity(viewerTarget) && (!hasGuidedEFFrames || (answerConfig.efContourFrameGuidanceEnabled !== true && savedGoldComponents.length === 0)) ? (
+        {targetHasNavigationIdentity(viewerTarget) && !compositePhaseSlots.length && (!hasGuidedEFFrames || (answerConfig.efContourFrameGuidanceEnabled !== true && savedGoldComponents.length === 0)) ? (
           <div className="mt-2 flex flex-wrap items-center gap-2">
             <button
               type="button"
@@ -5654,7 +6996,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
           </div>
         ) : null}
         <div className="mt-2 flex flex-wrap gap-2">
-          {isViewerNativeQuestion(question) ? (
+          {isViewerNativeQuestion(question) && compositePhaseSlots.length === 0 && !hasGuidedEFFrames ? (
             <button
               type="button"
               className="rounded border border-blue-500 px-2 py-1 text-xs font-semibold text-blue-100 disabled:opacity-50"
@@ -5704,11 +7046,11 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
           ) : null}
         </div>
 
-        {targetHasNavigationIdentity(viewerTarget) && (!hasGuidedEFFrames || (answerConfig.efContourFrameGuidanceEnabled !== true && savedGoldComponents.length === 0)) ? (
+        {targetHasNavigationIdentity(viewerTarget) && !compositePhaseSlots.length && (!hasGuidedEFFrames || (answerConfig.efContourFrameGuidanceEnabled !== true && savedGoldComponents.length === 0)) ? (
           <div className="bg-blue-950/30 mt-2 rounded border border-blue-700 px-2 py-1 text-xs text-blue-100">
             Target: {targetSummary}
           </div>
-        ) : isViewerNativeQuestion(question) && (!hasGuidedEFFrames || (answerConfig.efContourFrameGuidanceEnabled !== true && savedGoldComponents.length === 0)) ? (
+        ) : isViewerNativeQuestion(question) && !compositePhaseSlots.length && (!hasGuidedEFFrames || (answerConfig.efContourFrameGuidanceEnabled !== true && savedGoldComponents.length === 0)) ? (
           <div className="mt-2 text-xs text-orange-200">
             Spatial questions should have a captured target frame before publishing.
           </div>
@@ -5755,9 +7097,42 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         ) : null}
 
         {hasGuidedEFFrames ? (
-          <div className="mt-2 rounded border border-slate-600 bg-slate-900/60 p-2">
-            <div className="text-xs font-semibold text-gray-100">EF contour frames and saved gold</div>
-            <label className="mt-2 flex items-center gap-2 text-xs font-semibold text-gray-100">
+          <div className="mt-2 rounded border border-cyan-700 bg-cyan-950/20 p-2">
+            <div className="text-xs font-semibold text-cyan-100">EF contour measurements</div>
+            <p className="mt-1 text-xs text-gray-300">
+              Choose an individual A4C/A2C systolic or diastolic contour, then draw with
+              Freehand or Axis + apex. View saved opens that contour's original DICOM frame;
+              Delete clears only the selected draft contour and requires a new EF calculation.
+            </p>
+            <div className="mt-2 rounded border border-emerald-700 bg-emerald-950/30 p-2 text-sm font-semibold text-emerald-100">
+              Gold EF: {savedEFGold !== undefined
+                ? Number(savedEFGold).toFixed(2) + '%' : 'Not captured'}
+            </div>
+            {savedEFGold !== undefined && (() => {
+              const evidence = getEFGoldDerivedEvidenceStatus(
+                plainObject(answerConfig.goldMeasurement)
+              );
+              if (evidence.complete) return null;
+              return (
+                <div className="mt-2 rounded border border-amber-700 p-2 text-xs text-amber-100" role="status">
+                  The EF percentage is approved, but this gold version does not contain
+                  the complete calibrated LV long-axis and volume evidence.
+                  {evidence.missingLongAxisSlots.length ? (
+                    <div className="mt-1">
+                      Missing long axes: {evidence.missingLongAxisSlots.join(', ')}.
+                    </div>
+                  ) : null}
+                  <div className="mt-1">
+                    Contour areas alone cannot recover the original educator-selected apex.
+                    To display accurate long axes, create or edit a draft, repeat the
+                    four-frame LV EF measurement, capture the calculated EF as gold,
+                    and save the draft. Existing learner attempts keep their original version.
+                  </div>
+                </div>
+              );
+            })()}
+            <label className="mt-2 flex items-center gap-2 text-xs font-semibold text-gray-100"
+              onClick={event => event.stopPropagation()}>
               <input type="checkbox"
                 checked={answerConfig.efContourFrameGuidanceEnabled === true}
                 disabled={isCapturing || authoringSaving || !isDraftDefinition(authoringDefinition)}
@@ -5772,7 +7147,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               <div className="mt-2 space-y-2">
                 <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px]">
                   <span className="text-emerald-200">
-                    Saved gold: {efGoldRows.filter(row => row.goldVerified).length}/4 verified source references
+                    Saved gold contours: {efGoldRows.filter(row => row.goldVerified).length}/4
                   </span>
                   {answerConfig.efContourFrameGuidanceEnabled === true ? (
                     <span className={guidedEFFramesComplete ? 'text-green-200' : 'text-amber-200'}>
@@ -5789,7 +7164,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                   const guidanceEnabled = answerConfig.efContourFrameGuidanceEnabled === true;
                   const targetCaptured = targetHasNavigationIdentity(row.configuredTarget);
                   return (
-                    <div key={row.slot} className="border-t border-gray-700 pt-2 text-xs">
+                    <div key={row.slot} className="border-t border-cyan-800/70 pt-2 text-xs">
                       <div className="font-medium text-gray-100">{row.label}</div>
                       {guidanceEnabled ? (
                         <div className={row.configuredComplete ? 'mt-1 text-gray-300' : 'mt-1 text-amber-200'}>
@@ -5798,14 +7173,83 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                             : targetCaptured ? 'Incomplete frame source' : 'Not configured'}
                         </div>
                       ) : null}
-                      <div className={row.goldVerified
-                        ? row.sourceMismatch ? 'mt-1 text-amber-200' : 'mt-1 text-emerald-200'
-                        : 'mt-1 text-amber-200'}>
-                        Gold: {row.goldVerified
-                          ? `Saved · ${getViewerTargetSummary(row.savedTarget)}${row.sourceMismatch ? ' · Does not match target' : ' · Source verified'}`
-                          : 'No verified saved contour'}
-                      </div>
+                      {!row.goldVerified ? (
+                        <div className="mt-1 text-amber-200">No saved gold contour</div>
+                      ) : null}
+                      {row.goldVerified ? (() => {
+                        const derived = plainObject(plainObject(
+                          plainObject(answerConfig.goldMeasurement).compositeResult
+                        ).derived);
+                        const raw = plainObject(derived.slotLongAxisMM)[row.slot];
+                        const measured = raw == null || raw === '' ? NaN : Number(raw);
+                        const areaRaw = plainObject(derived.slotAreaCM2)[row.slot];
+                        const area = areaRaw == null || areaRaw === '' ? NaN : Number(areaRaw);
+                        return (
+                          <div className="mt-1 space-y-1">
+                            <div className={Number.isFinite(area) && area > 0
+                              ? 'font-semibold text-emerald-200' : 'text-amber-200'}>
+                              Calibrated LV contour area: {Number.isFinite(area) && area > 0
+                                ? area.toFixed(2) + ' cm²'
+                                : 'not stored; recapture or validate the gold contour'}
+                            </div>
+                            <div className={Number.isFinite(measured) && measured > 0
+                              ? 'text-emerald-200' : 'text-amber-200'}>
+                              LV long axis: {Number.isFinite(measured) && measured > 0
+                                ? measured.toFixed(2) + ' mm'
+                                : 'not stored'}
+                            </div>
+                          </div>
+                        );
+                      })() : null}
                       <div className="mt-2 flex flex-wrap gap-2">
+                        {[
+                          { label: 'Freehand', method: 'freehand' },
+                          { label: 'Axis + apex', method: 'axisApex' },
+                        ].map(choice => (
+                          <button key={choice.method} type="button"
+                            className="rounded border border-cyan-600 px-2 py-1 text-cyan-100 disabled:opacity-40"
+                            disabled={isCapturing || authoringSaving || !isDraftDefinition(authoringDefinition) ||
+                              (guidanceEnabled && !row.configuredComplete)}
+                            onClick={event => {
+                              event.preventDefault();
+                              event.stopPropagation();
+                              void (async () => {
+                                await selectQuestion({ quizKey: 'authoring', quizVersion: 1 },
+                                  question, { force: true });
+                                if (guidanceEnabled) {
+                                  const opened = await runViewerCommand(commandsManager,
+                                    'jumpToViewerQuizTarget', {
+                                      viewerTarget: row.configuredTarget,
+                                      questionKey: question.questionKey,
+                                    });
+                                  if (opened?.ok !== true) throw new Error('The contour target frame is unavailable.');
+                                  if (cleanString(opened?.viewportId)) {
+                                    await runViewerCommand(commandsManager, 'setViewportActive', {
+                                      viewportId: opened.viewportId,
+                                    });
+                                  }
+                                  const frame = await runViewerCommand(commandsManager,
+                                    'getCurrentViewerQuizFrameAnswer', {});
+                                  if (frame?.ok !== true || !matchesConfiguredCompositeFrame(
+                                    plainObject(frame?.answer?.selectedTarget), row.configuredTarget
+                                  )) throw new Error('The selected contour frame does not match its saved target.');
+                                }
+                                await runViewerCommand(commandsManager, 'startLVSimpsonEFWorkflow', {
+                                  slot: row.slot,
+                                  singleSlot: true,
+                                  captureMethod: choice.method,
+                                  efContourTargets: guidanceEnabled
+                                    ? plainObject(answerConfig.efContourTargets) : null,
+                                  questionKey: question.questionKey,
+                                });
+                              })().catch(error => uiNotificationService.show({
+                                title: 'EF contour', type: 'warning', duration: 6000,
+                                message: String(error?.message || error),
+                              }));
+                            }}>
+                            {choice.label}
+                          </button>
+                        ))}
                         {guidanceEnabled ? (
                           <button type="button"
                             className="rounded border border-blue-500 px-2 py-1 text-blue-100 disabled:opacity-50"
@@ -5826,12 +7270,72 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                               event.preventDefault();
                               event.stopPropagation();
                               setActiveQuestionKey(`authoring:${question.questionKey}`);
-                              void runViewerCommand(commandsManager, 'jumpToViewerQuizTarget', {
-                                viewerTarget: row.savedTarget,
-                                questionKey: question.questionKey,
-                              });
+                              // Use the same focused, source-backed overlay restoration as
+                              // LAV and RV FAC. Reopen the specific saved slot rather than
+                              // the composite answer's final (fourth) frame.
+                              void (async () => {
+                                const result = await runViewerCommand(
+                                  commandsManager, 'showViewerQuizMeasurementComparison', {
+                                    rubricMeasurement: plainObject(answerConfig.goldMeasurement),
+                                    viewerTarget: row.savedTarget,
+                                    focusedCompositeSlot: row.slot,
+                                    questionKey: question.questionKey,
+                                  }
+                                );
+                                const navigation = await runViewerCommand(
+                                  commandsManager, 'jumpToViewerQuizTarget', {
+                                    viewerTarget: row.savedTarget,
+                                    questionKey: question.questionKey,
+                                  }
+                                );
+                                if (cleanString(navigation?.viewportId)) {
+                                  await runViewerCommand(commandsManager, 'setViewportActive', {
+                                    viewportId: navigation.viewportId,
+                                  });
+                                }
+                                const currentFrame = await runViewerCommand(
+                                  commandsManager, 'getCurrentViewerQuizFrameAnswer', {}
+                                );
+                                const openedExpectedFrame = currentFrame?.ok === true &&
+                                  matchesConfiguredCompositeFrame(
+                                    plainObject(currentFrame?.answer?.selectedTarget), row.savedTarget
+                                  );
+                                if (navigation?.ok !== true || !openedExpectedFrame ||
+                                    result?.rubricRendered !== true) {
+                                  uiNotificationService.show({
+                                    title: 'Saved EF contour', type: 'warning', duration: 5000,
+                                    message: 'The saved contour or its exact source frame could not be displayed.',
+                                  });
+                                }
+                              })().catch(error => console.warn(
+                                '[CaseQuestionsPanel] EF saved contour navigation failed', error
+                              ));
                             }}>
                             View saved gold
+                          </button>
+                        ) : null}
+                        {row.goldVerified ? (
+                          <button type="button"
+                            className="rounded border border-red-600 px-2 py-1 text-red-100 disabled:opacity-40"
+                            disabled={isCapturing || authoringSaving || !isDraftDefinition(authoringDefinition)}
+                            onClick={event => {
+                              event.preventDefault();
+                              event.stopPropagation();
+                              const savedComponent = plainObject(
+                                plainObject(answerConfig.goldMeasurement).compositeResult
+                              ).components;
+                              const component = Array.isArray(savedComponent)
+                                ? savedComponent.find(item => cleanString(item?.slot) === row.slot)
+                                : null;
+                              void deleteCompositePhaseMeasurement(
+                                { quizKey: 'authoring', quizVersion: 1 } as QuizDefinition,
+                                question, row.slot, {
+                                  annotationId: cleanString(component?.annotationId),
+                                  target: row.savedTarget,
+                                }
+                              );
+                            }}>
+                            Delete contour
                           </button>
                         ) : null}
                         {guidanceEnabled && row.configuredComplete &&
@@ -5867,9 +7371,20 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                   </div>
                 ) : null}
                 {savedGoldComponents.length > 0 ? (
-                  <p className="border-t border-gray-700 pt-2 text-xs text-emerald-100">
-                    Saved result: {answerConfig.goldValue ?? plainObject(answerConfig.goldMeasurement).value ?? '—'} {answerConfig.unit || plainObject(answerConfig.goldMeasurement).unit || ''}
-                  </p>
+                  <div className="border-t border-gray-700 pt-2 text-xs text-emerald-100">
+                    <div className="font-semibold">Saved biplane measurements</div>
+                    {(() => {
+                      const derived = plainObject(plainObject(
+                        plainObject(answerConfig.goldMeasurement).compositeResult
+                      ).derived);
+                      const edv = derived.edvML == null ? NaN : Number(derived.edvML);
+                      const esv = derived.esvML == null ? NaN : Number(derived.esvML);
+                      return Number.isFinite(edv) && edv > 0 &&
+                        Number.isFinite(esv) && esv >= 0 ? (
+                          <div>Saved biplane EDV: {edv.toFixed(2)} mL · ESV: {esv.toFixed(2)} mL</div>
+                        ) : null;
+                    })()}
+                  </div>
                 ) : null}
               </div>
             ) : (
@@ -5882,7 +7397,8 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
 
         {compositePhaseSlots.length > 0 ? (
           <div className="mt-2 rounded border border-slate-600 bg-slate-900/60 p-2">
-            <label className="flex items-center gap-2 text-xs font-semibold text-gray-100">
+            <label className="flex items-center gap-2 text-xs font-semibold text-gray-100"
+              onClick={event => event.stopPropagation()}>
               <input
                 type="checkbox"
                 checked={answerConfig.compositeFrameGuidanceEnabled === true}
@@ -5947,7 +7463,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
           </div>
         ) : null}
 
-        {savedGoldComponents.length > 0 && !hasGuidedEFFrames ? (
+        {savedGoldComponents.length > 0 && !hasGuidedEFFrames &&
+          !['rvFAC', 'raArea', 'laVolumeBiplane', 'laVolumeBiplaneDisks', 'ivcCollapsibility', 'ivcRapRvsp']
+            .includes(cleanString(answerConfig.measurementKind)) ? (
           <div className="mt-2 rounded border border-emerald-700/70 bg-emerald-950/20 p-2">
             <div className="text-xs font-semibold text-emerald-100">
               Saved gold contours — {savedGoldComponents.filter(component => component.complete).length}/{savedGoldComponents.length} verified source references
@@ -6100,10 +7618,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                 )}
               </div>
             ) : null}
-            {renderCompositePhaseNavigation(
-              question,
-              isCapturing || authoringSaving || !isDraftDefinition(authoringDefinition)
-            )}
+
             {['ivcCollapsibility', 'ivcRapRvsp'].includes(
               cleanString(answerConfig.measurementKind)
             ) ? renderIVCCaliperControls(
@@ -6120,6 +7635,14 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               ? renderRVFACContourControls(
                   { quizKey: 'authoring', quizVersion: 1 }, question,
                   isCapturing || authoringSaving || !isDraftDefinition(authoringDefinition)
+                )
+              : null}
+            {renderCompositeCalculatedStatus(
+              { quizKey: 'authoring', quizVersion: 1 }, question
+            )}
+            {cleanString(answerConfig.measurementKind) === 'ivcCollapsibility'
+              ? renderAuthoringIVCRapRVSPReference(
+                  question, isCapturing || authoringSaving || !isDraftDefinition(authoringDefinition)
                 )
               : null}
             {cleanString(answerConfig.measurementKind) === 'ivcRapRvsp'
@@ -6151,8 +7674,8 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                 : bowelSet
                   ? 'Add selected gold BWT caliper'
                 : answerConfig.goldValue != null && answerConfig.goldValue !== ''
-                  ? (cleanString(answerConfig.measurementKind) === 'lvSimpsonEF' || cleanString(answerConfig.measurementKind) === 'laVolumeBiplane') ? 'Replace gold answer with calculated result' : 'Replace gold answer with selected measurement'
-                  : (cleanString(answerConfig.measurementKind) === 'lvSimpsonEF' || cleanString(answerConfig.measurementKind) === 'laVolumeBiplane') ? 'Use calculated result as gold answer' : bowelSet ? 'Add selected gold BWT caliper' : 'Use selected measurement as gold answer'}
+                  ? ['lvSimpsonEF', 'laVolumeBiplane', 'laVolumeBiplaneDisks', 'rvFAC', 'raArea', 'ivcCollapsibility'].includes(cleanString(answerConfig.measurementKind)) ? 'Replace gold answer with calculated result' : 'Replace gold answer with selected measurement'
+                  : ['lvSimpsonEF', 'laVolumeBiplane', 'laVolumeBiplaneDisks', 'rvFAC', 'raArea', 'ivcCollapsibility'].includes(cleanString(answerConfig.measurementKind)) ? 'Use calculated result as gold answer' : bowelSet ? 'Add selected gold BWT caliper' : 'Use selected measurement as gold answer'}
             </button>
 
             {(answerConfig.goldValue !== null &&
@@ -6192,7 +7715,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               </button>
             ) : null}
 
-            {!bowelSet && (answerConfig.goldValue !== null &&
+            {!bowelSet && !['lvSimpsonEF', 'rvFAC', 'raArea', 'laVolumeBiplane', 'laVolumeBiplaneDisks', 'ivcCollapsibility'].includes(
+              cleanString(answerConfig.measurementKind)
+            ) && (answerConfig.goldValue !== null &&
             typeof answerConfig.goldValue !== 'undefined' &&
             answerConfig.goldValue !== '' ? (
               <div className="bg-green-950/30 mt-2 rounded border border-green-700 px-2 py-1 text-xs text-green-100">
@@ -6201,15 +7726,17 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               </div>
             ) : (
               <div className="mt-2 text-xs text-orange-200">
-                {(cleanString(answerConfig.measurementKind) === 'lvSimpsonEF' || cleanString(answerConfig.measurementKind) === 'laVolumeBiplane')
+                {['lvSimpsonEF', 'laVolumeBiplane', 'laVolumeBiplaneDisks', 'rvFAC', 'raArea', 'ivcCollapsibility'].includes(cleanString(answerConfig.measurementKind))
                   ? 'Complete all required contours, then capture the calculated result as the gold answer. No annotation selection is required.'
                   : 'Select a measurement annotation in the viewport, then capture it as the gold answer.'}
               </div>
             ))}
 
             <label className="mt-2 block text-xs font-semibold text-gray-200">
-              {(cleanString(answerConfig.measurementKind) === 'lvSimpsonEF' || cleanString(answerConfig.measurementKind) === 'laVolumeBiplane')
-                ? `Numeric tolerance (${cleanString(answerConfig.measurementKind) === 'lvSimpsonEF' ? '%' : 'mL'})`
+              {['lvSimpsonEF', 'laVolumeBiplane', 'laVolumeBiplaneDisks', 'rvFAC', 'raArea', 'ivcCollapsibility'].includes(cleanString(answerConfig.measurementKind))
+                ? 'Numeric tolerance (' +
+                  (['lvSimpsonEF', 'rvFAC', 'ivcCollapsibility'].includes(cleanString(answerConfig.measurementKind))
+                    ? '%' : cleanString(answerConfig.measurementKind) === 'raArea' ? 'cm²' : 'mL') + ')'
                 : 'Length tolerance'}
             </label>
             <input
@@ -6231,7 +7758,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               }
             />
 
-            {(cleanString(answerConfig.measurementKind) === 'lvSimpsonEF' || cleanString(answerConfig.measurementKind) === 'laVolumeBiplane') ? (
+            {['lvSimpsonEF', 'laVolumeBiplane', 'laVolumeBiplaneDisks', 'rvFAC', 'raArea'].includes(cleanString(answerConfig.measurementKind)) ? (
               <div className="mt-3 border-t border-gray-700 pt-2">
                 <label className="flex items-center gap-2 text-xs text-gray-200">
                   <input
@@ -6276,7 +7803,84 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               </div>
             ) : null}
 
-            {cleanString(answerConfig.measurementKind) !== 'lvSimpsonEF' && cleanString(answerConfig.measurementKind) !== 'laVolumeBiplane' ? (
+            {cleanString(answerConfig.measurementKind) === 'length' && !bowelSet ? (
+              <div className="mt-3 text-xs text-gray-200">
+                <label className="block" htmlFor={`length-endpoint-tolerance-${question.questionKey}`}>
+                  Optional endpoint tolerance (mm; both ends)
+                </label>
+                <input
+                  id={`length-endpoint-tolerance-${question.questionKey}`}
+                  type="number" min="0" max="100" step="0.1"
+                  className="mt-1 block w-36 rounded border border-gray-700 bg-black px-2 py-1 text-sm text-white"
+                  value={numberOrEmpty(plainObject(question.scoringConfig).endpointToleranceMM)}
+                  disabled={authoringSaving || !isDraftDefinition(authoringDefinition)}
+                  onChange={event => {
+                    const scoring = { ...plainObject(question.scoringConfig) };
+                    if (!event.target.value) delete scoring.endpointToleranceMM;
+                    else {
+                      delete scoring.radius;
+                      delete scoring.radiusUnit;
+                      scoring.endpointToleranceMM = Number(event.target.value);
+                    }
+                    patchAuthoringQuestion(question, { scoringConfig: scoring });
+                  }}
+                />
+                <p className="mt-1 text-gray-400">
+                  When set, view both gold endpoint circles; leave empty for numeric-only
+                  grading unless a legacy centre radius is configured.
+                </p>
+                {numberOrEmpty(plainObject(question.scoringConfig).radius) !== '' ? (
+                  <button type="button"
+                    className="mt-2 block rounded border border-slate-500 px-2 py-1 text-slate-100"
+                    disabled={authoringSaving || !isDraftDefinition(authoringDefinition)}
+                    onClick={() => {
+                      const scoring = { ...plainObject(question.scoringConfig) };
+                      delete scoring.radius;
+                      delete scoring.radiusUnit;
+                      patchAuthoringQuestion(question, { scoringConfig: scoring });
+                    }}>
+                    Clear legacy centre radius ({plainObject(question.scoringConfig).radius} mm)
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
+
+            {cleanString(answerConfig.measurementKind) === 'ivcCollapsibility' ? (
+              <div className="mt-3 space-y-2 text-xs text-gray-200">
+                <label className="flex items-center gap-2">
+                  <input type="checkbox"
+                    checked={plainObject(question.scoringConfig).caliperEndpointToleranceEnabled !== false}
+                    disabled={authoringSaving || !isDraftDefinition(authoringDefinition)}
+                    onChange={event => patchAuthoringQuestion(question, {
+                      scoringConfig: {
+                        ...plainObject(question.scoringConfig),
+                        caliperEndpointToleranceEnabled: event.target.checked,
+                      },
+                    })}
+                  />
+                  Grade IVC expiration and inspiration endpoint placement
+                </label>
+                {plainObject(question.scoringConfig).caliperEndpointToleranceEnabled !== false ? (
+                  <label className="block">
+                    Tolerance around each gold endpoint (mm)
+                    <input type="number" min="0" max="100" step="0.1"
+                      className="mt-1 block w-36 rounded border border-gray-700 bg-black px-2 py-1 text-sm text-white"
+                      value={plainObject(question.scoringConfig).caliperEndpointToleranceMM ?? 5}
+                      disabled={authoringSaving || !isDraftDefinition(authoringDefinition)}
+                      onChange={event => patchAuthoringQuestion(question, {
+                        scoringConfig: {
+                          ...plainObject(question.scoringConfig),
+                          caliperEndpointToleranceMM: event.target.value === ''
+                            ? 5 : Number(event.target.value),
+                        },
+                      })}
+                    />
+                  </label>
+                ) : null}
+              </div>
+            ) : null}
+
+            {!['lvSimpsonEF', 'laVolumeBiplane', 'laVolumeBiplaneDisks', 'rvFAC', 'raArea', 'ivcCollapsibility', 'length'].includes(cleanString(answerConfig.measurementKind)) || bowelSet ? (
               <>
             <label className="mt-3 block text-xs font-semibold text-gray-200">
               {bowelSet ? 'Reference location radius (mm; visual guide)' : 'Position radius tolerance'}
@@ -6473,9 +8077,40 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         <div className="border-b border-gray-700 p-3">
           <div className="text-base font-semibold">Quiz Authoring</div>
           <div className="mt-1 text-xs text-gray-400">
-            Use this panel only for viewer-authored answers: frames, markers, gold points, and
-            measurements. Question numbers match Manage Quiz; other question types are omitted here.
+            Select one viewer-authored question at a time. Original question numbers match Manage Quiz.
           </div>
+          <label className="mt-3 block text-xs font-semibold text-gray-200" htmlFor="quiz-authoring-question-select">
+            Question
+          </label>
+          <div className="mt-1 text-[11px] text-gray-300">
+            ✓ All required gold values saved · ○ Gold values incomplete
+          </div>
+          <select
+            id="quiz-authoring-question-select"
+            className="mt-1 w-full min-w-0 rounded border border-gray-600 bg-gray-900 px-2 py-2 text-sm text-white"
+            value={authoringQuestions.some(question =>
+              isViewerNativeQuestion(question) &&
+              activeQuestionKey === `authoring:${question.questionKey}`) ? activeQuestionKey : ''}
+            disabled={loading || !canEditDraft || authoringSaving || !!capturingAuthoringKey}
+            onChange={event => {
+              const question = authoringQuestions.find(item =>
+                isViewerNativeQuestion(item) &&
+                event.target.value === `authoring:${item.questionKey}`);
+              if (question) void selectQuestion({
+                quizKey: 'authoring', quizVersion: 1,
+              }, question);
+            }}
+          >
+            <option value="">Select a question…</option>
+            {authoringQuestions.map((question, index) =>
+              isViewerNativeQuestion(question) ? (
+                <option key={question.questionKey} value={`authoring:${question.questionKey}`}>
+                  {hasAllRequiredViewerGoldValues(
+                    question, getCorrectMarkerIdsFromAnswerConfig(plainObject(question.answerConfig))
+                  ) ? '✓ ' : '○ '}{index + 1}. {question.title || question.prompt || question.questionKey}
+                </option>
+              ) : null)}
+          </select>
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto p-3 pb-20">
@@ -6514,8 +8149,16 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
 
               <div className="space-y-3">
                 {authoringQuestions.map((question, index) =>
-                  isViewerNativeQuestion(question) ? renderAuthoringQuestion(question, index) : null
+                  isViewerNativeQuestion(question) &&
+                  activeQuestionKey === `authoring:${question.questionKey}`
+                    ? renderAuthoringQuestion(question, index) : null
                 )}
+                {!authoringQuestions.some(question => isViewerNativeQuestion(question) &&
+                  activeQuestionKey === `authoring:${question.questionKey}`) ? (
+                  <div className="text-xs text-gray-400">
+                    Choose a question above to edit its viewer sources and gold answer.
+                  </div>
+                ) : null}
               </div>
             </div>
           )}
@@ -6535,7 +8178,10 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
             <button
               type="button"
               className="flex-1 rounded bg-purple-700 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50"
-              disabled={authoringSaving || !canEditDraft}
+              disabled={authoringSaving || !!capturingAuthoringKey || !canEditDraft}
+              title={capturingAuthoringKey
+                ? 'Complete the measurement capture before saving this quiz draft.'
+                : undefined}
               onClick={saveAuthoringDraft}
             >
               {authoringSaving ? 'Saving draft…' : 'Save authoring changes'}
@@ -6570,6 +8216,47 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         >
           {learnerPanelTitle}
         </div>
+        {hasLearnerQuizContent ? (
+          <>
+            <label className="mt-3 block text-xs font-semibold text-gray-200" htmlFor="quiz-learner-question-select">
+              Question
+            </label>
+            <select
+              id="quiz-learner-question-select"
+              className="mt-1 w-full min-w-0 rounded border border-gray-600 bg-gray-900 px-2 py-2 text-sm text-white"
+              value={quizzes.some(quiz => (quiz.questions || []).some(question =>
+                activeQuestionKey === `${quiz.quizKey}:${question.questionKey}`))
+                ? activeQuestionKey : ''}
+              disabled={!!capturingMeasurementKey || !!capturingFrameKey || !!capturingPointKey}
+              onChange={event => {
+                for (const quiz of quizzes) {
+                  const question = (quiz.questions || []).find(item =>
+                    event.target.value === `${quiz.quizKey}:${item.questionKey}`);
+                  if (question) {
+                    void selectQuestion(quiz, question);
+                    return;
+                  }
+                }
+              }}
+            >
+              <option value="">Select a question…</option>
+              {quizzes.map(quiz => (
+                <optgroup key={`${quiz.quizKey}:${quiz.quizVersion}`} label={quiz.title || 'Case Questions'}>
+                  {[...(quiz.questions || [])].sort((a, b) =>
+                    Number(a.sortOrder || 0) - Number(b.sortOrder || 0)
+                  ).map((question, index) => (
+                    <option key={question.questionKey}
+                      value={`${quiz.quizKey}:${question.questionKey}`}>
+                      {index + 1}. {isLearnerQuestionAnswered(
+                        question, answersByQuizKey?.[quiz.quizKey]?.[question.questionKey]
+                      ) ? '✓ ' : ''} {question.title || question.prompt || question.questionKey}
+                    </option>
+                  ))}
+                </optgroup>
+              ))}
+            </select>
+          </>
+        ) : null}
       </div>
 
       <div className="min-h-0 min-w-0 max-w-full flex-1 overflow-x-hidden overflow-y-auto p-3">
@@ -6626,13 +8313,13 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                   ) : null}
 
                   <div className="bg-blue-950/30 mt-3 min-w-0 max-w-full rounded border border-blue-700 p-2 text-xs text-blue-100">
-                    Click each question before answering. Questions marked “Opens target”
-                    navigate to the assigned image or instance without revealing the correct frame.
+                    Select a question above before answering.
                   </div>
 
                   <div className="mt-3 space-y-4">
                     {questions.map((question, index) => {
                       const questionSelectionKey = `${quiz.quizKey}:${question.questionKey}`;
+                      if (activeQuestionKey !== questionSelectionKey) return null;
                       const isActiveQuestion = activeQuestionKey === questionSelectionKey;
                       const hasViewerTarget = !!getQuestionViewerTarget(question) &&
                         !(question.type === 'frameSelection' &&
@@ -6670,12 +8357,6 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                             {index + 1}. {question.title || question.prompt}
                             {question.required ? <span className="text-red-300"> *</span> : null}
                           </div>
-
-                          {hasViewerTarget ? (
-                            <div className="mt-1 text-[11px] uppercase tracking-wide text-blue-300">
-                              {question.type === 'frameSelection' ? 'Opens target instance' : 'Opens target'}
-                            </div>
-                          ) : null}
 
                           {question.title ? (
                             <div

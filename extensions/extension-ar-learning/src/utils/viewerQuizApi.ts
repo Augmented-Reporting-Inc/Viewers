@@ -291,6 +291,17 @@ async function ensureLearnerCopyForViewerSave(saveTarget: ViewerSaveTarget) {
   return learnerCopy;
 }
 
+// A learner's first quiz open is a deliberate server mutation: pin the
+// questions and grading rubric before presenting anything to the learner.
+// The server owns version selection and stores gold snapshots privately.
+async function startViewerQuizForLearnerSeries(seriesId: string): Promise<void> {
+  const id = cleanString(seriesId);
+  if (!id) return;
+  await fetchJson(buildFormApiUrl(`series/${encodeURIComponent(id)}/viewer-quiz-start`), {
+    method: 'POST',
+  });
+}
+
 async function fetchViewerQuizContextForSaveTarget(saveTarget: ViewerSaveTarget) {
   if (!saveTarget.baseSeriesId) {
     return null;
@@ -393,8 +404,47 @@ export async function getViewerQuizzesForActiveStudy() {
   const saveTarget = getArViewerSaveTargetFromUrl();
 
   if (isLearnerCopyOnSaveTarget(saveTarget)) {
-    const contextPayload = await fetchViewerQuizContextForSaveTarget(saveTarget);
-    const learnerSeriesId = getLearnerSeriesIdFromQuizContextPayload(contextPayload, saveTarget);
+    // Existing report-owned attempts must never be duplicated in the viewer.
+    // Resolve an optional persisted copy first, then freeze its quiz before
+    // fetching questions to render. A virtual report shell without a learner
+    // Series remains a read-only preview until the report owns a saved copy.
+    let learnerSeriesId = saveTarget.learnerSeriesId;
+    if (!learnerSeriesId) {
+      const lookup = await fetchViewerQuizContextForSaveTarget(saveTarget);
+      learnerSeriesId = getLearnerSeriesIdFromQuizContextPayload(lookup, saveTarget);
+      if (!learnerSeriesId &&
+          cleanString(saveTarget.measurementWorkflowRole).toLowerCase() === 'learner' &&
+          saveTarget.attemptOwner !== 'report') {
+        // Viewer-first quizzes really do start in the viewer. Reuse the
+        // existing tenant/learner-authorized copy creation; do not wait
+        // until the first save, or an educator edit could change version.
+        const ensured = await ensureLearnerCopyForViewerSave(saveTarget);
+        learnerSeriesId = getSeriesId(ensured);
+      }
+      if (!learnerSeriesId) {
+        // A report-owned attempt must be established by the report, never by
+        // the viewer. Until then, do not present an unfrozen quiz as a live
+        // learner attempt.
+        return {
+          ...(lookup || {}),
+          seriesDoc: null,
+          seriesId: '',
+          baseSeriesId: cleanString(lookup?.baseSeriesId || saveTarget.baseSeriesId),
+          learnerSeriesId: '',
+          tenantId: cleanString(lookup?.tenantId),
+          enabled: false,
+          contentKeys: [],
+          quizzes: [],
+          responses: [],
+        };
+      }
+    }
+    if (cleanString(saveTarget.measurementWorkflowRole).toLowerCase() === 'learner') {
+      await startViewerQuizForLearnerSeries(learnerSeriesId);
+    }
+    const contextPayload = await fetchViewerQuizContextForSaveTarget({
+      ...saveTarget, learnerSeriesId,
+    });
 
     return {
       ...(contextPayload || {}),
@@ -423,6 +473,12 @@ export async function getViewerQuizzesForActiveStudy() {
       quizzes: [],
       responses: [],
     };
+  }
+
+  if (seriesDoc?.isLearnerCopy === true &&
+      cleanString(saveTarget.measurementWorkflowRole).toLowerCase() === 'learner' &&
+      !isViewerQuizAuthoringMode()) {
+    await startViewerQuizForLearnerSeries(seriesId);
   }
 
   const payload = await fetchJson(

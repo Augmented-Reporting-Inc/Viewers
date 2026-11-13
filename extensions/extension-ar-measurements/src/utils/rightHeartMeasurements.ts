@@ -1,3 +1,5 @@
+import { convertPhysicalValue } from './physicalMeasurementPresentation';
+
 /**
  * Reusable right-heart scalar calculations.
  *
@@ -38,17 +40,14 @@ export function calculateRVFAC(edaCM2: NumericInput, esaCM2: NumericInput) {
 
 export function calculateRAArea(area: NumericInput, unit: string) {
   const value = finiteNumber(area);
-  const normalized = String(unit || '').trim().toLowerCase().replace(/\s/g, '');
   if (value == null) {
     return { status: 'incomplete' as MeasurementCalculationStatus, areaCM2: null };
   }
-  if (value <= 0 || !['cm²', 'cm2', 'mm²', 'mm2'].includes(normalized)) {
+  const areaCM2 = convertPhysicalValue(value, unit, 'cm²', 'area');
+  if (value <= 0 || areaCM2 == null) {
     return { status: 'invalid' as MeasurementCalculationStatus, areaCM2: null };
   }
-  return {
-    status: 'complete' as MeasurementCalculationStatus,
-    areaCM2: normalized.startsWith('mm') ? value / 100 : value,
-  };
+  return { status: 'complete' as MeasurementCalculationStatus, areaCM2 };
 }
 
 export function calculateIVCCollapsibility(
@@ -168,28 +167,52 @@ function ivcSlot(measurement: ViewerMeasurement): IVCSlot | null {
   return null;
 }
 
+/** Actual cine frame always outranks a stale MeasurementService default. */
+export function getMeasurementDICOMFrameNumber(measurement: ViewerMeasurement): number {
+  const imageId = String(measurement?.referencedImageId ||
+    measurement?.metadata?.referencedImageId || '');
+  const match = imageId.match(/\/frames\/([1-9][0-9]*)(?:[/?#]|$)/);
+  const exactFrame = Number(match?.[1]);
+  if (Number.isSafeInteger(exactFrame) && exactFrame > 0) return exactFrame;
+  const storedFrame = Number(measurement?.frameNumber || measurement?.metadata?.frameNumber || 0);
+  return Number.isSafeInteger(storedFrame) && storedFrame > 0 ? storedFrame : 0;
+}
+
 function calibratedLengthMM(measurement: ViewerMeasurement): number | null {
   if (String(measurement?.toolName || '') !== 'Length') return null;
   const points = measurement?.points || measurement?.measurements?.points || [];
   if (!Array.isArray(points) || points.length < 2) return null;
-  const stats = measurement?.cachedStats || measurement?.data || {};
-  const firstStats = Object.values(stats).find(value => value && typeof value === 'object') as
-    | Record<string, any>
-    | undefined;
   const source = measurement?.measurements || {};
-  const raw = source.length ?? measurement?.length ?? firstStats?.length ??
-    (measurement?.toolName === 'Length' ? measurement?.value : null);
-  const unit = String(
-    source.lengthUnit || source.unit || measurement?.lengthUnit ||
-    measurement?.unit || firstStats?.lengthUnit || firstStats?.unit || ''
-  ).trim().toLowerCase();
-  const length = finiteNumber(raw);
-
-  // A pixel distance or an unlabelled raw number is not clinical evidence.
-  if (length == null || length <= 0) return null;
-  if (unit === 'mm') return length;
-  if (unit === 'cm') return length * 10;
-  return null;
+  const getLength = (raw: unknown, unit: unknown): number | null => {
+    const value = finiteNumber(raw);
+    if (value == null || value <= 0) return null;
+    return convertPhysicalValue(value, unit, 'mm', 'length');
+    // Pixel/non-calibrated distances cannot be scored.
+  };
+  const explicit = getLength(source.length ?? measurement?.length ??
+    (measurement?.toolName === 'Length' ? measurement?.value : null),
+    source.lengthUnit || source.unit || measurement?.lengthUnit || measurement?.unit);
+  if (explicit != null) return explicit;
+  const caches = [
+    measurement?.cachedStats,
+    measurement?.data?.cachedStats,
+    measurement?.measurements?.cachedStats,
+    measurement?.data,
+  ];
+  const candidates: number[] = [];
+  for (const cache of caches) {
+    if (!cache || typeof cache !== 'object' || Array.isArray(cache)) continue;
+    const rows = [cache, ...Object.values(cache)];
+    for (const row of rows) {
+      if (!row || typeof row !== 'object' || Array.isArray(row)) continue;
+      const mm = getLength((row as any).length,
+        (row as any).lengthUnit || (row as any).unit);
+      if (mm != null) candidates.push(mm);
+    }
+  }
+  if (!candidates.length ||
+      candidates.some(mm => Math.abs(mm - candidates[0]) > 0.05)) return null;
+  return candidates[0];
 }
 
 function compatibleIVCCinePair(a: ViewerMeasurement, b: ViewerMeasurement): boolean {
@@ -202,8 +225,20 @@ function compatibleIVCCinePair(a: ViewerMeasurement, b: ViewerMeasurement): bool
 
   const sopA = String(a?.SOPInstanceUID || a?.metadata?.SOPInstanceUID || '').trim();
   const sopB = String(b?.SOPInstanceUID || b?.metadata?.SOPInstanceUID || '').trim();
-  const frameA = finiteNumber(a?.frameNumber ?? a?.metadata?.frameNumber);
-  const frameB = finiteNumber(b?.frameNumber ?? b?.metadata?.frameNumber);
+  // The Length adapter may retain a legacy frameNumber=1 while its exact
+  // referencedImageId points to a later cine frame. Use the DICOMweb frame,
+  // when explicitly encoded, rather than pairing two distinct frames as one.
+  const sourceFrame = (measurement: ViewerMeasurement) => {
+    const imageId = String(measurement?.referencedImageId ||
+      measurement?.metadata?.referencedImageId || '');
+    const match = imageId.match(/\/frames\/([1-9][0-9]*)(?:[/?#]|$)/);
+    const imageFrame = Number(match?.[1]);
+    return Number.isSafeInteger(imageFrame) && imageFrame > 0
+      ? imageFrame
+      : finiteNumber(measurement?.frameNumber ?? measurement?.metadata?.frameNumber);
+  };
+  const frameA = sourceFrame(a);
+  const frameB = sourceFrame(b);
   // Cross-series pairing is valid only with explicit distinct DICOM instances.
   if (seriesA !== seriesB && (!sopA || !sopB || sopA === sopB)) return false;
   if (sopA && sopB && sopA === sopB &&

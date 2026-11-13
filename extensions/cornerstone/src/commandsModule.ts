@@ -1,3 +1,4 @@
+import { getSplinePersistence, compactOversampledSpline } from './utils/splinePersistence';
 import {
   getEnabledElement,
   metaData,
@@ -123,9 +124,14 @@ import {
 } from '../../extension-ar-measurements/src/utils/bowelMeasurementTargets';
 import { calculateLVSimpson } from '../../extension-ar-measurements/src/utils/lvSimpson';
 import { getEchoAreaSlot } from '../../extension-ar-measurements/src/utils/echoAreaMeasurements';
-import { resolveViewerQuizCompositeResult, resolveViewerQuizLVSimpsonForStudy, isViewerQuizCompositeReviewCurrent } from '../../extension-ar-measurements/src/utils/viewerQuizCompositeResults';
+import { resolveViewerQuizCompositeResult, resolveViewerQuizLVSimpsonForStudy, isViewerQuizCompositeReviewCurrent, getViewerQuizCompositeStatus, calibratedLVContourAreaCM2 } from '../../extension-ar-measurements/src/utils/viewerQuizCompositeResults';
 import { createGuidedMouseToolOwnership } from './utils/guidedMouseToolOwnership';
 import { calibrateUSContourPoints, worldToImageIndex } from './utils/usRegionLengthCalibration';
+import { getQuizEchoAreaSourceMetadata, calculateCalibratedEchoAreaCM2, getSavedQuizEchoAreaDisplayInfo, getQuizCompositeContourViewportLines, getQuizCompositeGoldContourSlotMetadata, getVerifiedEFGoldContourViewportLines } from './utils/quizEchoAreaCalibration';
+import { installQuizContourTextRenderer } from './utils/installQuizContourTextRenderer';
+import { consumeViewerLengthFirstLabelMode } from './utils/viewerLengthLabelMode';
+import { getViewerQuizRouteMeasurementDomain } from '../../extension-ar-learning/src/utils/viewerQuizMeasurementDomain';
+import { resolveViewerQuizGoldAreaBackfill, resolveSavedEFGoldContourAreas, resolveVerifiedEFGoldContourAreasFromDicom } from '../../extension-ar-measurements/src/utils/quizGoldAreaBackfill';
 
 const { DefaultHistoryMemo } = csUtils.HistoryMemo;
 const toggleSyncFunctions = {
@@ -452,23 +458,24 @@ function isViewerMeasurementSessionFallbackReplacementReady(
   }
 
   if (isLAVolumeMeasurement(sessionMeasurement)) {
-    if (!isLAVolumeMeasurement(liveMeasurement)) {
-      return false;
-    }
-
+    if (!isLAVolumeMeasurement(liveMeasurement)) return false;
     const liveGeometry =
       liveMeasurement?.laVolume || liveMeasurement?.measurements?.laVolume || {};
     const liveSlot = getLAVolumeSlotFromMeasurement(liveMeasurement);
     const sessionSlot = getLAVolumeSlotFromMeasurement(sessionMeasurement);
     const livePoints = getViewerMeasurementSnapshotPoints(liveMeasurement, liveGeometry);
-
-    return !!(
-      liveMeasurement?.toolName &&
-      liveSlot &&
-      (!sessionSlot || liveSlot === sessionSlot) &&
-      livePoints.length >= 6 &&
-      (liveMeasurement?.referencedImageId || liveMeasurement?.referenceSeriesUID)
-    );
+    // A spline is not a valid replacement for LA source evidence until the
+    // guided anatomy and calibrated axis have arrived from Cornerstone.
+    const hasLandmarks = !!(liveGeometry.baseLeftPoint && liveGeometry.baseRightPoint &&
+      (liveGeometry.superiorPoint || liveGeometry.axisPoint || liveGeometry.apexPoint));
+    const axisLength = Number(liveGeometry.longAxisLengthMM);
+    const matchingSource = !sessionMeasurement?.referencedImageId ||
+      liveMeasurement?.referencedImageId === sessionMeasurement.referencedImageId;
+    return !!(liveMeasurement?.toolName &&
+      liveSlot && (!sessionSlot || liveSlot === sessionSlot) &&
+      livePoints.length >= 6 && hasLandmarks &&
+      Number.isFinite(axisLength) && axisLength > 0 &&
+      matchingSource && liveMeasurement?.referencedImageId);
   }
 
   return true;
@@ -612,6 +619,15 @@ function getCurrentViewerMeasurementSnapshot(
     }
   }
 
+  // Native hydrate does not emit a completed measurement. MeasurementService
+  // update ignores unknown IDs, so new guided RV contours must also be read
+  // directly from annotation state before any adapter entry exists.
+  for (const native of getAllCornerstoneViewerAnnotations()) {
+    const source = getCornerstoneEchoAreaMeasurementFallback(native);
+    if (!source) continue;
+    measurementsById.set(source.uid, { ...(measurementsById.get(source.uid) || {}), ...source });
+  }
+
   // Cine comments intentionally have no Cornerstone geometry. MeasurementService.update()
   // only updates IDs it already owns, so newly-created comments live in this small
   // session map until the normal viewerMeasurements/reviewerMeasurements save succeeds.
@@ -636,6 +652,90 @@ function getCurrentViewerMeasurementSnapshot(
         : null;
       const spectralDoppler = annotation?.data?.spectralDoppler;
 
+      // Preserve anatomical LA landmarks while following edited spline points
+      // on the exact source frame. The session fallback handles early adapters
+      // that have not yet populated the full LA measurement contract.
+      if (isLAVolumeMeasurement(measurement) && annotation?.data) {
+        const sourceImage = String(annotation?.metadata?.referencedImageId || '');
+        const measuredImage = String(measurement?.referencedImageId || '');
+        const points = annotation?.data?.contour?.polyline;
+        const geometry = annotation?.data?.laVolume ||
+          measurement?.laVolume || measurement?.measurements?.laVolume;
+        if ((!sourceImage || !measuredImage || sourceImage === measuredImage) &&
+          Array.isArray(points) && points.length >= 6 && geometry?.slot) {
+          return {
+            ...measurement, points,
+            laVolume: { ...geometry, contourPoints: points },
+          };
+        }
+      }
+
+      // SplineROI and Length keep calibrated stats on their Cornerstone source
+      // annotation. Quiz acquisition can populate MeasurementService before its
+      // numeric adapter receives those stats. Preserve only the source tool's
+      // calibrated cachedStats, never infer an area/diameter from polygon pixels.
+      const sourceKind = String(measurement?.measurementKind ||
+        measurement?.measurements?.measurementKind || '').trim();
+      const echoAreaSource = getQuizEchoAreaSourceMetadata(annotation?.data);
+      const isRightHeartContour = sourceKind === 'echoAreaSlot' ||
+        echoAreaSource.measurementKind === 'echoAreaSlot';
+      const ivcLabel = String(measurement?.label ||
+        measurement?.measurementRole || measurement?.role || '')
+        .toLowerCase().replace(/[^a-z0-9]/g, '');
+      const isIVC = measurement?.toolName === 'Length' &&
+        ['ivcexp', 'ivcexpiration', 'ivcinsp', 'ivcinspiration',
+         'ivcendexpiration', 'ivcendinspiration',
+         'ivcendexpirationdiameter', 'ivcendinspirationdiameter'].includes(ivcLabel);
+      if ((isRightHeartContour || isIVC) && annotation?.data) {
+        const sourceImage = String(annotation?.metadata?.referencedImageId || '');
+        const measuredImage = String(measurement?.referencedImageId || '');
+        // Never substitute measurements from a different source frame.
+        if (!sourceImage || !measuredImage || sourceImage === measuredImage) {
+          const sourceStats = annotation.data.cachedStats ||
+            annotation.cachedStats || {};
+          const contourPoints = annotation.data?.contour?.polyline ||
+            annotation.data?.handles?.points;
+          const storedRegions = annotation.data?.echoArea?.calibrationRegions ||
+            measurement?.echoArea?.calibrationRegions;
+          const regions = Array.isArray(storedRegions) && storedRegions.length
+            ? storedRegions : isRightHeartContour ? getEchoAreaCalibrationRegions({
+                displaySet: null, imageId: sourceImage || measuredImage,
+                sopInstanceId: measurement.SOPInstanceUID,
+              }) : [];
+          // Once a contour is edited, the original area is stale. Recalculate
+          // from the currently drawn contour and its previously verified DICOM
+          // region rather than trusting an old MeasurementService value.
+          const hasAreaCalibration = isRightHeartContour &&
+            Array.isArray(regions) && regions.length > 0 &&
+            Array.isArray(contourPoints);
+          const updatedArea = hasAreaCalibration
+            ? calibratedEchoAreaFromRegions({
+                points: contourPoints, imageId: sourceImage || measuredImage,
+                regions,
+              })
+            : null;
+          return {
+            ...measurement,
+            ...echoAreaSource,
+            ...(hasAreaCalibration ? {
+              echoArea: { ...(echoAreaSource.echoArea || measurement.echoArea), calibrationRegions: regions },
+              points: contourPoints,
+              area: updatedArea,
+              measurements: {
+                ...(measurement.measurements || {}),
+                area: updatedArea,
+                areaUnit: updatedArea != null ? 'cm2' : '',
+              },
+            } : {}),
+            cachedStats: hasAreaCalibration ? {} : sourceStats,
+            data: {
+              ...(measurement?.data || {}),
+              cachedStats: hasAreaCalibration ? {} : sourceStats,
+            },
+          };
+        }
+      }
+
       if (spectralDoppler?.measurementKind !== SPECTRAL_DOPPLER_MEASUREMENT_KIND) {
         return measurement;
       }
@@ -658,6 +758,36 @@ function getCurrentViewerMeasurementSnapshot(
   );
 
   return restoredMeasurements;
+}
+
+/** Guided RV/RA acquisition can precede the OHIF adapter's first entry.
+ * Read only explicitly tagged native contours, as for LV/LA and Doppler. */
+function getCornerstoneEchoAreaMeasurementFallback(stateAnnotation: any = {}) {
+  const source = getQuizEchoAreaSourceMetadata(stateAnnotation.data);
+  if (!source.measurementKind) return null;
+  const metadata = stateAnnotation.metadata || {};
+  const points = stateAnnotation.data?.contour?.polyline;
+  const image = String(metadata.referencedImageId || '');
+  const id = getMeasurementAnnotationId(stateAnnotation);
+  if (!id || id.startsWith('ar-viewer-quiz-') ||
+      metadata.arMeasurementWorkflow === 'viewerQuizGoldDisplay' ||
+      !image || !Array.isArray(points) || points.length < 3 ||
+      !['SplineROI', 'PlanarFreehandROI', 'LivewireContour'].includes(metadata.toolName)) return null;
+  const parsed = parseDicomWebIdsFromReferencedImageId(image);
+  if (metadata.SOPInstanceUID && parsed.sopInstanceId &&
+      String(metadata.SOPInstanceUID) !== parsed.sopInstanceId) return null;
+  return {
+    uid: id, annotationUID: id, metadata, ...source,
+    toolName: metadata.toolName, label: stateAnnotation.data.label || '',
+    referenceStudyUID: metadata.StudyInstanceUID || parsed.studyInstanceId || '',
+    referenceSeriesUID: metadata.SeriesInstanceUID || parsed.seriesInstanceId || '',
+    SOPInstanceUID: metadata.SOPInstanceUID || parsed.sopInstanceId || '',
+    FrameOfReferenceUID: metadata.FrameOfReferenceUID || '',
+    referencedImageId: image, frameNumber: parsed.frameNumber || getFrameNumberFromReferencedImageId(image),
+    points, data: stateAnnotation.data.cachedStats || {},
+    isLocked: !!stateAnnotation.isLocked, isVisible: stateAnnotation.isVisible !== false,
+    arMeasurementReadOnly: !!metadata.arMeasurementReadOnly || !!stateAnnotation.data.arMeasurementReadOnly,
+  };
 }
 
 function getAllCornerstoneViewerAnnotations() {
@@ -1230,6 +1360,8 @@ function inferDomainWithoutSeriesDoc(explicitDomain) {
   }
 
   const path = String(window.location?.pathname || '').toLowerCase();
+  const viewerRouteDomain = getViewerQuizRouteMeasurementDomain(path);
+  if (viewerRouteDomain) return viewerRouteDomain;
 
   if (path.includes('/bviewer/iuscan')) {
     return 'bowel';
@@ -1270,6 +1402,8 @@ const ECHO_LENGTH_MEASUREMENT_LABELS_CONFIG = Object.freeze({
     { value: 'LAd', label: 'Left atrial dimension' },
     { value: 'RVIDd', label: 'RVIDd' },
     { value: 'TAPSE', label: 'TAPSE' },
+    { value: 'IVCexp', label: 'IVC expiration (IVCexp)' },
+    { value: 'IVCinsp', label: 'IVC inspiration (IVCinsp)' },
   ],
 });
 
@@ -2948,6 +3082,8 @@ function serializeViewerMeasurement(measurement, domain, existingAnnotation = nu
             view: 'A4C',
             phase: echoAreaSlot === 'RV_ED' ? 'ED' : 'ES',
             method: echoArea?.method || 'closed-contour-planimetry',
+            ...(Array.isArray(echoArea?.calibrationRegions)
+              ? { calibrationRegions: echoArea.calibrationRegions } : {}),
           },
         }
       : {}),
@@ -2994,7 +3130,10 @@ function serializeViewerMeasurement(measurement, domain, existingAnnotation = nu
     referenceSeriesUID: measurement.referenceSeriesUID,
     referencedImageId: measurement.referencedImageId,
     frameNumber,
-    points: measurement.points,
+    points: measurement.toolName === 'SplineROI' && isEchoArea
+      ? compactOversampledSpline(measurement.points) : measurement.points,
+    ...getSplinePersistence(measurement,
+      cornerstoneTools.annotation.state.getAnnotation?.(measurement.uid)),
     viewPlaneNormal: getViewerMeasurementMetadataVector(
       measurement,
       existingAnnotation,
@@ -3789,6 +3928,47 @@ function normalizeUltrasoundRegion(region) {
   };
 }
 
+/**
+ * DICOM ultrasound-region calibration is the same source used by the EF tool.
+ * A contour can be used as an area only when *every* point is inside one
+ * unambiguous spatial region with physical centimetre/mm spacing.
+ * This never estimates an area from uncalibrated viewport/world pixels.
+ */
+function calibratedEchoAreaFromRegions({
+  points, imageId, regions,
+}: { points: number[][]; imageId: string; regions: any[] }) {
+  if (!imageId || !Array.isArray(regions) || !regions.length) return null;
+  const imagePlane = metaData.get?.('imagePlaneModule', imageId);
+  const physical = calibrateUSContourPoints({ points, imagePlane, regions });
+  if (!physical || physical.length < 6) return null;
+  return calculateCalibratedEchoAreaCM2(physical);
+}
+
+/** Resolve calibration for the exact image, including metadata populated by
+ * the image loader after the display set's lightweight instance was created. */
+function getEchoAreaCalibrationRegions({ displaySet, imageId, sopInstanceId }) {
+  if (!imageId || !sopInstanceId ||
+      getSopInstanceIdFromImageId(imageId) !== String(sopInstanceId)) return [];
+  const sources = getDisplaySetInstances(displaySet).filter(instance =>
+    String(getSopInstanceIdFromSource(instance) || '') === String(sopInstanceId));
+  const loaded = metaData.get?.('instance', imageId);
+  const loadedSOP = String(getSopInstanceIdFromSource(loaded) || '');
+  if (loaded && (!loadedSOP || loadedSOP === String(sopInstanceId))) sources.push(loaded);
+  const direct = metaData.get?.('ultrasoundRegions', imageId);
+  const raw = sources.flatMap(getUltrasoundRegionsFromSource);
+  raw.push(...(Array.isArray(direct) ? direct : getUltrasoundRegionsFromSource(direct)));
+  return raw.map(normalizeUltrasoundRegion).filter(Boolean);
+}
+
+function getVerifiedEchoAreaCalibration({
+  displaySet, imageId, sopInstanceId, points,
+}: { displaySet: any; imageId: string; sopInstanceId: string; points: number[][] }) {
+  if (!imageId || !sopInstanceId) return null;
+  const regions = getEchoAreaCalibrationRegions({ displaySet, imageId, sopInstanceId });
+  const areaCM2 = calibratedEchoAreaFromRegions({ points, imageId, regions });
+  return areaCM2 == null ? null : { areaCM2, regions };
+}
+
 function chooseUltrasoundRegionForPoints(regions = [], points = []) {
   const normalizedRegions = regions.map(normalizeUltrasoundRegion).filter(Boolean);
 
@@ -4001,9 +4181,16 @@ function buildContourMeasurementPayload(
       : existingAnnotation?.measurements?.displayText || existingAnnotation?.displayText || [];
   const displayText = normalizeDisplayTextUnits(rawDisplayText, 'area');
 
-  const rawArea =
-    finiteNumberOrNull(stats?.area) ?? finiteNumberOrNull(existingAnnotation?.measurements?.area);
-  const rawAreaUnit = stats?.areaUnit || existingAnnotation?.measurements?.areaUnit || '';
+  // The snapshot recomputes guided areas from the current source contour and
+  // DICOM region. Prefer that value over native ROI statistics and old saves.
+  const hasVerifiedArea = !!getEchoAreaSlot(measurement) &&
+    Object.prototype.hasOwnProperty.call(measurement?.measurements || {}, 'area');
+  const rawArea = hasVerifiedArea
+    ? (measurement.measurements.area == null ? null : finiteNumberOrNull(measurement.measurements.area))
+    : finiteNumberOrNull(stats?.area) ?? finiteNumberOrNull(existingAnnotation?.measurements?.area);
+  const rawAreaUnit = hasVerifiedArea
+    ? measurement.measurements.areaUnit || ''
+    : stats?.areaUnit || existingAnnotation?.measurements?.areaUnit || '';
 
   if (rawArea == null) {
     return {
@@ -4056,6 +4243,24 @@ function getSavedContourAreaForDisplay(savedAnnotation, referencedImageId = '') 
   return rawArea;
 }
 
+function isSavedQuizEchoContour(savedAnnotation) {
+  return savedAnnotation?.measurementKind === 'echoAreaSlot' ||
+    !!getEchoAreaSlot(savedAnnotation) ||
+    isLAVolumeMeasurement(savedAnnotation);
+}
+
+function getSavedQuizEchoContourAreaDisplay(savedAnnotation) {
+  if (!isSavedQuizEchoContour(savedAnnotation)) return null;
+  const measurements = savedAnnotation?.measurements || {};
+  const physical = getSavedQuizEchoAreaDisplayInfo(measurements.area, measurements.areaUnit);
+  if (!physical) return null;
+  // The quiz panel uses cm². Convert only explicit physically calibrated mm².
+  const value = physical.areaUnit === 'mm²' ? physical.value / 100 : physical.value;
+  return Number.isFinite(value) && value > 0
+    ? { value, areaUnit: 'cm²', linearUnit: 'cm' }
+    : null;
+}
+
 function getSavedAnnotationDisplayText(savedAnnotation) {
   const savedSpectralDoppler = getSpectralDopplerGeometry(savedAnnotation, savedAnnotation);
 
@@ -4069,6 +4274,12 @@ function getSavedAnnotationDisplayText(savedAnnotation) {
   if (savedAnnotation?.toolName === 'ArrowAnnotate') {
     const text = getArrowAnnotateText(savedAnnotation);
     return text ? [text] : [];
+  }
+  // Quiz RV/LA contour areas already carry explicit physical units from
+  // calibrated measurement data. Do not reuse stale generic ROI displayText.
+  const quizArea = getSavedQuizEchoContourAreaDisplay(savedAnnotation);
+  if (isSavedQuizEchoContour(savedAnnotation)) {
+    return quizArea ? [`${quizArea.value.toFixed(2)} cm²`] : ['Calibrated area unavailable'];
   }
   const measurements = savedAnnotation?.measurements || {};
   const isCurvedLength = isBowelCurvedLengthViewerMeasurement(savedAnnotation, savedAnnotation);
@@ -4143,7 +4354,11 @@ function buildSavedAnnotationStatsForMeasurementService(savedAnnotation, referen
   }
 
   if (isViewerContourTool(savedAnnotation?.toolName)) {
-    const area = getSavedContourAreaForDisplay(
+    const quizArea = getSavedQuizEchoContourAreaDisplay(savedAnnotation);
+    // A quiz contour without explicit physical calibration must not fall back
+    // to native pixel-area statistics and be shown as valid millimetre area.
+    if (isSavedQuizEchoContour(savedAnnotation) && !quizArea) return {};
+    const area = quizArea?.value ?? getSavedContourAreaForDisplay(
       savedAnnotation,
       referencedImageId || savedAnnotation?.referencedImageId || ''
     );
@@ -4155,9 +4370,9 @@ function buildSavedAnnotationStatsForMeasurementService(savedAnnotation, referen
     return {
       [statsKey]: {
         area,
-        areaUnit: 'mm²',
-        areaUnits: 'mm²',
-        unit: 'mm',
+        areaUnit: quizArea?.areaUnit || 'mm²',
+        areaUnits: quizArea?.areaUnit || 'mm²',
+        unit: quizArea?.linearUnit || 'mm',
       },
     };
   }
@@ -4235,7 +4450,11 @@ function buildSavedAnnotationStatsForCornerstone(savedAnnotation, referencedImag
   }
 
   if (isViewerContourTool(savedAnnotation?.toolName)) {
-    const area = getSavedContourAreaForDisplay(
+    const quizArea = getSavedQuizEchoContourAreaDisplay(savedAnnotation);
+    // A quiz contour without explicit physical calibration must not fall back
+    // to native pixel-area statistics and be shown as valid millimetre area.
+    if (isSavedQuizEchoContour(savedAnnotation) && !quizArea) return {};
+    const area = quizArea?.value ?? getSavedContourAreaForDisplay(
       savedAnnotation,
       referencedImageId || savedAnnotation?.referencedImageId || ''
     );
@@ -4249,17 +4468,17 @@ function buildSavedAnnotationStatsForCornerstone(savedAnnotation, referencedImag
         targetId,
         {
           area,
-          areaUnit: 'mm²',
-          areaUnits: 'mm²',
-          unit: 'mm',
-          units: 'mm',
-          modalityUnit: 'mm',
+          areaUnit: quizArea?.areaUnit || 'mm²',
+          areaUnits: quizArea?.areaUnit || 'mm²',
+          unit: quizArea?.linearUnit || 'mm',
+          units: quizArea?.linearUnit || 'mm',
+          modalityUnit: quizArea?.linearUnit || 'mm',
           modalityUnitOptions: {
-            areaUnit: 'mm²',
-            unit: 'mm',
+            areaUnit: quizArea?.areaUnit || 'mm²',
+            unit: quizArea?.linearUnit || 'mm',
           },
           arSavedMeasurementArea: area,
-          arSavedMeasurementAreaUnit: 'mm²',
+          arSavedMeasurementAreaUnit: quizArea?.areaUnit || 'mm²',
         },
       ])
     );
@@ -5453,6 +5672,104 @@ function sanitizeContourTextLines(lines = []) {
     .filter(Boolean);
 }
 
+/**
+ * Quiz-only physical area labels. Cornerstone's generic SplineROI cachedStats
+ * text may be based on a different ultrasound-region scale than the validated
+ * RV/LA calculation. Never display that native number for a quiz contour.
+ * The Case Questions panel and this viewport use the exact same calculator.
+ */
+function installQuizCompositeContourTextOverrideForViewport({
+  viewport, viewportId = '', measurementService, viewportGridService,
+  displaySetService, toolGroupService,
+}) {
+  if (!viewport) return;
+  // The hook is safe for any viewport: only explicit quiz composite contour
+  // metadata is intercepted. Depending on URL query parameters missed some
+  // legitimate quiz launches and left the native ROI mm² renderer active.
+  const resolvedViewportId = viewport.id || viewportId;
+  let toolGroup = null;
+  try {
+    const groupRef = toolGroupService?.getToolGroupForViewport?.(resolvedViewportId);
+    toolGroup = typeof groupRef === 'string'
+      ? toolGroupService?.getToolGroup?.(groupRef) ||
+        ToolGroupManager.getToolGroup?.(groupRef)
+      : groupRef;
+    toolGroup ||= ToolGroupManager.getToolGroupForViewport?.(
+      resolvedViewportId, viewport.renderingEngineId
+    ) || ToolGroupManager.getToolGroupForViewport?.(resolvedViewportId);
+  } catch (error) {
+    console.warn('[Quiz contour units] tool group lookup failed', error);
+  }
+  if (!toolGroup) {
+    console.warn('[Quiz contour units] no tool group for viewport', resolvedViewportId);
+    return;
+  }
+
+  // The rendering tool receives (data, targetId), not the annotation itself.
+  // Resolve the same validated phase value as Case Questions, but tie it to
+  // the annotation's actual image (and annotation id where supplied) instead
+  // of a stale active viewport captured when the tool group was first made.
+  const formatQuizContour = (data, rawTargetId = '') => {
+    const contourData = data?.annotation?.data || data?.data || data;
+    const slot = String(contourData?.echoArea?.slot ||
+      contourData?.laVolume?.slot || '').trim().toUpperCase();
+    const echoSlot = !!contourData?.echoArea?.slot &&
+      ['RV_ED', 'RV_ES', 'RA_ES'].includes(slot);
+    const laSlot = !!contourData?.laVolume?.slot &&
+      ['A4C', 'A2C'].includes(slot);
+    if (!echoSlot && !laSlot) return null;
+
+    const kind = echoSlot ? (slot === 'RA_ES' ? 'raArea' : 'rvFAC')
+      : 'laVolumeBiplane';
+    const targetImage = String(rawTargetId || '')
+      .replace(/^(?:imageId|volumeId):/i, '');
+    const annotationId = String(contourData?.arQuizSourceAnnotationId || '').trim();
+    const allMeasurements = getCurrentViewerMeasurementSnapshot(measurementService);
+    const matches = allMeasurements.filter(measurement => {
+      const candidateSlot = echoSlot
+        ? getEchoAreaSlot(measurement)
+        : String(measurement?.laVolume?.slot ||
+          measurement?.measurements?.laVolume?.slot || '').trim().toUpperCase();
+      if (candidateSlot !== slot) return false;
+      const candidateId = String(measurement?.uid || measurement?.annotationUID ||
+        measurement?.annotationId || '').trim();
+      if (annotationId && annotationId !== candidateId) return false;
+      const sourceImage = String(measurement?.referencedImageId ||
+        measurement?.metadata?.referencedImageId || '').trim();
+      return !targetImage || (sourceImage && sourceImage === targetImage);
+    });
+    // Duplicate or missing exact source references are not physical evidence.
+    // Saved contours may still have explicit previously validated cm² display
+    // text; the formatter handles that without adopting native pixel statistics.
+    let areaCM2 = null;
+    if (matches.length === 1) {
+      const study = String(matches[0]?.referenceStudyUID ||
+        matches[0]?.StudyInstanceUID || '').trim();
+      if (study) {
+        const scoped = allMeasurements.filter(measurement =>
+          String(measurement?.referenceStudyUID ||
+            measurement?.StudyInstanceUID || '').trim() === study);
+        const status = getViewerQuizCompositeStatus(kind as any, scoped);
+        areaCM2 = status?.phaseValues?.[slot] ?? null;
+      }
+    }
+    return getQuizCompositeContourViewportLines(contourData, areaCM2);
+  };
+
+  for (const toolName of new Set([
+    toolNames.SplineROI || 'SplineROI',
+    toolNames.PlanarFreehandROI || 'PlanarFreehandROI',
+  ])) {
+    const installed = installQuizContourTextRenderer({
+      toolGroup, toolName, formatQuizContour,
+      sanitizeFallback: sanitizeContourTextLines,
+    });
+    if (!installed) {
+      console.warn('[Quiz contour units] text renderer not active for', toolName);
+    }
+  }
+}
+
 function installLVSimpsonContourTextCleanupForViewport({ viewport, viewportId = '', toolName }) {
   if (!viewport || !toolName) {
     return;
@@ -5483,7 +5800,23 @@ function installLVSimpsonContourTextCleanupForViewport({ viewport, viewportId = 
     getTextLines: function (...args) {
       const lines =
         typeof previousGetTextLines === 'function' ? previousGetTextLines.call(this, ...args) : [];
-
+      const raw = args[0];
+      const data = raw?.annotation?.data || raw?.data || raw;
+      const goldEFText = getVerifiedEFGoldContourViewportLines(
+        data?.arVerifiedQuizEFGoldContour
+      );
+      if (goldEFText) return goldEFText;
+      const lv = data?.lvSimpson || {};
+      // Cornerstone's native ROI statistics can be expressed in image pixels.
+      // EF's physical contour coordinates were independently calibrated in mm.
+      // Display a physical area only when those exact coordinates exist.
+      if (['A4C_ED', 'A4C_ES', 'A2C_ED', 'A2C_ES'].includes(String(lv.slot || '')) &&
+          !lv.calibrationError) {
+        const area = calibratedLVContourAreaCM2(lv.calibratedContourPoints);
+        return area !== null
+          ? [`LV contour area: ${area.toFixed(2)} cm²`]
+          : ['Calibrated LV contour area unavailable'];
+      }
       return sanitizeContourTextLines(lines);
     },
   };
@@ -5596,11 +5929,11 @@ function installSpectralDopplerTextOverrideForViewport({ viewport, viewportId = 
 }
 
 /**
- * EF-only click-to-trace capture. Deliberately avoids the shared PlanarFreehandROI
- * gesture handler: only the final world-space points enter the existing Simpson
- * annotation/calculation path. No temporary Cornerstone annotation is persisted.
+ * Reusable education click-to-trace capture. Avoids the shared PlanarFreehandROI
+ * drag gesture; returns world points only, with no temporary annotation persisted.
+ * EF, LA and quiz-only right-heart acquisitions call their own validated calculators.
  */
-function captureLVSimpsonClickTrace({ viewport, isCancelled, setCancelHandler }) {
+function captureViewerClickTrace({ viewport, isCancelled, setCancelHandler, previewLabel = '' }) {
   const element = viewport?.element;
   if (!element?.addEventListener || !viewport?.canvasToWorld || !viewport?.worldToCanvas) {
     return Promise.resolve(null);
@@ -5652,7 +5985,18 @@ function captureLVSimpsonClickTrace({ viewport, isCancelled, setCancelHandler })
         element.appendChild(overlay);
       }
       overlay.style.zIndex = '999';
-      overlay.replaceChildren(polyline);
+      if (previewLabel) {
+        const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        label.setAttribute('x', '12');
+        label.setAttribute('y', '22');
+        label.setAttribute('fill', '#facc15');
+        label.setAttribute('font-size', '14');
+        label.setAttribute('font-weight', '600');
+        label.textContent = previewLabel + ' · tracing (not yet calculated)';
+        overlay.replaceChildren(polyline, label);
+      } else {
+        overlay.replaceChildren(polyline);
+      }
     }
 
     function onMouseDown(event) {
@@ -6145,7 +6489,18 @@ function renderLVSimpsonWorkflowPanel({
     const measurement = matching[0];
     const geometry = measurement?.lvSimpson || measurement?.measurements?.lvSimpson || {};
     const axis = Number(geometry.longAxisLengthMM);
-    const detail = measurement && Number.isFinite(axis) && axis > 0 ? ` — long axis ${axis.toFixed(1)} mm` : '';
+    // Use the same physically calibrated contour geometry as EF calculation
+    // and the viewport's LV contour label. Never treat pixel-space ROI area
+    // as cm², or substitute an area from a different physiological slot.
+    const areaCM2 = measurement && !geometry.calibrationError
+      ? calibratedLVContourAreaCM2(geometry.calibratedContourPoints)
+      : null;
+    const axisDetail = measurement && Number.isFinite(axis) && axis > 0
+      ? `long axis ${axis.toFixed(1)} mm` : '';
+    const areaDetail = areaCM2 !== null
+      ? `contour area ${areaCM2.toFixed(2)} cm²`
+      : measurement ? 'calibrated contour area unavailable' : '';
+    const detail = [axisDetail, areaDetail].filter(Boolean).join(' · ');
     const displayName = getLVSimpsonSlotDisplayName(slot);
     const row = document.createElement('div');
     Object.assign(row.style, {
@@ -6154,7 +6509,7 @@ function renderLVSimpsonWorkflowPanel({
     });
     const canNavigateSlot = !!lvSimpsonPanelController?.canNavigateSlot?.(slot);
     const rowLabel = document.createElement(canNavigateSlot ? 'button' : 'span');
-    rowLabel.textContent = `${measurement ? '✓' : '○'}  ${displayName}${detail}`;
+    rowLabel.textContent = `${measurement ? '✓' : '○'}  ${displayName}${detail ? ' — ' + detail : ''}`;
     rowLabel.dataset.lvSimpsonSlot = slot;
     rowLabel.dataset.lvSimpsonLabel = rowLabel.textContent;
     rowLabel.style.flex = '1 1 100%';
@@ -8062,6 +8417,7 @@ function commandsModule({
   const viewerMeasurementsModifiedInSession = new Set<string>();
   const viewerMeasurementsDeletedInSession = new Set<string>();
   const viewerQuizMeasurementComparisonAnnotationIds = new Set<string>();
+  const viewerQuizGoldEFDisplayAnnotationIds = new Set<string>();
   const {
     viewportGridService,
     toolGroupService,
@@ -8100,6 +8456,28 @@ function commandsModule({
     disabled: false,
     isActive: lvSimpsonMouseTools.isActive(),
   }));
+  // Quiz context highlights existing custom measurement toolbar buttons without
+  // activating a generic annotation or changing clinical tool acquisition.
+  let activeQuizMeasurementKind = '';
+  const quizToolbarEvaluators = {
+    'evaluate.arQuizLAVolume': ['laVolumeBiplane', 'laVolumeBiplaneDisks'],
+    'evaluate.arQuizRAArea': ['raArea'],
+    'evaluate.arQuizRVFAC': ['rvFAC'],
+    'evaluate.arQuizSpectralVmax': ['trVmax'],
+  };
+  Object.entries(quizToolbarEvaluators).forEach(([name, kinds]) => {
+    toolbarService?.registerEvaluateFunction?.(name, () =>
+      kinds.includes(activeQuizMeasurementKind) ? { isActive: true } : {}
+    );
+  });
+  const setQuizToolbarMeasurementKind = (measurementKind = '') => {
+    const next = String(measurementKind || '').trim();
+    if (activeQuizMeasurementKind === next) return;
+    activeQuizMeasurementKind = next;
+    toolbarService?.refreshToolbarState?.({
+      viewportId: viewportGridService.getActiveViewportId(),
+    });
+  };
   let suppressLVSimpsonRecoveryEvents = 0;
 
   // Length's label-dialog cancellation only runs after the second click.
@@ -8252,7 +8630,48 @@ function commandsModule({
     };
   }
 
+  function applyVerifiedEFGoldLabel(annotationId: string, slot: string, gold: any, hydrated?: any) {
+    const areaRaw = gold?.compositeResult?.derived?.slotAreaCM2?.[slot];
+    if (areaRaw === null || areaRaw === undefined || areaRaw === '') return;
+    const area = Number(areaRaw);
+    if (!Number.isFinite(area) || area <= 0) return;
+    const savedComponent = gold?.compositeResult?.components?.find(
+      (component: any) => component?.slot === slot
+    );
+    if (!savedComponent?.annotationId ||
+        !['A4C_ED', 'A4C_ES', 'A2C_ED', 'A2C_ES'].includes(slot)) return;
+    const source = annotation.state.getAnnotation?.(annotationId) || hydrated;
+    if (!source) return;
+    const rawAxis = gold?.compositeResult?.derived?.slotLongAxisMM?.[slot];
+    const axis = rawAxis == null || rawAxis === '' ? null : Number(rawAxis);
+    const lv = source.data?.lvSimpson;
+    const sourceArea = lv && !lv.calibrationError
+      ? calibratedLVContourAreaCM2(lv.calibratedContourPoints) : null;
+    if (sourceArea != null && Math.abs(sourceArea - area) > 0.02) {
+      // Aggregate, no DICOM identifiers or coordinates in diagnostics.
+      console.warn('[ViewerQuiz] calibrated EF source area differs from saved gold', {
+        slot, goldAreaCM2: area, sourceAreaCM2: sourceArea,
+      });
+    }
+    source.data = {
+      ...(source.data || {}),
+      arVerifiedQuizEFGoldContour: {
+        origin: 'quiz-gold', slot, areaCM2: area,
+        sourceAreaCM2: sourceArea,
+        axisMM: Number.isFinite(axis) && axis > 0 ? axis : null,
+      },
+    };
+    viewerQuizGoldEFDisplayAnnotationIds.add(annotationId);
+  }
+
   function clearViewerQuizMeasurementComparisonAnnotations() {
+    for (const annotationId of viewerQuizGoldEFDisplayAnnotationIds) {
+      const source = annotation.state.getAnnotation?.(annotationId);
+      if (source?.data?.arVerifiedQuizEFGoldContour?.origin === 'quiz-gold') {
+        delete source.data.arVerifiedQuizEFGoldContour;
+      }
+    }
+    viewerQuizGoldEFDisplayAnnotationIds.clear();
     for (const annotationId of viewerQuizMeasurementComparisonAnnotationIds) {
       try {
         annotation.state.removeAnnotation?.(annotationId);
@@ -8892,6 +9311,27 @@ function commandsModule({
         return null;
       }
 
+      // Learner IVC phase buttons already identify expiration/inspiration.
+      // The question panel assigns the actual label by validated annotation
+      // ID and DICOM source. Suppress only the first-label dialog for a newly
+      // drawn Length in explicitly requested quiz measure-only mode.
+      // Do not bypass ordinary clinical/bowel labeling or manual relabeling.
+      const pendingAnnotation = cornerstoneTools.annotation.state.getAnnotation?.(uid);
+      const labelDecision = consumeViewerLengthFirstLabelMode({
+        mode: viewerLengthLabelMode,
+        toolName: measurement.toolName,
+        pendingFirstLabel: pendingAnnotation?.metadata?.toolName === 'Length' &&
+          pendingAnnotation?.data?.arPendingLengthLabel === true,
+      });
+      if (labelDecision.suppress) {
+        // The IVC exemption is single-use; the next Length must prompt.
+        viewerLengthLabelMode = labelDecision.nextMode;
+        window.dispatchEvent(new CustomEvent('ar-learning:quiz-measurement-added', {
+          detail: { measurementId: uid },
+        }));
+        return String(measurement.label || 'Length');
+      }
+
       let labelConfig = options.labelConfigOverride;
 
       if (!labelConfig && measurement?.toolName === 'Length') {
@@ -9306,12 +9746,36 @@ function commandsModule({
             observedIds.clear();
             ids.forEach(id => observedIds.add(id));
           },
+          // A saved contour's own DICOM source is authoritative for review.
+          // Guided targets are for acquiring a new contour and can differ
+          // from historical gold. Never navigate every saved row via the
+          // composite answer's last-used image.
+          getNavigationTarget(slot: string) {
+            const saved = getStudyMeasurements().filter(item =>
+              getLVSimpsonSlotFromMeasurement(item) === slot
+            );
+            if (saved.length === 1) {
+              const item = saved[0];
+              const sourceTarget = {
+                studyInstanceUID: item.referenceStudyUID || item.StudyInstanceUID,
+                seriesInstanceUID: item.referenceSeriesUID || item.SeriesInstanceUID,
+                sopInstanceUID: item.SOPInstanceUID,
+                referencedImageId: item.referencedImageId,
+                frameNumber: item.frameNumber,
+              };
+              const verified = getEFContourFrameTarget({ [slot]: sourceTarget }, slot);
+              if (verified) return verified;
+            }
+            // No unique saved source: an explicitly authored target is still
+            // valid, but an ambiguous contour must not be guessed.
+            return saved.length > 1 ? null : getEFContourFrameTarget(efContourTargets, slot);
+          },
           canNavigateSlot(slot: string) {
-            return isActiveStudy() && !!getEFContourFrameTarget(efContourTargets, slot);
+            return isActiveStudy() && !!this.getNavigationTarget(slot);
           },
           async onNavigateSlot(slot: string) {
             if (!isActiveStudy()) return;
-            const target = getEFContourFrameTarget(efContourTargets, slot);
+            const target = this.getNavigationTarget(slot);
             if (!target) return;
             cancelDrawingWithoutClosingPanel();
             let navigation: any = null;
@@ -9481,7 +9945,7 @@ function commandsModule({
           ],
           instruction: isClinicalReportWorkflow
             ? 'Review the four contours and calculated EF. Save through AR Measurements to review and apply EF, EDV and ESV to the clinical report.'
-            : 'Cross-check EF = (EDV - ESV) / EDV × 100, then capture this result in the active EF question.',
+            : 'EF calculation complete.',
           onCapture: isClinicalReportWorkflow ? null : () => requestLVSimpsonQuizCapture({
             studyInstanceId: currentStudyId, value: resolved.composite.value, mode: 'manual',
           }),
@@ -9563,8 +10027,8 @@ function commandsModule({
           instruction: `Step ${stepNumber}/4: Click at one mitral hinge to start, move around the apex without holding the mouse button, then click the opposite hinge to finish. Esc cancels.`,
           onCancel: () => clearLVSimpsonWorkflowIfCurrent(workflowSessionId),
         });
-        const points = await captureLVSimpsonClickTrace({
-          viewport,
+        const points = await captureViewerClickTrace({
+          viewport, previewLabel: slotDisplayName + ' LA volume',
           isCancelled: isWorkflowCancelled,
           setCancelHandler: cancel => {
             if (activeLVSimpsonWorkflowSessionId === workflowSessionId) {
@@ -10129,171 +10593,130 @@ function commandsModule({
       // Freeze the active source before landmark drawing; each phase must
       // remain on the same DICOM image/frame through freehand acquisition.
       const acquisitionImageId = getCurrentViewportImageInfo(viewport)?.imageId || '';
-      const overlay = createLVSimpsonPreviewOverlay(viewport.element);
-
-      uiNotificationService.show({
-        title: `LA Volume step ${stepNumber}/2`,
-        message: `Navigate to ${slotDisplayName}. Draw the mitral annular closure line from one annular edge to the other. Press Esc to cancel.`,
-        type: 'info',
-        duration: 8000,
-      });
-
-      const annulus = await captureLVSimpsonDrag({
-        viewport,
-        toolGroup: laToolGroup,
-        restorePreviousTool: false,
-        isCancelled: isWorkflowCancelled,
-        setCancelHandler: cancel => {
-          if (activeLAVolumeWorkflowSessionId === workflowSessionId) {
-            activeLAVolumeCaptureCancel = cancel;
-          }
-        },
-        onPreview: ({ startWorld, currentWorld }) => {
-          drawLVSimpsonPreview({
-            overlay,
-            viewport,
-            baseLeftPoint: startWorld,
-            baseRightPoint: currentWorld,
+      // Axis + apex retains the existing two-drag acquisition. Freehand is a
+      // distinct, single click-to-trace acquisition (matching the EF tool).
+      let geometry: any = null;
+      if (useFreehand) {
+        uiNotificationService.show({
+          title: `LA Volume ${slotDisplayName} freehand`,
+          message: 'Click the first mitral hinge, move around the atrial wall without holding ' +
+            'the mouse button, then click the opposite hinge to finish. Esc cancels.',
+          type: 'info', duration: 9500,
+        });
+        const points = await captureViewerClickTrace({
+          viewport,
+          previewLabel: `LA ${slotDisplayName}`,
+          isCancelled: isWorkflowCancelled,
+          setCancelHandler: cancel => {
+            if (activeLAVolumeWorkflowSessionId === workflowSessionId) {
+              activeLAVolumeCaptureCancel = cancel;
+            }
+          },
+        });
+        if (!points || isWorkflowCancelled()) {
+          clearLAVolumeWorkflowIfCurrent(workflowSessionId);
+          return { ok: false, reason: 'la-freehand-cancelled' };
+        }
+        // The existing EF geometry derivation determines annular hinges and
+        // the farthest superior-wall point from a single freehand contour.
+        // The LA area-length/disks calculations continue to use LA geometry.
+        geometry = deriveLVSimpsonGeometryFromFreehand(points);
+        if (!geometry) {
+          clearLAVolumeWorkflowIfCurrent(workflowSessionId);
+          uiNotificationService.show({
+            title: 'LA Volume',
+            message: 'The contour could not identify both mitral hinges and the superior LA wall. ' +
+              'Start at one hinge and finish at the other, or use Axis + apex.',
+            type: 'warning', duration: 7000,
           });
-        },
-      });
-
-      if (!annulus || isWorkflowCancelled()) {
+          return { ok: false, reason: 'la-freehand-landmarks-invalid' };
+        }
+      } else {
+        const overlay = createLVSimpsonPreviewOverlay(viewport.element);
+  
+        uiNotificationService.show({
+          title: `LA Volume step ${stepNumber}/2`,
+          message: `Navigate to ${slotDisplayName}. Draw the mitral annular closure line from one annular edge to the other. Press Esc to cancel.`,
+          type: 'info',
+          duration: 8000,
+        });
+  
+        const annulus = await captureLVSimpsonDrag({
+          viewport,
+          toolGroup: laToolGroup,
+          restorePreviousTool: false,
+          isCancelled: isWorkflowCancelled,
+          setCancelHandler: cancel => {
+            if (activeLAVolumeWorkflowSessionId === workflowSessionId) {
+              activeLAVolumeCaptureCancel = cancel;
+            }
+          },
+          onPreview: ({ startWorld, currentWorld }) => {
+            drawLVSimpsonPreview({
+              overlay,
+              viewport,
+              baseLeftPoint: startWorld,
+              baseRightPoint: currentWorld,
+            });
+          },
+        });
+  
+        if (!annulus || isWorkflowCancelled()) {
+          clearLVSimpsonPreviewOverlay(viewport.element);
+          setLVSimpsonViewportCursor(viewport.element, 'default');
+          clearLAVolumeWorkflowIfCurrent(workflowSessionId);
+          return null;
+        }
+  
+        drawLVSimpsonPreview({
+          overlay,
+          viewport,
+          baseLeftPoint: annulus.startWorld,
+          baseRightPoint: annulus.endWorld,
+        });
+  
+        uiNotificationService.show({
+          title: `LA Volume step ${stepNumber}/2`,
+          message: `Now drag from the annular midpoint to the inner edge of the furthest superior LA wall for ${slotDisplayName}.`,
+          type: 'info',
+          duration: 8000,
+        });
+  
+        const superiorDrag = await captureLVSimpsonDrag({
+          viewport,
+          toolGroup: laToolGroup,
+          restorePreviousTool: false,
+          isCancelled: isWorkflowCancelled,
+          setCancelHandler: cancel => {
+            if (activeLAVolumeWorkflowSessionId === workflowSessionId) {
+              activeLAVolumeCaptureCancel = cancel;
+            }
+          },
+          onPreview: ({ currentWorld }) => {
+            drawLVSimpsonPreview({
+              overlay,
+              viewport,
+              baseLeftPoint: annulus.startWorld,
+              baseRightPoint: annulus.endWorld,
+              apexPoint: currentWorld,
+            });
+          },
+        });
+  
         clearLVSimpsonPreviewOverlay(viewport.element);
         setLVSimpsonViewportCursor(viewport.element, 'default');
-        clearLAVolumeWorkflowIfCurrent(workflowSessionId);
-        return null;
-      }
-
-      drawLVSimpsonPreview({
-        overlay,
-        viewport,
-        baseLeftPoint: annulus.startWorld,
-        baseRightPoint: annulus.endWorld,
-      });
-
-      uiNotificationService.show({
-        title: `LA Volume step ${stepNumber}/2`,
-        message: `Now drag from the annular midpoint to the inner edge of the furthest superior LA wall for ${slotDisplayName}.`,
-        type: 'info',
-        duration: 8000,
-      });
-
-      const superiorDrag = await captureLVSimpsonDrag({
-        viewport,
-        toolGroup: laToolGroup,
-        restorePreviousTool: false,
-        isCancelled: isWorkflowCancelled,
-        setCancelHandler: cancel => {
-          if (activeLAVolumeWorkflowSessionId === workflowSessionId) {
-            activeLAVolumeCaptureCancel = cancel;
-          }
-        },
-        onPreview: ({ currentWorld }) => {
-          drawLVSimpsonPreview({
-            overlay,
-            viewport,
-            baseLeftPoint: annulus.startWorld,
-            baseRightPoint: annulus.endWorld,
-            apexPoint: currentWorld,
-          });
-        },
-      });
-
-      clearLVSimpsonPreviewOverlay(viewport.element);
-      setLVSimpsonViewportCursor(viewport.element, 'default');
-
-      if (!superiorDrag?.endWorld || isWorkflowCancelled()) {
-        clearLAVolumeWorkflowIfCurrent(workflowSessionId);
-        return null;
-      }
-
-      // Both techniques retain the same independently calibrated annulus and
-      // superior-wall landmarks. Freehand replaces only the contour geometry;
-      // the area-length/disks calculators continue to use the same long axis.
-      let freehandContour: any = null;
-      if (useFreehand) {
-        laVolumeMouseTools.restore();
-        const toolName = toolNames.PlanarFreehandROI || 'PlanarFreehandROI';
-        const activation = actions.activateViewerMeasurementTool({
-          toolName, stopCine: true,
-        });
-        if (!activation?.ok) {
+  
+        if (!superiorDrag?.endWorld || isWorkflowCancelled()) {
           clearLAVolumeWorkflowIfCurrent(workflowSessionId);
-          return { ok: false, reason: 'la-freehand-tool-unavailable' };
+          return null;
         }
-
-        const expectedImageId = getCurrentViewportImageInfo(viewport)?.imageId || '';
-        uiNotificationService.show({
-          title: 'LA Volume freehand',
-          message: `Trace and close the ${slotDisplayName} LA cavity including the annular closure line. Keep the same DICOM image/frame used for the landmarks. Press Esc to cancel.`,
-          type: 'info', duration: 10000,
+  
+  
+        geometry = buildEchoVolumeContourFromBaseAxis({
+          baseLeftPoint: annulus.startWorld,
+          baseRightPoint: annulus.endWorld,
+          axisPoint: superiorDrag.endWorld,
         });
-        freehandContour = await new Promise(resolve => {
-          let finished = false;
-          const finish = (result: any) => {
-            if (finished) return;
-            finished = true;
-            eventTarget.removeEventListener(Enums.Events.ANNOTATION_COMPLETED, completed);
-            window.removeEventListener('keydown', escape);
-            activeLAVolumeCaptureCancel = null;
-            resolve(result);
-          };
-          const completed = (event: Event) => {
-            if (isWorkflowCancelled()) return finish(null);
-            const source = (event as CustomEvent)?.detail?.annotation;
-            if (String(source?.metadata?.toolName || '') !== toolName) return;
-            const annotationId = String(source?.annotationUID || '').trim();
-            const imageId = String(source?.metadata?.referencedImageId || '');
-            const points = source?.data?.contour?.polyline;
-            if (!annotationId || !expectedImageId || imageId !== expectedImageId ||
-                !Array.isArray(points) || points.length < 6 ||
-                source?.data?.contour?.closed !== true ||
-                !points.every((point: any) =>
-                  Array.isArray(point) && point.length >= 2 &&
-                  point.slice(0, 3).every((coordinate: any) => Number.isFinite(Number(coordinate))))) {
-              uiNotificationService.show({
-                title: 'LA Volume freehand',
-                message: 'Closed calibrated LA contour on the landmark image/frame is required.',
-                type: 'warning', duration: 6000,
-              });
-              return;
-            }
-            finish({ annotationId, points: points.map((point: any) =>
-              [Number(point[0]), Number(point[1]), Number(point[2] ?? 0)]) });
-          };
-          const escape = (event: KeyboardEvent) => {
-            if (event.key === 'Escape') finish(null);
-          };
-          activeLAVolumeCaptureCancel = () => finish(null);
-          eventTarget.addEventListener(Enums.Events.ANNOTATION_COMPLETED, completed);
-          window.addEventListener('keydown', escape);
-        });
-        try {
-          actions.setToolActive({
-            toolName: toolNames.WindowLevel || 'WindowLevel',
-            toolGroupId: laToolGroup,
-          });
-        } catch (error) {
-          console.warn('[LA Volume] could not restore navigation after freehand:', error);
-        }
-        if (!freehandContour || isWorkflowCancelled()) {
-          clearLAVolumeWorkflowIfCurrent(workflowSessionId);
-          return { ok: false, reason: 'la-freehand-contour-cancelled' };
-        }
-        // The temporary drawing is only an acquisition carrier; the ordinary
-        // persisted LA spline below owns the final editable annotation.
-        actions.removeMeasurement({ uid: freehandContour.annotationId });
-      }
-
-      const geometry = buildEchoVolumeContourFromBaseAxis({
-        baseLeftPoint: annulus.startWorld,
-        baseRightPoint: annulus.endWorld,
-        axisPoint: superiorDrag.endWorld,
-      });
-
-      if (geometry?.points?.length && freehandContour?.points?.length >= 6) {
-        geometry.points = freehandContour.points;
       }
 
       if (!geometry?.points?.length) {
@@ -10447,6 +10870,10 @@ function commandsModule({
           viewportId: activeViewportId,
           toolName: toolNames.SplineROI || 'SplineROI',
         });
+        installQuizCompositeContourTextOverrideForViewport({
+          viewport, viewportId: activeViewportId,
+          measurementService, viewportGridService, displaySetService, toolGroupService,
+        });
         viewport.render?.();
       } catch {}
 
@@ -10506,6 +10933,14 @@ function commandsModule({
       preferredTargetKey = '',
       quizCapture = false,
     } = {}) => {
+      // The Vmax toolbar uses this same clinical acquisition command. When a
+      // TR Vmax quiz question is active, bind the known spectral target rather
+      // than falling back to generic Ultrasound Directional target selection.
+      // Outside that exact quiz context, retain the existing clinical UI.
+      if (spectralVmax && activeQuizMeasurementKind === 'trVmax') {
+        preferredTargetKey = 'echo.trPeakVelocity';
+        quizCapture = true;
+      }
       clearEchoAreaWorkflowListeners();
       clearUltrasoundDirectionalWorkflowListeners();
 
@@ -10633,7 +11068,17 @@ function commandsModule({
           selectedTarget = normalizeUltrasoundDirectionalTargetSelection('generic', rawUnit);
         }
 
-        const reportMapping = !quizCapture && isClinicalReportMeasurementsSaveTarget(saveTarget)
+        // A learner measurement captured inside a report-owned assessment may
+        // be offered as a *reviewable* clinical report value. This does not
+        // write TRVel automatically: the existing report preview/selection
+        // still decides which mapped fields are applied. Standalone learning
+        // quizzes continue to have no clinical mapping.
+        const allowReportOwnedQuizTR = quizCapture && spectralVmax &&
+          selectedTarget?.key === 'echo.trPeakVelocity' &&
+          isReportOwnedLearnerMeasurementTarget(saveTarget) &&
+          isClinicalReportMeasurementsSaveTarget(saveTarget);
+        const reportMapping = isClinicalReportMeasurementsSaveTarget(saveTarget) &&
+          (!quizCapture || allowReportOwnedQuizTR)
           ? buildUltrasoundDirectionalReportMapping(selectedTarget)
           : null;
         const convertedReportValue = convertUltrasoundDirectionalValueForTarget({
@@ -10698,6 +11143,20 @@ function commandsModule({
         }
 
         actions.markViewerMeasurementCreatedInSession?.({ uid: annotationId });
+        // The educator/learner quiz panel captures this exact calibrated
+        // annotation after its final label and physical m/s conversion exist.
+        // Do not emit a gradeable quiz event for generic or unsupported
+        // spectral measurements.
+        if (quizCapture && spectralVmax &&
+            selectedTarget?.key === 'echo.trPeakVelocity' &&
+            convertedReportValue?.unit === 'm/s' &&
+            Number.isFinite(Number(convertedReportValue?.value)) &&
+            Number(convertedReportValue.value) > 0 &&
+            Number(convertedReportValue.value) <= 8) {
+          window.dispatchEvent(new CustomEvent('ar-learning:quiz-measurement-added', {
+            detail: { measurementId: annotationId },
+          }));
+        }
         dispatchLiveMeasurementsRefresh({
           reason: 'ultrasound-directional-labelled',
           annotationUID: annotationId,
@@ -11012,7 +11471,12 @@ function commandsModule({
 
         const sop = getSopInstanceIdFromImageId(info.imageId) ||
           displaySet?.SOPInstanceUID || displaySet?.sopInstanceUID || '';
+        const verifiedArea = getVerifiedEchoAreaCalibration({
+          displaySet, imageId: info.imageId, sopInstanceId: sop,
+          points: geometry.points,
+        });
         const echoArea = {
+          ...(verifiedArea ? { calibrationRegions: verifiedArea.regions } : {}),
           slot: chosen, phase, view: 'A4C',
           method: 'closed-contour-planimetry',
           contourSource: geometry.contourSource,
@@ -11051,8 +11515,14 @@ function commandsModule({
           FrameOfReferenceUID: state.metadata.FrameOfReferenceUID,
           frameNumber: getFrameNumberFromReferencedImageId(info.imageId),
           points: geometry.points,
+          ...(verifiedArea ? { measurements: {
+            area: verifiedArea.areaCM2, areaUnit: 'cm2',
+          }} : {}),
         }, true);
         actions.markViewerMeasurementCreatedInSession?.({ uid: annotationId });
+        installQuizCompositeContourTextOverrideForViewport({
+          viewport, viewportId, measurementService, viewportGridService, displaySetService, toolGroupService,
+        });
         dispatchLiveMeasurementsRefresh({ reason: 'guided-rv-area-created', annotationUID: annotationId });
         viewport.render?.();
         uiNotificationService.show({
@@ -11067,7 +11537,7 @@ function commandsModule({
         if (activeEchoAreaSessionId === sessionId) clearEchoAreaWorkflowListeners();
       }
     },
-    startEchoAreaContourWorkflow: async ({ slot = '' } = {}) => {
+    startEchoAreaContourWorkflow: async ({ slot = '', clickTrace = false } = {}) => {
       const configuredSlots = {
         RA_ES: {
           label: 'RAa',
@@ -11105,6 +11575,114 @@ function commandsModule({
           duration: 7000,
         });
         return { ok: false, reason: 'echo-area-slot-already-exists', slot: selectedSlot };
+      }
+
+      if (clickTrace) {
+        // This branch is restricted to quiz acquisition. Clinical freehand ROIs
+        // retain their established Cornerstone drag workflow and configuration.
+        clearEchoAreaWorkflowListeners();
+        clearSpectralDopplerWorkflowListeners();
+        clearUltrasoundDirectionalWorkflowListeners();
+        const { viewport } = _getActiveViewportEnabledElement() || {};
+        const viewportId = viewportGridService.getActiveViewportId();
+        if (!viewport?.element || !viewportId) {
+          return { ok: false, reason: 'viewport-not-ready' };
+        }
+        const sessionId = csUtils.uuidv4();
+        activeEchoAreaSessionId = sessionId;
+        const isCancelled = () => activeEchoAreaSessionId !== sessionId;
+        const imageInfo = getCurrentViewportImageInfo(viewport);
+        const sourceImageId = String(imageInfo?.imageId || '');
+        uiNotificationService.show({
+          title: target.title,
+          message: 'Click once at an annular hinge to start, trace without holding the mouse ' +
+            'button, then click again to finish and close the contour. Press Esc to cancel.',
+          type: 'info', duration: 9000,
+        });
+        try {
+          const traced = await captureViewerClickTrace({
+            viewport, previewLabel: target.label,
+            isCancelled,
+            setCancelHandler: cancel => {
+              if (!isCancelled()) rvFACGuidedCancel = cancel;
+            },
+          });
+          if (!traced || isCancelled() ||
+              !sourceImageId || sourceImageId !== getCurrentViewportImageInfo(viewport)?.imageId) {
+            return { ok: false, reason: 'echo-area-trace-cancelled-or-frame-changed' };
+          }
+          if (traced.length < 6) return { ok: false, reason: 'echo-area-contour-too-short' };
+          const points = [...traced, traced[0]];
+          const displaySet = getActiveViewportDisplaySet({
+            viewportGridService, displaySetService, viewportId,
+          });
+          const study = String(displaySet?.StudyInstanceUID || displaySet?.studyInstanceUID || '');
+          const series = String(displaySet?.SeriesInstanceUID || displaySet?.seriesInstanceUID || '');
+          const sop = getSopInstanceIdFromImageId(sourceImageId) ||
+            displaySet?.SOPInstanceUID || displaySet?.sopInstanceUID || '';
+          const frameNumber = getFrameNumberFromReferencedImageId(sourceImageId);
+          if (!study || !series || !sop || !(frameNumber > 0)) {
+            return { ok: false, reason: 'echo-area-source-identity-missing' };
+          }
+          const annotationId = csUtils.uuidv4();
+          let hydrated = null;
+          try {
+            hydrated = cornerstoneTools.SplineROITool?.hydrate?.(viewportId, points, {
+              annotationUID: annotationId,
+            });
+          } catch (error) {
+            console.warn('[Echo Area] click-trace spline hydration failed:', error);
+          }
+          const state = cornerstoneTools.annotation.state.getAnnotation?.(annotationId) || hydrated;
+          if (!state) return { ok: false, reason: 'echo-area-spline-hydration-failed' };
+          const verifiedArea = getVerifiedEchoAreaCalibration({
+            displaySet, imageId: sourceImageId, sopInstanceId: sop, points,
+          });
+          const echoArea = {
+            ...(verifiedArea ? { calibrationRegions: verifiedArea.regions } : {}),
+            slot: selectedSlot, phase: target.phase, view: 'A4C',
+            method: 'closed-contour-planimetry', contourSource: 'freehand-click-trace',
+          };
+          state.metadata = {
+            ...(state.metadata || {}),
+            toolName: toolNames.SplineROI || 'SplineROI',
+            referencedImageId: sourceImageId,
+            StudyInstanceUID: study,
+            SeriesInstanceUID: series,
+            SOPInstanceUID: sop,
+            FrameOfReferenceUID: viewport.getFrameOfReferenceUID?.() || '',
+          };
+          state.data = {
+            ...(state.data || {}), label: target.label, echoArea,
+            measurementKind: 'echoAreaSlot',
+            handles: { ...(state.data?.handles || {}), points },
+            contour: { ...(state.data?.contour || {}), polyline: points, closed: true },
+          };
+          state.invalidated = true;
+          measurementService.update(annotationId, {
+            uid: annotationId, annotationUID: annotationId,
+            toolName: toolNames.SplineROI || 'SplineROI',
+            label: target.label, measurementRole: target.label,
+            role: target.label, measurementKind: 'echoAreaSlot',
+            echoArea, slot: selectedSlot, phase: target.phase, view: 'A4C',
+            referenceStudyUID: study, referenceSeriesUID: series,
+            SOPInstanceUID: sop, referencedImageId: sourceImageId,
+            FrameOfReferenceUID: state.metadata.FrameOfReferenceUID,
+            frameNumber, points,
+            ...(verifiedArea ? { measurements: {
+              area: verifiedArea.areaCM2, areaUnit: 'cm2',
+            }} : {}),
+          }, true);
+          actions.markViewerMeasurementCreatedInSession?.({ uid: annotationId });
+          installQuizCompositeContourTextOverrideForViewport({
+            viewport, viewportId, measurementService, viewportGridService, displaySetService, toolGroupService,
+          });
+          dispatchLiveMeasurementsRefresh({ reason: 'quiz-echo-area-created', annotationUID: annotationId });
+          viewport.render?.();
+          return { ok: true, slot: selectedSlot, annotationId };
+        } finally {
+          if (activeEchoAreaSessionId === sessionId) clearEchoAreaWorkflowListeners();
+        }
       }
 
       clearEchoAreaWorkflowListeners();
@@ -11192,6 +11770,14 @@ function commandsModule({
         } catch (error) {
           console.warn('[Echo Area] measurement service update failed:', error);
         }
+        const displayViewport = cornerstoneViewportService.getCornerstoneViewport(viewportId);
+        if (displayViewport) {
+          installQuizCompositeContourTextOverrideForViewport({
+            viewport: displayViewport, viewportId,
+            measurementService, viewportGridService, displaySetService, toolGroupService,
+          });
+          displayViewport.render?.();
+        }
         dispatchLiveMeasurementsRefresh({ reason: 'echo-area-created', annotationUID: annotationId });
         uiNotificationService.show({
           title: target.title,
@@ -11215,7 +11801,8 @@ function commandsModule({
       });
       return { ok: true, sessionId, slot: selectedSlot };
     },
-    startRAAreaWorkflow: () => actions.startEchoAreaContourWorkflow({ slot: 'RA_ES' }),
+    startRAAreaWorkflow: (options: { clickTrace?: boolean } = {}) =>
+      actions.startEchoAreaContourWorkflow({ ...options, slot: 'RA_ES' }),
     startRVFACWorkflow: () => {
       const measurements = getCurrentViewerMeasurementSnapshot(measurementService);
       const occupied = new Set(measurements.map(getEchoAreaSlot).filter(Boolean));
@@ -12549,6 +13136,7 @@ function commandsModule({
       }
     },
     setToolActiveToolbar: ({ value, itemId, toolName, toolGroupIds = [] }) => {
+      setQuizToolbarMeasurementKind('');
       // Sometimes it is passed as value (tools with options), sometimes as itemId (toolbar buttons)
       toolName = toolName || itemId || value;
       if (lvSimpsonMouseTools.isActive() && activeLVSimpsonWorkflowSessionId) {
@@ -12574,6 +13162,72 @@ function commandsModule({
     setViewerLengthLabelMode: ({ labelMode = VIEWER_LENGTH_LABEL_MODE_PROMPT } = {}) => {
       viewerLengthLabelMode = normalizeViewerLengthLabelMode(labelMode);
       return viewerLengthLabelMode;
+    },
+    /**
+     * Quiz-only: the learner explicitly selected expiration/inspiration in
+     * the question panel, so no second Length label selection is necessary.
+     * Only a new, unlabeled Length measurement on the requested DICOM frame
+     * is eligible. This never assigns labels in general clinical or bowel UI.
+     */
+    setViewerQuizIVCPhaseLabel: ({
+      measurementId = '', slot = '', expectedTarget = null,
+    } = {}) => {
+      const id = String(measurementId || '').trim();
+      const phase = String(slot || '').trim().toUpperCase();
+      if (!id || !['IVC_EXP', 'IVC_INSP'].includes(phase)) {
+        return { ok: false, reason: 'invalid-ivc-phase-selection' };
+      }
+      const measurement = measurementService.getMeasurement?.(id);
+      if (!measurement || String(measurement.toolName || '') !== 'Length') {
+        return { ok: false, reason: 'length-measurement-unavailable' };
+      }
+      const activeLabel = String(
+        measurement.label || measurement.measurementRole || ''
+      ).trim();
+      const requestedLabel = phase === 'IVC_EXP' ? 'IVCexp' : 'IVCinsp';
+      if (activeLabel && !['Length', requestedLabel].includes(activeLabel)) {
+        return { ok: false, reason: 'already-labelled-differently' };
+      }
+      const target = expectedTarget || {};
+      if (target && Object.keys(target).length > 0) {
+        const actual = {
+          study: String(measurement.referenceStudyUID || measurement.StudyInstanceUID || ''),
+          series: String(measurement.referenceSeriesUID || measurement.SeriesInstanceUID || ''),
+          sop: String(measurement.SOPInstanceUID || measurement.metadata?.SOPInstanceUID || ''),
+          image: String(measurement.referencedImageId || measurement.metadata?.referencedImageId || ''),
+          frame: getFrameNumberFromReferencedImageId(
+            measurement.referencedImageId || measurement.metadata?.referencedImageId || ''
+          ),
+        };
+        if (!actual.study || !actual.series || !actual.sop ||
+            !target.studyInstanceUID || !target.seriesInstanceUID ||
+            !target.sopInstanceUID ||
+            actual.study !== String(target.studyInstanceUID) ||
+            actual.series !== String(target.seriesInstanceUID) ||
+            actual.sop !== String(target.sopInstanceUID) ||
+            Number(target.frameNumber) !== actual.frame ||
+            (target.referencedImageId && normalizeImageIdForCompare(actual.image) !==
+              normalizeImageIdForCompare(String(target.referencedImageId)))) {
+          return { ok: false, reason: 'ivc-source-frame-mismatch' };
+        }
+      }
+      const cornerstoneAnnotation = cornerstoneTools.annotation.state.getAnnotation?.(id);
+      if (cornerstoneAnnotation?.data?.arPendingLengthLabel === true) {
+        delete cornerstoneAnnotation.data.arPendingLengthLabel;
+      }
+      if (activeLabel !== requestedLabel) {
+        measurementService.update(id, {
+          ...measurement, label: requestedLabel,
+          measurementRole: requestedLabel,
+        }, true);
+        viewerMeasurementsModifiedInSession.add(id);
+      }
+      viewerLengthLabelMode = VIEWER_LENGTH_LABEL_MODE_PROMPT;
+      window.dispatchEvent(new CustomEvent('ar-learning:quiz-measurement-labelled', {
+        detail: { measurementId: id },
+      }));
+      dispatchLiveMeasurementsRefresh({ kind: 'ivc-quiz-phase-labelled' });
+      return { ok: true, slot: phase, label: requestedLabel };
     },
     getViewerLengthLabelMode: () => viewerLengthLabelMode,
     resetViewerLengthLabelMode: () => {
@@ -12715,12 +13369,30 @@ function commandsModule({
         cineStopped: stopCine,
       };
     },
+    setViewerQuizMeasurementContext: ({ measurementKind = '' } = {}) => {
+      if (activeQuizMeasurementKind !== String(measurementKind || '').trim()) {
+        // A question switch ends the previous acquisition before the next tool
+        // activates. Otherwise EF/LA can retain primary mouse ownership while
+        // TR or an IVC caliper is being started in the new question.
+        clearEchoAreaWorkflowListeners();
+        clearUltrasoundDirectionalWorkflowListeners();
+        if (activeLVSimpsonWorkflowSessionId) {
+          clearLVSimpsonWorkflowIfCurrent(activeLVSimpsonWorkflowSessionId);
+        }
+        if (activeLAVolumeWorkflowSessionId) {
+          clearLAVolumeWorkflowIfCurrent(activeLAVolumeWorkflowSessionId);
+        }
+      }
+      setQuizToolbarMeasurementKind(measurementKind);
+      return { ok: true, measurementKind: activeQuizMeasurementKind };
+    },
     activateViewerQuizMeasurementTool: ({
       toolName = 'Length',
       measurementKind = '',
       efContourTargets = null,
       questionKey = '',
     } = {}) => {
+      setQuizToolbarMeasurementKind(measurementKind);
       if (measurementKind === 'lvSimpsonEF') {
         if (activeLAVolumeWorkflowSessionId) {
           clearLAVolumeWorkflowIfCurrent(activeLAVolumeWorkflowSessionId);
@@ -12774,7 +13446,7 @@ function commandsModule({
         if (activeLAVolumeWorkflowSessionId) {
           clearLAVolumeWorkflowIfCurrent(activeLAVolumeWorkflowSessionId);
         }
-        const command = actions.startRAAreaWorkflow();
+        const command = actions.startRAAreaWorkflow({ clickTrace: true });
         void Promise.resolve(command).catch(error =>
           console.warn('[Viewer quiz] right-heart capture activation failed:', error)
         );
@@ -12798,6 +13470,7 @@ function commandsModule({
       return actions.activateViewerMeasurementTool({ toolName, stopCine: true });
     },
     releaseViewerQuizDrawingTool: () => {
+      setQuizToolbarMeasurementKind('');
       if (activeLVSimpsonWorkflowSessionId) {
         clearLVSimpsonWorkflowIfCurrent(activeLVSimpsonWorkflowSessionId);
       }
@@ -14543,6 +15216,18 @@ function commandsModule({
         });
       }
 
+      // Reattach the renderer override on restored quiz contours as well as
+      // newly drawn ones. Saved display text metadata does not itself alter
+      // Cornerstone's native getTextLines output.
+      if (!isSpectralDopplerViewerMeasurement(savedAnnotation) &&
+          (getEchoAreaSlot(savedAnnotation) || isLAVolumeMeasurement(savedAnnotation))) {
+        installQuizCompositeContourTextOverrideForViewport({
+          viewport: hydratedViewport,
+          viewportId: hydratedViewport.id || targetViewportId,
+          measurementService, viewportGridService, displaySetService, toolGroupService,
+        });
+      }
+
       // Cornerstone-owned AR annotations (VTI traces and directional US measurements)
       // must not round-trip through MeasurementService here. Their persisted AR payload
       // and Cornerstone annotation state are the source of truth for viewport display.
@@ -14854,6 +15539,16 @@ function commandsModule({
         viewport, target, resolveTargetViewport
       );
 
+      // Navigating between saved quiz source frames can change the viewport's
+      // tool group; keep the area renderer attached before displaying contours.
+      if (jumpResult?.ok !== false) {
+        installQuizCompositeContourTextOverrideForViewport({
+          viewport: resolveTargetViewport(),
+          viewportId: targetViewportId,
+          measurementService, viewportGridService, displaySetService, toolGroupService,
+        });
+      }
+
       return {
         ...jumpResult,
         viewportId: targetViewportId,
@@ -15078,6 +15773,134 @@ function commandsModule({
       };
     },
 
+    /**
+     * Learner composite quiz reopen: restore EACH exact, persisted learner
+     * source annotation on its own referenced DICOM image/frame. Never use
+     * educator gold or an approximate measurement lookup as a substitute.
+     * This restores drawing evidence without changing quiz scores or report.
+     */
+    showViewerQuizLearnerCompositeMeasurement: async ({
+      learnerMeasurement = {}, viewerTarget = null, questionKey = '',
+    } = {}) => {
+      const kind = String(learnerMeasurement?.measurementKind || '').trim();
+      const slots = kind === 'rvFAC' ? ['RV_ED', 'RV_ES']
+        : ['laVolumeBiplane', 'laVolumeBiplaneDisks'].includes(kind)
+          ? ['A4C', 'A2C']
+          : kind === 'ivcCollapsibility' || kind === 'ivcRapRvsp'
+            ? ['IVC_EXP', 'IVC_INSP'] : [];
+      const sourceComposite = kind === 'ivcRapRvsp'
+        ? learnerMeasurement?.compositeResult?.ivc?.compositeResult
+        : learnerMeasurement?.compositeResult;
+      const components = Array.isArray(sourceComposite?.components)
+        ? sourceComposite.components : [];
+      if (slots.length !== 2 || components.length !== slots.length ||
+          slots.some(slot => components.filter(item => item?.slot === slot).length !== 1)) {
+        return { ok: false, restoredCount: 0, reason: 'learner-composite-source-incomplete' };
+      }
+      const saveTarget = getArViewerSaveTargetFromUrl();
+      const learnerId = String(
+        saveTarget.learnerSeriesId || saveTarget.seriesId || ''
+      ).trim();
+      const { learnerSeriesDoc } = await getViewerQuizMeasurementSeriesDocs({
+        includeBaseSeries: false,
+      });
+      // A learner view can only use its isolated copy; never load a source
+      // teaching study (or a previously opened educator's measurements).
+      if (!learnerId || !learnerSeriesDoc ||
+          String(learnerSeriesDoc._id || '') !== learnerId ||
+          learnerSeriesDoc.isLearnerCopy !== true) {
+        return { ok: false, restoredCount: 0, reason: 'learner-copy-not-available' };
+      }
+      const existing = getRequestedWorkflowAnnotations(
+        learnerSeriesDoc.MeasurementAnnotations, [VIEWER_MEASUREMENTS_WORKFLOW]
+      );
+      const sources = [];
+      const sourceFrames = new Set<string>();
+      const sourceIds = new Set<string>();
+      for (const slot of slots) {
+        const component = components.find(item => item.slot === slot);
+        const expected = component?.target || {};
+        const sourceId = String(component?.annotationId || '').trim();
+        const saved = existing.filter(item =>
+          getMeasurementAnnotationId(item) === sourceId
+        );
+        const sourceFrame = [
+          expected.studyInstanceUID, expected.seriesInstanceUID,
+          expected.sopInstanceUID, expected.frameNumber,
+        ].map(value => String(value || '')).join('|');
+        if (!sourceId || sourceIds.has(sourceId) ||
+            sourceFrames.has(sourceFrame) || saved.length !== 1 ||
+            !expected.studyInstanceUID || !expected.seriesInstanceUID ||
+            !expected.sopInstanceUID ||
+            !Number.isSafeInteger(Number(expected.frameNumber)) ||
+            Number(expected.frameNumber) < 1 ||
+            !Array.isArray(component?.points) ||
+            component.points.length < (kind === 'ivcCollapsibility' || kind === 'ivcRapRvsp' ? 2 : 3)) {
+          return { ok: false, restoredCount: 0, reason: 'learner-source-annotation-unavailable', slot };
+        }
+        const annotation = saved[0];
+        const image = String(annotation.referencedImageId || '').trim();
+        const savedFrame = getFrameNumberFromReferencedImageId(image);
+        const expectedImage = String(expected.referencedImageId || '').trim();
+        if (String(annotation.StudyInstanceUID || '') !== String(expected.studyInstanceUID) ||
+            String(annotation.SeriesInstanceUID || '') !== String(expected.seriesInstanceUID) ||
+            String(annotation.SOPInstanceUID || '') !== String(expected.sopInstanceUID) ||
+            !image || !expectedImage ||
+            normalizeImageIdForCompare(image) !== normalizeImageIdForCompare(expectedImage) ||
+            savedFrame !== Number(expected.frameNumber) ||
+            (annotation.frameNumber && Number(annotation.frameNumber) !== savedFrame)) {
+          return { ok: false, restoredCount: 0, reason: 'learner-source-frame-mismatch', slot };
+        }
+        if (!Array.isArray(annotation.points) ||
+            annotation.points.length < (kind === 'ivcCollapsibility' || kind === 'ivcRapRvsp' ? 2 : 3)) {
+          return { ok: false, restoredCount: 0,
+            reason: 'learner-saved-contour-geometry-unavailable', slot };
+        }
+        sourceIds.add(sourceId);
+        sourceFrames.add(sourceFrame);
+        sources.push({ slot, annotation });
+      }
+      clearViewerQuizMeasurementComparisonAnnotations();
+      let restoredCount = 0;
+      const errors = [];
+      // Cornerstone needs the referenced frame to be available when a saved
+      // annotation is hydrated. Navigate to each in sequence, then return to
+      // the question target so learners are not stranded on the last phase.
+      for (const { slot, annotation: saved } of sources) {
+        const restored = await actions.jumpToSavedViewerAnnotation({
+          annotation: saved, selectAnnotation: false,
+          runDelayedDisplayRefresh: false,
+        });
+        if (restored?.ok !== true) {
+          errors.push({ slot, reason: restored?.reason || 'hydration-failed' });
+          continue;
+        }
+        const sourceId = getMeasurementAnnotationId(saved);
+        const hydrated = sourceId ? annotation.state.getAnnotation?.(sourceId) : null;
+        if (!hydrated ||
+            normalizeImageIdForCompare(hydrated.metadata?.referencedImageId || '') !==
+              normalizeImageIdForCompare(saved.referencedImageId || '')) {
+          errors.push({ slot, reason: 'learner-contour-viewport-hydration-mismatch' });
+          continue;
+        }
+        hydrated.isVisible = true;
+        restoredCount++;
+      }
+      if (viewerTarget) {
+        try {
+          await actions.jumpToViewerQuizTarget({ viewerTarget, questionKey });
+        } catch (error) {
+          console.warn('[ViewerQuiz] could not return to learner question frame', error);
+        }
+      }
+      return {
+        ok: errors.length === 0 && restoredCount === slots.length,
+        learnerRendered: restoredCount > 0, restoredCount,
+        expectedCount: slots.length,
+        reason: errors[0]?.reason || '',
+        failedSlots: errors.map(item => item.slot),
+      };
+    },
     showViewerQuizLearnerMeasurement: async ({
       learnerMeasurement = {},
       viewerTarget = null,
@@ -15335,9 +16158,12 @@ function commandsModule({
       learnerMeasurement = {},
       rubricMeasurement = {},
       viewerTarget = null,
+      focusedCompositeSlot = '',
       questionKey = '',
       radius = null,
       radiusUnit = 'world',
+      endpointToleranceMM = null,
+      ivcEndpointToleranceEnabled = false,
     } = {}) => {
       clearViewerQuizMeasurementComparisonAnnotations();
       clearAllViewerQuizMarkerOverlays();
@@ -15395,7 +16221,8 @@ function commandsModule({
         ).trim();
         const study = String(target.studyInstanceUID || '').trim();
         if (
-          !Array.isArray(points) || points.length < 3 ||
+          !Array.isArray(points) ||
+          points.length < (rubricMeasurement?.measurementKind === 'ivcCollapsibility' ? 2 : 3) ||
           points.length > 5000 || !imageId ||
           (expectedStudy && (!study || study !== expectedStudy))
         ) {
@@ -15409,21 +16236,49 @@ function commandsModule({
         if (safePoints.some(point => !point || point.some(value => !Number.isFinite(value)))) {
           return null;
         }
+        const derived = rubricMeasurement?.compositeResult?.derived || {};
+        const ivcValue = slot === 'IVC_EXP' ? derived.expirationDiameterMM
+          : slot === 'IVC_INSP' ? derived.inspirationDiameterMM : null;
+        const areaValue = slot === 'RV_ED' ? derived.edaCM2
+          : slot === 'RV_ES' ? derived.esaCM2
+          : slot === 'A4C' ? derived.a4cAreaCM2
+          : slot === 'A2C' ? derived.a2cAreaCM2
+          : slot === 'RA_ES' ? derived.areaCM2 : null;
+        const physical = Number(
+          rubricMeasurement?.measurementKind === 'ivcCollapsibility' ? ivcValue : areaValue
+        );
+        const hasPhysical = (rubricMeasurement?.measurementKind === 'ivcCollapsibility'
+          ? ivcValue : areaValue) != null && Number.isFinite(physical) && physical > 0;
+        const unit = rubricMeasurement?.measurementKind === 'ivcCollapsibility'
+          ? 'mm' : 'cm²';
         return {
           annotationId: String(component.annotationId || '').trim(),
           uid: String(component.annotationId || '').trim(),
           workflow: VIEWER_MEASUREMENTS_WORKFLOW,
-          toolName: 'PlanarFreehandROI',
+          toolName: rubricMeasurement?.measurementKind === 'ivcCollapsibility'
+            ? 'Length' : 'PlanarFreehandROI',
           label: slot,
           measurementRole: slot,
           measurementKind: rubricMeasurement.measurementKind,
+          // Temporary gold overlays need the same explicit contour slot as
+          // original acquisition. Otherwise Cornerstone treats them as generic
+          // ROI annotations and displays a separate native mm² measurement.
+          ...getQuizCompositeGoldContourSlotMetadata(
+            rubricMeasurement.measurementKind, slot
+          ),
+          ...(hasPhysical ? {
+            displayText: [slot + ': ' + physical.toFixed(2) + ' ' + unit],
+            measurements: rubricMeasurement?.measurementKind === 'ivcCollapsibility'
+              ? { length: physical, lengthUnit: 'mm' }
+              : { area: physical, areaUnit: 'cm2' },
+          } : {}),
           StudyInstanceUID: study,
           SeriesInstanceUID: String(target.seriesInstanceUID || ''),
           SOPInstanceUID: String(target.sopInstanceUID || ''),
           referencedImageId: imageId,
           frameNumber: Number(target.frameNumber || 0),
           points: safePoints,
-          contourClosed: true,
+          contourClosed: rubricMeasurement?.measurementKind !== 'ivcCollapsibility',
         };
       };
       const resolvedRubricContours = compositeRubric
@@ -15436,9 +16291,9 @@ function commandsModule({
               getRequestedWorkflowAnnotations(seriesDoc?.MeasurementAnnotations)
             ).find(item => getMeasurementAnnotationId(item) === sourceId);
             const sourceAnnotation =
+              embeddedContourFromComponent(component, slot) ||
               persisted ||
-              getViewerQuizMeasurementAnnotationFromService(reference) ||
-              embeddedContourFromComponent(component, slot);
+              getViewerQuizMeasurementAnnotationFromService(reference);
             return sourceAnnotation ? { sourceAnnotation, slot } : null;
           }).filter(Boolean)
         : [];
@@ -15496,10 +16351,34 @@ function commandsModule({
         };
       }
 
+      // Gold measurement comparison is a separate hydration path from
+      // jumpToSavedViewerAnnotation. Install the scoped area renderer here too:
+      // restoring the annotation alone does not install getTextLines.
+      if (['rvFAC', 'raArea', 'laVolumeBiplane', 'laVolumeBiplaneDisks'].includes(
+        String(rubricMeasurement?.measurementKind || '')
+      )) {
+        installQuizCompositeContourTextOverrideForViewport({
+          viewport, viewportId: comparisonViewportId,
+          measurementService, viewportGridService, displaySetService, toolGroupService,
+        });
+      }
+
+      if (rubricMeasurement?.measurementKind === 'lvSimpsonEF') {
+        for (const toolName of [toolNames.SplineROI || 'SplineROI',
+          toolNames.PlanarFreehandROI || 'PlanarFreehandROI']) {
+          installLVSimpsonContourTextCleanupForViewport({
+            viewport, viewportId: comparisonViewportId, toolName,
+          });
+        }
+      }
+
       // Authoring gold calipers already loaded in Cornerstone should be selected
       // directly. Reconstructing a temporary comparison overlay can fail when
       // the saved source annotation has not yet been rehydrated into this viewport.
-      if (goldSourceId && !getViewerQuizMeasurementSourceAnnotationId(learnerMeasurement)) {
+      if (!compositeRubric && goldSourceId &&
+          !getViewerQuizMeasurementSourceAnnotationId(learnerMeasurement) &&
+          !(endpointToleranceMM !== null && endpointToleranceMM !== '' &&
+            Number.isFinite(Number(endpointToleranceMM)) && Number(endpointToleranceMM) > 0)) {
         const liveGold = annotation.state.getAnnotation?.(goldSourceId);
         const goldTarget = getViewerQuizMeasurementReferenceTarget(rubricMeasurement, rubricAnnotation);
         const expectedImage = normalizeImageIdForCompare(
@@ -15568,6 +16447,27 @@ function commandsModule({
       ].filter(entry => !!entry.sourceAnnotation);
 
       for (const entry of entries) {
+        const sourceId = String(entry.sourceAnnotation?.annotationId ||
+          entry.sourceAnnotation?.uid || '').trim();
+        const native = compositeRubric && entry.variant === 'rubric' && sourceId
+          ? annotation.state.getAnnotation?.(sourceId) : null;
+        const expectedImage = normalizeImageIdForCompare(
+          entry.sourceAnnotation?.referencedImageId || '');
+        const nativeImage = normalizeImageIdForCompare(
+          native?.metadata?.referencedImageId || '');
+        if (native && expectedImage && nativeImage === expectedImage) {
+          if (entry.variant === 'rubric' &&
+              rubricMeasurement?.measurementKind === 'lvSimpsonEF') {
+            applyVerifiedEFGoldLabel(sourceId, entry.slot, rubricMeasurement);
+          }
+          native.isVisible = true;
+          cornerstoneTools.annotation.selection.setAnnotationSelected?.(
+            sourceId, !focusedCompositeSlot || entry.slot === focusedCompositeSlot
+          );
+          renderedCount++;
+          rubricRendered = true;
+          continue;
+        }
         const comparisonAnnotation = buildViewerQuizMeasurementComparisonAnnotation({
           sourceAnnotation: entry.sourceAnnotation,
           variant: entry.variant,
@@ -15641,15 +16541,21 @@ function commandsModule({
           }
         }
 
+        if (entry.variant === 'rubric' && entry.slot &&
+            rubricMeasurement?.measurementKind === 'lvSimpsonEF') {
+          applyVerifiedEFGoldLabel(comparisonAnnotationId, entry.slot, rubricMeasurement, hydratedAnnotation);
+        }
         hydratedAnnotation.isLocked = true;
         hydratedAnnotation.isVisible = true;
+        const focused = entry.variant === 'rubric' && !!focusedCompositeSlot &&
+          entry.slot === focusedCompositeSlot;
         annotation.config.style.setAnnotationStyles(
           comparisonAnnotationId,
-          VIEWER_QUIZ_MEASUREMENT_COMPARISON_STYLES[entry.variant]
+          focused ? VIEWER_QUIZ_MEASUREMENT_COMPARISON_STYLES.rubricFocused
+            : VIEWER_QUIZ_MEASUREMENT_COMPARISON_STYLES[entry.variant]
         );
         cornerstoneTools.annotation.selection.setAnnotationSelected?.(
-          comparisonAnnotationId,
-          false
+          comparisonAnnotationId, focused
         );
         viewerQuizMeasurementComparisonAnnotationIds.add(comparisonAnnotationId);
         renderedCount += 1;
@@ -15664,9 +16570,62 @@ function commandsModule({
         getViewerQuizMeasurementCenterPoint(rubricAnnotation) ||
         getViewerQuizMeasurementCenterPoint(rubricMeasurement);
       const numericRadius = Number(radius);
+      const endpointRadius = endpointToleranceMM === null || endpointToleranceMM === ''
+        ? null : Number(endpointToleranceMM);
+      const isIVC = rubricMeasurement?.measurementKind === 'ivcCollapsibility';
+      const useEndpointTolerance =
+        isIVC ? ivcEndpointToleranceEnabled === true
+          : rubricMeasurement?.measurementKind === 'length' &&
+            endpointRadius !== null;
       let toleranceCircleRendered = false;
+      let endpointCirclesRendered = 0;
 
-      if (rubricCenter && Number.isFinite(numericRadius) && numericRadius > 0) {
+      if (useEndpointTolerance && endpointRadius !== null &&
+          Number.isFinite(endpointRadius) && endpointRadius > 0) {
+        const activeImage = normalizeImageIdForCompare(
+          viewport.getCurrentImageId?.() || ''
+        );
+        const goldParts = isIVC
+          ? (Array.isArray(rubricMeasurement?.compositeResult?.components)
+              ? rubricMeasurement.compositeResult.components : [])
+          : [rubricAnnotation || rubricMeasurement];
+        for (const part of goldParts) {
+          if (isIVC && focusedCompositeSlot && part?.slot !== focusedCompositeSlot) continue;
+          const sourceTarget = part?.target ||
+            getViewerQuizMeasurementReferenceTarget(rubricMeasurement, rubricAnnotation) || {};
+          const expectedImage = normalizeImageIdForCompare(
+            sourceTarget.referencedImageId || part?.referencedImageId || ''
+          );
+          const expectedInstanceFrame = sourceTarget.sopInstanceUID &&
+            Number.isInteger(Number(sourceTarget.frameNumber)) &&
+            Number(sourceTarget.frameNumber) > 0
+            ? `/instances/${String(sourceTarget.sopInstanceUID).toLowerCase()}/frames/${Number(sourceTarget.frameNumber)}`
+            : '';
+          const frameMatches = activeImage && (
+            (expectedImage && (activeImage === expectedImage ||
+              activeImage.endsWith(expectedImage))) ||
+            (expectedInstanceFrame && activeImage.includes(expectedInstanceFrame))
+          );
+          // Composite phase geometry must only appear on its exact gold image/frame.
+          if (isIVC && !frameMatches) continue;
+          const points = getViewerQuizMeasurementPoints(part);
+          if (points.length !== 2) continue;
+          for (const coordinates of points) {
+            const point = {
+              x: Number(coordinates[0]),
+              y: Number(coordinates[1]),
+              z: Number(coordinates[2] || 0),
+              coordinateSpace: 'world',
+            };
+            if (appendViewerQuizToleranceCircle({
+              viewport, point, radius: endpointRadius, radiusUnit: 'mm',
+            })) endpointCirclesRendered += 1;
+          }
+        }
+        toleranceCircleRendered = endpointCirclesRendered > 0;
+      } else if (!useEndpointTolerance && rubricCenter &&
+          Number.isFinite(numericRadius) && numericRadius > 0) {
+        // Retain the older centre-radius display for saved legacy questions.
         toleranceCircleRendered = appendViewerQuizToleranceCircle({
           viewport,
           point: rubricCenter,
@@ -15704,6 +16663,7 @@ function commandsModule({
         compositeContoursExpected: compositeRubric ? expectedSlots.length : 0,
         compositeContoursResolved: resolvedRubricContours.length,
         toleranceCircleRendered,
+        endpointCirclesRendered,
       };
     },
     getCurrentViewerQuizFrameAnswer: async () => {
@@ -15813,6 +16773,169 @@ function commandsModule({
         viewportId: activeViewportId,
       });
     },
+    /**
+     * Restore missing physical RV/LA phase areas from the immutable gold
+     * contours and the original DICOM US-region calibration. This is an
+     * explicit authoring action, not a learner or scoring calculation.
+     * Never derive areas from uncalibrated world/pixel geometry.
+     */
+    recoverViewerQuizGoldAreas: async ({
+      rubricMeasurement = {}, questionKey = '',
+    } = {}) => {
+      const kind = String(rubricMeasurement?.measurementKind || '').trim();
+      if (kind === 'lvSimpsonEF') {
+        // EF is already calculated and educator-approved. Recover display
+        // areas only from the matching persisted calibrated annotations.
+        const { baseSeriesDoc, learnerSeriesDoc } =
+          await getViewerQuizMeasurementSeriesDocs();
+        // Educator authoring can open the original series directly, with no
+        // derivedFrom/baseSeriesId. Searching only baseSeriesDoc then always
+        // returns zero gold annotations. The resolver independently requires
+        // exact annotation ID, study/series/SOP/image, and contour agreement.
+        let recovery: ReturnType<typeof resolveSavedEFGoldContourAreas> = {
+          ok: false, reason: 'No saved EF source series available',
+        };
+        for (const seriesDoc of [baseSeriesDoc, learnerSeriesDoc].filter(Boolean)) {
+          // A derived series may carry a second copy of the original
+          // annotation. Never concatenate the two and treat that as two
+          // independent gold sources; independently validate each full set.
+          recovery = resolveSavedEFGoldContourAreas({
+            gold: rubricMeasurement,
+            savedAnnotations: getRequestedWorkflowAnnotations(
+              seriesDoc.MeasurementAnnotations
+            ),
+          });
+          if (recovery.ok) return recovery;
+          // An existing but altered source is not evidence of a missing
+          // container. Never bypass a known image/contour disagreement.
+          if (/source frames invalid|source identity conflict|image\/frame mismatch|contour changed|physical area mismatch/i
+            .test(String(recovery.reason || ''))) return recovery;
+        }
+        // An educator can have exact calibrated saved source annotations
+        // hydrated into MeasurementService even when the Series lookup fails.
+        // Run the same immutable-ID/frame/contour verification before falling
+        // back to raw DICOM evidence. This also restores retained LV axes.
+        const liveRecovery = resolveSavedEFGoldContourAreas({
+          gold: rubricMeasurement,
+          savedAnnotations: getCurrentViewerMeasurementSnapshot(measurementService),
+        });
+        if (liveRecovery.ok) return liveRecovery;
+        if (/source frames invalid|source identity conflict|image\/frame mismatch|contour changed|physical area mismatch|axis disagrees/i
+          .test(String(liveRecovery.reason || ''))) return liveRecovery;
+        // A truly missing source can instead be checked against the original
+        // exact-frame DICOM US-region calibration below. That contour evidence
+        // has no trusted apex index, so do not invent a legacy LV long axis.
+        console.info('[ViewerQuiz] EF saved-source area recovery unavailable; attempting verified DICOM calibration', {
+          reason: liveRecovery.reason || recovery.reason,
+        });
+      }
+      const previousFrame = await actions.getCurrentViewerQuizFrameAnswer();
+      const previousTarget = previousFrame?.ok ? previousFrame.answer?.selectedTarget : null;
+      const previousViewportId = viewportGridService.getActiveViewportId();
+      let navigatedForCalibration = false;
+      try {
+        const recover = kind === 'lvSimpsonEF'
+          ? resolveVerifiedEFGoldContourAreasFromDicom
+          : resolveViewerQuizGoldAreaBackfill;
+        return await recover({
+          kind,
+          gold: rubricMeasurement,
+          calibrate: async component => {
+            const target = component?.target || {};
+            // The saved image's metadata may already be available on
+            // question open. Prefer a read-only calculation without changing
+            // the active viewport; navigate only if metadata must be loaded.
+            const displaySet = getDisplaySetForSavedAnnotation(displaySetService, {
+              SOPInstanceUID: target.sopInstanceUID,
+              SeriesInstanceUID: target.seriesInstanceUID,
+            });
+            if (!displaySet) return null;
+            const sourceStudy = String(displaySet.StudyInstanceUID || '').trim();
+            const sourceSeries = String(displaySet.SeriesInstanceUID || '').trim();
+            if ((sourceStudy && sourceStudy !== String(target.studyInstanceUID || '')) ||
+                (sourceSeries && sourceSeries !== String(target.seriesInstanceUID || ''))) {
+              return null;
+            }
+            const savedImageId = String(target.referencedImageId || '');
+            const fromCachedMetadata = getVerifiedEchoAreaCalibration({
+              displaySet,
+              imageId: savedImageId,
+              sopInstanceId: String(target.sopInstanceUID || ''),
+              points: component.points || [],
+            });
+            if (fromCachedMetadata?.areaCM2 != null) {
+              return fromCachedMetadata.areaCM2;
+            }
+            const navigation = await actions.jumpToViewerQuizTarget({
+              viewerTarget: target, questionKey,
+            });
+            if (!navigation?.ok) return null;
+            navigatedForCalibration = true;
+            const sourceViewport = cornerstoneViewportService.getCornerstoneViewport(
+              navigation.viewportId || viewportGridService.getActiveViewportId()
+            );
+            const actualImageId = sourceViewport
+              ? String(getCurrentViewportImageInfo(sourceViewport)?.imageId || '')
+              : '';
+            // Never apply DICOM metadata from a different cine frame, even
+            // if a viewer navigation reported success before the image changed.
+            if (!actualImageId ||
+                getSopInstanceIdFromImageId(actualImageId) !== String(target.sopInstanceUID || '') ||
+                getFrameNumberFromReferencedImageId(actualImageId) !== Number(target.frameNumber)) {
+              return null;
+            }
+            const calibrated = getVerifiedEchoAreaCalibration({
+              displaySet,
+              imageId: actualImageId,
+              sopInstanceId: String(target.sopInstanceUID || ''),
+              points: component.points || [],
+            });
+            return calibrated?.areaCM2 ?? null;
+          },
+        });
+      } catch (error) {
+        console.warn('[ViewerQuiz] gold area recovery failed', error);
+        return { ok: false, reason: 'gold-area-recovery-error' };
+      } finally {
+        // Recovery is read-only until the educator explicitly saves the
+        // updated draft. Restore their original viewing context.
+        if (navigatedForCalibration && previousTarget?.sopInstanceUID) {
+          try {
+            const restored = await actions.jumpToViewerQuizTarget({
+              viewerTarget: previousTarget, questionKey,
+            });
+            if (restored?.ok && previousViewportId) {
+              await Promise.resolve(actions.setViewportActive({ viewportId: previousViewportId }));
+            }
+          } catch (error) {
+            console.warn('[ViewerQuiz] could not restore pre-recovery frame', error);
+          }
+        }
+      }
+    },
+    getViewerQuizCompositeStatusForActiveStudy: ({ measurementKind = '' } = {}) => {
+      const kind = String(measurementKind || '').trim();
+      const activeViewportId = viewportGridService.getActiveViewportId();
+      const displaySet = getActiveViewportDisplaySet({
+        viewportGridService, displaySetService, viewportId: activeViewportId,
+      });
+      const study = String(
+        displaySet?.StudyInstanceUID || displaySet?.studyInstanceUID || ''
+      ).trim();
+      if (!study) {
+        return {
+          complete: false, value: null, unit: '',
+          message: 'Select an image from the quiz study before reviewing the calculated measurement.',
+        };
+      }
+      const snapshot = getCurrentViewerMeasurementSnapshot(measurementService);
+      return getViewerQuizCompositeStatus(
+        kind as any,
+        snapshot.filter(entry =>
+          String(entry?.referenceStudyUID || entry?.StudyInstanceUID || '').trim() === study
+        )
+      );
+    },
     getSelectedViewerMeasurementQuizAnswer: async ({
       question = {},
       measurementType = '',
@@ -15921,9 +17044,11 @@ function commandsModule({
           ? authoritativeEF?.composite
           : resolveViewerQuizCompositeResult(requestedKind, sourceMeasurements);
         if (!composite) {
+          const diagnostic = getViewerQuizCompositeStatus(requestedKind as any, sourceMeasurements);
           return {
             ok: false,
-            reason: 'composite-measurement-incomplete',
+            reason: diagnostic.message || 'Composite measurement is not yet complete or calibrated.',
+            reasonCode: 'composite-measurement-incomplete',
             selectedMeasurementId,
           };
         }
@@ -16145,6 +17270,9 @@ function commandsModule({
     activateViewerQuizMeasurementTool: {
       commandFn: actions.activateViewerQuizMeasurementTool,
     },
+    setViewerQuizMeasurementContext: {
+      commandFn: actions.setViewerQuizMeasurementContext,
+    },
     releaseViewerQuizDrawingTool: {
       commandFn: actions.releaseViewerQuizDrawingTool,
     },
@@ -16156,6 +17284,9 @@ function commandsModule({
     },
     getViewerLengthLabelMode: {
       commandFn: actions.getViewerLengthLabelMode,
+    },
+    setViewerQuizIVCPhaseLabel: {
+      commandFn: actions.setViewerQuizIVCPhaseLabel,
     },
     resetViewerLengthLabelMode: {
       commandFn: actions.resetViewerLengthLabelMode,
@@ -16416,6 +17547,12 @@ function commandsModule({
     getViewerMeasurementSnapshotForPanel: {
       commandFn: actions.getViewerMeasurementSnapshotForPanel,
     },
+    getViewerQuizCompositeStatusForActiveStudy: {
+      commandFn: actions.getViewerQuizCompositeStatusForActiveStudy,
+    },
+    recoverViewerQuizGoldAreas: {
+      commandFn: actions.recoverViewerQuizGoldAreas,
+    },
     getViewerQuizLVSimpsonForActiveStudy: {
       commandFn: actions.getViewerQuizLVSimpsonForActiveStudy,
     },
@@ -16429,6 +17566,7 @@ function commandsModule({
         quizSpatialEvidenceByAnnotationId = null,
         previewOnly = false,
         reportFieldNames = null,
+        educationQuizHemodynamics = null,
         suppressSuccessNotification = false,
       } = {}) => {
         const { measurementService, uiNotificationService } = servicesManager.services;
@@ -16962,6 +18100,7 @@ function commandsModule({
                   accessType: 'update',
                   viewerMeasurementIntent: 'clinical-report',
                   viewerMeasurementReviewOnly: true,
+                  ...(isReportOwnedMeasurementSave ? { educationQuizHemodynamics } : {}),
                   viewerReportFieldUpdates: clinicalReportFieldUpdates,
                   MeasurementAnnotations: nextMeasurementAnnotations,
                   scoringIntent: shouldSubmitForScore ? 'score-attempt' : 'draft',
@@ -17020,6 +18159,7 @@ function commandsModule({
               ...(shouldSyncReportFields
                 ? {
                     viewerMeasurementIntent: 'clinical-report',
+                    ...(isReportOwnedMeasurementSave ? { educationQuizHemodynamics } : {}),
                     viewerReportFieldUpdates: clinicalReportFieldUpdates,
                     ...(clinicalReportApprovedFieldNames !== null
                       ? { viewerMeasurementApprovedFields: clinicalReportApprovedFieldNames }
@@ -17068,7 +18208,8 @@ function commandsModule({
             );
 
             if (!response.ok) {
-              throw new Error(`Save failed: ${response.status}`);
+              const failure = await response.json().catch(() => null);
+              throw new Error(`Save failed (${response.status}): ${failure?.errorMsg || failure?.error || response.statusText}`);
             }
 
             const updatedSeries = await response.json().catch(() => null);
@@ -17326,6 +18467,9 @@ function commandsModule({
     },
     showViewerQuizLearnerMeasurement: {
       commandFn: actions.showViewerQuizLearnerMeasurement,
+    },
+    showViewerQuizLearnerCompositeMeasurement: {
+      commandFn: actions.showViewerQuizLearnerCompositeMeasurement,
     },
     clearViewerQuizMeasurementComparison: {
       commandFn: actions.clearViewerQuizMeasurementComparison,

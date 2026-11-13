@@ -38,6 +38,28 @@ describe('echo chamber areas', () => {
     }])).toBeNull();
   });
 
+  it('accepts the authoritative nested Cornerstone SplineROI area only with physical units', () => {
+    const snapshot = {
+      ...area('RVEDA', 0),
+      toolName: 'SplineROI',
+      data: {
+        cachedStats: { 'imageId:dicom-frame': { area: 3000, areaUnit: 'mm²' } },
+      },
+    };
+    expect(getCalibratedEchoAreaCM2(snapshot)).toBe(30);
+    expect(getCalibratedEchoAreaCM2({
+      ...snapshot, data: { cachedStats: {
+        'imageId:dicom-frame': { area: 3000, areaUnit: 'px²' },
+      } },
+    })).toBeNull();
+    expect(getCalibratedEchoAreaCM2({
+      ...snapshot, data: { cachedStats: {
+        first: { area: 3000, areaUnit: 'mm²' },
+        second: { area: 2000, areaUnit: 'mm²' },
+      } },
+    })).toBeNull();
+  });
+
   it('provides RA area and rejects duplicate contours', () => {
     const ra = area('RAa', 1600);
     expect(calculateRAAreaFromMeasurements([ra])?.values?.areaCM2).toBe(16);
@@ -74,6 +96,24 @@ describe('echo chamber areas', () => {
     expect(calculateRVFACFromMeasurements([ed])?.status).toBe('incomplete');
     expect(calculateRVFACFromMeasurements([ed, area('RVESA', 3400)])?.status)
       .toBe('invalid');
+  });
+
+  it('trusts referenced DICOM frames over a stale default frame number', () => {
+    const ed = {
+      ...area('RVEDA', 3000), SOPInstanceUID: 'cine-sop', frameNumber: 1,
+      referencedImageId: 'wadors:/studies/study-1/series/cine-1/instances/cine-sop/frames/14',
+    };
+    const es = {
+      ...area('RVESA', 1800), SOPInstanceUID: 'cine-sop', frameNumber: 1,
+      referencedImageId: 'wadors:/studies/study-1/series/cine-1/instances/cine-sop/frames/17',
+    };
+    const result = calculateRVFACFromMeasurements([ed, es]);
+    expect(result?.status).toBe('complete');
+    expect(result?.edEvidence?.frameNumber).toBe(14);
+    expect(result?.esEvidence?.frameNumber).toBe(17);
+    expect(calculateRVFACFromMeasurements([
+      ed, { ...es, referencedImageId: ed.referencedImageId, frameNumber: 17 },
+    ])?.status).toBe('invalid');
   });
 
   it('maps only complete RV FAC calculations to structured report fields', () => {

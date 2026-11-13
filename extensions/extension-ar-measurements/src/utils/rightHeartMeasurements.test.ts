@@ -118,6 +118,33 @@ describe('right-heart measurement calculations', () => {
     expect(calculateIVCFromMeasurements([ivc('IVC', 20)])).toBeNull();
   });
 
+  it('restores explicitly calibrated nested Length stats and exact cine source frames', () => {
+    const exp = ivc('IVCexp', 0, 'px', {
+      uid: 'exp', frameNumber: 1,
+      referencedImageId: 'wadors:dicom-web/studies/study-A/series/cine-IVC/instances/sop-IVC/frames/4',
+      measurements: {},
+      data: { cachedStats: { target: { length: 20, unit: 'mm' } } },
+    });
+    const insp = ivc('IVCinsp', 0, 'px', {
+      uid: 'insp', frameNumber: 1,
+      referencedImageId: 'wadors:dicom-web/studies/study-A/series/cine-IVC/instances/sop-IVC/frames/12',
+      measurements: {},
+      data: { cachedStats: { target: { length: 8, unit: 'mm' } } },
+    });
+    const result = calculateIVCFromMeasurements([exp, insp]);
+    expect(result?.status).toBe('complete');
+    expect(result?.values?.expirationDiameterMM).toBe(20);
+    expect(result?.values?.collapsibilityPercent).toBe(60);
+    expect(calculateIVCFromMeasurements([
+      exp, { ...insp, referencedImageId:
+        'wadors:dicom-web/studies/study-A/series/cine-IVC/instances/sop-IVC/frames/4' },
+    ])?.status).toBe('invalid');
+    expect(calculateIVCFromMeasurements([
+      { ...exp, data: { cachedStats: { target: { length: 20, unit: 'px' } } } },
+      insp,
+    ])?.status).toBe('incomplete');
+  });
+
   it('maps only complete IVC pairs to distinct clinical fields', () => {
     const pair = calculateIVCFromMeasurements([
       ivc('IVCexp', 20),
