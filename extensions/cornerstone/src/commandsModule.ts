@@ -130,6 +130,7 @@ import { calibrateUSContourPoints, worldToImageIndex } from './utils/usRegionLen
 import { getQuizEchoAreaSourceMetadata, calculateCalibratedEchoAreaCM2, getSavedQuizEchoAreaDisplayInfo, getQuizCompositeContourViewportLines, getQuizCompositeGoldContourSlotMetadata, getVerifiedEFGoldContourViewportLines } from './utils/quizEchoAreaCalibration';
 import { installQuizContourTextRenderer } from './utils/installQuizContourTextRenderer';
 import { consumeViewerLengthFirstLabelMode } from './utils/viewerLengthLabelMode';
+import { getViewerQuizRouteMeasurementDomain } from '../../extension-ar-learning/src/utils/viewerQuizMeasurementDomain';
 import { resolveViewerQuizGoldAreaBackfill, resolveSavedEFGoldContourAreas, resolveVerifiedEFGoldContourAreasFromDicom } from '../../extension-ar-measurements/src/utils/quizGoldAreaBackfill';
 
 const { DefaultHistoryMemo } = csUtils.HistoryMemo;
@@ -1359,6 +1360,8 @@ function inferDomainWithoutSeriesDoc(explicitDomain) {
   }
 
   const path = String(window.location?.pathname || '').toLowerCase();
+  const viewerRouteDomain = getViewerQuizRouteMeasurementDomain(path);
+  if (viewerRouteDomain) return viewerRouteDomain;
 
   if (path.includes('/bviewer/iuscan')) {
     return 'bowel';
