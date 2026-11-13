@@ -3143,7 +3143,13 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       // The IVC measure-only setting must never leak into ordinary learner
       // Length questions, including when the phase binding already finished.
       pendingQuizIVCPhaseRef.current = null;
-      await runViewerCommand(commandsManager, 'resetViewerLengthLabelMode', {});
+      try {
+        await runViewerCommand(commandsManager, 'resetViewerLengthLabelMode', {});
+      } catch (error) {
+        console.warn('[CaseQuestionsPanel] Length label-mode reset failed', error);
+      }
+      // Do not allow an older selection to resume after a newer one.
+      if (lastActivatedQuestionRef.current !== nextActiveQuestionKey) return;
     }
     if (question.type === 'frameSelection') {
       setFrameNavigationErrors(current => {
