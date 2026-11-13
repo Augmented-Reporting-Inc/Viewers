@@ -149,6 +149,9 @@ export function resolveSavedEFGoldContourAreas({
   }
 
   const areas: Record<string, number> = {};
+  const axes: Record<string, number> = {
+    ...(composite.derived?.slotLongAxisMM || {}),
+  };
   for (let index = 0; index < slots.length; index++) {
     const component = selected[index][0];
     const target = component.target || {};
@@ -188,12 +191,24 @@ export function resolveSavedEFGoldContourAreas({
       return failure(slots[index] + ': saved physical area mismatch');
     }
     areas[slots[index]] = value;
+    // A verified LV Simpson source retains its physically calibrated
+    // hinge-to-apex axis independently of the contour area. Restore that
+    // evidence only when the exact immutable annotation and frame match.
+    const axis = finitePositive(geometry.calibratedLongAxisLengthMM);
+    const priorAxis = finitePositive(axes[slots[index]]);
+    if (axis !== null) {
+      if (priorAxis !== null && Math.abs(priorAxis - axis) > 0.1) {
+        return failure(slots[index] + ': saved EF axis disagrees with source');
+      }
+      axes[slots[index]] = axis;
+    }
   }
   return {
     ok: true as const,
     derived: {
       ...(composite.derived || {}),
       slotAreaCM2: areas,
+      ...(Object.keys(axes).length ? { slotLongAxisMM: axes } : {}),
     },
     calibratedSlots: [...slots],
   };
