@@ -7236,7 +7236,15 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                                     viewportId: navigation.viewportId,
                                   });
                                 }
-                                if (navigation?.ok !== true || result?.rubricRendered !== true) {
+                                const currentFrame = await runViewerCommand(
+                                  commandsManager, 'getCurrentViewerQuizFrameAnswer', {}
+                                );
+                                const openedExpectedFrame = currentFrame?.ok === true &&
+                                  matchesConfiguredCompositeFrame(
+                                    plainObject(currentFrame?.answer?.selectedTarget), row.savedTarget
+                                  );
+                                if (navigation?.ok !== true || !openedExpectedFrame ||
+                                    result?.rubricRendered !== true) {
                                   uiNotificationService.show({
                                     title: 'Saved EF contour', type: 'warning', duration: 5000,
                                     message: 'The saved contour or its exact source frame could not be displayed.',
