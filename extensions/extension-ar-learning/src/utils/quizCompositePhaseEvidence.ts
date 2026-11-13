@@ -6,6 +6,10 @@ export function getCompositePhaseSlot(measurement: any, kind: string): string {
   const source = asObject(measurement);
   const measurementKind = clean(source.measurementKind ||
     asObject(source.measurements).measurementKind);
+  if (kind === 'lvSimpsonEF') {
+    if (measurementKind !== 'lvSimpsonEF' && measurementKind !== 'lvSimpsonSlot') return '';
+    return clean(source.lvSimpson?.slot || source.measurements?.lvSimpson?.slot || source.slot);
+  }
   if (kind === 'rvFAC' || kind === 'raArea') {
     if (measurementKind !== 'echoAreaSlot') return '';
     return clean(source.echoArea?.slot || source.measurements?.echoArea?.slot || source.slot);
@@ -167,6 +171,7 @@ export function getCompositeGoldCaptureSignature(question: any, measurements: an
   const kind = clean(question?.answerConfig?.measurementKind);
   const slotsByKind: Record<string, string[]> = {
     rvFAC: ['RV_ED', 'RV_ES'],
+    lvSimpsonEF: ['A4C_ED', 'A4C_ES', 'A2C_ED', 'A2C_ES'],
     laVolumeBiplane: ['A4C', 'A2C'],
     laVolumeBiplaneDisks: ['A4C', 'A2C'],
     ivcCollapsibility: ['IVC_EXP', 'IVC_INSP'],
@@ -266,7 +271,8 @@ export function clearSavedCompositeGoldPhase(
       clean(matching[0]?.annotationId) !== clean(expectedAnnotationId)) return null;
 
   const surviving = components.filter(part => clean(part?.slot) !== slot);
-  const configuredTargets = asObject(config.compositeFrameTargets);
+  const isEF = clean(config.measurementKind) === 'lvSimpsonEF';
+  const configuredTargets = asObject(isEF ? config.efContourTargets : config.compositeFrameTargets);
   const oldTarget = asObject(matching[0].target);
   const configured = asObject(configuredTargets[slot]);
   const sameTarget = ['studyInstanceUID', 'seriesInstanceUID', 'sopInstanceUID']
@@ -280,7 +286,7 @@ export function clearSavedCompositeGoldPhase(
     ...question,
     answerConfig: {
       ...config,
-      compositeFrameTargets: nextTargets,
+      ...(isEF ? { efContourTargets: nextTargets } : { compositeFrameTargets: nextTargets }),
       goldValue: null,
       goldMeasurement: surviving.length ? {
         ...gold,
