@@ -50,6 +50,7 @@ import {
 import { EF_CONTOUR_FRAME_SLOTS, getEFGoldContourAuthoringRows } from '../utils/efGoldContourAuthoring';
 import { validateAndOrderAuthoringQuestions } from '../utils/quizAuthoringQuestionIdentity';
 import { hasAllRequiredViewerGoldValues } from '../utils/quizAuthoringGoldReadiness';
+import { getViewerQuizRouteMeasurementDomain } from '../utils/viewerQuizMeasurementDomain';
 import { getCompositePhaseSlot, getCompositePhaseMeasurementId, matchesCompositePhaseSource, getCompositeGoldCaptureSignature, getSavedCompositePhaseValues, needsSavedCalibratedGoldAreas,
   findEditableCompositePhaseMeasurement, clearSavedCompositeGoldPhase, getCompositeGoldPersistenceError, getIncompleteCompositeGoldReplacementReason } from '../utils/quizCompositePhaseEvidence';
 
@@ -193,7 +194,8 @@ function getLearnerQuizMeasurementDomain(quiz: QuizDefinition | undefined, sourc
     normalizeQuizMeasurementDomain(source?.seriesDoc?.measurementDomain) ||
     normalizeQuizMeasurementDomain(source?.measurementDomain) ||
     inferLegacyQuizMeasurementDomain(quiz) ||
-    getQuizAuthoringMeasurementDomainFromUrl();
+    getQuizAuthoringMeasurementDomainFromUrl() ||
+    getViewerQuizRouteMeasurementDomain(window.location?.pathname);
 }
 
 function getQuizQuestionMeasurementDomain(
@@ -213,7 +215,8 @@ function resolveQuizAuthoringMeasurementDomain(
   return (
     getQuizAuthoringMeasurementDomainFromUrl() ||
     normalizeQuizMeasurementDomain(definition?.domain) ||
-    inferLegacyQuizMeasurementDomain(definition)
+    inferLegacyQuizMeasurementDomain(definition) ||
+    getViewerQuizRouteMeasurementDomain(window.location?.pathname)
   );
 }
 
@@ -5656,8 +5659,8 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       <div className="mt-2 rounded border border-cyan-700/70 p-2 text-xs">
         <div className="mb-1 font-semibold text-cyan-100">IVC phase measurements</div>
         <p className="mb-2 text-gray-300">
-          Choose expiration or inspiration below, then draw the calibrated
-          Length caliper.
+          Choose a phase below and draw the calibrated Length caliper.
+          When prompted, label it IVCexp or IVCinsp respectively.
         </p>
         <div className="space-y-2">
           {[
@@ -5675,20 +5678,11 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                 void (async () => {
                   await activateQuestionForPhaseCapture(quiz, question);
                   if (!(await ensureConfiguredCompositePhaseFrame(question, phase.slot))) return;
-                  // Clicking a specific IVC phase is explicit learner intent.
-                  // Bind the next completed Length source to it without a
-                  // second, redundant label selection dialog.
-                  pendingQuizIVCPhaseRef.current = {
-                    activationKey: `${quiz.quizKey}:${question.questionKey}`,
-                    slot: phase.slot,
-                    target: plainObject(question.answerConfig).compositeFrameGuidanceEnabled === true
-                      ? plainObject(plainObject(question.answerConfig).compositeFrameTargets)[phase.slot]
-                      : null,
-                    issuedAt: Date.now(),
-                  };
-                  await runViewerCommand(commandsManager, 'setViewerLengthLabelMode', {
-                    labelMode: 'measure-only',
-                  });
+                  // Learners explicitly choose IVCexp / IVCinsp in the
+                  // ordinary Length dialog. Avoid a global measure-only flag:
+                  // it could suppress labels in other quiz questions.
+                  pendingQuizIVCPhaseRef.current = null;
+                  await runViewerCommand(commandsManager, 'resetViewerLengthLabelMode', {});
                   const activation = await runViewerCommand(
                     commandsManager, 'activateViewerMeasurementTool', {
                       toolName: 'Length', stopCine: true,
