@@ -7,8 +7,12 @@ export function getCompositePhaseSlot(measurement: any, kind: string): string {
   const measurementKind = clean(source.measurementKind ||
     asObject(source.measurements).measurementKind);
   if (kind === 'lvSimpsonEF') {
-    if (measurementKind !== 'lvSimpsonEF' && measurementKind !== 'lvSimpsonSlot') return '';
-    return clean(source.lvSimpson?.slot || source.measurements?.lvSimpson?.slot || source.slot);
+    // The clinical viewer uses a distinct LV Simpson contour kind; rely on
+    // its explicit lvSimpson evidence rather than the quiz result kind.
+    const geometry = asObject(source.lvSimpson || source.measurements?.lvSimpson);
+    if (!Object.keys(geometry).length && !['lvSimpsonEF', 'lvSimpsonSlot'].includes(measurementKind)) return '';
+    const slot = clean(geometry.slot || source.slot);
+    return ['A4C_ED', 'A4C_ES', 'A2C_ED', 'A2C_ES'].includes(slot) ? slot : '';
   }
   if (kind === 'rvFAC' || kind === 'raArea') {
     if (measurementKind !== 'echoAreaSlot') return '';
