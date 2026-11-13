@@ -198,3 +198,69 @@ export function resolveSavedEFGoldContourAreas({
     calibratedSlots: [...slots],
   };
 }
+
+/**
+ * Recover approved EF per-contour display areas when the original Mongo
+ * annotation container is absent. Recalibrate the immutable gold geometry
+ * against each exact DICOM SOP/frame; never interpret world pixels as mm.
+ * This does not recalculate EF, alter source contours, or change scoring.
+ */
+export async function resolveVerifiedEFGoldContourAreasFromDicom({
+  kind, gold, calibrate,
+}: { kind: string; gold: GoldAnswer; calibrate: GoldAreaCalibration }) {
+  if (kind !== 'lvSimpsonEF' ||
+      clean(gold?.measurementKind) !== kind ||
+      finitePositive(gold?.value) === null) {
+    return failure('EF gold result unavailable');
+  }
+  const composite = gold?.compositeResult || {};
+  const slots = ['A4C_ED', 'A4C_ES', 'A2C_ED', 'A2C_ES'];
+  const components: GoldComponent[] = composite.components;
+  if (!Array.isArray(components) || components.length !== slots.length) {
+    return failure('EF gold sources incomplete');
+  }
+  const selected = slots.map(slot =>
+    components.filter(component => clean(component?.slot) === slot));
+  if (selected.some(matches => matches.length !== 1 || !validSource(matches[0]))) {
+    return failure('EF gold source frames invalid');
+  }
+  const sources = selected.map(matches => matches[0]);
+  const studyIds = new Set(sources.map(source => clean(source.target?.studyInstanceUID)));
+  const annotationIds = new Set(sources.map(source => clean(source.annotationId)));
+  const frameIds = new Set(sources.map(source => {
+    const target = source.target || {};
+    return [target.seriesInstanceUID, target.sopInstanceUID, target.frameNumber].join('|');
+  }));
+  if (studyIds.size !== 1 || annotationIds.size !== slots.length ||
+      frameIds.size !== slots.length) {
+    return failure('EF gold source identity conflict');
+  }
+  const derived = { ...(composite.derived || {}) };
+  const areas: Record<string, number> = {};
+  for (let index = 0; index < slots.length; index++) {
+    const source = sources[index];
+    const target = source.target || {};
+    // The saved image path must itself name the exact SOP and 1-based frame.
+    // A valid frame suffix alone is not sufficient to establish image identity.
+    const imagePath = clean(target.referencedImageId);
+    const match = imagePath.match(/\/instances\/([^/?#]+)\/frames\/([1-9][0-9]*)(?:[/?#]|$)/i);
+    if (!match || decodeURIComponent(match[1]) !== clean(target.sopInstanceUID) ||
+        Number(match[2]) !== Number(target.frameNumber)) {
+      return failure(slots[index] + ': EF gold image/frame mismatch');
+    }
+    const value = finitePositive(await calibrate(source));
+    if (value === null) {
+      return failure(slots[index] + ': exact DICOM calibration unavailable');
+    }
+    const previous = finitePositive(composite.derived?.slotAreaCM2?.[slots[index]]);
+    if (previous !== null && Math.abs(previous - value) > 0.02) {
+      return failure(slots[index] + ': saved EF area disagrees with DICOM calibration');
+    }
+    areas[slots[index]] = value;
+  }
+  return {
+    ok: true as const,
+    derived: { ...derived, slotAreaCM2: areas },
+    calibratedSlots: [...slots],
+  };
+}
