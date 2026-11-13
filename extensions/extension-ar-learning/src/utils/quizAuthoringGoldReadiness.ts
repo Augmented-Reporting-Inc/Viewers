@@ -70,11 +70,11 @@ export function hasAllRequiredViewerGoldValues(
         targetReady(component?.target)).length === 1)) return false;
     const derived = object(composite.derived);
     if (kind === 'lvSimpsonEF') {
-      const areas = object(derived.slotAreaCM2);
-      const axes = object(derived.slotLongAxisMM);
-      return positive(scalar) && positive(derived.edvML) &&
-        finite(derived.esvML) && Number(derived.esvML) >= 0 &&
-        slots.every(slot => positive(areas[slot]) && positive(axes[slot]));
+      // The published rubric grades the approved EF percent. Verified
+      // per-contour areas, long axes and derived volumes are informative
+      // evidence, not additional independent gold answers. Their absence on
+      // legacy approved EF must not mark a gradeable question incomplete.
+      return positive(scalar);
     }
     const fields = valueFields[kind] || {};
     return slots.every(slot => positive(derived[fields[slot]]));
