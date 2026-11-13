@@ -49,6 +49,7 @@ import {
 } from '../utils/compositeFrameTargets';
 import { EF_CONTOUR_FRAME_SLOTS, getEFGoldContourAuthoringRows } from '../utils/efGoldContourAuthoring';
 import { validateAndOrderAuthoringQuestions } from '../utils/quizAuthoringQuestionIdentity';
+import { hasAllRequiredViewerGoldValues } from '../utils/quizAuthoringGoldReadiness';
 import { getCompositePhaseSlot, getCompositePhaseMeasurementId, matchesCompositePhaseSource, getCompositeGoldCaptureSignature, getSavedCompositePhaseValues, needsSavedCalibratedGoldAreas,
   findEditableCompositePhaseMeasurement, clearSavedCompositeGoldPhase, getCompositeGoldPersistenceError, getIncompleteCompositeGoldReplacementReason } from '../utils/quizCompositePhaseEvidence';
 
@@ -7961,6 +7962,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
           <label className="mt-3 block text-xs font-semibold text-gray-200" htmlFor="quiz-authoring-question-select">
             Question
           </label>
+          <div className="mt-1 text-[11px] text-gray-300">
+            ✓ All required gold values saved · ○ Gold values incomplete
+          </div>
           <select
             id="quiz-authoring-question-select"
             className="mt-1 w-full min-w-0 rounded border border-gray-600 bg-gray-900 px-2 py-2 text-sm text-white"
@@ -7981,7 +7985,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
             {authoringQuestions.map((question, index) =>
               isViewerNativeQuestion(question) ? (
                 <option key={question.questionKey} value={`authoring:${question.questionKey}`}>
-                  {index + 1}. {question.title || question.prompt || question.questionKey}
+                  {hasAllRequiredViewerGoldValues(
+                    question, getCorrectMarkerIdsFromAnswerConfig(plainObject(question.answerConfig))
+                  ) ? '✓ ' : '○ '}{index + 1}. {question.title || question.prompt || question.questionKey}
                 </option>
               ) : null)}
           </select>
