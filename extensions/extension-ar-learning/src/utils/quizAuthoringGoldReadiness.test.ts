@@ -37,7 +37,16 @@ describe('educator question dropdown gold readiness', () => {
     expect(hasAllRequiredViewerGoldValues(noArea)).toBe(true);
     const noSource = ef();
     noSource.answerConfig.goldMeasurement.compositeResult.components[2].annotationId = '';
-    expect(hasAllRequiredViewerGoldValues(noSource)).toBe(false);
+    expect(hasAllRequiredViewerGoldValues(noSource)).toBe(true);
+    const percentOnly = {
+      type: 'measurementNumeric',
+      answerConfig: { measurementKind: 'lvSimpsonEF', goldValue: 56.4 },
+    };
+    expect(hasAllRequiredViewerGoldValues(percentOnly)).toBe(true);
+    expect(hasAllRequiredViewerGoldValues({
+      ...percentOnly,
+      answerConfig: { ...percentOnly.answerConfig, goldValue: null },
+    })).toBe(false);
   });
 
   it('requires the gold target for frame questions and coordinates for point questions', () => {
