@@ -36,3 +36,23 @@ it('does not alter ordinary source contours or invalid geometry', () => {
   expect(compactOversampledSpline(invalid)).toBe(invalid);
   expect(getSplinePersistence({ toolName: 'Length' }, {})).toEqual({});
 });
+
+
+it('round-trips sparse controls through MeasurementService-approved metadata', () => {
+  const controls = circle(12);
+  const original = getSplinePersistence({ toolName: 'SplineROI' }, {
+    data: { handles: { points: controls }, spline: { type: 'CATMULLROM' } },
+  });
+  const mapped = {
+    toolName: 'SplineROI',
+    points: circle(240),
+    metadata: { arSplinePersistence: original },
+  };
+  // OHIF sees no unknown top-level splineControlPoints/splineType keys.
+  expect(mapped).not.toHaveProperty('splineControlPoints');
+  expect(mapped).not.toHaveProperty('splineType');
+  const saved = getSplinePersistence(mapped);
+  expect(saved.splineControlPoints).toEqual(controls);
+  expect(saved.splineType).toBe('CATMULLROM');
+  expect(getSavedSplineType(saved)).toBe('CATMULLROM');
+});
