@@ -139,8 +139,14 @@ export function getVerifiedEFGoldContourViewportLines(evidence: any): string[] |
   if (!Number.isFinite(area) || area <= 0) return null;
   const axis = evidence.axisMM == null || evidence.axisMM === ''
     ? null : Number(evidence.axisMM);
+  const sourceArea = evidence.sourceAreaCM2 == null || evidence.sourceAreaCM2 === ''
+    ? null : Number(evidence.sourceAreaCM2);
   return [
     'Gold ' + slot.replace('_', ' ') + ' LV contour area: ' + area.toFixed(2) + ' cm²',
+    ...(sourceArea != null && Number.isFinite(sourceArea) && sourceArea > 0 &&
+      Math.abs(sourceArea - area) > 0.02
+      ? ['Source contour area: ' + sourceArea.toFixed(2) +
+          ' cm² (differs from saved gold; verify)'] : []),
     ...(axis != null && Number.isFinite(axis) && axis > 0
       ? ['Gold LV long axis: ' + axis.toFixed(2) + ' mm'] : []),
   ];
