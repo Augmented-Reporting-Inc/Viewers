@@ -103,7 +103,7 @@ describe('EF gold physical area recovery from persisted exact annotations', () =
       slot: component.slot,
       calibratedContourPoints: component.points,
       originalContourPoints: component.points,
-      calibratedLongAxisLengthMM: 78,
+      calibratedLongAxisLengthMM: 80,
       calibrationError: null,
     },
   }));
@@ -141,15 +141,17 @@ describe('EF gold physical area recovery from persisted exact annotations', () =
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.derived.slotLongAxisMM).toEqual({
-        A4C_ED: 78, A4C_ES: 78, A2C_ED: 78, A2C_ES: 78,
+        A4C_ED: 80, A4C_ES: 80, A2C_ED: 80, A2C_ES: 80,
       });
     }
     expect(copy.compositeResult.derived.slotLongAxisMM).toBeUndefined();
   });
 
   it('rejects conflict between previously verified and source LV axis lengths', () => {
+    const changed: any = JSON.parse(JSON.stringify(prior));
+    changed.compositeResult.derived.slotLongAxisMM.A4C_ED = 70;
     const result = resolveSavedEFGoldContourAreas({
-      gold: prior, savedAnnotations: annotations,
+      gold: changed, savedAnnotations: annotations,
     });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.reason).toMatch(/axis disagrees/);
