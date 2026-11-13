@@ -129,6 +129,7 @@ import { createGuidedMouseToolOwnership } from './utils/guidedMouseToolOwnership
 import { calibrateUSContourPoints, worldToImageIndex } from './utils/usRegionLengthCalibration';
 import { getQuizEchoAreaSourceMetadata, calculateCalibratedEchoAreaCM2, getSavedQuizEchoAreaDisplayInfo, getQuizCompositeContourViewportLines, getQuizCompositeGoldContourSlotMetadata, getVerifiedEFGoldContourViewportLines } from './utils/quizEchoAreaCalibration';
 import { installQuizContourTextRenderer } from './utils/installQuizContourTextRenderer';
+import { consumeViewerLengthFirstLabelMode } from './utils/viewerLengthLabelMode';
 import { resolveViewerQuizGoldAreaBackfill, resolveSavedEFGoldContourAreas, resolveVerifiedEFGoldContourAreasFromDicom } from '../../extension-ar-measurements/src/utils/quizGoldAreaBackfill';
 
 const { DefaultHistoryMemo } = csUtils.HistoryMemo;
@@ -9290,13 +9291,15 @@ function commandsModule({
       // drawn Length in explicitly requested quiz measure-only mode.
       // Do not bypass ordinary clinical/bowel labeling or manual relabeling.
       const pendingAnnotation = cornerstoneTools.annotation.state.getAnnotation?.(uid);
-      if (viewerLengthLabelMode === VIEWER_LENGTH_LABEL_MODE_MEASURE_ONLY &&
-          measurement.toolName === 'Length' &&
-          pendingAnnotation?.metadata?.toolName === 'Length' &&
-          pendingAnnotation?.data?.arPendingLengthLabel === true) {
-        // This exemption is for exactly one explicitly chosen IVC phase.
-        // Never let the module-wide mode suppress labels on later Lengths.
-        viewerLengthLabelMode = VIEWER_LENGTH_LABEL_MODE_PROMPT;
+      const labelDecision = consumeViewerLengthFirstLabelMode({
+        mode: viewerLengthLabelMode,
+        toolName: measurement.toolName,
+        pendingFirstLabel: pendingAnnotation?.metadata?.toolName === 'Length' &&
+          pendingAnnotation?.data?.arPendingLengthLabel === true,
+      });
+      if (labelDecision.suppress) {
+        // The IVC exemption is single-use; the next Length must prompt.
+        viewerLengthLabelMode = labelDecision.nextMode;
         window.dispatchEvent(new CustomEvent('ar-learning:quiz-measurement-added', {
           detail: { measurementId: uid },
         }));
