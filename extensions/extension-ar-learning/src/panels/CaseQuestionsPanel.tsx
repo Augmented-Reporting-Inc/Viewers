@@ -2103,9 +2103,6 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
   const autoBowelLearnerCaptureQueueRef = useRef<Promise<void>>(Promise.resolve());
   const autoCompositeLearnerCaptureInFlightRef = useRef(new Set<string>());
   const autoCompositeLearnerCapturedSignatureRef = useRef<Record<string, string>>({});
-  const pendingQuizIVCPhaseRef = useRef<null | {
-    activationKey: string; slot: string; target: any; issuedAt: number;
-  }>(null);
   const bowelCaptureFailureReasonRef = useRef<Record<string, string>>({});
   const [bowelCaptureErrors, setBowelCaptureErrors] = useState<Record<string, string>>({});
   // Geometry is intentionally absent from saved quiz responses. This cache
@@ -3145,7 +3142,6 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     if (isNewQuestion) {
       // The IVC measure-only setting must never leak into ordinary learner
       // Length questions, including when the phase binding already finished.
-      pendingQuizIVCPhaseRef.current = null;
       try {
         await runViewerCommand(commandsManager, 'resetViewerLengthLabelMode', {});
       } catch (error) {
@@ -3956,41 +3952,6 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       const question = quiz?.questions?.find(item => item.questionKey === questionKey);
 
       if (!quiz || !question || question.type !== 'measurementNumeric') {
-        return;
-      }
-      // Only the active learner IVC phase button may assign a Length label.
-      const pendingPhase = pendingQuizIVCPhaseRef.current;
-      if (pendingPhase &&
-          pendingPhase.activationKey === `${quizKey}:${questionKey}` &&
-          Date.now() - pendingPhase.issuedAt < 60000 &&
-          !labelCompleted) {
-        void (async () => {
-          for (const delayMs of [80, 280, 750]) {
-            await new Promise(resolve => window.setTimeout(resolve, delayMs));
-            if (pendingQuizIVCPhaseRef.current !== pendingPhase ||
-                lastActivatedQuestionRef.current !== pendingPhase.activationKey) return;
-            const labeled = await runViewerCommand(
-              commandsManager, 'setViewerQuizIVCPhaseLabel', {
-                measurementId, slot: pendingPhase.slot,
-                expectedTarget: pendingPhase.target,
-              }
-            );
-            if (labeled?.ok) {
-              pendingQuizIVCPhaseRef.current = null;
-              return;
-            }
-            if (labeled?.reason === 'already-labelled-differently' ||
-                labeled?.reason === 'ivc-source-frame-mismatch') break;
-          }
-          if (pendingQuizIVCPhaseRef.current === pendingPhase) {
-            pendingQuizIVCPhaseRef.current = null;
-            await runViewerCommand(commandsManager, 'resetViewerLengthLabelMode', {});
-            uiNotificationService.show({
-              title: 'IVC phase label', type: 'warning', duration: 5000,
-              message: 'The new caliper could not be bound to the selected IVC phase. Verify its image frame.',
-            });
-          }
-        })();
         return;
       }
       if (isBowelMeasurementSetQuestion(question)) {
@@ -5681,7 +5642,6 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                   // Learners explicitly choose IVCexp / IVCinsp in the
                   // ordinary Length dialog. Avoid a global measure-only flag:
                   // it could suppress labels in other quiz questions.
-                  pendingQuizIVCPhaseRef.current = null;
                   await runViewerCommand(commandsManager, 'resetViewerLengthLabelMode', {});
                   const activation = await runViewerCommand(
                     commandsManager, 'activateViewerMeasurementTool', {
