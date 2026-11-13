@@ -1,8 +1,11 @@
 /** Keep editable spline controls separate from the sampled display contour. */
 export function getSplinePersistence(measurement: any, liveAnnotation?: any) {
   if (measurement?.toolName !== 'SplineROI') return {};
-  const controls = liveAnnotation?.data?.handles?.points || measurement.splineControlPoints;
-  const type = liveAnnotation?.data?.spline?.type || measurement.splineType;
+  const preserved = measurement?.metadata?.arSplinePersistence || {};
+  const controls = liveAnnotation?.data?.handles?.points ||
+    measurement.splineControlPoints || preserved.splineControlPoints;
+  const type = liveAnnotation?.data?.spline?.type ||
+    measurement.splineType || preserved.splineType;
   return Array.isArray(controls) && controls.length >= 3
     ? { splineControlPoints: (type === 'LINEAR' ? compactOversampledSpline(controls) : controls).map(point => Array.from(point)), splineType: type || 'CATMULLROM' }
     : {};
