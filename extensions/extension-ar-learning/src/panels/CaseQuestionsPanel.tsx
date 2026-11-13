@@ -7093,8 +7093,8 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         ) : null}
 
         {hasGuidedEFFrames ? (
-          <div className="mt-2 rounded border border-slate-600 bg-slate-900/60 p-2">
-            <div className="text-xs font-semibold text-gray-100">EF gold measurements</div>
+          <div className="mt-2 rounded border border-cyan-700 bg-cyan-950/20 p-2">
+            <div className="text-xs font-semibold text-cyan-100">EF contour measurements</div>
             <div className="mt-2 rounded border border-emerald-700 bg-emerald-950/30 p-2 text-sm font-semibold text-emerald-100">
               Gold EF: {savedEFGold !== undefined
                 ? Number(savedEFGold).toFixed(2) + '%' : 'Not captured'}
@@ -7155,7 +7155,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                   const guidanceEnabled = answerConfig.efContourFrameGuidanceEnabled === true;
                   const targetCaptured = targetHasNavigationIdentity(row.configuredTarget);
                   return (
-                    <div key={row.slot} className="border-t border-gray-700 pt-2 text-xs">
+                    <div key={row.slot} className="border-t border-cyan-800/70 pt-2 text-xs">
                       <div className="font-medium text-gray-100">{row.label}</div>
                       {guidanceEnabled ? (
                         <div className={row.configuredComplete ? 'mt-1 text-gray-300' : 'mt-1 text-amber-200'}>
@@ -7213,12 +7213,64 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                               event.preventDefault();
                               event.stopPropagation();
                               setActiveQuestionKey(`authoring:${question.questionKey}`);
-                              void runViewerCommand(commandsManager, 'jumpToViewerQuizTarget', {
-                                viewerTarget: row.savedTarget,
-                                questionKey: question.questionKey,
-                              });
+                              // Use the same focused, source-backed overlay restoration as
+                              // LAV and RV FAC. Reopen the specific saved slot rather than
+                              // the composite answer's final (fourth) frame.
+                              void (async () => {
+                                const result = await runViewerCommand(
+                                  commandsManager, 'showViewerQuizMeasurementComparison', {
+                                    rubricMeasurement: plainObject(answerConfig.goldMeasurement),
+                                    viewerTarget: row.savedTarget,
+                                    focusedCompositeSlot: row.slot,
+                                    questionKey: question.questionKey,
+                                  }
+                                );
+                                const navigation = await runViewerCommand(
+                                  commandsManager, 'jumpToViewerQuizTarget', {
+                                    viewerTarget: row.savedTarget,
+                                    questionKey: question.questionKey,
+                                  }
+                                );
+                                if (cleanString(navigation?.viewportId)) {
+                                  await runViewerCommand(commandsManager, 'setViewportActive', {
+                                    viewportId: navigation.viewportId,
+                                  });
+                                }
+                                if (navigation?.ok !== true || result?.rubricRendered !== true) {
+                                  uiNotificationService.show({
+                                    title: 'Saved EF contour', type: 'warning', duration: 5000,
+                                    message: 'The saved contour or its exact source frame could not be displayed.',
+                                  });
+                                }
+                              })().catch(error => console.warn(
+                                '[CaseQuestionsPanel] EF saved contour navigation failed', error
+                              ));
                             }}>
                             View saved gold
+                          </button>
+                        ) : null}
+                        {row.goldVerified ? (
+                          <button type="button"
+                            className="rounded border border-red-600 px-2 py-1 text-red-100 disabled:opacity-40"
+                            disabled={isCapturing || authoringSaving || !isDraftDefinition(authoringDefinition)}
+                            onClick={event => {
+                              event.preventDefault();
+                              event.stopPropagation();
+                              const savedComponent = plainObject(
+                                plainObject(answerConfig.goldMeasurement).compositeResult
+                              ).components;
+                              const component = Array.isArray(savedComponent)
+                                ? savedComponent.find(item => cleanString(item?.slot) === row.slot)
+                                : null;
+                              void deleteCompositePhaseMeasurement(
+                                { quizKey: 'authoring', quizVersion: 1 } as QuizDefinition,
+                                question, row.slot, {
+                                  annotationId: cleanString(component?.annotationId),
+                                  target: row.savedTarget,
+                                }
+                              );
+                            }}>
+                            Delete contour
                           </button>
                         ) : null}
                         {guidanceEnabled && row.configuredComplete &&
