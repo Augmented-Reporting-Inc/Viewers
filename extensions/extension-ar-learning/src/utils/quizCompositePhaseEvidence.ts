@@ -305,6 +305,7 @@ export function clearSavedCompositeGoldPhase(
  * quiz gold. Reject a misleading successful draft save until recaptured. */
 export function getIncompleteCompositeGoldReplacementReason(questions: any[]): string {
   const slotsByKind: Record<string, string[]> = {
+    lvSimpsonEF: ['A4C_ED', 'A4C_ES', 'A2C_ED', 'A2C_ES'],
     rvFAC: ['RV_ED', 'RV_ES'],
     laVolumeBiplane: ['A4C', 'A2C'],
     laVolumeBiplaneDisks: ['A4C', 'A2C'],
