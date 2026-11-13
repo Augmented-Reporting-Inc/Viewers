@@ -127,7 +127,7 @@ import { getEchoAreaSlot } from '../../extension-ar-measurements/src/utils/echoA
 import { resolveViewerQuizCompositeResult, resolveViewerQuizLVSimpsonForStudy, isViewerQuizCompositeReviewCurrent, getViewerQuizCompositeStatus, calibratedLVContourAreaCM2 } from '../../extension-ar-measurements/src/utils/viewerQuizCompositeResults';
 import { createGuidedMouseToolOwnership } from './utils/guidedMouseToolOwnership';
 import { calibrateUSContourPoints, worldToImageIndex } from './utils/usRegionLengthCalibration';
-import { getQuizEchoAreaSourceMetadata, calculateCalibratedEchoAreaCM2, getSavedQuizEchoAreaDisplayInfo, getQuizCompositeContourViewportLines, getQuizCompositeGoldContourSlotMetadata } from './utils/quizEchoAreaCalibration';
+import { getQuizEchoAreaSourceMetadata, calculateCalibratedEchoAreaCM2, getSavedQuizEchoAreaDisplayInfo, getQuizCompositeContourViewportLines, getQuizCompositeGoldContourSlotMetadata, getVerifiedEFGoldContourViewportLines } from './utils/quizEchoAreaCalibration';
 import { installQuizContourTextRenderer } from './utils/installQuizContourTextRenderer';
 import { resolveViewerQuizGoldAreaBackfill, resolveSavedEFGoldContourAreas, resolveVerifiedEFGoldContourAreasFromDicom } from '../../extension-ar-measurements/src/utils/quizGoldAreaBackfill';
 
@@ -5796,6 +5796,10 @@ function installLVSimpsonContourTextCleanupForViewport({ viewport, viewportId = 
         typeof previousGetTextLines === 'function' ? previousGetTextLines.call(this, ...args) : [];
       const raw = args[0];
       const data = raw?.annotation?.data || raw?.data || raw;
+      const goldEFText = getVerifiedEFGoldContourViewportLines(
+        data?.arVerifiedQuizEFGoldContour
+      );
+      if (goldEFText) return goldEFText;
       const lv = data?.lvSimpson || {};
       // Cornerstone's native ROI statistics can be expressed in image pixels.
       // EF's physical contour coordinates were independently calibrated in mm.
@@ -8396,6 +8400,7 @@ function commandsModule({
   const viewerMeasurementsModifiedInSession = new Set<string>();
   const viewerMeasurementsDeletedInSession = new Set<string>();
   const viewerQuizMeasurementComparisonAnnotationIds = new Set<string>();
+  const viewerQuizGoldEFDisplayAnnotationIds = new Set<string>();
   const {
     viewportGridService,
     toolGroupService,
@@ -8608,7 +8613,38 @@ function commandsModule({
     };
   }
 
+  function applyVerifiedEFGoldLabel(annotationId: string, slot: string, gold: any) {
+    const areaRaw = gold?.compositeResult?.derived?.slotAreaCM2?.[slot];
+    if (areaRaw === null || areaRaw === undefined || areaRaw === '') return;
+    const area = Number(areaRaw);
+    if (!Number.isFinite(area) || area <= 0) return;
+    const savedComponent = gold?.compositeResult?.components?.find(
+      (component: any) => component?.slot === slot
+    );
+    if (!savedComponent?.annotationId ||
+        !['A4C_ED', 'A4C_ES', 'A2C_ED', 'A2C_ES'].includes(slot)) return;
+    const source = annotation.state.getAnnotation?.(annotationId);
+    if (!source) return;
+    const rawAxis = gold?.compositeResult?.derived?.slotLongAxisMM?.[slot];
+    const axis = rawAxis == null || rawAxis === '' ? null : Number(rawAxis);
+    source.data = {
+      ...(source.data || {}),
+      arVerifiedQuizEFGoldContour: {
+        origin: 'quiz-gold', slot, areaCM2: area,
+        axisMM: Number.isFinite(axis) && axis > 0 ? axis : null,
+      },
+    };
+    viewerQuizGoldEFDisplayAnnotationIds.add(annotationId);
+  }
+
   function clearViewerQuizMeasurementComparisonAnnotations() {
+    for (const annotationId of viewerQuizGoldEFDisplayAnnotationIds) {
+      const source = annotation.state.getAnnotation?.(annotationId);
+      if (source?.data?.arVerifiedQuizEFGoldContour?.origin === 'quiz-gold') {
+        delete source.data.arVerifiedQuizEFGoldContour;
+      }
+    }
+    viewerQuizGoldEFDisplayAnnotationIds.clear();
     for (const annotationId of viewerQuizMeasurementComparisonAnnotationIds) {
       try {
         annotation.state.removeAnnotation?.(annotationId);
@@ -16367,6 +16403,10 @@ function commandsModule({
         const nativeImage = normalizeImageIdForCompare(
           native?.metadata?.referencedImageId || '');
         if (native && expectedImage && nativeImage === expectedImage) {
+          if (entry.variant === 'rubric' &&
+              rubricMeasurement?.measurementKind === 'lvSimpsonEF') {
+            applyVerifiedEFGoldLabel(sourceId, entry.slot, rubricMeasurement);
+          }
           native.isVisible = true;
           cornerstoneTools.annotation.selection.setAnnotationSelected?.(
             sourceId, !focusedCompositeSlot || entry.slot === focusedCompositeSlot
@@ -16448,6 +16488,10 @@ function commandsModule({
           }
         }
 
+        if (entry.variant === 'rubric' && entry.slot &&
+            rubricMeasurement?.measurementKind === 'lvSimpsonEF') {
+          applyVerifiedEFGoldLabel(comparisonAnnotationId, entry.slot, rubricMeasurement);
+        }
         hydratedAnnotation.isLocked = true;
         hydratedAnnotation.isVisible = true;
         const focused = entry.variant === 'rubric' && !!focusedCompositeSlot &&
