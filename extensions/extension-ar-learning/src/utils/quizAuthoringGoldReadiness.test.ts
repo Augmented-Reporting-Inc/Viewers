@@ -26,15 +26,15 @@ const ef = () => ({
 });
 
 describe('educator question dropdown gold readiness', () => {
-  it('marks EF complete only when four source frames, areas, axes and volumes are retained', () => {
+  it('marks approved EF gold ready with four source frames even when optional display axes/areas are absent', () => {
     const complete = ef();
     expect(hasAllRequiredViewerGoldValues(complete)).toBe(true);
     const noAxis = ef();
     delete (noAxis.answerConfig.goldMeasurement.compositeResult.derived.slotLongAxisMM as any).A2C_ES;
-    expect(hasAllRequiredViewerGoldValues(noAxis)).toBe(false);
+    expect(hasAllRequiredViewerGoldValues(noAxis)).toBe(true);
     const noArea = ef();
     delete (noArea.answerConfig.goldMeasurement.compositeResult.derived.slotAreaCM2 as any).A4C_ED;
-    expect(hasAllRequiredViewerGoldValues(noArea)).toBe(false);
+    expect(hasAllRequiredViewerGoldValues(noArea)).toBe(true);
     const noSource = ef();
     noSource.answerConfig.goldMeasurement.compositeResult.components[2].annotationId = '';
     expect(hasAllRequiredViewerGoldValues(noSource)).toBe(false);
