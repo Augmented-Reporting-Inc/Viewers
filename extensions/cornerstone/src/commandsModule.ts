@@ -6489,7 +6489,18 @@ function renderLVSimpsonWorkflowPanel({
     const measurement = matching[0];
     const geometry = measurement?.lvSimpson || measurement?.measurements?.lvSimpson || {};
     const axis = Number(geometry.longAxisLengthMM);
-    const detail = measurement && Number.isFinite(axis) && axis > 0 ? ` — long axis ${axis.toFixed(1)} mm` : '';
+    // Use the same physically calibrated contour geometry as EF calculation
+    // and the viewport's LV contour label. Never treat pixel-space ROI area
+    // as cm², or substitute an area from a different physiological slot.
+    const areaCM2 = measurement && !geometry.calibrationError
+      ? calibratedLVContourAreaCM2(geometry.calibratedContourPoints)
+      : null;
+    const axisDetail = measurement && Number.isFinite(axis) && axis > 0
+      ? `long axis ${axis.toFixed(1)} mm` : '';
+    const areaDetail = areaCM2 !== null
+      ? `contour area ${areaCM2.toFixed(2)} cm²`
+      : measurement ? 'calibrated contour area unavailable' : '';
+    const detail = [axisDetail, areaDetail].filter(Boolean).join(' · ');
     const displayName = getLVSimpsonSlotDisplayName(slot);
     const row = document.createElement('div');
     Object.assign(row.style, {
@@ -6498,7 +6509,7 @@ function renderLVSimpsonWorkflowPanel({
     });
     const canNavigateSlot = !!lvSimpsonPanelController?.canNavigateSlot?.(slot);
     const rowLabel = document.createElement(canNavigateSlot ? 'button' : 'span');
-    rowLabel.textContent = `${measurement ? '✓' : '○'}  ${displayName}${detail}`;
+    rowLabel.textContent = `${measurement ? '✓' : '○'}  ${displayName}${detail ? ' — ' + detail : ''}`;
     rowLabel.dataset.lvSimpsonSlot = slot;
     rowLabel.dataset.lvSimpsonLabel = rowLabel.textContent;
     rowLabel.style.flex = '1 1 100%';
