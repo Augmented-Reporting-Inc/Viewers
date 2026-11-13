@@ -686,8 +686,9 @@ function getSavedQuizAreaCM2(savedAnnotation: any = {}) {
   // Do not treat a native ROI pixel/mm² cache as the quiz measurement.
   const la = savedAnnotation?.laVolume || measurements.laVolume || {};
   const kind = String(savedAnnotation?.measurementKind ||
-    measurements.measurementKind || la.measurementKind || '').trim();
-  if (kind === 'laVolumeSlot' && ['A4C', 'A2C'].includes(
+    measurements.measurementKind || '').trim();
+  if ((kind === 'laVolumeSlot' || la.measurementKind === 'laVolumeSlot') &&
+      ['A4C', 'A2C'].includes(
     String(la.slot || savedAnnotation?.slot || '').trim().toUpperCase())) {
     return getVerifiedLAVolumeContourAreaCM2({
       ...savedAnnotation, measurementKind: 'laVolumeSlot',
