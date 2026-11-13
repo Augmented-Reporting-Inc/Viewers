@@ -16758,10 +16758,22 @@ function commandsModule({
           if (/source frames invalid|source identity conflict|image\/frame mismatch|contour changed|physical area mismatch/i
             .test(String(recovery.reason || ''))) return recovery;
         }
-        // A truly missing source container can instead be checked against
-        // the original, exact-frame DICOM US-region calibration below.
+        // An educator can have exact calibrated saved source annotations
+        // hydrated into MeasurementService even when the Series lookup fails.
+        // Run the same immutable-ID/frame/contour verification before falling
+        // back to raw DICOM evidence. This also restores retained LV axes.
+        const liveRecovery = resolveSavedEFGoldContourAreas({
+          gold: rubricMeasurement,
+          savedAnnotations: getCurrentViewerMeasurementSnapshot(measurementService),
+        });
+        if (liveRecovery.ok) return liveRecovery;
+        if (/source frames invalid|source identity conflict|image\/frame mismatch|contour changed|physical area mismatch|axis disagrees/i
+          .test(String(liveRecovery.reason || ''))) return liveRecovery;
+        // A truly missing source can instead be checked against the original
+        // exact-frame DICOM US-region calibration below. That contour evidence
+        // has no trusted apex index, so do not invent a legacy LV long axis.
         console.info('[ViewerQuiz] EF saved-source area recovery unavailable; attempting verified DICOM calibration', {
-          reason: recovery.reason,
+          reason: liveRecovery.reason || recovery.reason,
         });
       }
       const previousFrame = await actions.getCurrentViewerQuizFrameAnswer();
