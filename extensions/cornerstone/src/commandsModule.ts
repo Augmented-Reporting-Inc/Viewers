@@ -16692,14 +16692,20 @@ function commandsModule({
         // derivedFrom/baseSeriesId. Searching only baseSeriesDoc then always
         // returns zero gold annotations. The resolver independently requires
         // exact annotation ID, study/series/SOP/image, and contour agreement.
-        const sources = [baseSeriesDoc, learnerSeriesDoc]
-          .filter(Boolean)
-          .flatMap(seriesDoc => getRequestedWorkflowAnnotations(
-            seriesDoc.MeasurementAnnotations
-          ));
-        return resolveSavedEFGoldContourAreas({
-          gold: rubricMeasurement, savedAnnotations: sources,
-        });
+        let recovery = { ok: false, reason: 'No saved EF source series available' };
+        for (const seriesDoc of [baseSeriesDoc, learnerSeriesDoc].filter(Boolean)) {
+          // A derived series may carry a second copy of the original
+          // annotation. Never concatenate the two and treat that as two
+          // independent gold sources; independently validate each full set.
+          recovery = resolveSavedEFGoldContourAreas({
+            gold: rubricMeasurement,
+            savedAnnotations: getRequestedWorkflowAnnotations(
+              seriesDoc.MeasurementAnnotations
+            ),
+          });
+          if (recovery.ok) break;
+        }
+        return recovery;
       }
       const previousFrame = await actions.getCurrentViewerQuizFrameAnswer();
       const previousTarget = previousFrame?.ok ? previousFrame.answer?.selectedTarget : null;
