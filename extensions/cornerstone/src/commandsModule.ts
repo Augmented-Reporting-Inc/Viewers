@@ -8614,7 +8614,7 @@ function commandsModule({
     };
   }
 
-  function applyVerifiedEFGoldLabel(annotationId: string, slot: string, gold: any) {
+  function applyVerifiedEFGoldLabel(annotationId: string, slot: string, gold: any, hydrated?: any) {
     const areaRaw = gold?.compositeResult?.derived?.slotAreaCM2?.[slot];
     if (areaRaw === null || areaRaw === undefined || areaRaw === '') return;
     const area = Number(areaRaw);
@@ -8624,7 +8624,7 @@ function commandsModule({
     );
     if (!savedComponent?.annotationId ||
         !['A4C_ED', 'A4C_ES', 'A2C_ED', 'A2C_ES'].includes(slot)) return;
-    const source = annotation.state.getAnnotation?.(annotationId);
+    const source = annotation.state.getAnnotation?.(annotationId) || hydrated;
     if (!source) return;
     const rawAxis = gold?.compositeResult?.derived?.slotLongAxisMM?.[slot];
     const axis = rawAxis == null || rawAxis === '' ? null : Number(rawAxis);
@@ -16503,7 +16503,7 @@ function commandsModule({
 
         if (entry.variant === 'rubric' && entry.slot &&
             rubricMeasurement?.measurementKind === 'lvSimpsonEF') {
-          applyVerifiedEFGoldLabel(comparisonAnnotationId, entry.slot, rubricMeasurement);
+          applyVerifiedEFGoldLabel(comparisonAnnotationId, entry.slot, rubricMeasurement, hydratedAnnotation);
         }
         hydratedAnnotation.isLocked = true;
         hydratedAnnotation.isVisible = true;
