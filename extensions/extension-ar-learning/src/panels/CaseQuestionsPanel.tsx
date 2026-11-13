@@ -47,7 +47,7 @@ import {
   getCompleteCompositeFrameTargets,
   matchesConfiguredCompositeFrame,
 } from '../utils/compositeFrameTargets';
-import { EF_CONTOUR_FRAME_SLOTS, getEFGoldContourAuthoringRows } from '../utils/efGoldContourAuthoring';
+import { EF_CONTOUR_FRAME_SLOTS, getEFGoldContourAuthoringRows, getEFGoldDerivedEvidenceStatus } from '../utils/efGoldContourAuthoring';
 import { validateAndOrderAuthoringQuestions } from '../utils/quizAuthoringQuestionIdentity';
 import { hasAllRequiredViewerGoldValues } from '../utils/quizAuthoringGoldReadiness';
 import { getViewerQuizRouteMeasurementDomain } from '../utils/viewerQuizMeasurementDomain';
@@ -5030,6 +5030,24 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       }
       let answer = result.answer;
       const captureKind = cleanString(answerConfig.measurementKind);
+      if (captureKind === 'lvSimpsonEF') {
+        const evidence = getEFGoldDerivedEvidenceStatus(answer);
+        if (!evidence.complete) {
+          const missing = [
+            ...(evidence.missingLongAxisSlots.length
+              ? [`LV long axes: ${evidence.missingLongAxisSlots.join(', ')}`] : []),
+            ...(evidence.missingAreaSlots.length
+              ? [`calibrated contour areas: ${evidence.missingAreaSlots.join(', ')}`] : []),
+            ...(!evidence.hasBiplaneVolumes ? ['biplane EDV/ESV'] : []),
+          ];
+          throw new Error(
+            'Cannot capture new EF gold without complete calibrated measurements (' +
+              missing.join('; ') +
+              '). Finish the four LV EF contours and review the calculated result. ' +
+              'Existing historical gold and learner attempts were not changed.'
+          );
+        }
+      }
       if (captureKind === 'ivcCollapsibility') {
         const latest = authoringQuestionsRef.current.find(item =>
           item.questionKey === question.questionKey);
@@ -7081,6 +7099,29 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               Gold EF: {savedEFGold !== undefined
                 ? Number(savedEFGold).toFixed(2) + '%' : 'Not captured'}
             </div>
+            {savedEFGold !== undefined && (() => {
+              const evidence = getEFGoldDerivedEvidenceStatus(
+                plainObject(answerConfig.goldMeasurement)
+              );
+              if (evidence.complete) return null;
+              return (
+                <div className="mt-2 rounded border border-amber-700 p-2 text-xs text-amber-100" role="status">
+                  The EF percentage is approved, but this gold version does not contain
+                  the complete calibrated LV long-axis and volume evidence.
+                  {evidence.missingLongAxisSlots.length ? (
+                    <div className="mt-1">
+                      Missing long axes: {evidence.missingLongAxisSlots.join(', ')}.
+                    </div>
+                  ) : null}
+                  <div className="mt-1">
+                    Contour areas alone cannot recover the original educator-selected apex.
+                    To display accurate long axes, create or edit a draft, repeat the
+                    four-frame LV EF measurement, capture the calculated EF as gold,
+                    and save the draft. Existing learner attempts keep their original version.
+                  </div>
+                </div>
+              );
+            })()}
             <label className="mt-2 flex items-center gap-2 text-xs font-semibold text-gray-100"
               onClick={event => event.stopPropagation()}>
               <input type="checkbox"
