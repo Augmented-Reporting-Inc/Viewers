@@ -14,7 +14,7 @@ import {
   buildSpectralDopplerDisplayText,
 } from './spectralDoppler';
 import { BOWEL_CURVED_LENGTH_MEASUREMENT_KIND } from '../../../extension-ar-measurements/src/utils/bowelMeasurementTargets';
-import { calculateCalibratedEchoAreaCM2, getSavedQuizEchoAreaDisplayInfo } from './quizEchoAreaCalibration';
+import { calculateCalibratedEchoAreaCM2, getSavedQuizEchoAreaDisplayInfo, getVerifiedEFGoldContourViewportLines } from './quizEchoAreaCalibration';
 import { getVerifiedLAVolumeContourAreaCM2 } from '../../../extension-ar-measurements/src/utils/laVolume';
 
 const CONTOUR_TOOL_NAMES = new Set(['SplineROI', 'PlanarFreehandROI', 'LivewireContour']);
@@ -922,6 +922,10 @@ function installSavedContourTextOverrideForViewport({ viewport, viewportId = '',
       );
 
       for (const candidate of candidates) {
+        const goldEFText = getVerifiedEFGoldContourViewportLines(
+          candidate?.arVerifiedQuizEFGoldContour
+        );
+        if (goldEFText) return goldEFText;
         const overrideText = candidate?.arSavedMeasurementDisplayText;
 
         if (Array.isArray(overrideText) && overrideText.length > 0) {
