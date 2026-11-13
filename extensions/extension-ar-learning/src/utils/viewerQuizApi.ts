@@ -412,7 +412,19 @@ export async function getViewerQuizzesForActiveStudy() {
     if (!learnerSeriesId) {
       const lookup = await fetchViewerQuizContextForSaveTarget(saveTarget);
       learnerSeriesId = getLearnerSeriesIdFromQuizContextPayload(lookup, saveTarget);
+      if (!learnerSeriesId &&
+          cleanString(saveTarget.measurementWorkflowRole).toLowerCase() === 'learner' &&
+          saveTarget.attemptOwner !== 'report') {
+        // Viewer-first quizzes really do start in the viewer. Reuse the
+        // existing tenant/learner-authorized copy creation; do not wait
+        // until the first save, or an educator edit could change version.
+        const ensured = await ensureLearnerCopyForViewerSave(saveTarget);
+        learnerSeriesId = getSeriesId(ensured);
+      }
       if (!learnerSeriesId) {
+        // A report-owned attempt must be established by the report, never by
+        // the viewer. Until then, do not present an unfrozen quiz as a live
+        // learner attempt.
         return {
           ...(lookup || {}),
           seriesDoc: null,
@@ -420,10 +432,10 @@ export async function getViewerQuizzesForActiveStudy() {
           baseSeriesId: cleanString(lookup?.baseSeriesId || saveTarget.baseSeriesId),
           learnerSeriesId: '',
           tenantId: cleanString(lookup?.tenantId),
-          enabled: lookup?.enabled === true,
-          contentKeys: Array.isArray(lookup?.contentKeys) ? lookup.contentKeys : [],
-          quizzes: Array.isArray(lookup?.quizzes) ? lookup.quizzes : [],
-          responses: Array.isArray(lookup?.responses) ? lookup.responses : [],
+          enabled: false,
+          contentKeys: [],
+          quizzes: [],
+          responses: [],
         };
       }
     }
