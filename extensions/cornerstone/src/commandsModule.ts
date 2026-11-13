@@ -16692,7 +16692,9 @@ function commandsModule({
         // derivedFrom/baseSeriesId. Searching only baseSeriesDoc then always
         // returns zero gold annotations. The resolver independently requires
         // exact annotation ID, study/series/SOP/image, and contour agreement.
-        let recovery = { ok: false, reason: 'No saved EF source series available' };
+        let recovery: ReturnType<typeof resolveSavedEFGoldContourAreas> = {
+          ok: false, reason: 'No saved EF source series available',
+        };
         for (const seriesDoc of [baseSeriesDoc, learnerSeriesDoc].filter(Boolean)) {
           // A derived series may carry a second copy of the original
           // annotation. Never concatenate the two and treat that as two
