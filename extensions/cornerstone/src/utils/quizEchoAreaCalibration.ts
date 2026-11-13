@@ -125,3 +125,23 @@ export function getQuizEchoAreaSourceMetadata(data: any = {}): Record<string, an
   if (!['RV_ED', 'RV_ES', 'RA_ES'].includes(slot)) return {};
   return { measurementKind: 'echoAreaSlot', echoArea: { ...source, slot } };
 }
+
+/**
+ * Viewer-only gold comparison overlay. Values come exclusively from the
+ * verified educator composite result, not native ROI cachedStats.
+ */
+export function getVerifiedEFGoldContourViewportLines(evidence: any): string[] | null {
+  if (evidence?.origin !== 'quiz-gold') return null;
+  const slot = String(evidence?.slot || '').trim().toUpperCase();
+  if (!['A4C_ED', 'A4C_ES', 'A2C_ED', 'A2C_ES'].includes(slot)) return null;
+  if (evidence.areaCM2 == null || evidence.areaCM2 === '') return null;
+  const area = Number(evidence.areaCM2);
+  if (!Number.isFinite(area) || area <= 0) return null;
+  const axis = evidence.axisMM == null || evidence.axisMM === ''
+    ? null : Number(evidence.axisMM);
+  return [
+    'Gold ' + slot.replace('_', ' ') + ' LV contour area: ' + area.toFixed(2) + ' cm²',
+    ...(axis != null && Number.isFinite(axis) && axis > 0
+      ? ['Gold LV long axis: ' + axis.toFixed(2) + ' mm'] : []),
+  ];
+}
