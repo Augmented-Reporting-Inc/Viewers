@@ -16686,10 +16686,17 @@ function commandsModule({
       if (kind === 'lvSimpsonEF') {
         // EF is already calculated and educator-approved. Recover display
         // areas only from the matching persisted calibrated annotations.
-        const { baseSeriesDoc } = await getViewerQuizMeasurementSeriesDocs();
-        const sources = baseSeriesDoc
-          ? getRequestedWorkflowAnnotations(baseSeriesDoc.MeasurementAnnotations)
-          : [];
+        const { baseSeriesDoc, learnerSeriesDoc } =
+          await getViewerQuizMeasurementSeriesDocs();
+        // Educator authoring can open the original series directly, with no
+        // derivedFrom/baseSeriesId. Searching only baseSeriesDoc then always
+        // returns zero gold annotations. The resolver independently requires
+        // exact annotation ID, study/series/SOP/image, and contour agreement.
+        const sources = [baseSeriesDoc, learnerSeriesDoc]
+          .filter(Boolean)
+          .flatMap(seriesDoc => getRequestedWorkflowAnnotations(
+            seriesDoc.MeasurementAnnotations
+          ));
         return resolveSavedEFGoldContourAreas({
           gold: rubricMeasurement, savedAnnotations: sources,
         });
