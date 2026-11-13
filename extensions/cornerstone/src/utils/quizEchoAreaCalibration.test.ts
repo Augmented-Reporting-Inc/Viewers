@@ -1,4 +1,4 @@
-import { calculateCalibratedEchoAreaCM2, getSavedQuizEchoAreaDisplayInfo, getQuizCompositeContourViewportLines, getQuizCompositeGoldContourSlotMetadata } from './quizEchoAreaCalibration';
+import { calculateCalibratedEchoAreaCM2, getSavedQuizEchoAreaDisplayInfo, getQuizCompositeContourViewportLines, getQuizCompositeGoldContourSlotMetadata, getVerifiedEFGoldContourViewportLines } from './quizEchoAreaCalibration';
 
 describe('DICOM-calibrated quiz echo area', () => {
   it('calculates physical area in cm² from already calibrated millimetres', () => {
@@ -121,5 +121,34 @@ describe('composite gold comparison source contours retain quiz identity', () =>
     expect(getQuizCompositeContourViewportLines(la, null)).toEqual(['31.26 cm²']);
     expect(getQuizCompositeContourViewportLines(rv, 19.31)).toEqual(['RVEDA: 19.31 cm²']);
     expect(getQuizCompositeContourViewportLines(la, 31.26)).toEqual(['LA A4C: 31.26 cm²']);
+  });
+});
+
+
+describe('EF educator gold contour viewport text', () => {
+  it('uses the exact verified gold area and saved axis rather than native ROI stats', () => {
+    expect(getVerifiedEFGoldContourViewportLines({
+      origin: 'quiz-gold', slot: 'A4C_ED', areaCM2: 27.516,
+      axisMM: 83.247,
+    })).toEqual([
+      'Gold A4C ED LV contour area: 27.52 cm²',
+      'Gold LV long axis: 83.25 mm',
+    ]);
+  });
+  it('shows the verified area without inventing a missing axis', () => {
+    expect(getVerifiedEFGoldContourViewportLines({
+      origin: 'quiz-gold', slot: 'A2C_ES', areaCM2: 14.2,
+    })).toEqual(['Gold A2C ES LV contour area: 14.20 cm²']);
+  });
+  it('does not override ordinary contours or unverified areas', () => {
+    expect(getVerifiedEFGoldContourViewportLines({
+      slot: 'A4C_ED', areaCM2: 27.5,
+    })).toBeNull();
+    expect(getVerifiedEFGoldContourViewportLines({
+      origin: 'quiz-gold', slot: 'A4C_ED', areaCM2: null,
+    })).toBeNull();
+    expect(getVerifiedEFGoldContourViewportLines({
+      origin: 'quiz-gold', slot: 'A4C_ED', areaCM2: 'abc',
+    })).toBeNull();
   });
 });
