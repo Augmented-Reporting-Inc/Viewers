@@ -135,6 +135,16 @@ describe('EF educator gold contour viewport text', () => {
       'Gold LV long axis: 83.25 mm',
     ]);
   });
+  it('calls out independently calibrated source areas that disagree with the saved gold', () => {
+    expect(getVerifiedEFGoldContourViewportLines({
+      origin: 'quiz-gold', slot: 'A2C_ES',
+      areaCM2: 14.2, sourceAreaCM2: 15.1, axisMM: 75,
+    })).toEqual([
+      'Gold A2C ES LV contour area: 14.20 cm²',
+      'Source contour area: 15.10 cm² (differs from saved gold; verify)',
+      'Gold LV long axis: 75.00 mm',
+    ]);
+  });
   it('shows the verified area without inventing a missing axis', () => {
     expect(getVerifiedEFGoldContourViewportLines({
       origin: 'quiz-gold', slot: 'A2C_ES', areaCM2: 14.2,
