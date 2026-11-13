@@ -5654,7 +5654,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
           </div>
         ) : null}
         <div className="mt-2 flex flex-wrap gap-2">
-          {isViewerNativeQuestion(question) ? (
+          {isViewerNativeQuestion(question) && !hasGuidedEFFrames ? (
             <button
               type="button"
               className="rounded border border-blue-500 px-2 py-1 text-xs font-semibold text-blue-100 disabled:opacity-50"
