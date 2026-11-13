@@ -3139,9 +3139,11 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       return;
     }
     lastActivatedQuestionRef.current = nextActiveQuestionKey;
-    if (isNewQuestion && pendingQuizIVCPhaseRef.current) {
+    if (isNewQuestion) {
+      // The IVC measure-only setting must never leak into ordinary learner
+      // Length questions, including when the phase binding already finished.
       pendingQuizIVCPhaseRef.current = null;
-      void runViewerCommand(commandsManager, 'resetViewerLengthLabelMode', {});
+      await runViewerCommand(commandsManager, 'resetViewerLengthLabelMode', {});
     }
     if (question.type === 'frameSelection') {
       setFrameNavigationErrors(current => {
