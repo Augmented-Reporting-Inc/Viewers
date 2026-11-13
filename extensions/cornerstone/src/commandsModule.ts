@@ -16705,15 +16705,14 @@ function commandsModule({
               seriesDoc.MeasurementAnnotations
             ),
           });
-          if (recovery.ok) break;
+          if (recovery.ok) return recovery;
+          // An existing but altered source is not evidence of a missing
+          // container. Never bypass a known image/contour disagreement.
+          if (/source frames invalid|source identity conflict|image\/frame mismatch|contour changed|physical area mismatch/i
+            .test(String(recovery.reason || ''))) return recovery;
         }
-        if (recovery.ok) return recovery;
-        // Do not bypass known source identity/geometry disagreement. A truly
-        // missing annotation container can instead be checked against the
-        // original DICOM US-region calibration below.
-        const hardConflict = /source frames invalid|source identity conflict|image\/frame mismatch|contour changed|physical area mismatch/i
-          .test(String(recovery.reason || ''));
-        if (hardConflict) return recovery;
+        // A truly missing source container can instead be checked against
+        // the original, exact-frame DICOM US-region calibration below.
         console.info('[ViewerQuiz] EF saved-source area recovery unavailable; attempting verified DICOM calibration', {
           reason: recovery.reason,
         });
