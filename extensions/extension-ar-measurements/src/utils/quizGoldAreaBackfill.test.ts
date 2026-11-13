@@ -103,7 +103,7 @@ describe('EF gold physical area recovery from persisted exact annotations', () =
       slot: component.slot,
       calibratedContourPoints: component.points,
       originalContourPoints: component.points,
-      calibratedLongAxisLengthMM: 80,
+      calibratedLongAxisLengthMM: ({ A4C_ED: 80, A4C_ES: 75, A2C_ED: 79, A2C_ES: 73 } as Record<string, number>)[component.slot],
       calibrationError: null,
     },
   }));
@@ -141,7 +141,7 @@ describe('EF gold physical area recovery from persisted exact annotations', () =
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.derived.slotLongAxisMM).toEqual({
-        A4C_ED: 80, A4C_ES: 80, A2C_ED: 80, A2C_ES: 80,
+        A4C_ED: 80, A4C_ES: 75, A2C_ED: 79, A2C_ES: 73,
       });
     }
     expect(copy.compositeResult.derived.slotLongAxisMM).toBeUndefined();
