@@ -175,7 +175,6 @@ export function getCompositeGoldCaptureSignature(question: any, measurements: an
   const kind = clean(question?.answerConfig?.measurementKind);
   const slotsByKind: Record<string, string[]> = {
     rvFAC: ['RV_ED', 'RV_ES'],
-    lvSimpsonEF: ['A4C_ED', 'A4C_ES', 'A2C_ED', 'A2C_ES'],
     laVolumeBiplane: ['A4C', 'A2C'],
     laVolumeBiplaneDisks: ['A4C', 'A2C'],
     ivcCollapsibility: ['IVC_EXP', 'IVC_INSP'],
