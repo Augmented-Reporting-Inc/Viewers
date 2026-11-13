@@ -9258,6 +9258,9 @@ function commandsModule({
           measurement.toolName === 'Length' &&
           pendingAnnotation?.metadata?.toolName === 'Length' &&
           pendingAnnotation?.data?.arPendingLengthLabel === true) {
+        // This exemption is for exactly one explicitly chosen IVC phase.
+        // Never let the module-wide mode suppress labels on later Lengths.
+        viewerLengthLabelMode = VIEWER_LENGTH_LABEL_MODE_PROMPT;
         window.dispatchEvent(new CustomEvent('ar-learning:quiz-measurement-added', {
           detail: { measurementId: uid },
         }));
