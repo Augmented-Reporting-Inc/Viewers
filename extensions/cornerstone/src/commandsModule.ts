@@ -129,7 +129,7 @@ import { createGuidedMouseToolOwnership } from './utils/guidedMouseToolOwnership
 import { calibrateUSContourPoints, worldToImageIndex } from './utils/usRegionLengthCalibration';
 import { getQuizEchoAreaSourceMetadata, calculateCalibratedEchoAreaCM2, getSavedQuizEchoAreaDisplayInfo, getQuizCompositeContourViewportLines, getQuizCompositeGoldContourSlotMetadata } from './utils/quizEchoAreaCalibration';
 import { installQuizContourTextRenderer } from './utils/installQuizContourTextRenderer';
-import { resolveViewerQuizGoldAreaBackfill, resolveSavedEFGoldContourAreas } from '../../extension-ar-measurements/src/utils/quizGoldAreaBackfill';
+import { resolveViewerQuizGoldAreaBackfill, resolveSavedEFGoldContourAreas, resolveVerifiedEFGoldContourAreasFromDicom } from '../../extension-ar-measurements/src/utils/quizGoldAreaBackfill';
 
 const { DefaultHistoryMemo } = csUtils.HistoryMemo;
 const toggleSyncFunctions = {
@@ -16707,14 +16707,26 @@ function commandsModule({
           });
           if (recovery.ok) break;
         }
-        return recovery;
+        if (recovery.ok) return recovery;
+        // Do not bypass known source identity/geometry disagreement. A truly
+        // missing annotation container can instead be checked against the
+        // original DICOM US-region calibration below.
+        const hardConflict = /source frames invalid|source identity conflict|image\/frame mismatch|contour changed|physical area mismatch/i
+          .test(String(recovery.reason || ''));
+        if (hardConflict) return recovery;
+        console.info('[ViewerQuiz] EF saved-source area recovery unavailable; attempting verified DICOM calibration', {
+          reason: recovery.reason,
+        });
       }
       const previousFrame = await actions.getCurrentViewerQuizFrameAnswer();
       const previousTarget = previousFrame?.ok ? previousFrame.answer?.selectedTarget : null;
       const previousViewportId = viewportGridService.getActiveViewportId();
       let navigatedForCalibration = false;
       try {
-        return await resolveViewerQuizGoldAreaBackfill({
+        const recover = kind === 'lvSimpsonEF'
+          ? resolveVerifiedEFGoldContourAreasFromDicom
+          : resolveViewerQuizGoldAreaBackfill;
+        return await recover({
           kind,
           gold: rubricMeasurement,
           calibrate: async component => {
