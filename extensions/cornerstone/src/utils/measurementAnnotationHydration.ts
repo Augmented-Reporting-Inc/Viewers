@@ -15,6 +15,7 @@ import {
 } from './spectralDoppler';
 import { BOWEL_CURVED_LENGTH_MEASUREMENT_KIND } from '../../../extension-ar-measurements/src/utils/bowelMeasurementTargets';
 import { calculateCalibratedEchoAreaCM2, getSavedQuizEchoAreaDisplayInfo } from './quizEchoAreaCalibration';
+import { getVerifiedLAVolumeContourAreaCM2 } from '../../../extension-ar-measurements/src/utils/laVolume';
 
 const CONTOUR_TOOL_NAMES = new Set(['SplineROI', 'PlanarFreehandROI', 'LivewireContour']);
 const ULTRASOUND_DIRECTIONAL_TOOL_NAME = 'UltrasoundDirectionalTool';
@@ -679,6 +680,20 @@ function getSavedQuizAreaCM2(savedAnnotation: any = {}) {
     return calculateCalibratedEchoAreaCM2(physical);
   }
   const measurements = savedAnnotation?.measurements || {};
+  // LA volume contours persist calibrated long-axis landmarks and the
+  // contour itself, not necessarily a generic ROI area statistic. On reopen,
+  // recover the exact validated physical area from that saved LA geometry.
+  // Do not treat a native ROI pixel/mm² cache as the quiz measurement.
+  const la = savedAnnotation?.laVolume || measurements.laVolume || {};
+  const kind = String(savedAnnotation?.measurementKind ||
+    measurements.measurementKind || la.measurementKind || '').trim();
+  if (kind === 'laVolumeSlot' && ['A4C', 'A2C'].includes(
+    String(la.slot || savedAnnotation?.slot || '').trim().toUpperCase())) {
+    return getVerifiedLAVolumeContourAreaCM2({
+      ...savedAnnotation, measurementKind: 'laVolumeSlot',
+      laVolume: { ...la, measurementKind: 'laVolumeSlot' },
+    });
+  }
   const physical = getSavedQuizEchoAreaDisplayInfo(
     measurements.area, measurements.areaUnit
   );
