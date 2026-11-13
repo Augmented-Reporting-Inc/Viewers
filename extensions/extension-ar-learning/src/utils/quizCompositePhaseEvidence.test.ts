@@ -440,3 +440,74 @@ describe('quiz composite phase evidence', () => {
     expect(getGoldPhaseMeasurementSummary({}, 'raArea')).toBe('Gold source recorded');
   });
 });
+
+
+describe('EF draft contour deletion follows LAV/RV FAC phase safety', () => {
+  const slots = ['A4C_ED', 'A4C_ES', 'A2C_ED', 'A2C_ES'];
+  const target = (slot: string, frame: number) => ({
+    studyInstanceUID: 'study', seriesInstanceUID: 'series',
+    sopInstanceUID: 'sop-' + slot, referencedImageId: 'dicom:' + slot,
+    frameNumber: frame,
+  });
+  const components = slots.map((slot, index) => ({
+    slot, annotationId: 'ann-' + slot, target: target(slot, index + 1),
+  }));
+  const question = () => ({
+    type: 'measurementNumeric',
+    answerConfig: {
+      measurementKind: 'lvSimpsonEF',
+      efContourFrameGuidanceEnabled: true,
+      efContourTargets: Object.fromEntries(slots.map((slot, index) =>
+        [slot, target(slot, index + 1)])),
+      goldValue: 58,
+      goldMeasurement: {
+        measurementKind: 'lvSimpsonEF', value: 58,
+        compositeResult: {
+          components,
+          derived: {
+            edvML: 100, esvML: 42,
+            slotAreaCM2: Object.fromEntries(slots.map(slot => [slot, 18])),
+            slotLongAxisMM: Object.fromEntries(slots.map(slot => [slot, 80])),
+          },
+        },
+      },
+    },
+  });
+
+  it('identifies the four independent LV Simpson source annotations', () => {
+    for (const slot of slots) {
+      const measurement = {
+        uid: 'ann-' + slot, measurementKind: 'lvSimpsonEF',
+        lvSimpson: { slot }, referenceStudyUID: 'study',
+      };
+      expect(getCompositePhaseSlot(measurement, 'lvSimpsonEF')).toBe(slot);
+      expect(findEditableCompositePhaseMeasurement([measurement], 'lvSimpsonEF',
+        slot, { annotationId: 'ann-' + slot })).toEqual(measurement);
+      expect(findEditableCompositePhaseMeasurement([measurement], 'lvSimpsonEF',
+        slot, { annotationId: 'wrong-id' })).toBeNull();
+    }
+  });
+
+  it('clears exactly one gold contour while invalidating all stale EF/EDV/ESV', () => {
+    const draft = question();
+    const result = clearSavedCompositeGoldPhase(draft, 'A4C_ED', 'ann-A4C_ED');
+    expect(result).not.toBeNull();
+    expect(result!.answerConfig.goldValue).toBeNull();
+    expect(result!.answerConfig.goldMeasurement.value).toBeNull();
+    expect(result!.answerConfig.goldMeasurement.compositeResult.derived).toBeNull();
+    expect(result!.answerConfig.goldMeasurement.compositeResult.components.map(
+      part => part.slot)).toEqual(['A4C_ES', 'A2C_ED', 'A2C_ES']);
+    expect(result!.answerConfig.efContourTargets.A4C_ED).toBeUndefined();
+    expect(result!.answerConfig.efContourTargets.A2C_ES.frameNumber).toBe(4);
+    expect(getIncompleteCompositeGoldReplacementReason([result!])).toContain('A4C_ED');
+    expect(clearSavedCompositeGoldPhase(result!, 'A4C_ES', 'wrong-id')).toBeNull();
+  });
+
+  it('does not remove a newer educator target when deleting an older saved source', () => {
+    const draft = question();
+    draft.answerConfig.efContourTargets.A2C_ES = target('A2C_ES', 9);
+    const result = clearSavedCompositeGoldPhase(draft, 'A2C_ES', 'ann-A2C_ES');
+    expect(result!.answerConfig.efContourTargets.A2C_ES.frameNumber).toBe(9);
+    expect(result!.answerConfig.goldMeasurement.compositeResult.components).toHaveLength(3);
+  });
+});
