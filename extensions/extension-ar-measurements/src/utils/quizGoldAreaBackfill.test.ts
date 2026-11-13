@@ -1,4 +1,4 @@
-import { resolveViewerQuizGoldAreaBackfill, resolveSavedEFGoldContourAreas } from './quizGoldAreaBackfill';
+import { resolveViewerQuizGoldAreaBackfill, resolveSavedEFGoldContourAreas, resolveVerifiedEFGoldContourAreasFromDicom } from './quizGoldAreaBackfill';
 
 const source = (slot: string, frame: number) => ({
   slot, annotationId: 'annotation-' + slot,
@@ -150,5 +150,85 @@ describe('EF gold physical area recovery from persisted exact annotations', () =
     expect(resolveSavedEFGoldContourAreas({
       gold: prior, savedAnnotations: changed,
     }).ok).toBe(false);
+  });
+});
+
+
+describe('EF gold exact-frame DICOM calibration fallback', () => {
+  const slots = ['A4C_ED', 'A4C_ES', 'A2C_ED', 'A2C_ES'];
+  const goldComponents = slots.map((slot, index) => source(slot, index + 1));
+  const approvedGold = () => ({
+    measurementKind: 'lvSimpsonEF', value: 57.2, unit: '%',
+    compositeResult: {
+      components: JSON.parse(JSON.stringify(goldComponents)),
+      derived: { edvML: 102.1, esvML: 43.7,
+        slotLongAxisMM: { A4C_ED: 80, A4C_ES: 75, A2C_ED: 79, A2C_ES: 73 } },
+    },
+  });
+  const recalibrate = async (component: any) => ({
+    A4C_ED: 27.5, A4C_ES: 16.2, A2C_ED: 26.1, A2C_ES: 15.1,
+  })[component.slot] || null;
+
+  it('recovers all areas with exact DICOM calibration despite missing saved Mongo annotations', async () => {
+    const original = approvedGold();
+    const untouched = JSON.parse(JSON.stringify(original));
+    const recovered = await resolveVerifiedEFGoldContourAreasFromDicom({
+      kind: 'lvSimpsonEF', gold: original, calibrate: recalibrate,
+    });
+    expect(recovered.ok).toBe(true);
+    if (recovered.ok) {
+      expect(recovered.derived.slotAreaCM2).toEqual({
+        A4C_ED: 27.5, A4C_ES: 16.2, A2C_ED: 26.1, A2C_ES: 15.1,
+      });
+      expect(recovered.derived.edvML).toBe(102.1);
+      expect(recovered.derived.esvML).toBe(43.7);
+      expect(recovered.derived.slotLongAxisMM.A4C_ES).toBe(75);
+    }
+    expect(original).toEqual(untouched);
+  });
+
+  it('rejects incorrect source SOP/frame identity without calling calibration', async () => {
+    const gold = approvedGold();
+    gold.compositeResult.components[1].target.referencedImageId =
+      gold.compositeResult.components[1].target.referencedImageId
+        .replace('/instances/sop-A4C_ES/', '/instances/sop-other/');
+    let called = false;
+    const outcome = await resolveVerifiedEFGoldContourAreasFromDicom({
+      kind: 'lvSimpsonEF', gold, calibrate: async () => { called = true; return 24; },
+    });
+    expect(outcome.ok).toBe(false);
+    // The first validated slot is permitted before the second's mismatch;
+    // never interpret a mismatched SOP as verified EF display evidence.
+    expect(called).toBe(true);
+  });
+
+  it('rejects missing physical calibration and disagreement with an existing saved physical area', async () => {
+    const missing = await resolveVerifiedEFGoldContourAreasFromDicom({
+      kind: 'lvSimpsonEF', gold: approvedGold(),
+      calibrate: async component => component.slot === 'A2C_ES' ? null : 20,
+    });
+    expect(missing.ok).toBe(false);
+    const mismatch = approvedGold() as any;
+    mismatch.compositeResult.derived.slotAreaCM2 = { A4C_ED: 99 };
+    const conflict = await resolveVerifiedEFGoldContourAreasFromDicom({
+      kind: 'lvSimpsonEF', gold: mismatch, calibrate: recalibrate,
+    });
+    expect(conflict.ok).toBe(false);
+  });
+
+  it('rejects ambiguous duplicate source frames and duplicate annotation IDs', async () => {
+    const duplicateFrame = approvedGold();
+    duplicateFrame.compositeResult.components[1].target = {
+      ...duplicateFrame.compositeResult.components[0].target,
+    };
+    expect((await resolveVerifiedEFGoldContourAreasFromDicom({
+      kind: 'lvSimpsonEF', gold: duplicateFrame, calibrate: recalibrate,
+    })).ok).toBe(false);
+    const duplicateAnnotation = approvedGold();
+    duplicateAnnotation.compositeResult.components[1].annotationId =
+      duplicateAnnotation.compositeResult.components[0].annotationId;
+    expect((await resolveVerifiedEFGoldContourAreasFromDicom({
+      kind: 'lvSimpsonEF', gold: duplicateAnnotation, calibrate: recalibrate,
+    })).ok).toBe(false);
   });
 });
