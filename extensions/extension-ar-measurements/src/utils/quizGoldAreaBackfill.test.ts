@@ -165,9 +165,10 @@ describe('EF gold exact-frame DICOM calibration fallback', () => {
         slotLongAxisMM: { A4C_ED: 80, A4C_ES: 75, A2C_ED: 79, A2C_ES: 73 } },
     },
   });
-  const recalibrate = async (component: any) => ({
+  const calibratedAreas: Record<string, number> = {
     A4C_ED: 27.5, A4C_ES: 16.2, A2C_ED: 26.1, A2C_ES: 15.1,
-  })[component.slot] || null;
+  };
+  const recalibrate = async (component: any) => calibratedAreas[component.slot] || null;
 
   it('recovers all areas with exact DICOM calibration despite missing saved Mongo annotations', async () => {
     const original = approvedGold();
