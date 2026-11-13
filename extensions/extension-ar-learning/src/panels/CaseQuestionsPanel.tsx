@@ -7197,6 +7197,54 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                         );
                       })() : null}
                       <div className="mt-2 flex flex-wrap gap-2">
+                        {[
+                          { label: 'Freehand', method: 'freehand' },
+                          { label: 'Axis + apex', method: 'axisApex' },
+                        ].map(choice => (
+                          <button key={choice.method} type="button"
+                            className="rounded border border-cyan-600 px-2 py-1 text-cyan-100 disabled:opacity-40"
+                            disabled={isCapturing || authoringSaving || !isDraftDefinition(authoringDefinition) ||
+                              (guidanceEnabled && !row.configuredComplete)}
+                            onClick={event => {
+                              event.preventDefault();
+                              event.stopPropagation();
+                              void (async () => {
+                                await selectQuestion({ quizKey: 'authoring', quizVersion: 1 },
+                                  question, { force: true });
+                                if (guidanceEnabled) {
+                                  const opened = await runViewerCommand(commandsManager,
+                                    'jumpToViewerQuizTarget', {
+                                      viewerTarget: row.configuredTarget,
+                                      questionKey: question.questionKey,
+                                    });
+                                  if (opened?.ok !== true) throw new Error('The contour target frame is unavailable.');
+                                  if (cleanString(opened?.viewportId)) {
+                                    await runViewerCommand(commandsManager, 'setViewportActive', {
+                                      viewportId: opened.viewportId,
+                                    });
+                                  }
+                                  const frame = await runViewerCommand(commandsManager,
+                                    'getCurrentViewerQuizFrameAnswer', {});
+                                  if (frame?.ok !== true || !matchesConfiguredCompositeFrame(
+                                    plainObject(frame?.answer?.selectedTarget), row.configuredTarget
+                                  )) throw new Error('The selected contour frame does not match its saved target.');
+                                }
+                                await runViewerCommand(commandsManager, 'startLVSimpsonEFWorkflow', {
+                                  slot: row.slot,
+                                  singleSlot: true,
+                                  captureMethod: choice.method,
+                                  efContourTargets: guidanceEnabled
+                                    ? plainObject(answerConfig.efContourTargets) : null,
+                                  questionKey: question.questionKey,
+                                });
+                              })().catch(error => uiNotificationService.show({
+                                title: 'EF contour', type: 'warning', duration: 6000,
+                                message: String(error?.message || error),
+                              }));
+                            }}>
+                            {choice.label}
+                          </button>
+                        ))}
                         {guidanceEnabled ? (
                           <button type="button"
                             className="rounded border border-blue-500 px-2 py-1 text-blue-100 disabled:opacity-50"
