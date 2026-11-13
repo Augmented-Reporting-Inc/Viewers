@@ -2603,6 +2603,10 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       updateAuthoringQuestion(question.questionKey, current =>
         clearSavedCompositeGoldPhase(current, slot, savedId) || current
       );
+      // Saved gold contours use temporary, read-only comparison overlays.
+      // Clear the old four-contour presentation immediately: a deleted gold
+      // source must not remain visible while the educator redraws its slot.
+      await runViewerCommand(commandsManager, 'clearViewerQuizMeasurementComparison', {});
     } else if (!authoringMode) {
       // A partial learner composite must never remain gradeable.
       setAnswer(quiz.quizKey, question, null);
