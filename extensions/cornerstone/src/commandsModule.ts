@@ -8628,10 +8628,20 @@ function commandsModule({
     if (!source) return;
     const rawAxis = gold?.compositeResult?.derived?.slotLongAxisMM?.[slot];
     const axis = rawAxis == null || rawAxis === '' ? null : Number(rawAxis);
+    const lv = source.data?.lvSimpson;
+    const sourceArea = lv && !lv.calibrationError
+      ? calibratedLVContourAreaCM2(lv.calibratedContourPoints) : null;
+    if (sourceArea != null && Math.abs(sourceArea - area) > 0.02) {
+      // Aggregate, no DICOM identifiers or coordinates in diagnostics.
+      console.warn('[ViewerQuiz] calibrated EF source area differs from saved gold', {
+        slot, goldAreaCM2: area, sourceAreaCM2: sourceArea,
+      });
+    }
     source.data = {
       ...(source.data || {}),
       arVerifiedQuizEFGoldContour: {
         origin: 'quiz-gold', slot, areaCM2: area,
+        sourceAreaCM2: sourceArea,
         axisMM: Number.isFinite(axis) && axis > 0 ? axis : null,
       },
     };
