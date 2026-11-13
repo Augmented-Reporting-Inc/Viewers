@@ -60,6 +60,11 @@ export function hasAllRequiredViewerGoldValues(
         clean(entry?.sourceAnnotationId) && targetReady(entry?.viewerTarget || entry?.target));
   }
 
+  // EF gold is an approved percentage. Per-view source contours, areas,
+  // axes and volumes are separate evidence/display details, not additional
+  // numeric gold answers. Mirror the grading-ready scalar shown in authoring.
+  if (kind === 'lvSimpsonEF') return positive(scalar);
+
   const slots = slotsForKind[kind];
   if (slots) {
     const composite = object(gold.compositeResult);
@@ -69,13 +74,6 @@ export function hasAllRequiredViewerGoldValues(
         clean(component?.slot) === slot && clean(component?.annotationId) &&
         targetReady(component?.target)).length === 1)) return false;
     const derived = object(composite.derived);
-    if (kind === 'lvSimpsonEF') {
-      // The published rubric grades the approved EF percent. Verified
-      // per-contour areas, long axes and derived volumes are informative
-      // evidence, not additional independent gold answers. Their absence on
-      // legacy approved EF must not mark a gradeable question incomplete.
-      return positive(scalar);
-    }
     const fields = valueFields[kind] || {};
     return slots.every(slot => positive(derived[fields[slot]]));
   }
