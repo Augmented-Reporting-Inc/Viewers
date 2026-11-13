@@ -9735,12 +9735,36 @@ function commandsModule({
             observedIds.clear();
             ids.forEach(id => observedIds.add(id));
           },
+          // A saved contour's own DICOM source is authoritative for review.
+          // Guided targets are for acquiring a new contour and can differ
+          // from historical gold. Never navigate every saved row via the
+          // composite answer's last-used image.
+          getNavigationTarget(slot: string) {
+            const saved = getStudyMeasurements().filter(item =>
+              getLVSimpsonSlotFromMeasurement(item) === slot
+            );
+            if (saved.length === 1) {
+              const item = saved[0];
+              const sourceTarget = {
+                studyInstanceUID: item.referenceStudyUID || item.StudyInstanceUID,
+                seriesInstanceUID: item.referenceSeriesUID || item.SeriesInstanceUID,
+                sopInstanceUID: item.SOPInstanceUID,
+                referencedImageId: item.referencedImageId,
+                frameNumber: item.frameNumber,
+              };
+              const verified = getEFContourFrameTarget({ [slot]: sourceTarget }, slot);
+              if (verified) return verified;
+            }
+            // No unique saved source: an explicitly authored target is still
+            // valid, but an ambiguous contour must not be guessed.
+            return saved.length > 1 ? null : getEFContourFrameTarget(efContourTargets, slot);
+          },
           canNavigateSlot(slot: string) {
-            return isActiveStudy() && !!getEFContourFrameTarget(efContourTargets, slot);
+            return isActiveStudy() && !!this.getNavigationTarget(slot);
           },
           async onNavigateSlot(slot: string) {
             if (!isActiveStudy()) return;
-            const target = getEFContourFrameTarget(efContourTargets, slot);
+            const target = this.getNavigationTarget(slot);
             if (!target) return;
             cancelDrawingWithoutClosingPanel();
             let navigation: any = null;
