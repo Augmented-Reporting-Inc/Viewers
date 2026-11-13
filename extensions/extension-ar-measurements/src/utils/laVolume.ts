@@ -318,6 +318,22 @@ function buildSlotGeometry(measurement, slot) {
   };
 }
 
+/**
+ * Reuse the exact calibrated LA area-length geometry for display after
+ * a persisted learner contour is hydrated. This is not a new measurement
+ * or a scoring operation; invalid/incomplete source geometry returns null.
+ */
+export function getVerifiedLAVolumeContourAreaCM2(measurement) {
+  const kind = String(measurement?.measurementKind ||
+    measurement?.measurements?.measurementKind || '').trim();
+  const slot = getSlot(measurement);
+  if (kind !== 'laVolumeSlot' || !LA_VOLUME_SLOT_INFO[slot]) return null;
+  const geometry = buildSlotGeometry(measurement, slot);
+  return geometry.complete === true &&
+    Number.isFinite(geometry.areaCM2) && geometry.areaCM2 > 0
+    ? geometry.areaCM2 : null;
+}
+
 function uniqueMessages(messages = []) {
   const seen = new Set();
 
