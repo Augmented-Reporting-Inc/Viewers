@@ -1399,6 +1399,8 @@ const ECHO_LENGTH_MEASUREMENT_LABELS_CONFIG = Object.freeze({
     { value: 'LAd', label: 'Left atrial dimension' },
     { value: 'RVIDd', label: 'RVIDd' },
     { value: 'TAPSE', label: 'TAPSE' },
+    { value: 'IVCexp', label: 'IVC expiration (IVCexp)' },
+    { value: 'IVCinsp', label: 'IVC inspiration (IVCinsp)' },
   ],
 });
 
