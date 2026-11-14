@@ -12,6 +12,14 @@ export function resolveQuizGoldViewportImage({
   frameNumber = null,
   viewportImageIds = [],
   getInstanceMetadata = () => null,
+}: {
+  savedImageId?: string;
+  studyInstanceUID?: string;
+  seriesInstanceUID?: string;
+  sopInstanceUID?: string;
+  frameNumber?: number | null;
+  viewportImageIds?: string[];
+  getInstanceMetadata?: (imageId: string) => any;
 } = {}) {
   const clean = value => String(value ?? '').trim();
   const normalized = value => clean(value)
@@ -39,9 +47,6 @@ export function resolveQuizGoldViewportImage({
     if (clean(metadata.StudyInstanceUID) && metadata.StudyInstanceUID !== path.study) return false;
     if (clean(metadata.SeriesInstanceUID) && metadata.SeriesInstanceUID !== path.series) return false;
     if (metadata.SOPInstanceUID !== path.sop) return false;
-    const metadataFrame = Number(metadata.frameNumber);
-    if (metadata.frameNumber != null && Number.isInteger(metadataFrame) && metadataFrame > 0 &&
-        metadataFrame !== path.frame) return false;
     return true;
   };
   if (!saved || !savedPath || !expected.sop ||
