@@ -56,6 +56,11 @@ export default function getSOPInstanceAttributes(imageId, displaySetService, ann
 
 function _getUIDFromImageID(imageId) {
   const instance = cornerstone.metaData.get('instance', imageId);
+  if (!instance?.SOPInstanceUID) {
+    // Never manufacture DICOM identity for a restored annotation. The caller
+    // can decline this measurement without corrupting clinical measurement state.
+    throw new Error('Cornerstone instance metadata unavailable for referenced image');
+  }
 
   return {
     SOPInstanceUID: instance.SOPInstanceUID,
