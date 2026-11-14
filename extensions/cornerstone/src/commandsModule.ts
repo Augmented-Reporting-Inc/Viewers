@@ -1,4 +1,5 @@
 import { getSplinePersistence, compactOversampledSpline } from './utils/splinePersistence';
+import { resolveQuizGoldViewportImage } from './utils/viewerQuizGoldImageReference';
 import {
   getEnabledElement,
   metaData,
@@ -16477,8 +16478,26 @@ function commandsModule({
         // contour against its own image rather than navigating the viewport to
         // each subsequent frame (which would leave the wrong frame visible).
         const match = entry.slot
-          ? { imageId: comparisonAnnotation.referencedImageId || '' }
+          ? resolveQuizGoldViewportImage({
+              savedImageId: comparisonAnnotation.referencedImageId,
+              studyInstanceUID: comparisonAnnotation.StudyInstanceUID,
+              seriesInstanceUID: comparisonAnnotation.SeriesInstanceUID,
+              sopInstanceUID: comparisonAnnotation.SOPInstanceUID,
+              frameNumber: comparisonAnnotation.frameNumber,
+              viewportImageIds: getViewportImageIds(viewport),
+              getInstanceMetadata: imageId => metaData.get('instance', imageId),
+            })
           : await waitForSavedAnnotationImageMatch(viewport, comparisonAnnotation);
+        // A saved DICOMweb URL can differ from Cornerstone's registered imageId
+        // (e.g. wadors: vs dicomweb:). Only use a verified, exact stack image.
+        // Never register a composite gold overlay under an unregistered URL:
+        // measurement mapping requires metadata for the exact imageId string.
+        if (entry.slot && !match.ok) {
+          console.warn('[ViewerQuiz] composite gold image metadata unresolved', {
+            questionKey, slot: entry.slot, reason: match.reason,
+          });
+          continue;
+        }
         const hydrated = hydrateViewerQuizMeasurementComparisonAnnotation({
           comparisonAnnotation,
           viewport,
