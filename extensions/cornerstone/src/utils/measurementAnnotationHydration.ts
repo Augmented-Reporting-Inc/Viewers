@@ -1315,6 +1315,22 @@ function getSavedArrowAnnotateTextBox(annotation: any = {}) {
   return isPlainObject(annotation?.textBox) ? annotation.textBox : {};
 }
 
+/**
+ * Saved Length evidence is used only for unchanged restored handles. It is not
+ * a calibration source for newly drawn/edited measurements.
+ */
+function getRestoredLengthEvidence(annotation, referencedImageId) {
+  if (inferToolName(annotation) !== 'Length') return null;
+  const measurements = annotation?.measurements || {};
+  const value = finiteNumberOrNull(measurements.length) ?? finiteNumberOrNull(measurements.value);
+  const unit = String(measurements.lengthUnit || measurements.unit || '').trim().toLowerCase();
+  const points = cloneAnnotationPoints(annotation?.points);
+  if (value === null || value <= 0 || unit !== 'mm' || points.length !== 2 || !referencedImageId) {
+    return null;
+  }
+  return { valueMm: value, referencedImageId, points };
+}
+
 function buildCornerstoneAnnotation(annotation, fallbackFrameOfReferenceUID = '') {
   const annotationUID = annotation.uid || annotation.annotationId;
   const referencedImageId = annotation.referencedImageId;
@@ -1369,6 +1385,9 @@ function buildCornerstoneAnnotation(annotation, fallbackFrameOfReferenceUID = ''
       },
     },
     cachedStats: buildCachedStatsForAnnotation(annotation, toolName, referencedImageId),
+    ...(getRestoredLengthEvidence(annotation, referencedImageId)
+      ? { arRestoredLengthEvidence: getRestoredLengthEvidence(annotation, referencedImageId) }
+      : {}),
   };
 
   if (toolName === 'ArrowAnnotate') {
@@ -1502,6 +1521,7 @@ function patchHydratedAnnotationFromSaved({
       },
     },
     cachedStats: buildCachedStatsForAnnotation(savedAnnotation, toolName, referencedImageId),
+    arRestoredLengthEvidence: getRestoredLengthEvidence(savedAnnotation, referencedImageId),
     ...(isSavedSpectralDopplerAnnotation(savedAnnotation)
       ? {
           spectralDoppler:
