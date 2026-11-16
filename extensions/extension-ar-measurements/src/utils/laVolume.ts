@@ -535,18 +535,14 @@ export function calculateLABiplaneDisks(
   const a4c = base.slots.A4C;
   const a2c = base.slots.A2C;
   const axisDifferenceMM = Math.abs(a4c.longAxisLengthMM - a2c.longAxisLengthMM);
-  if (axisDifferenceMM > MAX_RECOMMENDED_AXIS_DIFFERENCE_MM) {
-    const warning = 'LA A4C/A2C long axes differ by more than 5 mm; reacquire or redraw for Simpson disk summation.';
-    return {
-      status: 'invalid',
-      method,
-      methodId,
-      slots: base.slots,
-      values: null,
-      messages: [...(base.messages || []), warning],
-      guidance: [...(base.messages || []), warning],
-    };
-  }
+  // The 5 mm difference is a clinical image-quality recommendation, not an
+  // arithmetic or source-evidence failure. Fixed teaching images cannot be
+  // reacquired, and repeated redraws may not correct an acquired-view
+  // difference. Keep the area-length calculator's explicit quality warning
+  // while still returning the disk result from two valid, calibrated contours.
+  // Missing/duplicate source phases, invalid physical geometry and sampled
+  // diameters remain hard failures.
+  const qualityWarnings = base.messages || [];
 
   const widths4 = a4c.widths;
   const widths2 = a2c.widths;
@@ -612,8 +608,8 @@ export function calculateLABiplaneDisks(
       diskCount: SAMPLE_COUNT,
       diskHeightMM,
     },
-    messages: base.messages || [],
-    guidance: base.guidance || [],
+    messages: qualityWarnings,
+    guidance: qualityWarnings,
   };
 }
 
