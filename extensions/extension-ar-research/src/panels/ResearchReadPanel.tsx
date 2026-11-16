@@ -495,7 +495,9 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
         '[AR Research] viewer measurement capture failed; preserving saved annotations',
         captureError
       );
-      return savedAnnotations;
+      return savedAnnotations.filter(annotation =>
+        !deletedAnnotationIdsRef.current.has(getAnnotationKey(annotation))
+      );
     }
   }, [commandsManager, context?.readSchema?.domain, savedAnnotations]);
 
