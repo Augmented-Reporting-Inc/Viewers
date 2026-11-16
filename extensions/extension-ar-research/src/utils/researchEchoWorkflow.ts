@@ -68,16 +68,23 @@ export function getResearchRapChoices(field: any) {
 
 export function getResearchCompanionField(field: any, fields: any[] = []) {
   if (!field) return null;
-  // Keep legacy Echo starter protocols readable without modifying saved data.
-  const match = fields.find(item => item.componentKey === 'readerComment' &&
+  const explicitlyGrouped = fields.find(item =>
     item.key !== field.key &&
-    (item.config?.groupWithComponentKey === field.componentKey ||
-      (field.componentKey === 'imageQuality' && !item.config?.groupWithComponentKey))
+    String(item.config?.groupWithComponentKey || '') === String(field.componentKey)
   );
-  return field.componentKey === 'imageQuality' ? match || null : null;
+  if (explicitlyGrouped) return explicitlyGrouped;
+  // Backwards-compatible Echo starter schemas created before the grouping flag.
+  return field.componentKey === 'imageQuality'
+    ? fields.find(item => item.key !== field.key &&
+        item.componentKey === 'readerComment' &&
+        !item.config?.groupWithComponentKey) || null
+    : null;
 }
 
 export function isResearchCompanionHidden(field: any, fields: any[] = []) {
-  if (field?.componentKey !== 'readerComment') return false;
-  return !!fields.find(item => getResearchCompanionField(item, fields)?.key === field.key);
+  if (!field) return false;
+  return !!fields.find(item =>
+    item.key !== field.key &&
+    getResearchCompanionField(item, fields)?.key === field.key
+  );
 }
