@@ -4959,7 +4959,11 @@ function getEFContourFrameTarget(targets: any, slot: string) {
   const target = targets[slot];
   if (!target || typeof target !== 'object' || Array.isArray(target)) return null;
   const normalized = normalizeViewerQuizTarget(target);
-  if (!normalized.referencedImageId || !normalized.sopInstanceId ||
+  // Research Manager protocols may store the canonical SOP Instance UID +
+  // 1-based frame instead of a transient viewer image URL. Both are exact
+  // DICOM targets. The EF navigator still verifies the resulting image's
+  // *actual* SOP and frame before permitting the contour workflow.
+  if (!normalized.sopInstanceId ||
       !Number.isInteger(normalized.frameNumber) || normalized.frameNumber < 1) return null;
   return target;
 }
