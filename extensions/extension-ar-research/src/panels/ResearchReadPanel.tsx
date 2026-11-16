@@ -6,6 +6,12 @@ import React, {
   useState,
 } from 'react';
 import { buildViewerMeasurementValueCandidates } from 'extension-ar-measurements';
+import ResearchEchoGuidedControls from './ResearchEchoGuidedControls';
+import {
+  getResearchRapChoices,
+  getResearchCompanionField,
+  isResearchCompanionHidden,
+} from '../utils/researchEchoWorkflow';
 import {
   buildReadFields,
   buildCalculatedReadState,
@@ -18,6 +24,8 @@ import {
   getResearchFieldMeasurementCandidates,
   getResearchFieldSourceAnnotations,
   getResearchProtocolViewerTargets,
+  getResearchProtocolCompatibleCandidates,
+  isResearchCandidateOnProtocolFrames,
 } from '../utils/researchFieldNavigation';
 import {
   completeResearchReadReview,
@@ -115,7 +123,9 @@ function ReadField({
   const kind = cleanString(field.kind).toLowerCase();
   const numeric = ['measurement', 'continuous', 'number', 'numeric'].includes(kind);
   const text = ['text', 'comment', 'textarea'].includes(kind);
-  const options = Array.isArray(field?.config?.options) ? field.config.options : [];
+  const configuredOptions = Array.isArray(field?.config?.options) ? field.config.options : [];
+  const options = configuredOptions.length ? configuredOptions :
+    getResearchRapChoices(field).map(value => ({ value, label: value + ' mmHg' }));
   const unit = cleanString(field?.config?.unit);
   const calculated = cleanString(field?.config?.calculation?.type).toLowerCase() === 'rvsp';
 
@@ -233,13 +243,17 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
     () => buildReadFields(context?.readSchema || {}),
     [context?.readSchema]
   );
+  const visibleFields = useMemo(
+    () => fields.filter(field => !isResearchCompanionHidden(field, fields)),
+    [fields]
+  );
   useEffect(() => {
-    if (!fields.length) return;
+    if (!visibleFields.length) return;
     setSelectedFieldKey(current =>
-      fields.some(field => field.key === current) ? current :
-      (fields.find(field => field.required)?.key || fields[0].key)
+      visibleFields.some(field => field.key === current) ? current :
+      (visibleFields.find(field => field.required)?.key || visibleFields[0].key)
     );
-  }, [fields]);
+  }, [visibleFields]);
 
   const allAnnotations = useMemo(
     () => mergeMeasurementAnnotations(savedAnnotations, liveAnnotations),
@@ -308,10 +322,13 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
       );
 
       setViewerCandidates(candidates);
-      const updates = buildViewerMeasurementReadUpdates(
-        fields,
-        candidates,
-        valueSourcesRef.current
+      const available = mergeMeasurementAnnotations(savedAnnotations, snapshot);
+      const updates = fields.flatMap(field =>
+        buildViewerMeasurementReadUpdates(
+          [field],
+          getResearchProtocolCompatibleCandidates(field, candidates, available),
+          valueSourcesRef.current
+        )
       );
 
       if (!updates.length) {
@@ -481,8 +498,12 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
       // fresh toolbar measurement can race the React event/state update and
       // save as an unlinked viewer annotation with an empty numeric field.
       const latestCandidates = buildViewerMeasurementValueCandidates(measurementAnnotations);
-      const freshUpdates = buildViewerMeasurementReadUpdates(
-        fields, latestCandidates, valueSourcesRef.current
+      const freshUpdates = fields.flatMap(field =>
+        buildViewerMeasurementReadUpdates(
+          [field],
+          getResearchProtocolCompatibleCandidates(field, latestCandidates, measurementAnnotations),
+          valueSourcesRef.current
+        )
       );
       const latestValues = { ...values };
       const latestSources = { ...valueSourcesRef.current };
@@ -492,6 +513,22 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
           source: update.source,
           sourceMeasurementKey: update.sourceMeasurementKey,
         };
+      }
+      // Fixed-frame protocols must not accept a manually entered value or
+      // an annotation captured from a different DICOM frame as verified.
+      // The UI and the persisted source evidence must agree.
+      for (const field of fields) {
+        const targets = getResearchProtocolViewerTargets(field);
+        const mustUseFrames = field?.config?.compositeFrameGuidanceEnabled === true;
+        if (!targets.length && !mustUseFrames) continue;
+        const value = latestValues[field.key];
+        if (value === '' || value === null || value === undefined) continue;
+        const source = latestSources[field.key] || {};
+        const match = getResearchFieldMeasurementCandidates(field, latestCandidates)
+          .find(candidate => candidate.sourceMeasurementKey === source.sourceMeasurementKey);
+        if (!match || !isResearchCandidateOnProtocolFrames(field, match, measurementAnnotations)) {
+          throw new Error(field.label + ': the value does not have verified evidence on the protocol-configured DICOM source frame.');
+        }
       }
       const latestReadState = buildCalculatedReadState(
         fields, latestValues, latestSources, latestCandidates
