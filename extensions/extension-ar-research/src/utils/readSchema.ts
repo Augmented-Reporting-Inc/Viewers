@@ -247,7 +247,8 @@ export function buildReadValueMap(readResults: any = {}) {
 export function buildCalculatedReadState(
   fields: any[] = [],
   values: Record<string, any> = {},
-  sources: Record<string, any> = {}
+  sources: Record<string, any> = {},
+  viewerCandidates: any[] | null = null
 ) {
   const nextValues = { ...values };
   const nextSources = { ...sources };
@@ -280,7 +281,13 @@ export function buildCalculatedReadState(
       trValue !== '' && trValue != null &&
       rapValue !== '' && rapValue != null &&
       trSource?.source === 'viewer-measurement' &&
-      !!cleanString(trSource?.sourceMeasurementKey);
+      !!cleanString(trSource?.sourceMeasurementKey) &&
+      // Once the active annotation snapshot has been received, a removed
+      // TR contour cannot continue to authorize a stale RVSP result.
+      (viewerCandidates == null || viewerCandidates.some(candidate =>
+        candidate.source === 'viewer-measurement' &&
+        candidate.sourceMeasurementKey === trSource.sourceMeasurementKey
+      ));
 
     const result = validUnits && hasInputs
       ? calculateRVSP(trValue, rapValue)
