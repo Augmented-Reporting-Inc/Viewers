@@ -178,6 +178,53 @@ describe('Shared native Length US calibration — live vs completed', () => {
     expect(measurement.displayText.primary).toEqual(live);
   });
 
+  it('restores Samsung BWT 6.98 mm without using native double-calibrated 1.16 mm', () => {
+    const physicalDelta = 0.016649011522531509;
+    const worldPoints = [
+      [58.43999978430569, 49.632292140051725, 0],
+      [59.94383364222944, 42.814911984130745, 0],
+    ];
+    const samsungRegion = usRegion({
+      regionLocationMinY0: 90,
+      regionLocationMaxX1: 640,
+      regionLocationMaxY1: 480,
+      physicalDeltaX: physicalDelta,
+      physicalDeltaY: physicalDelta,
+    });
+    const annotation = mohawkLikeAnnotation();
+    annotation.data.handles.points = worldPoints.map(p => [...p]);
+    annotation.data.cachedStats[targetId] = { length: 1.1623, unit: 'cm US Region' };
+    annotation.data.arRestoredLengthEvidence = {
+      valueMm: 6.98,
+      referencedImageId: imageId,
+      points: worldPoints.map(p => [...p]),
+    };
+
+    // Frame metadata is temporarily unavailable while restoring the cine.
+    withImage({ regions: [samsungRegion], imagePlane: undefined });
+    const live = createCalibratedLengthTextLines(nativeDefaultGetTextLines);
+    expect(live(annotation.data, targetId)).toEqual(['6.98 mm']);
+
+    // Once frame imagePlane arrives, the calibrated geometry is used instead.
+    withImage({
+      regions: [samsungRegion],
+      imagePlane: {
+        columnPixelSpacing: physicalDelta * 10,
+        rowPixelSpacing: physicalDelta * 10,
+      },
+    });
+    expect(live(annotation.data, targetId)).toEqual(['6.98 mm']);
+
+    // After an edit, the old saved value cannot mask new/unverified geometry.
+    annotation.data.handles.points[1][0] += 1;
+    withImage({ regions: [samsungRegion], imagePlane: undefined });
+    expect(live(annotation.data, targetId)).toEqual(['Physical calibration unavailable']);
+
+    // Never use evidence from a different cine frame.
+    annotation.data.handles.points = worldPoints.map(p => [...p]);
+    expect(live(annotation.data, 'imageId:other-frame')).toEqual(['Physical calibration unavailable']);
+  });
+
   it('never mutates the live annotation (frozen input still maps)', () => {
     withImage({ regions: [usRegion()], imagePlane: singleRegionPlane });
     const annotation = deepFreeze(mohawkLikeAnnotation());
