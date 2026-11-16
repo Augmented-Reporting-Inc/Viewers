@@ -10,6 +10,7 @@ on:
       - 'extensions/extension-ar-measurements/src/utils/measurementValueCandidates.test.ts'
       - 'extensions/extension-ar-research/src/utils/readSchemaCalculated.test.ts'
       - 'extensions/extension-ar-research/jest.config.js'
+      - 'extensions/extension-ar-research/babel.config.js'
       - '.github/workflows/validate-research-tr-vmax-binding.yml'
   workflow_dispatch:
 
