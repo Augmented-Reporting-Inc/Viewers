@@ -109,7 +109,14 @@ function getResearchTRVelocityCandidate(annotation: any = {}) {
   const labelToken = cleanString(
     annotation?.label || annotation?.measurementRole || annotation?.role
   ).toLowerCase().replace(/[^a-z0-9]/g, '');
-  const isTRPeak = ['trpeakvelocity', 'trvmax', 'trvel'].includes(labelToken);
+  const mappedTarget = cleanString(
+    annotation?.reportMapping?.targetKey ||
+    annotation?.ultrasoundDirectional?.reportMapping?.targetKey ||
+    annotation?.measurements?.ultrasoundDirectional?.reportMapping?.targetKey
+  );
+  const isTRPeak =
+    ['trpeakvelocity', 'trvmax', 'trvel'].includes(labelToken) ||
+    mappedTarget === 'echo.trPeakVelocity';
   const directional =
     annotation?.ultrasoundDirectional ||
     annotation?.measurements?.ultrasoundDirectional;
@@ -124,8 +131,15 @@ function getResearchTRVelocityCandidate(annotation: any = {}) {
 
   const measurementKey = getMeasurementKey(annotation);
   const rawValue = directional.value;
-  const rawUnit = cleanString(directional.unit).toLowerCase().replace(/\s+/g, '');
-  const unitFactor = rawUnit === 'm/s' ? 1 : rawUnit === 'cm/s' ? 0.01 : rawUnit === 'mm/s' ? 0.001 : null;
+  // Ultrasound-region calibration commonly serializes cm/sec or cm/second.
+  // Normalize unit notation before converting; never parse the viewport text.
+  const rawUnit = cleanString(directional.unit).toLowerCase()
+    .replace(/\s+/g, '')
+    .replace(/\/seconds?$/, '/s')
+    .replace(/\/secs?$/, '/s');
+  const unitFactor = rawUnit === 'm/s' ? 1 :
+    rawUnit === 'cm/s' ? 0.01 :
+    rawUnit === 'mm/s' ? 0.001 : null;
   const rawNumeric = rawValue === null || rawValue === undefined || rawValue === ''
     ? null
     : Number(rawValue);
