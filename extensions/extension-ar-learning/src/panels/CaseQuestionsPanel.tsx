@@ -2744,6 +2744,10 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       Math.abs(Number(status.value) - Number(gold.value)) < 0.005;
     const unit = cleanString(status.unit || gold.unit || config.unit);
     const needsAreaRecovery = authoringMode && needsSavedCalibratedGoldAreas(question);
+    const savedWarnings = plainObject(gold.compositeResult).qualityWarnings;
+    const rawWarnings = hasLive ? status.warnings : savedWarnings;
+    const qualityWarnings = Array.isArray(rawWarnings)
+      ? rawWarnings.map(cleanString).filter(Boolean) : [];
     return (
       <div className="mt-2 rounded border border-emerald-700/60 bg-emerald-950/10 px-2 py-2 text-xs">
         {hasLive ? (
@@ -2763,6 +2767,15 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               'Complete both calibrated measurements and their source references.'}
           </div>
         )}
+        {qualityWarnings.length > 0 && (hasLive || hasGold) ? (
+          <div className="mt-1 text-amber-200" role="status">
+            <div className="font-semibold">LA view-quality advisory — calculation remains available</div>
+            {qualityWarnings.map((warning: string, index: number) => (
+              <div key={index} className="mt-1">{warning}</div>
+            ))}
+            <div className="mt-1">Review LA view selection and contour placement if possible. This warning does not prevent capturing, saving or submitting the measurement.</div>
+          </div>
+        ) : null}
         {hasGold && hasLive && !sameGold ? (
           <div className="mt-1 text-amber-200">
             {authoringMode ? 'Saved gold' : 'Saved answer'}: {Number(gold.value).toFixed(2)} {unit}. The live value has changed;
