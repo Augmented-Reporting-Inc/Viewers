@@ -51,6 +51,7 @@ import { EF_CONTOUR_FRAME_SLOTS, getEFGoldContourAuthoringRows, getEFGoldDerived
 import { validateAndOrderAuthoringQuestions } from '../utils/quizAuthoringQuestionIdentity';
 import { hasAllRequiredViewerGoldValues } from '../utils/quizAuthoringGoldReadiness';
 import { getViewerQuizRouteMeasurementDomain } from '../utils/viewerQuizMeasurementDomain';
+import { getRestoredQuizMeasurementKind } from '../utils/restoredQuizMeasurementContext';
 import { getCompositePhaseSlot, getCompositePhaseMeasurementId, matchesCompositePhaseSource, getCompositeGoldCaptureSignature, getSavedCompositePhaseValues, needsSavedCalibratedGoldAreas,
   findEditableCompositePhaseMeasurement, clearSavedCompositeGoldPhase, getCompositeGoldPersistenceError, getIncompleteCompositeGoldReplacementReason } from '../utils/quizCompositePhaseEvidence';
 
@@ -2223,8 +2224,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       if (active?.type === 'measurementNumeric' && authoringMeasurementDomain) {
         syncQuizMeasurementDomainToUrl(authoringMeasurementDomain, { overwrite: true });
       }
-      const kind = active?.type === 'measurementNumeric'
-        ? cleanString(plainObject(active.answerConfig).measurementKind) : '';
+      const kind = getRestoredQuizMeasurementKind({
+        activeQuestionKey, authoringMode: true, authoringQuestions,
+      });
       void runViewerCommand(commandsManager, 'setViewerQuizMeasurementContext', {
         measurementKind: kind,
       }).catch(error => console.warn('[CaseQuestionsPanel] restoring authoring measurement context failed', error));
@@ -2233,8 +2235,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     const [quizKey, questionKey] = activeQuestionKey.split(':');
     const quiz = quizzes.find(item => item.quizKey === quizKey);
     const question = quiz?.questions?.find(item => item.questionKey === questionKey);
-    const kind = question?.type === 'measurementNumeric'
-      ? cleanString(plainObject(question.answerConfig).measurementKind) : '';
+    const kind = getRestoredQuizMeasurementKind({ activeQuestionKey, quizzes });
     void runViewerCommand(commandsManager, 'setViewerQuizMeasurementContext', {
       measurementKind: kind,
     }).catch(error => console.warn('[CaseQuestionsPanel] restoring learner measurement context failed', error));
