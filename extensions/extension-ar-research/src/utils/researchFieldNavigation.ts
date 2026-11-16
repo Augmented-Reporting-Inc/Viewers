@@ -74,3 +74,94 @@ export function getResearchProtocolViewerTargets(field: any): Array<{label: stri
   }
   return targets;
 }
+
+/**
+ * Exact protocol source guard. Composite results can contain multiple source
+ * annotation IDs, so compare their *sets* to distinct configured phase targets;
+ * never accept a visually similar but different DICOM frame.
+ *
+ * A protocol without configured frames leaves the existing reader freedom
+ * unchanged. Invalid/incomplete required phase configuration fails closed.
+ */
+function getAnnotationSourceFrame(annotation: any = {}) {
+  const referencedImageId = cleanString(
+    annotation?.referencedImageId || annotation?.metadata?.referencedImageId
+  );
+  const frameFromImage = referencedImageId.match(/\/frames\/(\d+)(?:\b|[/?#])/i) ||
+    referencedImageId.match(/[?&]frame(?:Number)?=(\d+)/i);
+  const frame = Number(
+    annotation?.frameNumber ?? annotation?.FrameNumber ??
+    (frameFromImage ? frameFromImage[1] : '')
+  );
+  return {
+    sop: cleanString(
+      annotation?.SOPInstanceUID || annotation?.sopInstanceUID ||
+      annotation?.metadata?.SOPInstanceUID
+    ),
+    series: cleanString(
+      annotation?.referenceSeriesUID || annotation?.SeriesInstanceUID ||
+      annotation?.seriesInstanceUID
+    ),
+    study: cleanString(
+      annotation?.referenceStudyUID || annotation?.StudyInstanceUID ||
+      annotation?.studyInstanceUID
+    ),
+    frame,
+  };
+}
+
+function annotationMatchesTarget(annotation: any, target: any) {
+  const source = getAnnotationSourceFrame(annotation);
+  const sop = cleanString(target?.sopInstanceUID || target?.SOPInstanceUID);
+  const series = cleanString(target?.seriesInstanceUID || target?.SeriesInstanceUID);
+  const study = cleanString(target?.studyInstanceUID || target?.StudyInstanceUID);
+  return !!source.sop && !!sop &&
+    Number.isInteger(source.frame) && source.frame > 0 &&
+    source.sop === sop && source.frame === Number(target?.frameNumber) &&
+    (!series || source.series === series) &&
+    (!study || source.study === study);
+}
+
+export function isResearchCandidateOnProtocolFrames(
+  field: any, candidate: any, annotations: any[] = []
+) {
+  const config = field?.config || {};
+  const fixedTargets = getResearchProtocolViewerTargets(field);
+  const phases = config.compositeFrameTargets && typeof config.compositeFrameTargets === 'object'
+    ? Object.keys(config.compositeFrameTargets) : [];
+  if (config.compositeFrameGuidanceEnabled === true) {
+    // Guard incomplete configs as well as missing/reordered phase sources.
+    const expected: Record<string, number> = {
+      lvEjectionFraction: 4, laVolumeDisks: 2,
+      rvFac: 2, ivcCollapsibility: 2,
+    };
+    const required = expected[cleanString(field?.componentKey)] || 0;
+    if (!required || phases.length !== required ||
+      fixedTargets.length !== required) return false;
+  }
+  if (!fixedTargets.length) return true;
+  const sourceKeys = getResearchSourceAnnotationIds(candidate?.sourceMeasurementKey);
+  const matchedAnnotations = sourceKeys
+    .map(key => annotations.find(item => cleanString(
+      item?.annotationId || item?.annotationUID || item?.uid || item?.id
+    ) === key))
+    .filter(Boolean);
+  if (!matchedAnnotations.length) return false;
+  const remaining = [...matchedAnnotations];
+  for (const { viewerTarget } of fixedTargets) {
+    const index = remaining.findIndex(annotation =>
+      annotationMatchesTarget(annotation, viewerTarget)
+    );
+    if (index < 0) return false;
+    remaining.splice(index, 1);
+  }
+  return true;
+}
+
+export function getResearchProtocolCompatibleCandidates(
+  field: any, candidates: any[] = [], annotations: any[] = []
+) {
+  return candidates.filter(candidate =>
+    isResearchCandidateOnProtocolFrames(field, candidate, annotations)
+  );
+}
