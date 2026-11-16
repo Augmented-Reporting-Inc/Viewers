@@ -399,7 +399,7 @@ describe('LA biplane disks quality advisory does not block fixed-image learner c
     expect(status.complete).toBe(true);
     expect(status.value).toBeGreaterThan(0);
     expect(status.warnings).toHaveLength(1);
-    expect(status.warnings[0]).toMatch(/7\\.9 mm/);
+    expect(status.warnings[0]).toMatch(/7\.9 mm/);
     const answer = resolveViewerQuizCompositeResult('laVolumeBiplaneDisks', measurements);
     expect(answer?.methodId).toBe('biplane-disks-v1');
     expect(answer?.value).toBeCloseTo(status.value);
