@@ -136,6 +136,47 @@ describe('optional source-linked Research Read RVSP calculation', () => {
     expect(read.sources['rvsp|'].sourceMeasurementKey).toContain('TR-source-real-1');
   });
 
+  it('never arbitrarily binds the last of two TR Vmax sources', () => {
+    const competing = [
+      { labels: ['TRVel'], value: 2.5, unit: 'm/s',
+        source: 'viewer-measurement', sourceMeasurementKey: 'tr-first' },
+      { labels: ['TRVel'], value: 3.1, unit: 'm/s',
+        source: 'viewer-measurement', sourceMeasurementKey: 'tr-second' },
+    ];
+    expect(buildViewerMeasurementReadUpdates(fields(), competing, {})).toEqual([]);
+    const pinned = buildViewerMeasurementReadUpdates(fields(), competing, {
+      'trVmax|': { source: 'viewer-measurement', sourceMeasurementKey: 'tr-first' },
+    });
+    expect(pinned).toHaveLength(1);
+    expect(pinned[0].value).toBeCloseTo(2.5);
+    expect(pinned[0].sourceMeasurementKey).toBe('tr-first');
+  });
+
+  it('binds source-calibrated cm/sec toolbar velocity and keeps correct RVSP inputs', () => {
+    const candidates = buildViewerMeasurementValueCandidates([{
+      annotationId: 'tr-calibrated-256',
+      measurementKind: 'ultrasound-directional',
+      label: 'TR peak velocity',
+      measurements: {
+        ultrasoundDirectional: {
+          measurementKind: 'ultrasound-directional',
+          value: 256,
+          unit: 'cm/sec',
+          acquisitionMode: 'spectralVmax',
+        },
+      },
+    }]);
+    const updates = buildViewerMeasurementReadUpdates(fields(), candidates, {});
+    expect(updates).toHaveLength(1);
+    expect(updates[0].value).toBeCloseTo(2.56);
+    const state = buildCalculatedReadState(fields(),
+      { 'trVmax|': updates[0].value, 'rap|': 3 },
+      { 'trVmax|': { source: updates[0].source, sourceMeasurementKey: updates[0].sourceMeasurementKey },
+        'rap|': { source: 'manual' } },
+      candidates);
+    expect(state.values['rvsp|']).toBeCloseTo(29.2, 1);
+  });
+
   it('has no effect on protocols without a calculated field', () => {
     const regular = buildReadFields({
       components: [{ componentKey: 'comment', kind: 'text' }],

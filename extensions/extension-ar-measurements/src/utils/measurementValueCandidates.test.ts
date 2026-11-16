@@ -86,6 +86,19 @@ describe('Research Read calibrated toolbar TR velocity binding', () => {
     expect(tr.labels).toContain('TR peak velocity');
   });
 
+  it('accepts ultrasound-region cm/sec velocity notation and explicit TR report target', () => {
+    const src = directionalTR(256, 'cm/sec');
+    const result = buildViewerMeasurementValueCandidates([src]);
+    expect(result.find(x => x.labels.includes('TRVel'))?.value).toBeCloseTo(2.56, 6);
+
+    const mapped = {
+      ...src, label: 'Velocity',
+      reportMapping: { targetKey: 'echo.trPeakVelocity' },
+    };
+    expect(buildViewerMeasurementValueCandidates([mapped])
+      .find(x => x.labels.includes('TRVel'))?.value).toBeCloseTo(2.56, 6);
+  });
+
   it('preserves m/s and converts mm/s without parsing displayed text', () => {
     const direct = buildViewerMeasurementValueCandidates([directionalTR(3.1, 'm/s')]);
     expect(direct.find(item => item.labels.includes('TRVel'))?.value).toBeCloseTo(3.1);

@@ -396,17 +396,30 @@ export function buildViewerMeasurementReadUpdates(
       continue;
     }
 
-    let matchedCandidate = null;
+    const matchingCandidates = (Array.isArray(candidates) ? candidates : [])
+      .filter(candidate => {
+        const candidateTokens = normalizeMeasurementLabels(candidate?.labels)
+          .map(normalizeMeasurementLabelToken)
+          .filter(Boolean);
+        return candidateTokens.some(token => configuredTokens.has(token));
+      })
+      .filter(candidate => !!cleanString(candidate?.sourceMeasurementKey));
 
-    for (const candidate of Array.isArray(candidates) ? candidates : []) {
-      const candidateTokens = normalizeMeasurementLabels(candidate?.labels)
-        .map(normalizeMeasurementLabelToken)
-        .filter(Boolean);
-
-      if (candidateTokens.some(token => configuredTokens.has(token))) {
-        matchedCandidate = candidate;
-      }
-    }
+    const uniqueSources = Array.from(new Map(
+      matchingCandidates.map(candidate => [
+        cleanString(candidate.sourceMeasurementKey), candidate,
+      ])
+    ).values());
+    const previousSourceKey = cleanString(
+      valueSources?.[field.key]?.sourceMeasurementKey
+    );
+    // No arbitrary "last measurement wins" when two spectral acquisitions
+    // or contours have the same label on different instance/frame sources.
+    // An explicitly selected, previously bound source remains stable.
+    const matchedCandidate = previousSourceKey
+      ? uniqueSources.find(candidate =>
+          cleanString(candidate.sourceMeasurementKey) === previousSourceKey)
+      : uniqueSources.length === 1 ? uniqueSources[0] : null;
 
     if (!matchedCandidate) {
       continue;

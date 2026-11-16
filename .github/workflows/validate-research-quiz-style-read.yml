@@ -1,0 +1,58 @@
+name: Validate quiz-style Research Read
+
+on:
+  pull_request:
+    branches:
+      - fix/research-tr-vmax-binding-20261116
+      - port/3.11-custom
+    paths:
+      - 'extensions/extension-ar-research/src/**'
+      - 'extensions/extension-ar-research/babel.config.js'
+      - 'extensions/extension-ar-research/jest.config.js'
+      - 'extensions/extension-ar-measurements/src/utils/measurementValueCandidates*.ts'
+      - 'extensions/extension-ar-learning/src/panels/CaseQuestionsPanel.tsx'
+      - 'extensions/extension-ar-learning/src/utils/restoredQuizMeasurementContext*.ts'
+      - '.github/workflows/validate-research-quiz-style-read.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  research-read:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: yarn
+      - name: Install exact dependencies
+        run: yarn install --frozen-lockfile --non-interactive
+      - name: Check Research source navigation and calculated RVSP
+        run: yarn jest --config extensions/extension-ar-research/jest.config.js --runInBand --coverage=false --runTestsByPath extensions/extension-ar-research/src/utils/readSchemaCalculated.test.ts extensions/extension-ar-research/src/utils/researchFieldNavigation.test.ts
+      - name: Check calibrated source extraction, including cm/sec
+        run: yarn jest --config extensions/extension-ar-measurements/jest.config.js --runInBand --coverage=false --runTestsByPath extensions/extension-ar-measurements/src/utils/measurementValueCandidates.test.ts
+      - name: Compile Research Read panel JSX/TypeScript
+        run: |
+          node - <<'NODE'
+          const babel = require('@babel/core');
+          const path = 'extensions/extension-ar-research/src/panels/ResearchReadPanel.tsx';
+          const result = babel.transformFileSync(path, { envName: 'production' });
+          if (!result || !result.code) throw new Error('Research panel did not compile');
+          console.log('Research Read panel compiled successfully');
+          NODE
+      - name: Test restored learner and educator TR Vmax quiz context
+        run: yarn jest --config extensions/extension-ar-learning/jest.config.js --runInBand --coverage=false --runTestsByPath extensions/extension-ar-learning/src/utils/restoredQuizMeasurementContext.test.ts
+      - name: Compile learning quiz panel with restored toolbar context
+        run: |
+          node - <<'NODE'
+          const babel = require('@babel/core');
+          const path = 'extensions/extension-ar-learning/src/panels/CaseQuestionsPanel.tsx';
+          const result = babel.transformFileSync(path, { envName: 'production' });
+          if (!result || !result.code) throw new Error('Learning quiz panel did not compile');
+          console.log('Learning quiz panel compiled successfully');
+          NODE
