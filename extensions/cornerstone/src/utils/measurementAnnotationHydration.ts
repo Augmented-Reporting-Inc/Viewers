@@ -1339,6 +1339,7 @@ function buildCornerstoneAnnotation(annotation, fallbackFrameOfReferenceUID = ''
   const contourClosed = getSavedContourClosed(annotation);
   const toolName = inferToolName(annotation);
   const savedTextBox = getSavedArrowAnnotateTextBox(annotation);
+  const restoredLengthEvidence = getRestoredLengthEvidence(annotation, referencedImageId);
   const viewportViewReference =
     annotation?.arViewportViewReference && isPlainObject(annotation.arViewportViewReference)
       ? annotation.arViewportViewReference
@@ -1385,9 +1386,7 @@ function buildCornerstoneAnnotation(annotation, fallbackFrameOfReferenceUID = ''
       },
     },
     cachedStats: buildCachedStatsForAnnotation(annotation, toolName, referencedImageId),
-    ...(getRestoredLengthEvidence(annotation, referencedImageId)
-      ? { arRestoredLengthEvidence: getRestoredLengthEvidence(annotation, referencedImageId) }
-      : {}),
+    ...(restoredLengthEvidence ? { arRestoredLengthEvidence: restoredLengthEvidence } : {}),
   };
 
   if (toolName === 'ArrowAnnotate') {
