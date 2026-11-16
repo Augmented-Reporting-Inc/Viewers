@@ -3,7 +3,11 @@ import { getIsLocked } from './utils/getIsLocked';
 import { getIsVisible } from './utils/getIsVisible';
 import getSOPInstanceAttributes from './utils/getSOPInstanceAttributes';
 import { utils } from '@ohif/core';
-import { getUSRegionLengthCalibrationForTarget } from '../correctUSRegionLength';
+import {
+  getUSRegionLengthCalibrationForTarget,
+  hasUnresolvedSingleRegionLengthCalibration,
+} from '../correctUSRegionLength';
+import { getImageIdForLengthTarget } from '../usRegionLengthCalibration';
 
 const Length = {
   toAnnotation: measurement => {},
@@ -64,6 +68,19 @@ const Length = {
     const { points, textBox } = data.handles;
 
     const mappedAnnotations = getMappedAnnotations(annotation, displaySetService);
+
+    // Do not emit a persistable numeric measurement when a single spatial
+    // ultrasound region has no image-plane spacing. Native Cornerstone can
+    // apply PhysicalDelta twice in this state (6.98 mm -> 1.16 mm).
+    if (
+      mappedAnnotations.some(({ targetId }) =>
+        hasUnresolvedSingleRegionLengthCalibration(
+          getImageIdForLengthTarget(targetId, referencedImageId)
+        )
+      )
+    ) {
+      return null;
+    }
 
     // The measurement record gets the calibrated value for panels, persistence
     // and quiz capture. The live annotation's cachedStats are NOT modified:
