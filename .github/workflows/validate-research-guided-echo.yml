@@ -1,0 +1,48 @@
+name: Validate guided Echo Research workflows
+
+on:
+  pull_request:
+    branches:
+      - feature/research-quiz-style-read-20261116
+      - port/3.11-custom
+    paths:
+      - 'extensions/extension-ar-research/src/**'
+      - '.github/workflows/validate-research-guided-echo.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  guided-research:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: yarn
+      - run: yarn install --frozen-lockfile --non-interactive
+      - name: Test Research Read workflows, binding, target sources and RAP
+        run: |
+          yarn jest --config extensions/extension-ar-research/jest.config.js --runInBand --coverage=false --runTestsByPath \
+            extensions/extension-ar-research/src/utils/readSchemaCalculated.test.ts \
+            extensions/extension-ar-research/src/utils/researchFieldNavigation.test.ts \
+            extensions/extension-ar-research/src/utils/researchEchoWorkflow.test.ts
+      - name: Compile both viewer panels
+        run: |
+          node - <<'NODE'
+          const babel = require('@babel/core');
+          const files = [
+            'extensions/extension-ar-research/src/panels/ResearchReadPanel.tsx',
+            'extensions/extension-ar-research/src/panels/ResearchEchoGuidedControls.tsx',
+          ];
+          for (const file of files) {
+            const result = babel.transformFileSync(file, { envName: 'production' });
+            if (!result?.code) throw new Error('Could not compile ' + file);
+            console.log('Compiled', file);
+          }
+          NODE
