@@ -1,4 +1,7 @@
 import { calculateLVSimpson } from './lvSimpson';
+import { calculateLABiplaneDisks } from './laVolume';
+import { calculateRVFACFromMeasurements, getEchoAreaSlot } from './echoAreaMeasurements';
+import { calculateIVCFromMeasurements, isIVCDiameterMeasurement } from './rightHeartMeasurements';
 
 function cleanString(value: unknown) {
   return String(value || '').trim();
@@ -104,6 +107,36 @@ function isLVSimpsonAnnotation(annotation: any = {}) {
   );
 }
 
+/**
+ * Keep research-derived values linked to actual validated viewer annotations.
+ * A derived field is never inferred from a label or from free-text geometry.
+ * Labels are intentionally method-specific (20-disk LA != area-length LA).
+ */
+function addDerivedCandidate({
+  candidates, measurements, sourceFilter, labels, value, unit, prefix,
+}: {
+  candidates: any[];
+  measurements: any[];
+  sourceFilter: (annotation: any) => boolean;
+  labels: string[];
+  value: unknown;
+  unit: string;
+  prefix: string;
+}) {
+  const numeric = Number(value);
+  if (value == null || !Number.isFinite(numeric)) return;
+  const sources = measurements.filter(sourceFilter);
+  const sourceKeys = sources.map(getMeasurementKey);
+  if (!sourceKeys.length || sourceKeys.some(key => !key)) return;
+  candidates.push({
+    labels,
+    value: numeric,
+    unit,
+    source: 'viewer-derived',
+    sourceMeasurementKey: `${prefix}:${sourceKeys.join(',')}`.slice(0, 200),
+  });
+}
+
 export function buildViewerMeasurementValueCandidates(
   annotations: any[] = []
 ) {
@@ -153,6 +186,43 @@ export function buildViewerMeasurementValueCandidates(
       unit: '%',
       source: 'viewer-derived',
       sourceMeasurementKey: `lv-simpson:${sourceKeys.join(',')}`.slice(0, 200),
+    });
+  }
+
+  const laDisks = calculateLABiplaneDisks(measurements);
+  if (laDisks?.status === 'complete') {
+    addDerivedCandidate({
+      candidates, measurements,
+      sourceFilter: annotation =>
+        String(annotation?.measurementKind || annotation?.measurements?.measurementKind || '') === 'laVolumeSlot',
+      labels: ['LAVolumeDisks', 'LA Biplane Disks', 'LA 20-disk volume'],
+      value: laDisks.values?.volumeML,
+      unit: 'mL',
+      prefix: 'la-disks',
+    });
+  }
+
+  const rvFac = calculateRVFACFromMeasurements(measurements);
+  if (rvFac?.status === 'complete') {
+    addDerivedCandidate({
+      candidates, measurements,
+      sourceFilter: annotation => ['RV_ED', 'RV_ES'].includes(getEchoAreaSlot(annotation) || ''),
+      labels: ['RVFAC', 'RV FAC', 'RV fractional area change'],
+      value: rvFac.values?.facPercent,
+      unit: '%',
+      prefix: 'rv-fac',
+    });
+  }
+
+  const ivc = calculateIVCFromMeasurements(measurements);
+  if (ivc?.status === 'complete') {
+    addDerivedCandidate({
+      candidates, measurements,
+      sourceFilter: isIVCDiameterMeasurement,
+      labels: ['IVCCollapsibility', 'IVC collapsibility'],
+      value: ivc.values?.collapsibilityPercent,
+      unit: '%',
+      prefix: 'ivc-collapse',
     });
   }
 
