@@ -97,11 +97,13 @@ function notify(servicesManager: any, message: string, type = 'success') {
 function ReadField({
   field,
   value,
+  source,
   disabled,
   onChange,
 }: {
   field: any;
   value: any;
+  source?: any;
   disabled: boolean;
   onChange: (value: any) => void;
 }) {
@@ -129,6 +131,12 @@ function ReadField({
           </span>
         ) : null}
       </div>
+
+      {['viewer-measurement', 'viewer-derived'].includes(cleanString(source?.source)) ? (
+        <div className="mb-2 text-xs text-blue-300">
+          {source.source === 'viewer-derived' ? 'Calculated from viewer evidence' : 'Linked to viewer measurement'}
+        </div>
+      ) : null}
 
       {options.length > 0 ? (
         <select
@@ -328,6 +336,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
         return current;
       });
     } catch (bindingError) {
+      setViewerCandidates([]);
       console.warn(
         '[AR Research] viewer measurement binding refresh failed',
         bindingError
@@ -657,6 +666,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
             key={field.key}
             field={field}
             value={calculatedReadState.values[field.key] ?? ''}
+            source={calculatedReadState.sources[field.key]}
             disabled={context.readOnly || context.preview || isBusy}
             onChange={nextValue => updateValue(field.key, nextValue)}
           />
