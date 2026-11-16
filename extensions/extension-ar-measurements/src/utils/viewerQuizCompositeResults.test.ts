@@ -1,4 +1,5 @@
 import { boundEFQuizEvidencePoints, calibratedLVContourAreaCM2, isViewerQuizCompositeReviewCurrent, resolveViewerQuizCompositeResult, resolveViewerQuizLVSimpsonForStudy, getViewerQuizCompositeStatus } from './viewerQuizCompositeResults';
+import { calculateLABiplaneDisks } from './laVolume';
 
 describe('viewer quiz composite result evidence', () => {
   it('rejects missing required Simpson slots', () => {
@@ -388,6 +389,12 @@ describe('LA biplane disks quality advisory does not block fixed-image learner c
 
   it('calculates disks and captures exact-frame sources at 77.4 vs 69.5 mm with a visible warning', () => {
     const measurements = [la('A4C', 77.4, 20), la('A2C', 69.5, 16)];
+    // Existing clinical callers must still enforce the 5 mm image QA limit.
+    expect(calculateLABiplaneDisks(measurements)?.status).toBe('invalid');
+    // Only education quiz resolution explicitly opts into the advisory mode.
+    expect(calculateLABiplaneDisks(measurements, null, {
+      allowAxisQualityAdvisory: true,
+    })?.status).toBe('complete');
     const status = getViewerQuizCompositeStatus('laVolumeBiplaneDisks', measurements);
     expect(status.complete).toBe(true);
     expect(status.value).toBeGreaterThan(0);
