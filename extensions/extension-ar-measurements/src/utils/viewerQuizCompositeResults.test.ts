@@ -360,3 +360,63 @@ describe('EF physically calibrated contour area', () => {
     expect(calibratedLVContourAreaCM2([[0, 0, 0], [10, 0, 0], [20, 0, 0]])).toBeNull();
   });
 });
+
+
+describe('LA biplane disks quality advisory does not block fixed-image learner capture', () => {
+  const la = (slot: 'A4C' | 'A2C', axisMM: number, widthMM: number) => {
+    const half = widthMM / 2;
+    const points = [
+      [-half, 0, 0], [-half, axisMM * 0.25, 0],
+      [-half, axisMM * 0.5, 0], [-half, axisMM * 0.75, 0],
+      [-half, axisMM, 0], [half, axisMM, 0],
+      [half, axisMM * 0.75, 0], [half, axisMM * 0.5, 0],
+      [half, axisMM * 0.25, 0], [half, 0, 0],
+    ];
+    return {
+      uid: 'la-' + slot, measurementKind: 'laVolumeSlot', toolName: 'SplineROI',
+      slot, points,
+      laVolume: {
+        measurementKind: 'laVolumeSlot', slot, contourPoints: points,
+        baseLeftPoint: [-half, 0, 0], baseRightPoint: [half, 0, 0],
+        superiorPoint: [0, axisMM, 0], longAxisLengthMM: axisMM,
+      },
+      referenceStudyUID: 'study', referenceSeriesUID: 'series',
+      SOPInstanceUID: 'sop-' + slot, frameNumber: 1,
+      referencedImageId: 'wadors:studies/study/series/series/instances/sop-' + slot + '/frames/1',
+    };
+  };
+
+  it('calculates disks and captures exact-frame sources at 77.4 vs 69.5 mm with a visible warning', () => {
+    const measurements = [la('A4C', 77.4, 20), la('A2C', 69.5, 16)];
+    const status = getViewerQuizCompositeStatus('laVolumeBiplaneDisks', measurements);
+    expect(status.complete).toBe(true);
+    expect(status.value).toBeGreaterThan(0);
+    expect(status.warnings).toHaveLength(1);
+    expect(status.warnings[0]).toMatch(/7\\.9 mm/);
+    const answer = resolveViewerQuizCompositeResult('laVolumeBiplaneDisks', measurements);
+    expect(answer?.methodId).toBe('biplane-disks-v1');
+    expect(answer?.value).toBeCloseTo(status.value);
+    expect(answer?.derived?.axisDifferenceMM).toBeCloseTo(7.9);
+    expect(answer?.qualityWarnings?.[0]).toMatch(/Dedicated LA views should be reevaluated/);
+    expect(answer?.components).toHaveLength(2);
+    expect(answer?.components.map(c => c.annotationId)).toEqual(['la-A4C', 'la-A2C']);
+  });
+
+  it('does not warn when both axes are within 5 mm', () => {
+    const status = getViewerQuizCompositeStatus('laVolumeBiplaneDisks', [
+      la('A4C', 77.4, 20), la('A2C', 73.4, 16),
+    ]);
+    expect(status.complete).toBe(true);
+    expect(status.warnings).toEqual([]);
+  });
+
+  it('still rejects missing, duplicate or invalid-calibration LA source contours', () => {
+    const a4c = la('A4C', 77.4, 20);
+    const a2c = la('A2C', 69.5, 16);
+    expect(getViewerQuizCompositeStatus('laVolumeBiplaneDisks', [a4c]).complete).toBe(false);
+    expect(resolveViewerQuizCompositeResult('laVolumeBiplaneDisks', [a4c, a4c, a2c])).toBeNull();
+    expect(getViewerQuizCompositeStatus('laVolumeBiplaneDisks', [
+      a4c, { ...a2c, laVolume: { ...a2c.laVolume, longAxisLengthMM: 0 } },
+    ]).complete).toBe(false);
+  });
+});
