@@ -33,6 +33,7 @@ import {
 import { vec3, mat4 } from 'gl-matrix';
 import toggleImageSliceSync from './utils/imageSliceSync/toggleImageSliceSync';
 import { getFirstAnnotationSelected } from './utils/measurementServiceMappings/utils/selection';
+import { getMeasurementSnapshotStudyInstanceId } from './utils/measurementSnapshotStudy';
 import { getViewportEnabledElement } from './utils/getViewportEnabledElement';
 import getActiveViewportEnabledElement from './utils/getActiveViewportEnabledElement';
 import toggleVOISliceSync from './utils/toggleVOISliceSync';
@@ -17705,20 +17706,28 @@ function commandsModule({
             'submitted-for-score',
           ].includes(normalizedScoringIntent);
 
+          // The learner Series can retain its original Camosun study ID while
+          // the learning viewer renders the optimized Mohawk DICOM study.
+          // Match Cornerstone-native annotation sources against that effective
+          // study without rewriting the learner Series identity.
+          const snapshotStudyInstanceId = getMeasurementSnapshotStudyInstanceId(
+            seriesDoc,
+            isReportOwnedMeasurementSave
+          );
           const cornerstoneFallbackMeasurements = [
             ...(shouldSyncReportFields
               ? getCornerstoneVolumeMeasurementFallbacks({
-                  studyInstanceUID: String(seriesDoc?.StudyInstanceUID || ''),
+                  studyInstanceUID: snapshotStudyInstanceId,
                   excludedMeasurementIds: viewerMeasurementsDeletedInSession,
                 })
               : []),
             ...getCornerstoneUltrasoundDirectionalMeasurementFallbacks({
-              studyInstanceUID: String(seriesDoc?.StudyInstanceUID || ''),
+              studyInstanceUID: snapshotStudyInstanceId,
               excludedMeasurementIds: viewerMeasurementsDeletedInSession,
             }),
             ...(shouldSyncReportFields
               ? getCornerstoneBowelCurvedLengthMeasurementFallbacks({
-                  studyInstanceUID: String(seriesDoc?.StudyInstanceUID || ''),
+                  studyInstanceUID: snapshotStudyInstanceId,
                   excludedMeasurementIds: viewerMeasurementsDeletedInSession,
                 })
               : []),
