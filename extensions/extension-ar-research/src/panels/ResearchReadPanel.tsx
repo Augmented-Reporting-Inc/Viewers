@@ -8,6 +8,7 @@ import React, {
 import { buildViewerMeasurementValueCandidates } from 'extension-ar-measurements';
 import {
   buildReadFields,
+  buildCalculatedReadState,
   buildReadResultEntries,
   buildReadValueState,
   buildViewerMeasurementReadUpdates,
@@ -109,6 +110,7 @@ function ReadField({
   const text = ['text', 'comment', 'textarea'].includes(kind);
   const options = Array.isArray(field?.config?.options) ? field.config.options : [];
   const unit = cleanString(field?.config?.unit);
+  const calculated = cleanString(field?.config?.calculation?.type).toLowerCase() === 'rvsp';
 
   return (
     <div className="rounded border border-gray-700 bg-gray-950 p-3">
@@ -118,6 +120,7 @@ function ReadField({
           <div className="mt-0.5 text-xs text-gray-400">
             {field.required ? 'Required' : 'Optional'}
             {unit ? ` - ${unit}` : ''}
+            {calculated ? ' · Calculated from measured TR Vmax and entered RAP' : ''}
           </div>
         </div>
         {field.required ? (
@@ -131,7 +134,7 @@ function ReadField({
         <select
           className="w-full rounded border border-gray-600 bg-black px-3 py-2 text-sm text-white"
           value={value ?? ''}
-          disabled={disabled}
+          disabled={disabled || calculated}
           onChange={event => onChange(event.target.value)}
         >
           <option value="">Select...</option>
@@ -145,7 +148,7 @@ function ReadField({
         <textarea
           className="min-h-24 w-full rounded border border-gray-600 bg-black px-3 py-2 text-sm text-white"
           value={value ?? ''}
-          disabled={disabled}
+          disabled={disabled || calculated}
           onChange={event => onChange(event.target.value)}
           placeholder="Enter reader comment"
         />
@@ -155,7 +158,7 @@ function ReadField({
             className="min-w-0 flex-1 rounded border border-gray-600 bg-black px-3 py-2 text-sm text-white"
             type={numeric ? 'number' : 'text'}
             value={value ?? ''}
-            disabled={disabled}
+            disabled={disabled || calculated}
             min={numeric ? field?.config?.min : undefined}
             max={numeric ? field?.config?.max : undefined}
             step={numeric ? field?.config?.step || 'any' : undefined}
@@ -214,9 +217,15 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
     () => buildReadFields(context?.readSchema || {}),
     [context?.readSchema]
   );
+  const calculatedReadState = useMemo(
+    () => (context?.readOnly || context?.preview
+      ? { values, sources: valueSources }
+      : buildCalculatedReadState(fields, values, valueSources)),
+    [context?.readOnly, context?.preview, fields, values, valueSources]
+  );
   const missingRequired = useMemo(
-    () => getMissingRequiredReadFields(fields, values),
-    [fields, values]
+    () => getMissingRequiredReadFields(fields, calculatedReadState.values),
+    [fields, calculatedReadState.values]
   );
 
   const updateValue = useCallback((fieldKey, nextValue) => {
@@ -437,8 +446,8 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
         schemaVersion: cleanString(context?.readSchema?.schemaVersion),
         entries: buildReadResultEntries(
           fields,
-          values,
-          valueSources
+          calculatedReadState.values,
+          calculatedReadState.sources
         ),
       };
       const saved = await saveResearchReadReview({
@@ -485,8 +494,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
     context,
     fields,
     servicesManager,
-    values,
-    valueSources,
+    calculatedReadState,
   ]);
 
   const complete = useCallback(async () => {
@@ -645,7 +653,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
           <ReadField
             key={field.key}
             field={field}
-            value={values[field.key]}
+            value={calculatedReadState.values[field.key]}
             disabled={context.readOnly || context.preview || isBusy}
             onChange={nextValue => updateValue(field.key, nextValue)}
           />
