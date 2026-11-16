@@ -500,7 +500,8 @@ export function calculateLAVolume(measurements = [], seriesDocOrBsa = null) {
  */
 export function calculateLABiplaneDisks(
   measurements = [],
-  seriesDocOrBsa = null
+  seriesDocOrBsa = null,
+  { allowAxisQualityAdvisory = false } = {}
 ) {
   const methodId = LA_VOLUME_DISKS_METHOD;
   const method = 'Biplane Simpson summation of 20 elliptical LA disks (longer LA axis).';
@@ -536,13 +537,25 @@ export function calculateLABiplaneDisks(
   const a2c = base.slots.A2C;
   const axisDifferenceMM = Math.abs(a4c.longAxisLengthMM - a2c.longAxisLengthMM);
   // The 5 mm difference is a clinical image-quality recommendation, not an
-  // arithmetic or source-evidence failure. Fixed teaching images cannot be
-  // reacquired, and repeated redraws may not correct an acquired-view
-  // difference. Keep the area-length calculator's explicit quality warning
-  // while still returning the disk result from two valid, calibrated contours.
-  // Missing/duplicate source phases, invalid physical geometry and sampled
-  // diameters remain hard failures.
+  // arithmetic or source-evidence failure. Clinical calculations keep their
+  // existing strict default. Only explicit learner quiz callers use this
+  // advisory mode because fixed teaching images cannot be reacquired.
+  // Missing/duplicate source phases, invalid calibration and sampled
+  // diameters remain hard failures in both modes.
   const qualityWarnings = base.messages || [];
+  if (axisDifferenceMM > MAX_RECOMMENDED_AXIS_DIFFERENCE_MM &&
+      !allowAxisQualityAdvisory) {
+    const warning = 'LA A4C/A2C long axes differ by more than 5 mm; reacquire or redraw for Simpson disk summation.';
+    return {
+      status: 'invalid',
+      method,
+      methodId,
+      slots: base.slots,
+      values: null,
+      messages: [...qualityWarnings, warning],
+      guidance: [...qualityWarnings, warning],
+    };
+  }
 
   const widths4 = a4c.widths;
   const widths2 = a2c.widths;
