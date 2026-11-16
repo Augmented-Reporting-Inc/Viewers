@@ -987,18 +987,26 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
                 <div className="mt-2 space-y-1">
                   <div className="text-gray-400">Captured measurement sources — select to inspect</div>
                   {selectedSources.map(annotation => (
-                    <button
+                    <div
                       key={getAnnotationKey(annotation)}
-                      type="button"
-                      className="flex w-full min-w-0 items-center justify-between gap-2 rounded border border-gray-700 bg-black p-2 text-left hover:border-blue-500 disabled:opacity-50"
-                      disabled={!commandsManager}
-                      onClick={() => void jumpToAnnotation(annotation)}
+                      className="flex min-w-0 items-center gap-2 rounded border border-gray-700 bg-black p-2"
                     >
-                      <span className="min-w-0 break-words text-gray-200">
+                      <span className="min-w-0 flex-1 break-words text-gray-200">
                         {getAnnotationLabel(annotation)}
                       </span>
-                      <span className="shrink-0 text-blue-300">View source</span>
-                    </button>
+                      <button type="button"
+                        className="shrink-0 text-blue-300 hover:underline disabled:opacity-40"
+                        disabled={!commandsManager}
+                        onClick={() => void jumpToAnnotation(annotation)}
+                      >View source</button>
+                      {!context.readOnly && !context.preview ? (
+                        <button type="button"
+                          className="shrink-0 text-red-300 hover:underline disabled:opacity-40"
+                          disabled={isBusy}
+                          onClick={() => void deleteResearchAnnotation(annotation)}
+                        >Delete</button>
+                      ) : null}
+                    </div>
                   ))}
                 </div>
               ) : null}
