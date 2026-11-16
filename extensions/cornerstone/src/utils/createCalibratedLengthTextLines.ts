@@ -3,6 +3,31 @@ import { getUSRegionLengthCalibrationForTarget } from './correctUSRegionLength';
 
 const WRAPPED = Symbol.for('ar.calibratedLengthTextLines');
 
+/** Use persisted mm only for the exact restored image and unchanged handles. */
+function getUnchangedRestoredLength(data, targetId) {
+  const saved = data?.arRestoredLengthEvidence;
+  if (!saved || typeof targetId !== 'string' || !targetId.startsWith('imageId:')) {
+    return null;
+  }
+  if (targetId.slice('imageId:'.length) !== saved.referencedImageId) return null;
+  const current = data?.handles?.points;
+  if (!Array.isArray(current) || current.length !== 2 || !Array.isArray(saved.points)) {
+    return null;
+  }
+  const unchanged = current.every((point, i) =>
+    Array.isArray(point) &&
+    Array.isArray(saved.points[i]) &&
+    point.length >= 3 &&
+    saved.points[i].length >= 3 &&
+    [0, 1, 2].every(axis =>
+      Number.isFinite(Number(point[axis])) &&
+      Math.abs(Number(point[axis]) - Number(saved.points[i][axis])) < 1e-7
+    )
+  );
+  const value = Number(saved.valueMm);
+  return unchanged && Number.isFinite(value) && value > 0 ? value : null;
+}
+
 /**
  * Wrap the Length tool's existing getTextLines. Only the displayed text
  * changes: cachedStats, handles, interaction and completion stay owned by the
@@ -30,11 +55,27 @@ export function createCalibratedLengthTextLines(nativeGetTextLines) {
     }
 
     const calibration = getUSRegionLengthCalibrationForTarget(targetId, data);
-    if (!calibration) {
-      return originalLines;
+    if (calibration) {
+      return [formatCalibratedLength(calibration.lengthMm)];
     }
 
-    return [formatCalibratedLength(calibration.lengthMm)];
+    // The restored record is authoritative only while its image and endpoints
+    // have not changed. This avoids recalculating an already-mm single-region
+    // saved annotation with a pixel-world fallback when imagePlane is missing.
+    const savedLength = getUnchangedRestoredLength(data, targetId);
+    if (savedLength != null) {
+      return [formatCalibratedLength(savedLength)];
+    }
+
+    // Native Cornerstone's cm US Region text is not trustworthy in this
+    // fallback path; iUSCAN may relabel it as mm. Fail closed rather than show
+    // a plausible but wrong physical value after an edit or on a fresh trace.
+    const statsUnit = String(data?.cachedStats?.[targetId]?.unit || '');
+    if (/cm\s+US\s+Region/i.test(statsUnit)) {
+      return ['Physical calibration unavailable'];
+    }
+
+    return originalLines;
   }
 
   calibratedLengthTextLines[WRAPPED] = true;
