@@ -10,6 +10,8 @@ on:
       - 'extensions/extension-ar-research/babel.config.js'
       - 'extensions/extension-ar-research/jest.config.js'
       - 'extensions/extension-ar-measurements/src/utils/measurementValueCandidates*.ts'
+      - 'extensions/extension-ar-learning/src/panels/CaseQuestionsPanel.tsx'
+      - 'extensions/extension-ar-learning/src/utils/restoredQuizMeasurementContext*.ts'
       - '.github/workflows/validate-research-quiz-style-read.yml'
   workflow_dispatch:
 
@@ -42,4 +44,15 @@ jobs:
           const result = babel.transformFileSync(path, { envName: 'production' });
           if (!result || !result.code) throw new Error('Research panel did not compile');
           console.log('Research Read panel compiled successfully');
+          NODE
+      - name: Test restored learner and educator TR Vmax quiz context
+        run: yarn jest --config extensions/extension-ar-learning/jest.config.js --runInBand --coverage=false --runTestsByPath extensions/extension-ar-learning/src/utils/restoredQuizMeasurementContext.test.ts
+      - name: Compile learning quiz panel with restored toolbar context
+        run: |
+          node - <<'NODE'
+          const babel = require('@babel/core');
+          const path = 'extensions/extension-ar-learning/src/panels/CaseQuestionsPanel.tsx';
+          const result = babel.transformFileSync(path, { envName: 'production' });
+          if (!result || !result.code) throw new Error('Learning quiz panel did not compile');
+          console.log('Learning quiz panel compiled successfully');
           NODE
