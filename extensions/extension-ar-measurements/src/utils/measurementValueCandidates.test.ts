@@ -77,11 +77,11 @@ describe('Research Read calibrated toolbar TR velocity binding', () => {
     const candidates = buildViewerMeasurementValueCandidates([directionalTR(280)]);
     const tr = candidates.find(candidate => candidate.labels.includes('TRVel'));
     expect(tr).toMatchObject({
-      value: 2.8,
       unit: 'm/s',
       source: 'viewer-measurement',
       sourceMeasurementKey: 'TR-toolbar-annotation-1',
     });
+    expect(tr.value).toBeCloseTo(2.8, 6);
     expect(tr.labels).toContain('TR Vmax');
     expect(tr.labels).toContain('TR peak velocity');
   });
