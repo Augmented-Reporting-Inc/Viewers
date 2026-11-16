@@ -1,4 +1,4 @@
-import { buildViewerMeasurementValueCandidates } from 'extension-ar-measurements';
+import { buildViewerMeasurementValueCandidates } from '../../../extension-ar-measurements/src/utils/measurementValueCandidates';
 import {
   buildViewerMeasurementReadUpdates,
   buildReadFields,
