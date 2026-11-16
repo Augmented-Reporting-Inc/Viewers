@@ -13,12 +13,14 @@ import {
  */
 export default function ResearchEchoGuidedControls({
   field, commandsManager, disabled = false, readOnly = false, onError,
+  sourceAnnotations = [],
 }: {
   field: any;
   commandsManager: any;
   disabled?: boolean;
   readOnly?: boolean;
   onError?: (message: string) => void;
+  sourceAnnotations?: any[];
 }) {
   const [busy, setBusy] = useState('');
   const kind = String(field?.componentKey || '');
@@ -86,6 +88,19 @@ export default function ResearchEchoGuidedControls({
           {button('Open EF contour panel', 'ef', async () => {
             if (hasIncompleteRequiredEF) {
               throw new Error('Configure all four EF frames in Research Manager before opening the guided protocol.');
+            }
+            // The Research Review owns these saved contour annotations even
+            // when the shared study has no clinical AR Series document.
+            // Restore their exact source images one at a time before opening
+            // the established EF panel. Never substitute another frame.
+            const seen = new Set<string>();
+            for (const annotation of sourceAnnotations) {
+              const id = String(annotation?.annotationId || annotation?.uid || annotation?.id || '');
+              if (!id || seen.has(id)) continue;
+              seen.add(id);
+              await command('jumpToSavedViewerAnnotation', {
+                annotation, selectAnnotation: false,
+              });
             }
             return command('startLVSimpsonEFWorkflow', {
               efContourTargets: field.config?.compositeFrameTargets || null,
