@@ -175,6 +175,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
   const [context, setContext] = useState<any>(null);
   const [values, setValues] = useState<Record<string, any>>({});
   const [valueSources, setValueSources] = useState<Record<string, any>>({});
+  const [viewerCandidates, setViewerCandidates] = useState<any[] | null>(null);
   const valueSourcesRef = useRef<Record<string, any>>({});
   const [savedAnnotations, setSavedAnnotations] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -196,6 +197,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
       setValues(readState.values);
       valueSourcesRef.current = readState.sources;
       setValueSources(readState.sources);
+      setViewerCandidates(null);
       setSavedAnnotations(
         Array.isArray(next?.review?.measurementAnnotations)
           ? next.review.measurementAnnotations
@@ -220,8 +222,8 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
   const calculatedReadState = useMemo(
     () => (context?.readOnly || context?.preview
       ? { values, sources: valueSources }
-      : buildCalculatedReadState(fields, values, valueSources)),
-    [context?.readOnly, context?.preview, fields, values, valueSources]
+      : buildCalculatedReadState(fields, values, valueSources, viewerCandidates)),
+    [context?.readOnly, context?.preview, fields, values, valueSources, viewerCandidates]
   );
   const missingRequired = useMemo(
     () => getMissingRequiredReadFields(fields, calculatedReadState.values),
@@ -274,6 +276,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
           : []
       );
 
+      setViewerCandidates(candidates);
       const updates = buildViewerMeasurementReadUpdates(
         fields,
         candidates,
@@ -653,7 +656,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
           <ReadField
             key={field.key}
             field={field}
-            value={calculatedReadState.values[field.key]}
+            value={calculatedReadState.values[field.key] ?? ''}
             disabled={context.readOnly || context.preview || isBusy}
             onChange={nextValue => updateValue(field.key, nextValue)}
           />
