@@ -972,6 +972,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
             <ResearchEchoGuidedControls
               field={selectedField}
               commandsManager={commandsManager}
+              sourceAnnotations={selectedSources}
               disabled={context.readOnly || context.preview || isBusy}
               readOnly={context.readOnly || context.preview}
               onError={message => notify(servicesManager, message, 'warning')}
