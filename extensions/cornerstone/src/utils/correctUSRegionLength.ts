@@ -35,6 +35,33 @@ export function getUSRegionLengthCalibration(
 }
 
 /**
+ * A single spatial US region with missing image-plane spacing cannot safely
+ * interpret its world handles as pixels. Callers can reject the measurement
+ * instead of saving Cornerstone's double-calibrated native value.
+ */
+export function hasUnresolvedSingleRegionLengthCalibration(imageId: string | null | undefined) {
+  if (!imageId) return false;
+  try {
+    const regions = metaData.get('calibrationModule', imageId)?.sequenceOfUltrasoundRegions;
+    if (!Array.isArray(regions) || regions.length !== 1) return false;
+    const region = regions[0] || {};
+    if (
+      Number(region.physicalUnitsXDirection) !== 3 ||
+      Number(region.physicalUnitsYDirection) !== 3 ||
+      !(Math.abs(Number(region.physicalDeltaX)) > 0) ||
+      !(Math.abs(Number(region.physicalDeltaY)) > 0)
+    ) return false;
+    const plane = metaData.get('imagePlaneModule', imageId);
+    return !(
+      Number(plane?.columnPixelSpacing) > 0 &&
+      Number(plane?.rowPixelSpacing) > 0
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Calibration for one cachedStats target of a Length annotation. Live text and
  * the completed measurement both go through here, so for the same handles and
  * image they always produce the same number.
