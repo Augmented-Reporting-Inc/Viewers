@@ -1,4 +1,6 @@
+import { buildViewerMeasurementValueCandidates } from 'extension-ar-measurements';
 import {
+  buildViewerMeasurementReadUpdates,
   buildReadFields,
   buildCalculatedReadState,
   buildReadResultEntries,
@@ -87,6 +89,50 @@ describe('optional source-linked Research Read RVSP calculation', () => {
       { source: 'viewer-measurement', sourceMeasurementKey: 'TR-annot-other' },
     ]);
     expect(anotherStudy.values).not.toHaveProperty('rvsp|');
+  });
+
+
+  it('links the real serialized toolbar TR peak velocity to the configured RVSP field', () => {
+    const candidates = buildViewerMeasurementValueCandidates([{
+      annotationId: 'TR-source-real-1',
+      uid: 'TR-source-real-1',
+      measurementKind: 'ultrasound-directional',
+      toolName: 'UltrasoundDirectionalTool',
+      label: 'TR peak velocity',
+      measurements: {
+        value: 280,
+        unit: 'cm/s',
+        ultrasoundDirectional: {
+          measurementKind: 'ultrasound-directional',
+          acquisitionMode: 'spectralVmax',
+          value: 280,
+          unit: 'cm/s',
+          reportValue: 2.8,
+          reportUnit: 'm/s',
+        },
+      },
+    }]);
+    const updates = buildViewerMeasurementReadUpdates(fields(), candidates, {});
+    expect(updates).toEqual([{
+      fieldKey: 'trVmax|',
+      value: 2.8,
+      source: 'viewer-measurement',
+      sourceMeasurementKey: 'TR-source-real-1',
+    }]);
+
+    const savedSources = {
+      'trVmax|': {
+        source: updates[0].source,
+        sourceMeasurementKey: updates[0].sourceMeasurementKey,
+      },
+      'rap|': { source: 'manual' },
+    };
+    const read = buildCalculatedReadState(
+      fields(), { 'trVmax|': updates[0].value, 'rap|': 3 },
+      savedSources, candidates
+    );
+    expect(read.values['rvsp|']).toBeCloseTo(34.4);
+    expect(read.sources['rvsp|'].sourceMeasurementKey).toContain('TR-source-real-1');
   });
 
   it('has no effect on protocols without a calculated field', () => {
