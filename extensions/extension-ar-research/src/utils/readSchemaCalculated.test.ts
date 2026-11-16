@@ -75,6 +75,20 @@ describe('optional source-linked Research Read RVSP calculation', () => {
     expect(zeroTR.values).not.toHaveProperty('rvsp|');
   });
 
+  it('stops deriving RVSP when the referenced TR annotation is no longer live', () => {
+    const data = { 'trVmax|': 3, 'rap|': 3 };
+    const present = buildCalculatedReadState(fields(), data, inputSources, [
+      { source: 'viewer-measurement', sourceMeasurementKey: 'TR-annot-7' },
+    ]);
+    expect(present.values['rvsp|']).toBe(39);
+    const deleted = buildCalculatedReadState(fields(), data, inputSources, []);
+    expect(deleted.values).not.toHaveProperty('rvsp|');
+    const anotherStudy = buildCalculatedReadState(fields(), data, inputSources, [
+      { source: 'viewer-measurement', sourceMeasurementKey: 'TR-annot-other' },
+    ]);
+    expect(anotherStudy.values).not.toHaveProperty('rvsp|');
+  });
+
   it('has no effect on protocols without a calculated field', () => {
     const regular = buildReadFields({
       components: [{ componentKey: 'comment', kind: 'text' }],
