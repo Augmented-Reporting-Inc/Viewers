@@ -24,6 +24,7 @@ import {
   getResearchFieldMeasurementCandidates,
   getResearchFieldSourceAnnotations,
   getResearchProtocolViewerTargets,
+  getResearchSourceAnnotationIds,
   getResearchProtocolCompatibleCandidates,
   isResearchCandidateOnProtocolFrames,
 } from '../utils/researchFieldNavigation';
@@ -48,12 +49,15 @@ function getAnnotationKey(annotation: any = {}) {
   );
 }
 
-function mergeMeasurementAnnotations(saved: any[] = [], live: any[] = []) {
+function mergeMeasurementAnnotations(
+  saved: any[] = [], live: any[] = [],
+  deletedIds: Set<string> = new Set()
+) {
   const merged = new Map<string, any>();
 
   for (const annotation of [...(saved || []), ...(live || [])]) {
     const key = getAnnotationKey(annotation);
-    if (key) {
+    if (key && !deletedIds.has(key)) {
       merged.set(key, annotation);
     }
   }
@@ -202,6 +206,9 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
   const valueSourcesRef = useRef<Record<string, any>>({});
   const [savedAnnotations, setSavedAnnotations] = useState<any[]>([]);
   const [liveAnnotations, setLiveAnnotations] = useState<any[]>([]);
+  // Explicit research-source deletion is carried through Save even if
+  // legacy clinical Series hydration is unavailable for this research case.
+  const deletedAnnotationIdsRef = useRef<Set<string>>(new Set());
   const [selectedFieldKey, setSelectedFieldKey] = useState('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -224,6 +231,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
       setValueSources(readState.sources);
       const persistedAnnotations = Array.isArray(next?.review?.measurementAnnotations)
         ? next.review.measurementAnnotations : [];
+      deletedAnnotationIdsRef.current = new Set();
       setLiveAnnotations([]);
       setViewerCandidates(buildViewerMeasurementValueCandidates(persistedAnnotations));
       setSavedAnnotations(persistedAnnotations);
@@ -256,7 +264,9 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
   }, [visibleFields]);
 
   const allAnnotations = useMemo(
-    () => mergeMeasurementAnnotations(savedAnnotations, liveAnnotations),
+    () => mergeMeasurementAnnotations(
+      savedAnnotations, liveAnnotations, deletedAnnotationIdsRef.current
+    ),
     [savedAnnotations, liveAnnotations]
   );
 
@@ -311,14 +321,18 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
         }
       );
 
-      const snapshot = Array.isArray(serialized?.annotations)
-        ? serialized.annotations : [];
+      const snapshot = (Array.isArray(serialized?.annotations)
+        ? serialized.annotations : []).filter(annotation =>
+        !deletedAnnotationIdsRef.current.has(getAnnotationKey(annotation))
+      );
       setLiveAnnotations(snapshot);
       // A Research Review owns its persisted annotations. Unlike clinical
       // reports, this shared Research study need not have an AR Series doc.
       // Rebind from this review's saved evidence as well as current live work.
       const candidates = buildViewerMeasurementValueCandidates(
-        mergeMeasurementAnnotations(savedAnnotations, snapshot)
+        mergeMeasurementAnnotations(
+          savedAnnotations, snapshot, deletedAnnotationIdsRef.current
+        )
       );
 
       setViewerCandidates(candidates);
@@ -473,7 +487,8 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
 
       return mergeMeasurementAnnotations(
         savedAnnotations,
-        Array.isArray(serialized?.annotations) ? serialized.annotations : []
+        Array.isArray(serialized?.annotations) ? serialized.annotations : [],
+        deletedAnnotationIdsRef.current
       );
     } catch (captureError) {
       console.warn(
@@ -565,6 +580,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
           ? saved.measurementAnnotations
           : measurementAnnotations
       );
+      deletedAnnotationIdsRef.current = new Set();
       notify(
         servicesManager,
         `Research Read saved (${readResults.entries.length} structured result${
@@ -669,6 +685,52 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
     },
     [commandsManager, servicesManager]
   );
+
+  const deleteResearchAnnotation = async (annotation: any) => {
+    if (context?.readOnly || context?.preview || saving || completing) return;
+    const id = getAnnotationKey(annotation);
+    if (!id || !window.confirm('Delete this saved research measurement annotation?')) return;
+    try {
+      // This deletes the current viewer annotation when hydrated, and the
+      // Research-local tombstone ensures it is also removed from Save.
+      deletedAnnotationIdsRef.current.add(id);
+      try {
+        await commandsManager?.runCommand('removeMeasurement', { uid: id });
+      } catch (removeError) {
+        console.warn('[AR Research] viewer annotation removal unavailable', removeError);
+      }
+      setSavedAnnotations(current =>
+        current.filter(item => getAnnotationKey(item) !== id)
+      );
+      setLiveAnnotations(current =>
+        current.filter(item => getAnnotationKey(item) !== id)
+      );
+      setViewerCandidates(current => (current || []).filter(candidate =>
+        !getResearchSourceAnnotationIds(candidate?.sourceMeasurementKey).includes(id)
+      ));
+      const affected = new Set(Object.entries(valueSourcesRef.current)
+        .filter(([, source]) =>
+          getResearchSourceAnnotationIds(source?.sourceMeasurementKey).includes(id)
+        )
+        .map(([key]) => key));
+      setValueSources(current => {
+        const next = { ...current };
+        affected.forEach(key => delete next[key]);
+        valueSourcesRef.current = next;
+        return next;
+      });
+      setValues(current => {
+        const next = { ...current };
+        affected.forEach(key => delete next[key]);
+        return next;
+      });
+      notify(servicesManager, 'Research source deleted. Save the read to persist the change.');
+    } catch (removeError) {
+      deletedAnnotationIdsRef.current.delete(id);
+      console.warn('[AR Research] source deletion failed', removeError);
+      notify(servicesManager, 'Unable to delete this research source.', 'warning');
+    }
+  };
 
   const jumpToProtocolTarget = async (target: any, fieldKey: string) => {
     if (!commandsManager) return;
