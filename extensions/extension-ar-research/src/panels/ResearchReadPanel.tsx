@@ -15,6 +15,11 @@ import {
   getMissingRequiredReadFields,
 } from '../utils/readSchema';
 import {
+  getResearchFieldMeasurementCandidates,
+  getResearchFieldSourceAnnotations,
+  getResearchProtocolViewerTargets,
+} from '../utils/researchFieldNavigation';
+import {
   completeResearchReadReview,
   loadResearchReadContext,
   saveResearchReadReview,
@@ -186,6 +191,8 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
   const [viewerCandidates, setViewerCandidates] = useState<any[] | null>(null);
   const valueSourcesRef = useRef<Record<string, any>>({});
   const [savedAnnotations, setSavedAnnotations] = useState<any[]>([]);
+  const [liveAnnotations, setLiveAnnotations] = useState<any[]>([]);
+  const [selectedFieldKey, setSelectedFieldKey] = useState('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [completing, setCompleting] = useState(false);
@@ -205,12 +212,11 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
       setValues(readState.values);
       valueSourcesRef.current = readState.sources;
       setValueSources(readState.sources);
-      setViewerCandidates(null);
-      setSavedAnnotations(
-        Array.isArray(next?.review?.measurementAnnotations)
-          ? next.review.measurementAnnotations
-          : []
-      );
+      const persistedAnnotations = Array.isArray(next?.review?.measurementAnnotations)
+        ? next.review.measurementAnnotations : [];
+      setLiveAnnotations([]);
+      setViewerCandidates(buildViewerMeasurementValueCandidates(persistedAnnotations));
+      setSavedAnnotations(persistedAnnotations);
     } catch (loadError) {
       console.error('[AR Research] unable to load Research Read context', loadError);
       setError(loadError?.message || 'Unable to load the Research Read.');
@@ -227,6 +233,19 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
     () => buildReadFields(context?.readSchema || {}),
     [context?.readSchema]
   );
+  useEffect(() => {
+    if (!fields.length) return;
+    setSelectedFieldKey(current =>
+      fields.some(field => field.key === current) ? current :
+      (fields.find(field => field.required)?.key || fields[0].key)
+    );
+  }, [fields]);
+
+  const allAnnotations = useMemo(
+    () => mergeMeasurementAnnotations(savedAnnotations, liveAnnotations),
+    [savedAnnotations, liveAnnotations]
+  );
+
   const calculatedReadState = useMemo(
     () => (context?.readOnly || context?.preview
       ? { values, sources: valueSources }
@@ -278,10 +297,14 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
         }
       );
 
+      const snapshot = Array.isArray(serialized?.annotations)
+        ? serialized.annotations : [];
+      setLiveAnnotations(snapshot);
+      // A Research Review owns its persisted annotations. Unlike clinical
+      // reports, this shared Research study need not have an AR Series doc.
+      // Rebind from this review's saved evidence as well as current live work.
       const candidates = buildViewerMeasurementValueCandidates(
-        Array.isArray(serialized?.annotations)
-          ? serialized.annotations
-          : []
+        mergeMeasurementAnnotations(savedAnnotations, snapshot)
       );
 
       setViewerCandidates(candidates);
@@ -348,6 +371,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
     context?.readOnly,
     context?.readSchema?.domain,
     fields,
+    savedAnnotations,
   ]);
 
   useEffect(() => {
@@ -453,13 +477,32 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
 
     try {
       const measurementAnnotations = await captureViewerAnnotations();
+      // Recompute against the exact annotations being persisted. Otherwise a
+      // fresh toolbar measurement can race the React event/state update and
+      // save as an unlinked viewer annotation with an empty numeric field.
+      const latestCandidates = buildViewerMeasurementValueCandidates(measurementAnnotations);
+      const freshUpdates = buildViewerMeasurementReadUpdates(
+        fields, latestCandidates, valueSourcesRef.current
+      );
+      const latestValues = { ...values };
+      const latestSources = { ...valueSourcesRef.current };
+      for (const update of freshUpdates) {
+        latestValues[update.fieldKey] = update.value;
+        latestSources[update.fieldKey] = {
+          source: update.source,
+          sourceMeasurementKey: update.sourceMeasurementKey,
+        };
+      }
+      const latestReadState = buildCalculatedReadState(
+        fields, latestValues, latestSources, latestCandidates
+      );
       const readResults = {
         schemaKey: cleanString(context?.readSchema?.schemaKey),
         schemaVersion: cleanString(context?.readSchema?.schemaVersion),
         entries: buildReadResultEntries(
           fields,
-          calculatedReadState.values,
-          calculatedReadState.sources
+          latestReadState.values,
+          latestReadState.sources
         ),
       };
       const saved = await saveResearchReadReview({
@@ -507,6 +550,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
     fields,
     servicesManager,
     calculatedReadState,
+    values,
   ]);
 
   const complete = useCallback(async () => {
@@ -570,10 +614,13 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
   const jumpToAnnotation = useCallback(
     async annotation => {
       try {
-        await commandsManager.runCommand('jumpToSavedViewerAnnotation', {
+        const result = await commandsManager.runCommand('jumpToSavedViewerAnnotation', {
           annotation,
           selectAnnotation: true,
         });
+        if (result?.ok !== true) {
+          throw new Error(result?.reason || 'saved source navigation was unsuccessful');
+        }
       } catch (jumpError) {
         console.warn('[AR Research] saved annotation navigation failed', jumpError);
         notify(
@@ -585,6 +632,65 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
     },
     [commandsManager, servicesManager]
   );
+
+  const jumpToProtocolTarget = async (target: any, fieldKey: string) => {
+    if (!commandsManager) return;
+    try {
+      const result = await commandsManager.runCommand('jumpToViewerQuizTarget', {
+        viewerTarget: target,
+        questionKey: fieldKey,
+      });
+      if (result?.ok !== true) {
+        throw new Error(result?.reason || 'protocol target navigation failed');
+      }
+    } catch (navigationError) {
+      console.warn('[AR Research] protocol frame navigation failed', navigationError);
+      notify(servicesManager, 'Unable to open the configured protocol instance/frame.', 'warning');
+    }
+  };
+
+  const navigateToField = async (field: any) => {
+    const targets = getResearchProtocolViewerTargets(field);
+    // When a composite has multiple configured phases, let the reader pick the
+    // exact A4C/A2C, ED/ES or other source: never choose the wrong phase.
+    if (targets.length === 1) {
+      await jumpToProtocolTarget(targets[0].viewerTarget, field.key);
+      return;
+    }
+    if (targets.length > 1) return;
+    const sourceAnnotations = getResearchFieldSourceAnnotations(
+      calculatedReadState.sources[field.key], allAnnotations,
+      getResearchFieldMeasurementCandidates(field, viewerCandidates || [])
+    );
+    if (sourceAnnotations.length === 1) {
+      await jumpToAnnotation(sourceAnnotations[0]);
+    }
+  };
+
+  const selectField = (key: string) => {
+    const field = fields.find(item => item.key === key);
+    if (!field) return;
+    setSelectedFieldKey(key);
+    void navigateToField(field);
+  };
+
+  const selectSourceCandidate = (field: any, candidate: any) => {
+    const updates = buildViewerMeasurementReadUpdates([field], [candidate], {});
+    if (!updates.length) {
+      notify(servicesManager, 'Measurement unit or value is not compatible with this field.', 'warning');
+      return;
+    }
+    const update = updates[0];
+    setValues(current => ({ ...current, [field.key]: update.value }));
+    setValueSources(current => {
+      const next = { ...current, [field.key]: {
+        source: update.source,
+        sourceMeasurementKey: update.sourceMeasurementKey,
+      } };
+      valueSourcesRef.current = next;
+      return next;
+    });
+  };
 
   if (loading) {
     return <div className="p-4 text-sm text-gray-300">Loading Research Read...</div>;
