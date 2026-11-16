@@ -222,6 +222,7 @@ describe('Shared native Length US calibration — live vs completed', () => {
 
     // Never use evidence from a different cine frame.
     annotation.data.handles.points = worldPoints.map(p => [...p]);
+    annotation.data.cachedStats['imageId:other-frame'] = { length: 1.16, unit: 'cm US Region' };
     expect(live(annotation.data, 'imageId:other-frame')).toEqual(['Physical calibration unavailable']);
   });
 
