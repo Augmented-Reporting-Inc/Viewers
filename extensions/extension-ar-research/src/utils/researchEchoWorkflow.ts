@@ -48,7 +48,7 @@ export function isRequiredResearchPhaseMissing(field: any, slot: string) {
     !isUsableResearchTarget(getResearchEchoPhaseTarget(field, slot));
 }
 
-export function getResearchRapChoices(field: any) {
+export function getResearchRapChoices(field: any, domain = 'echo') {
   const configured = field?.config?.options;
   if (Array.isArray(configured) && configured.length) {
     return configured.map((option: any) => {
@@ -59,14 +59,15 @@ export function getResearchRapChoices(field: any) {
   }
   // Backwards-compatible Echo ReadSchema (created before the RAP preset used
   // options). Only this recognized measurement component receives defaults.
-  if (field?.componentKey === 'rap' &&
+  if (String(domain).toLowerCase() === 'echo' &&
+      field?.componentKey === 'rap' &&
       String(field?.config?.unit || '').toLowerCase() === 'mmhg') {
     return RESEARCH_RAP_CHOICES_MMHG.map(String);
   }
   return [];
 }
 
-export function getResearchCompanionField(field: any, fields: any[] = []) {
+export function getResearchCompanionField(field: any, fields: any[] = [], domain = 'echo') {
   if (!field) return null;
   const explicitlyGrouped = fields.find(item =>
     item.key !== field.key &&
@@ -74,17 +75,17 @@ export function getResearchCompanionField(field: any, fields: any[] = []) {
   );
   if (explicitlyGrouped) return explicitlyGrouped;
   // Backwards-compatible Echo starter schemas created before the grouping flag.
-  return field.componentKey === 'imageQuality'
+  return String(domain).toLowerCase() === 'echo' && field.componentKey === 'imageQuality'
     ? fields.find(item => item.key !== field.key &&
         item.componentKey === 'readerComment' &&
         !item.config?.groupWithComponentKey) || null
     : null;
 }
 
-export function isResearchCompanionHidden(field: any, fields: any[] = []) {
+export function isResearchCompanionHidden(field: any, fields: any[] = [], domain = 'echo') {
   if (!field) return false;
   return !!fields.find(item =>
     item.key !== field.key &&
-    getResearchCompanionField(item, fields)?.key === field.key
+    getResearchCompanionField(item, fields, domain)?.key === field.key
   );
 }
