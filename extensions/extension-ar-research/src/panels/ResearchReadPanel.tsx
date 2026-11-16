@@ -730,8 +730,10 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
         calculatedReadState.sources[selectedField.key], allAnnotations, selectedCandidates
       ) : [];
   const protocolTargets = selectedField ? getResearchProtocolViewerTargets(selectedField) : [];
-  const isSelectedMeasurement = selectedField &&
-    ['measurement', 'continuous'].includes(cleanString(selectedField.kind).toLowerCase());
+  const isSelectedMeasurement = selectedField && (
+    ['measurement', 'continuous'].includes(cleanString(selectedField.kind).toLowerCase()) ||
+    !!selectedField?.config?.calculation
+  );
   const completedFields = fields.filter(field => {
     const value = calculatedReadState.values[field.key];
     return value !== null && value !== undefined && String(value).trim() !== '';
