@@ -40,6 +40,8 @@ describe('Echo Research mirrors existing guided education controls', () => {
     } })).toEqual(['3']);
     expect(getResearchRapChoices({ componentKey: 'other', config: { unit: 'mmHg' } }))
       .toEqual([]);
+    expect(getResearchRapChoices({ componentKey: 'rap', config: { unit: 'mmHg' } }, 'ct'))
+      .toEqual([]);
   });
   it('groups Image quality and Reader comment without changing stored keys', () => {
     const fields = [
@@ -50,6 +52,7 @@ describe('Echo Research mirrors existing guided education controls', () => {
     expect(getResearchCompanionField(fields[0], fields)).toEqual(fields[1]);
     expect(isResearchCompanionHidden(fields[1], fields)).toBe(true);
     expect(isResearchCompanionHidden(fields[2], fields)).toBe(false);
+    expect(isResearchCompanionHidden(fields[1], fields, 'ct')).toBe(false);
     const other = [
       { componentKey: 'quality', key: 'quality|' },
       { componentKey: 'notes', key: 'notes|',
