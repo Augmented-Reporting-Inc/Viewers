@@ -1,0 +1,180 @@
+import React, { useState } from 'react';
+import {
+  getResearchEchoPhases,
+  getResearchEchoPhaseTarget,
+  isRequiredResearchPhaseMissing,
+  isUsableResearchTarget,
+} from '../utils/researchEchoWorkflow';
+
+/**
+ * Uses the existing clinical/Education Echo viewer commands. This is only
+ * orchestration and phase guidance; no duplicate drawing, calibration, or
+ * calculation engines are created for Research.
+ */
+export default function ResearchEchoGuidedControls({
+  field, commandsManager, disabled = false, readOnly = false, onError,
+}: {
+  field: any;
+  commandsManager: any;
+  disabled?: boolean;
+  readOnly?: boolean;
+  onError?: (message: string) => void;
+}) {
+  const [busy, setBusy] = useState('');
+  const kind = String(field?.componentKey || '');
+  const phases = getResearchEchoPhases(field);
+  const supported = ['lvEjectionFraction', 'laVolumeDisks', 'rvFac', 'ivcCollapsibility', 'trVmax'].includes(kind);
+  if (!supported || !commandsManager) return null;
+
+  const notifyError = (message: string) => onError?.(message);
+  const command = async (name: string, payload: any = {}) => {
+    const result = await commandsManager.runCommand(name, payload);
+    if (result?.ok === false) throw new Error(result?.reason || name + ' failed');
+    return result;
+  };
+  const openPhase = async (slot: string) => {
+    const target = getResearchEchoPhaseTarget(field, slot);
+    if (isRequiredResearchPhaseMissing(field, slot)) {
+      throw new Error('This protocol requires a fixed ' + slot + ' source frame; the Research Manager has not configured it.');
+    }
+    if (target && !isUsableResearchTarget(target)) {
+      throw new Error('The configured ' + (slot || 'measurement') + ' frame is incomplete.');
+    }
+    if (target) {
+      const result = await command('jumpToViewerQuizTarget', {
+        viewerTarget: target, questionKey: field.key,
+      });
+      if (result?.ok !== true) throw new Error('The configured image/frame could not be opened.');
+    }
+  };
+  const run = async (key: string, action: () => Promise<any>) => {
+    if (disabled || readOnly || busy) return;
+    setBusy(key);
+    try {
+      await action();
+    } catch (error) {
+      console.warn('[AR Research] guided Echo measurement failed', error);
+      notifyError(error?.message || 'Unable to activate this measurement.');
+    } finally {
+      setBusy('');
+    }
+  };
+  const button = (label: string, key: string, action: () => Promise<any>, blocked = false) => (
+    <button
+      type="button" disabled={disabled || readOnly || !!busy || blocked}
+      className="rounded border border-cyan-600 px-2 py-1 text-xs text-cyan-100 hover:bg-cyan-950/40 disabled:opacity-40"
+      onClick={() => void run(key, action)}
+    >{busy === key ? 'Opening…' : label}</button>
+  );
+  const viewTarget = (slot: string) => {
+    const target = getResearchEchoPhaseTarget(field, slot);
+    return target && isUsableResearchTarget(target)
+      ? button('View protocol frame ' + target.frameNumber, 'view:' + slot, () => openPhase(slot))
+      : null;
+  };
+  const hasIncompleteRequiredEF = kind === 'lvEjectionFraction' &&
+    phases.some(phase => isRequiredResearchPhaseMissing(field, phase.slot));
+
+  return (
+    <div className="rounded border border-cyan-700/70 bg-cyan-950/10 p-3 text-xs text-gray-200">
+      <div className="font-semibold text-cyan-100">Guided Echo measurement</div>
+      {kind === 'lvEjectionFraction' ? (
+        <div className="mt-2 space-y-2">
+          <p>Open the existing Simpson EF panel to draw or review four A4C/A2C
+            end-diastolic/end-systolic contours, choose the drawing technique,
+            calculate EF, and inspect existing source frames.</p>
+          {button('Open EF contour panel', 'ef', async () => {
+            if (hasIncompleteRequiredEF) {
+              throw new Error('Configure all four EF frames in Research Manager before opening the guided protocol.');
+            }
+            return command('startLVSimpsonEFWorkflow', {
+              efContourTargets: field.config?.compositeFrameTargets || null,
+              questionKey: field.key,
+            });
+          }, hasIncompleteRequiredEF)}
+          {phases.map(phase => (
+            <div key={phase.slot} className="flex flex-wrap items-center gap-2">
+              <span className="min-w-36">{phase.label}</span>
+              {viewTarget(phase.slot)}
+              {isRequiredResearchPhaseMissing(field, phase.slot)
+                ? <span className="text-amber-300">Missing required frame</span> : null}
+            </div>
+          ))}
+        </div>
+      ) : kind === 'trVmax' ? (
+        <div className="mt-2 space-y-2">
+          <p>Use the calibrated TR spectral Doppler Vmax tool. The stored value is
+            converted to m/s and linked to its source annotation.</p>
+          <div className="flex flex-wrap gap-2">
+            {button('Measure TR Vmax', 'tr', async () => {
+              await openPhase('');
+              await command('startUltrasoundDirectionalWorkflow', {
+                spectralVmax: true, preferredTargetKey: 'echo.trPeakVelocity',
+              });
+            })}
+            {viewTarget('')}
+          </div>
+        </div>
+      ) : (
+        <div className="mt-2 space-y-3">
+          {kind === 'laVolumeDisks' ? (
+            <p>Select A4C and A2C end-systolic sources. Use freehand or axis +
+              apex contours; the existing 20-disk calculator derives LA volume.</p>
+          ) : kind === 'rvFac' ? (
+            <p>Draw end-diastolic RVEDA and end-systolic RVESA from the
+              selected RV-focused views; existing viewer tools derive FAC.</p>
+          ) : (
+            <p>Draw two calibrated Length measurements: IVCexp and IVCinsp.
+              The existing IVC calculator derives collapsibility; RAP remains a separate explicit choice.</p>
+          )}
+          {phases.map(phase => {
+            const blocked = isRequiredResearchPhaseMissing(field, phase.slot);
+            return (
+              <div key={phase.slot} className="border-t border-gray-700 pt-2">
+                <div className="mb-2 font-medium text-gray-100">{phase.label}</div>
+                <div className="flex flex-wrap gap-2">
+                  {kind === 'laVolumeDisks'
+                    ? <>
+                      {button('Freehand', phase.slot + ':freehand', async () => {
+                        await openPhase(phase.slot);
+                        await command('startLAVolumeWorkflow', {
+                          slot: phase.slot, contourTechnique: 'freehand', autoContinue: false,
+                        });
+                      }, blocked)}
+                      {button('Axis + apex', phase.slot + ':axis', async () => {
+                        await openPhase(phase.slot);
+                        await command('startLAVolumeWorkflow', {
+                          slot: phase.slot, contourTechnique: 'axisApex', autoContinue: false,
+                        });
+                      }, blocked)}
+                    </>
+                    : kind === 'rvFac'
+                      ? <>
+                        {button('Freehand', phase.slot + ':freehand', async () => {
+                          await openPhase(phase.slot);
+                          await command('startEchoAreaContourWorkflow', {
+                            slot: phase.slot, clickTrace: true,
+                          });
+                        }, blocked)}
+                        {button('Axis + apex', phase.slot + ':axis', async () => {
+                          await openPhase(phase.slot);
+                          await command('startGuidedRVFACContourWorkflow', { slot: phase.slot });
+                        }, blocked)}
+                      </>
+                      : button('Measure ' + (phase.slot === 'IVC_EXP' ? 'IVCexp' : 'IVCinsp'),
+                        phase.slot + ':length', async () => {
+                          await openPhase(phase.slot);
+                          await command('resetViewerLengthLabelMode', {});
+                          await command('activateViewerMeasurementTool', { toolName: 'Length', stopCine: true });
+                        }, blocked)}
+                  {viewTarget(phase.slot)}
+                  {blocked ? <span className="text-amber-300">Missing required protocol frame</span> : null}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
