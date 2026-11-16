@@ -204,7 +204,7 @@ export function resolveViewerQuizCompositeResult(
     (kind === 'lvSimpsonEF'
       ? calculateLVSimpson(measurements)
       : kind === 'laVolumeBiplaneDisks'
-        ? calculateLABiplaneDisks(measurements)
+        ? calculateLABiplaneDisks(measurements, null, { allowAxisQualityAdvisory: true })
         : kind === 'rvFAC'
           ? calculateRVFACFromMeasurements(measurements)
           : kind === 'raArea'
@@ -381,7 +381,7 @@ export function getViewerQuizCompositeStatus(
     : kind === 'laVolumeBiplane'
       ? calculateLAVolume(measurementList)
       : kind === 'laVolumeBiplaneDisks'
-        ? calculateLABiplaneDisks(measurementList)
+        ? calculateLABiplaneDisks(measurementList, null, { allowAxisQualityAdvisory: true })
         : kind === 'rvFAC'
           ? calculateRVFACFromMeasurements(measurementList)
           : kind === 'raArea'
