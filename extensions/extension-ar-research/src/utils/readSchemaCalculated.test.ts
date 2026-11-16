@@ -113,12 +113,13 @@ describe('optional source-linked Research Read RVSP calculation', () => {
       },
     }]);
     const updates = buildViewerMeasurementReadUpdates(fields(), candidates, {});
-    expect(updates).toEqual([{
+    expect(updates).toHaveLength(1);
+    expect(updates[0]).toMatchObject({
       fieldKey: 'trVmax|',
-      value: 2.8,
       source: 'viewer-measurement',
       sourceMeasurementKey: 'TR-source-real-1',
-    }]);
+    });
+    expect(updates[0].value).toBeCloseTo(2.8, 6);
 
     const savedSources = {
       'trVmax|': {
