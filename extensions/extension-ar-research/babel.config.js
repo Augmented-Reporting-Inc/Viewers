@@ -6,6 +6,13 @@ module.exports = {
     ['@babel/plugin-transform-private-methods', { loose: true }],
   ],
   env: {
+    test: {
+      presets: [
+        ['@babel/preset-env', { modules: 'commonjs', targets: { node: 'current' } }],
+        '@babel/preset-react',
+        '@babel/preset-typescript',
+      ],
+    },
     production: {
       presets: [
         ['@babel/preset-env', { modules: false }],

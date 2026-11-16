@@ -44,6 +44,85 @@ const laContour = (slot: 'A4C' | 'A2C', widthMM: number) => {
   };
 };
 
+
+const directionalTR = (rawValue: number | null, unit = 'cm/s', label = 'TR peak velocity') => ({
+  annotationId: 'TR-toolbar-annotation-1',
+  uid: 'TR-toolbar-annotation-1',
+  toolName: 'UltrasoundDirectionalTool',
+  measurementKind: 'ultrasound-directional',
+  label,
+  referenceStudyUID: 'study',
+  referenceSeriesUID: 'tr-series',
+  SOPInstanceUID: 'tr-sop',
+  frameNumber: 4,
+  points,
+  measurements: {
+    measurementKind: 'ultrasound-directional',
+    value: rawValue,
+    unit,
+    ultrasoundDirectional: {
+      measurementKind: 'ultrasound-directional',
+      acquisitionMode: 'spectralVmax',
+      value: rawValue,
+      unit,
+      reportValue: rawValue === null ? null : rawValue / 100,
+      reportUnit: 'm/s',
+    },
+    displayText: ['TR peak velocity: 300 m/s - never parse as a source'],
+  },
+});
+
+describe('Research Read calibrated toolbar TR velocity binding', () => {
+  it('recognizes the selected TR peak target and converts cm/s into m/s with annotation provenance', () => {
+    const candidates = buildViewerMeasurementValueCandidates([directionalTR(280)]);
+    const tr = candidates.find(candidate => candidate.labels.includes('TRVel'));
+    expect(tr).toMatchObject({
+      unit: 'm/s',
+      source: 'viewer-measurement',
+      sourceMeasurementKey: 'TR-toolbar-annotation-1',
+    });
+    expect(tr.value).toBeCloseTo(2.8, 6);
+    expect(tr.labels).toContain('TR Vmax');
+    expect(tr.labels).toContain('TR peak velocity');
+  });
+
+  it('preserves m/s and converts mm/s without parsing displayed text', () => {
+    const direct = buildViewerMeasurementValueCandidates([directionalTR(3.1, 'm/s')]);
+    expect(direct.find(item => item.labels.includes('TRVel'))?.value).toBeCloseTo(3.1);
+    const metric = buildViewerMeasurementValueCandidates([directionalTR(3100, 'mm/s')]);
+    expect(metric.find(item => item.labels.includes('TRVel'))?.value).toBeCloseTo(3.1);
+  });
+
+  it('never maps another spectral Doppler target to TR velocity', () => {
+    const avPeak = directionalTR(320, 'cm/s', 'AV peak velocity');
+    const candidates = buildViewerMeasurementValueCandidates([avPeak]);
+    expect(candidates.some(item => item.labels.includes('TRVel'))).toBe(false);
+  });
+
+  it('rejects invalid or uncalibrated TR sources rather than guessing a value', () => {
+    const bad = [
+      directionalTR(230, 'px'),
+      directionalTR(null),
+      directionalTR(0),
+      directionalTR(-90),
+      directionalTR(900, 'm/s'),
+      { ...directionalTR(240), uid: '', annotationId: '' },
+    ];
+    for (const annotation of bad) {
+      const candidates = buildViewerMeasurementValueCandidates([annotation]);
+      expect(candidates.some(item => item.labels.includes('TRVel'))).toBe(false);
+    }
+  });
+
+  it('does not add a TR target to unrelated ultrasound measurements', () => {
+    const unselected = { ...directionalTR(280), label: 'Generic Ultrasound Directional (no AR report mapping)' };
+    expect(
+      buildViewerMeasurementValueCandidates([unselected])
+        .some(item => item.labels.includes('TRVel'))
+    ).toBe(false);
+  });
+});
+
 describe('Research Read source-linked Echo derived candidates', () => {
   it('exports only complete calibrated RV FAC and IVC collapse, with both source IDs', () => {
     const annotations = [

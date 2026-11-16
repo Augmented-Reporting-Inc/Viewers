@@ -204,7 +204,7 @@ export function resolveViewerQuizCompositeResult(
     (kind === 'lvSimpsonEF'
       ? calculateLVSimpson(measurements)
       : kind === 'laVolumeBiplaneDisks'
-        ? calculateLABiplaneDisks(measurements)
+        ? calculateLABiplaneDisks(measurements, null, { allowAxisQualityAdvisory: true })
         : kind === 'rvFAC'
           ? calculateRVFACFromMeasurements(measurements)
           : kind === 'raArea'
@@ -241,6 +241,12 @@ export function resolveViewerQuizCompositeResult(
     value,
     unit: kind === 'lvSimpsonEF' || kind === 'rvFAC' || kind === 'ivcCollapsibility'
       ? '%' : kind === 'raArea' ? 'cm2' : 'mL',
+    // Keep QA guidance as part of the captured result. It is advisory and
+    // cannot be confused with a missing contour or invalid calibration.
+    ...(['laVolumeBiplane', 'laVolumeBiplaneDisks'].includes(kind) &&
+      Array.isArray((result as any)?.messages) && (result as any).messages.length
+        ? { qualityWarnings: (result as any).messages.filter((warning: unknown) => typeof warning === 'string') }
+        : {}),
     components,
     // Save the independently calibrated per-contour LV long axes with the
     // approved biplane EF result. A biplane EDV/ESV is not an individual
@@ -292,6 +298,7 @@ export function resolveViewerQuizCompositeResult(
         a4cAreaCM2: (result as any).slots.A4C?.areaCM2,
         a2cAreaCM2: (result as any).slots.A2C?.areaCM2,
         volumeML: value,
+        axisDifferenceMM: (result as any).values?.axisDifferenceMM,
       },
     } : {}),
   };
@@ -361,6 +368,7 @@ export function getViewerQuizCompositeStatus(
       value: composite.value,
       unit: composite.unit,
       message: '',
+      warnings: composite.qualityWarnings || [],
       phaseValues,
       components: composite.components.map(component => ({
         slot: component.slot,
@@ -373,7 +381,7 @@ export function getViewerQuizCompositeStatus(
     : kind === 'laVolumeBiplane'
       ? calculateLAVolume(measurementList)
       : kind === 'laVolumeBiplaneDisks'
-        ? calculateLABiplaneDisks(measurementList)
+        ? calculateLABiplaneDisks(measurementList, null, { allowAxisQualityAdvisory: true })
         : kind === 'rvFAC'
           ? calculateRVFACFromMeasurements(measurementList)
           : kind === 'raArea'

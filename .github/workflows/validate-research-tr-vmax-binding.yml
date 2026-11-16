@@ -1,0 +1,39 @@
+name: Validate Research TR Vmax measurement binding
+
+on:
+  pull_request:
+    branches:
+      - port/3.11-custom
+      - feature/research-echo-derived-demo-20261116
+    paths:
+      - 'extensions/extension-ar-measurements/src/utils/measurementValueCandidates.ts'
+      - 'extensions/extension-ar-measurements/src/utils/measurementValueCandidates.test.ts'
+      - 'extensions/extension-ar-research/src/utils/readSchemaCalculated.test.ts'
+      - 'extensions/extension-ar-research/jest.config.js'
+      - 'extensions/extension-ar-research/babel.config.js'
+      - '.github/workflows/validate-research-tr-vmax-binding.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  source-linked-tr-read-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: yarn
+      - name: Install locked dependencies
+        run: yarn install --frozen-lockfile --non-interactive
+      - name: Test calibrated Vmax source candidates
+        run: yarn jest --config extensions/extension-ar-measurements/jest.config.js --runInBand --coverage=false --runTestsByPath extensions/extension-ar-measurements/src/utils/measurementValueCandidates.test.ts
+      - name: Test TR source linkage through RVSP calculation
+        run: yarn jest --config extensions/extension-ar-research/jest.config.js --runInBand --coverage=false --runTestsByPath extensions/extension-ar-research/src/utils/readSchemaCalculated.test.ts

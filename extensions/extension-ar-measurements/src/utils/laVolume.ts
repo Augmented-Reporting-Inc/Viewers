@@ -500,7 +500,8 @@ export function calculateLAVolume(measurements = [], seriesDocOrBsa = null) {
  */
 export function calculateLABiplaneDisks(
   measurements = [],
-  seriesDocOrBsa = null
+  seriesDocOrBsa = null,
+  { allowAxisQualityAdvisory = false } = {}
 ) {
   const methodId = LA_VOLUME_DISKS_METHOD;
   const method = 'Biplane Simpson summation of 20 elliptical LA disks (longer LA axis).';
@@ -535,7 +536,15 @@ export function calculateLABiplaneDisks(
   const a4c = base.slots.A4C;
   const a2c = base.slots.A2C;
   const axisDifferenceMM = Math.abs(a4c.longAxisLengthMM - a2c.longAxisLengthMM);
-  if (axisDifferenceMM > MAX_RECOMMENDED_AXIS_DIFFERENCE_MM) {
+  // The 5 mm difference is a clinical image-quality recommendation, not an
+  // arithmetic or source-evidence failure. Clinical calculations keep their
+  // existing strict default. Only explicit learner quiz callers use this
+  // advisory mode because fixed teaching images cannot be reacquired.
+  // Missing/duplicate source phases, invalid calibration and sampled
+  // diameters remain hard failures in both modes.
+  const qualityWarnings = base.messages || [];
+  if (axisDifferenceMM > MAX_RECOMMENDED_AXIS_DIFFERENCE_MM &&
+      !allowAxisQualityAdvisory) {
     const warning = 'LA A4C/A2C long axes differ by more than 5 mm; reacquire or redraw for Simpson disk summation.';
     return {
       status: 'invalid',
@@ -543,8 +552,8 @@ export function calculateLABiplaneDisks(
       methodId,
       slots: base.slots,
       values: null,
-      messages: [...(base.messages || []), warning],
-      guidance: [...(base.messages || []), warning],
+      messages: [...qualityWarnings, warning],
+      guidance: [...qualityWarnings, warning],
     };
   }
 
@@ -612,8 +621,8 @@ export function calculateLABiplaneDisks(
       diskCount: SAMPLE_COUNT,
       diskHeightMM,
     },
-    messages: base.messages || [],
-    guidance: base.guidance || [],
+    messages: qualityWarnings,
+    guidance: qualityWarnings,
   };
 }
 
