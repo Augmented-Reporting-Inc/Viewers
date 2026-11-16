@@ -117,12 +117,14 @@ function ReadField({
   source,
   disabled,
   onChange,
+  readDomain,
 }: {
   field: any;
   value: any;
   source?: any;
   disabled: boolean;
   onChange: (value: any) => void;
+  readDomain?: string;
 }) {
   const kind = cleanString(field.kind).toLowerCase();
   const numeric = ['measurement', 'continuous', 'number', 'numeric'].includes(kind);
@@ -137,7 +139,7 @@ function ReadField({
           ? String(option.label || option.value) + ' mmHg'
           : option.label,
       }))
-    : getResearchRapChoices(field).map(value => ({ value, label: value + ' mmHg' }));
+    : getResearchRapChoices(field, readDomain).map(value => ({ value, label: value + ' mmHg' }));
   const calculated = cleanString(field?.config?.calculation?.type).toLowerCase() === 'rvsp';
 
   return (
@@ -258,9 +260,10 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
     () => buildReadFields(context?.readSchema || {}),
     [context?.readSchema]
   );
+  const readDomain = cleanString(context?.readSchema?.domain).toLowerCase();
   const visibleFields = useMemo(
-    () => fields.filter(field => !isResearchCompanionHidden(field, fields)),
-    [fields]
+    () => fields.filter(field => !isResearchCompanionHidden(field, fields, readDomain)),
+    [fields, readDomain]
   );
   useEffect(() => {
     if (!visibleFields.length) return;
@@ -832,7 +835,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
   const isBusy = saving || completing;
   const selectedField = visibleFields.find(field => field.key === selectedFieldKey) ||
     visibleFields[0];
-  const companionField = getResearchCompanionField(selectedField, fields);
+  const companionField = getResearchCompanionField(selectedField, fields, readDomain);
   const selectedCandidates = selectedField
     ? getResearchProtocolCompatibleCandidates(
         selectedField,
@@ -948,6 +951,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
           <ReadField
             key={selectedField.key}
             field={selectedField}
+            readDomain={readDomain}
             value={calculatedReadState.values[selectedField.key] ?? ''}
             source={calculatedReadState.sources[selectedField.key]}
             disabled={context.readOnly || context.preview || isBusy}
@@ -957,6 +961,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
             <ReadField
               key={companionField.key}
               field={companionField}
+              readDomain={readDomain}
               value={calculatedReadState.values[companionField.key] ?? ''}
               source={calculatedReadState.sources[companionField.key]}
               disabled={context.readOnly || context.preview || isBusy}
