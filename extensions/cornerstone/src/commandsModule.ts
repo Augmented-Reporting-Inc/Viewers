@@ -34,6 +34,7 @@ import { vec3, mat4 } from 'gl-matrix';
 import toggleImageSliceSync from './utils/imageSliceSync/toggleImageSliceSync';
 import { getFirstAnnotationSelected } from './utils/measurementServiceMappings/utils/selection';
 import { getMeasurementSnapshotStudyInstanceId } from './utils/measurementSnapshotStudy';
+import { reconcileLearnerIvcSnapshotSources } from './utils/learnerIvcSourceSnapshot';
 import { getViewportEnabledElement } from './utils/getViewportEnabledElement';
 import getActiveViewportEnabledElement from './utils/getActiveViewportEnabledElement';
 import toggleVOISliceSync from './utils/toggleVOISliceSync';
@@ -18087,6 +18088,40 @@ function commandsModule({
               // MeasurementAnnotations boundary, after every merge/upsert step.
               nextMeasurementAnnotations =
                 compactClinicalViewerMeasurementAnnotationsRaw(nextMeasurementAnnotations);
+
+              // A guided learner IVC composite requires two distinct source
+              // Length annotations. MeasurementService can omit a completed
+              // caliper during cine/frame transitions. Recover only a matching
+              // Cornerstone-native source by exact ID, DICOM frame and points;
+              // otherwise fail before preview or commit. Do not promote answer
+              // reviewPayload geometry into stored evidence.
+              if (isReportOwnedMeasurementSave && educationQuizHemodynamics?.ivc) {
+                const snapshotAnnotations = getRequestedWorkflowAnnotations(
+                  nextMeasurementAnnotations,
+                  [VIEWER_MEASUREMENTS_WORKFLOW]
+                );
+                const result = reconcileLearnerIvcSnapshotSources({
+                  evidence: educationQuizHemodynamics,
+                  snapshotAnnotations,
+                  nativeAnnotations: getAllCornerstoneViewerAnnotations(),
+                  excludedIds: new Set([
+                    ...viewerMeasurementsDeletedInSession,
+                    ...explicitDeleteIds,
+                  ]),
+                });
+                if (result.missing.length) {
+                  throw new Error(
+                    `Cannot save IVC/RAP evidence: ${result.missing.join(' and ')} source caliper unavailable or mismatched. Re-measure that phase and retry.`
+                  );
+                }
+                if (result.recovered.length) {
+                  nextMeasurementAnnotations = upsertViewerMeasurementAnnotations({
+                    existingRaw: nextMeasurementAnnotations,
+                    source: 'ar-measurements-panel',
+                    annotations: result.recovered,
+                  });
+                }
+              }
 
               const reportAnnotations = getRequestedWorkflowAnnotations(nextMeasurementAnnotations, [
                 VIEWER_MEASUREMENTS_WORKFLOW,
