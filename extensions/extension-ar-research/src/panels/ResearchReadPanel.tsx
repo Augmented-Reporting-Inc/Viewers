@@ -722,6 +722,29 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
     'Research Study';
   const reviewStatus = cleanString(context?.review?.status || 'preview');
   const isBusy = saving || completing;
+  const selectedField = fields.find(field => field.key === selectedFieldKey) || fields[0];
+  const selectedCandidates = selectedField
+    ? getResearchFieldMeasurementCandidates(selectedField, viewerCandidates || []) : [];
+  const selectedSources = selectedField
+    ? getResearchFieldSourceAnnotations(
+        calculatedReadState.sources[selectedField.key], allAnnotations, selectedCandidates
+      ) : [];
+  const protocolTargets = selectedField ? getResearchProtocolViewerTargets(selectedField) : [];
+  const isSelectedMeasurement = selectedField &&
+    ['measurement', 'continuous'].includes(cleanString(selectedField.kind).toLowerCase());
+  const completedFields = fields.filter(field => {
+    const value = calculatedReadState.values[field.key];
+    return value !== null && value !== undefined && String(value).trim() !== '';
+  }).length;
+  const linkedAnnotationKeys = new Set(fields.flatMap(field =>
+    getResearchFieldSourceAnnotations(
+      calculatedReadState.sources[field.key], allAnnotations,
+      getResearchFieldMeasurementCandidates(field, viewerCandidates || [])
+    ).map(getAnnotationKey)
+  ));
+  const unlinkedAnnotations = allAnnotations.filter(annotation =>
+    !linkedAnnotationKeys.has(getAnnotationKey(annotation))
+  );
 
   return (
     <div className="h-full overflow-auto p-3 text-white">
@@ -766,61 +789,144 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
         </div>
       ) : null}
 
-      <div className="space-y-3">
-        {fields.map(field => (
-          <ReadField
-            key={field.key}
-            field={field}
-            value={calculatedReadState.values[field.key] ?? ''}
-            source={calculatedReadState.sources[field.key]}
-            disabled={context.readOnly || context.preview || isBusy}
-            onChange={nextValue => updateValue(field.key, nextValue)}
-          />
-        ))}
+      <div className="mb-3 rounded border border-gray-700 bg-gray-950 p-3">
+        <label htmlFor="research-read-field-select" className="text-xs font-semibold text-gray-200">
+          Question / measurement
+        </label>
+        <select
+          id="research-read-field-select"
+          className="mt-1 w-full min-w-0 rounded border border-gray-600 bg-gray-900 px-2 py-2 text-sm text-white"
+          value={selectedField?.key || ''}
+          onChange={event => selectField(event.target.value)}
+          disabled={isBusy}
+        >
+          {fields.map((field, index) => {
+            const value = calculatedReadState.values[field.key];
+            const answered = value !== undefined && value !== null && String(value).trim() !== '';
+            return <option key={field.key} value={field.key}>
+              {index + 1}. {answered ? '✓ ' : ''}{field.label}{field.required ? ' (required)' : ''}
+            </option>;
+          })}
+        </select>
+        <div className="mt-2 flex items-center justify-between gap-2">
+          <span className="text-xs text-gray-400">{completedFields}/{fields.length} fields entered</span>
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              className="rounded border border-gray-600 px-2 py-1 text-xs text-gray-200 disabled:opacity-40"
+              disabled={isBusy || fields.indexOf(selectedField) <= 0}
+              onClick={() => selectField(fields[fields.indexOf(selectedField) - 1].key)}
+            >Previous</button>
+            <button
+              type="button"
+              className="rounded border border-gray-600 px-2 py-1 text-xs text-gray-200 disabled:opacity-40"
+              disabled={isBusy || fields.indexOf(selectedField) >= fields.length - 1}
+              onClick={() => selectField(fields[fields.indexOf(selectedField) + 1].key)}
+            >Next</button>
+          </div>
+        </div>
       </div>
 
-      {!context.preview ? (
-        <div className="mt-4 rounded border border-gray-700 bg-gray-950 p-3">
-          <div className="flex items-center justify-between gap-2">
-            <div>
-              <div className="text-sm font-semibold">Viewer annotations</div>
-              <div className="text-xs text-gray-400">
-                Saved per reader with this Research Review
-              </div>
+      {selectedField ? (
+        <div className="space-y-2">
+          <ReadField
+            key={selectedField.key}
+            field={selectedField}
+            value={calculatedReadState.values[selectedField.key] ?? ''}
+            source={calculatedReadState.sources[selectedField.key]}
+            disabled={context.readOnly || context.preview || isBusy}
+            onChange={nextValue => updateValue(selectedField.key, nextValue)}
+          />
+          {(isSelectedMeasurement || protocolTargets.length > 0) ? (
+            <div className="rounded border border-gray-700 bg-gray-950 p-3 text-xs">
+              <div className="font-semibold text-gray-100">Viewer measurement and source frames</div>
+              {protocolTargets.length ? (
+                <div className="mt-2 space-y-1">
+                  <div className="text-gray-400">Protocol-selected instance/frame</div>
+                  {protocolTargets.map(({ label, viewerTarget }) => (
+                    <button
+                      key={label}
+                      type="button"
+                      className="flex w-full items-center justify-between gap-2 rounded border border-blue-800 px-2 py-2 text-left text-blue-200 hover:bg-blue-950/40 disabled:opacity-50"
+                      disabled={!commandsManager}
+                      onClick={() => void jumpToProtocolTarget(viewerTarget, selectedField.key)}
+                    >
+                      <span>{label}</span>
+                      <span>Open frame {viewerTarget.frameNumber}</span>
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+              {selectedSources.length ? (
+                <div className="mt-2 space-y-1">
+                  <div className="text-gray-400">Captured measurement sources — select to inspect</div>
+                  {selectedSources.map(annotation => (
+                    <button
+                      key={getAnnotationKey(annotation)}
+                      type="button"
+                      className="flex w-full min-w-0 items-center justify-between gap-2 rounded border border-gray-700 bg-black p-2 text-left hover:border-blue-500 disabled:opacity-50"
+                      disabled={!commandsManager}
+                      onClick={() => void jumpToAnnotation(annotation)}
+                    >
+                      <span className="min-w-0 break-words text-gray-200">
+                        {getAnnotationLabel(annotation)}
+                        {getAnnotationValue(annotation) ? ' · ' + getAnnotationValue(annotation) : ''}
+                      </span>
+                      <span className="shrink-0 text-blue-300">View source</span>
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+              {isSelectedMeasurement && selectedCandidates.length > 1 && !context.preview && !context.readOnly ? (
+                <div className="mt-2 space-y-1">
+                  <div className="text-amber-200">
+                    Multiple matching measurements. Choose the intended source rather than automatically accepting another frame.
+                  </div>
+                  {selectedCandidates.map((candidate, index) => (
+                    <button
+                      key={candidate.sourceMeasurementKey || index}
+                      type="button"
+                      className="block w-full rounded border border-blue-800 px-2 py-2 text-left text-blue-100 hover:bg-blue-950/40"
+                      onClick={() => selectSourceCandidate(selectedField, candidate)}
+                    >
+                      Use {Number(candidate.value).toFixed(2)} {candidate.unit}
+                      {' · '}{candidate.sourceMeasurementKey}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+              {isSelectedMeasurement && !selectedSources.length && !protocolTargets.length ? (
+                <div className="mt-2 text-gray-400">
+                  {selectedCandidates.length
+                    ? 'A compatible value is available. Its source frame will appear when the annotation is ready.'
+                    : 'Choose the appropriate image and frame in the viewer, then use the measurement toolbar. The calibrated value will populate here automatically.'}
+                </div>
+              ) : null}
             </div>
-            <span className="rounded bg-gray-800 px-2 py-1 text-xs">
-              {savedAnnotations.length}
-            </span>
-          </div>
-
-          {savedAnnotations.length ? (
-            <div className="mt-2 space-y-1">
-              {savedAnnotations.slice(0, 12).map((annotation, index) => (
-                <button
-                  key={getAnnotationKey(annotation) || index}
-                  type="button"
-                  className="block w-full rounded border border-gray-800 bg-black px-2 py-2 text-left text-xs hover:border-blue-700 disabled:opacity-50"
-                  disabled={!commandsManager}
-                  onClick={() => jumpToAnnotation(annotation)}
-                >
-                  <span className="font-semibold">
-                    {getAnnotationLabel(annotation)}
-                  </span>
-                  {getAnnotationValue(annotation) ? (
-                    <span className="ml-2 text-gray-400">
-                      {getAnnotationValue(annotation)}
-                    </span>
-                  ) : null}
-                </button>
-              ))}
-            </div>
-          ) : (
-            <div className="mt-2 text-xs text-gray-500">
-              Viewer measurements created during this read are captured when you
-              save the Research Read.
-            </div>
-          )}
+          ) : null}
         </div>
+      ) : null}
+
+      {!context.preview && unlinkedAnnotations.length ? (
+        <details className="mt-3 rounded border border-gray-700 bg-gray-950 p-3">
+          <summary className="cursor-pointer text-xs font-semibold text-gray-300">
+            Other viewer annotations ({unlinkedAnnotations.length})
+          </summary>
+          <div className="mt-2 space-y-1">
+            {unlinkedAnnotations.slice(0, 12).map((annotation, index) => (
+              <button
+                key={getAnnotationKey(annotation) || index}
+                type="button"
+                className="block w-full rounded border border-gray-700 bg-black px-2 py-2 text-left text-xs hover:border-blue-700"
+                onClick={() => void jumpToAnnotation(annotation)}
+                disabled={!commandsManager}
+              >
+                {getAnnotationLabel(annotation)}
+                {getAnnotationValue(annotation) ? ' · ' + getAnnotationValue(annotation) : ''}
+              </button>
+            ))}
+          </div>
+        </details>
       ) : null}
 
       {!context.preview && !context.readOnly ? (
