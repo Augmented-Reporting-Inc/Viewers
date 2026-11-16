@@ -7,6 +7,7 @@ on:
       - port/3.11-custom
     paths:
       - 'extensions/extension-ar-research/src/**'
+      - 'extensions/cornerstone/src/commandsModule.ts'
       - '.github/workflows/validate-research-guided-echo.yml'
   workflow_dispatch:
 
@@ -39,6 +40,7 @@ jobs:
           const files = [
             'extensions/extension-ar-research/src/panels/ResearchReadPanel.tsx',
             'extensions/extension-ar-research/src/panels/ResearchEchoGuidedControls.tsx',
+            'extensions/cornerstone/src/commandsModule.ts',
           ];
           for (const file of files) {
             const result = babel.transformFileSync(file, { envName: 'production' });
