@@ -194,7 +194,13 @@ export function buildViewerMeasurementValueCandidates(
     addDerivedCandidate({
       candidates, measurements,
       sourceFilter: annotation =>
-        String(annotation?.measurementKind || annotation?.measurements?.measurementKind || '') === 'laVolumeSlot',
+        String(
+          annotation?.measurementKind ||
+          annotation?.measurements?.measurementKind ||
+          annotation?.laVolume?.measurementKind ||
+          annotation?.measurements?.laVolume?.measurementKind ||
+          ''
+        ) === 'laVolumeSlot',
       labels: ['LAVolumeDisks', 'LA Biplane Disks', 'LA 20-disk volume'],
       value: laDisks.values?.volumeML,
       unit: 'mL',
