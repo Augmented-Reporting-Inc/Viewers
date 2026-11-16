@@ -759,9 +759,15 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
     'Research Study';
   const reviewStatus = cleanString(context?.review?.status || 'preview');
   const isBusy = saving || completing;
-  const selectedField = fields.find(field => field.key === selectedFieldKey) || fields[0];
+  const selectedField = visibleFields.find(field => field.key === selectedFieldKey) ||
+    visibleFields[0];
+  const companionField = getResearchCompanionField(selectedField, fields);
   const selectedCandidates = selectedField
-    ? getResearchFieldMeasurementCandidates(selectedField, viewerCandidates || []) : [];
+    ? getResearchProtocolCompatibleCandidates(
+        selectedField,
+        getResearchFieldMeasurementCandidates(selectedField, viewerCandidates || []),
+        allAnnotations
+      ) : [];
   const selectedSources = selectedField
     ? getResearchFieldSourceAnnotations(
         calculatedReadState.sources[selectedField.key], allAnnotations, selectedCandidates
@@ -771,7 +777,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
     ['measurement', 'continuous'].includes(cleanString(selectedField.kind).toLowerCase()) ||
     !!selectedField?.config?.calculation
   );
-  const completedFields = fields.filter(field => {
+  const completedFields = visibleFields.filter(field => {
     const value = calculatedReadState.values[field.key];
     return value !== null && value !== undefined && String(value).trim() !== '';
   }).length;
@@ -839,7 +845,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
           onChange={event => selectField(event.target.value)}
           disabled={isBusy}
         >
-          {fields.map((field, index) => {
+          {visibleFields.map((field, index) => {
             const value = calculatedReadState.values[field.key];
             const answered = value !== undefined && value !== null && String(value).trim() !== '';
             return <option key={field.key} value={field.key}>
@@ -848,19 +854,19 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
           })}
         </select>
         <div className="mt-2 flex items-center justify-between gap-2">
-          <span className="text-xs text-gray-400">{completedFields}/{fields.length} fields entered</span>
+          <span className="text-xs text-gray-400">{completedFields}/{visibleFields.length} questions answered</span>
           <div className="flex items-center gap-1">
             <button
               type="button"
               className="rounded border border-gray-600 px-2 py-1 text-xs text-gray-200 disabled:opacity-40"
-              disabled={isBusy || fields.indexOf(selectedField) <= 0}
-              onClick={() => selectField(fields[fields.indexOf(selectedField) - 1].key)}
+              disabled={isBusy || visibleFields.indexOf(selectedField) <= 0}
+              onClick={() => selectField(visibleFields[visibleFields.indexOf(selectedField) - 1].key)}
             >Previous</button>
             <button
               type="button"
               className="rounded border border-gray-600 px-2 py-1 text-xs text-gray-200 disabled:opacity-40"
-              disabled={isBusy || fields.indexOf(selectedField) >= fields.length - 1}
-              onClick={() => selectField(fields[fields.indexOf(selectedField) + 1].key)}
+              disabled={isBusy || visibleFields.indexOf(selectedField) >= visibleFields.length - 1}
+              onClick={() => selectField(visibleFields[visibleFields.indexOf(selectedField) + 1].key)}
             >Next</button>
           </div>
         </div>
@@ -876,6 +882,25 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
             disabled={context.readOnly || context.preview || isBusy}
             onChange={nextValue => updateValue(selectedField.key, nextValue)}
           />
+          {companionField ? (
+            <ReadField
+              key={companionField.key}
+              field={companionField}
+              value={calculatedReadState.values[companionField.key] ?? ''}
+              source={calculatedReadState.sources[companionField.key]}
+              disabled={context.readOnly || context.preview || isBusy}
+              onChange={nextValue => updateValue(companionField.key, nextValue)}
+            />
+          ) : null}
+          {cleanString(context?.readSchema?.domain).toLowerCase() === 'echo' ? (
+            <ResearchEchoGuidedControls
+              field={selectedField}
+              commandsManager={commandsManager}
+              disabled={context.readOnly || context.preview || isBusy}
+              readOnly={context.readOnly || context.preview}
+              onError={message => notify(servicesManager, message, 'warning')}
+            />
+          ) : null}
           {(isSelectedMeasurement || protocolTargets.length > 0) ? (
             <div className="rounded border border-gray-700 bg-gray-950 p-3 text-xs">
               <div className="font-semibold text-gray-100">Viewer measurement and source frames</div>
@@ -909,7 +934,6 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
                     >
                       <span className="min-w-0 break-words text-gray-200">
                         {getAnnotationLabel(annotation)}
-                        {getAnnotationValue(annotation) ? ' · ' + getAnnotationValue(annotation) : ''}
                       </span>
                       <span className="shrink-0 text-blue-300">View source</span>
                     </button>
