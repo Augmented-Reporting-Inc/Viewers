@@ -204,6 +204,9 @@ describe('Shared native Length US calibration — live vs completed', () => {
     withImage({ regions: [samsungRegion], imagePlane: undefined });
     const live = createCalibratedLengthTextLines(nativeDefaultGetTextLines);
     expect(live(annotation.data, targetId)).toEqual(['6.98 mm']);
+    // New measurements must not persist the incorrect native 1.16 value
+    // while this required image-plane calibration is unresolved.
+    expect(toMeasurement(annotation)).toBeNull();
 
     // Once frame imagePlane arrives, the calibrated geometry is used instead.
     withImage({
