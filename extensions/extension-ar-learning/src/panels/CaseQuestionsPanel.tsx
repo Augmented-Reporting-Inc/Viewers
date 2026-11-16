@@ -2211,8 +2211,10 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
   );
 
   // The highlighted question is restored from session storage on reopen.
-  // A fresh card click is not required, so restore its clinical domain before
-  // the next Length annotation requests a label (the /rviewer/ path is generic).
+  // A fresh card click is not required, so restore BOTH its clinical domain
+  // and measurement toolbar context. Without the latter, a Vmax toolbar click
+  // launches the generic target-selection dialog instead of using the TR
+  // question's known source target, even though measuring itself succeeds.
   useEffect(() => {
     if (authoringMode) {
       const questionKey = activeQuestionKey.startsWith('authoring:')
@@ -2221,11 +2223,21 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       if (active?.type === 'measurementNumeric' && authoringMeasurementDomain) {
         syncQuizMeasurementDomainToUrl(authoringMeasurementDomain, { overwrite: true });
       }
+      const kind = active?.type === 'measurementNumeric'
+        ? cleanString(plainObject(active.answerConfig).measurementKind) : '';
+      void runViewerCommand(commandsManager, 'setViewerQuizMeasurementContext', {
+        measurementKind: kind,
+      }).catch(error => console.warn('[CaseQuestionsPanel] restoring authoring measurement context failed', error));
       return;
     }
     const [quizKey, questionKey] = activeQuestionKey.split(':');
     const quiz = quizzes.find(item => item.quizKey === quizKey);
     const question = quiz?.questions?.find(item => item.questionKey === questionKey);
+    const kind = question?.type === 'measurementNumeric'
+      ? cleanString(plainObject(question.answerConfig).measurementKind) : '';
+    void runViewerCommand(commandsManager, 'setViewerQuizMeasurementContext', {
+      measurementKind: kind,
+    }).catch(error => console.warn('[CaseQuestionsPanel] restoring learner measurement context failed', error));
     let domain = question?.type === 'measurementNumeric'
       ? getQuizQuestionMeasurementDomain(quiz, question, payload) : '';
     if (!domain && quizzes.length) {
@@ -2237,7 +2249,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     }
     // Clear any stale prior quiz domain when definitions disagree.
     syncQuizMeasurementDomainToUrl(domain, { overwrite: true });
-  }, [activeQuestionKey, quizzes, payload, authoringMode, authoringMeasurementDomain, authoringQuestions]);
+  }, [activeQuestionKey, quizzes, payload, authoringMode, authoringMeasurementDomain, authoringQuestions, commandsManager]);
 
   async function refreshScoringPayload() {
     try {
