@@ -127,10 +127,17 @@ function ReadField({
   const kind = cleanString(field.kind).toLowerCase();
   const numeric = ['measurement', 'continuous', 'number', 'numeric'].includes(kind);
   const text = ['text', 'comment', 'textarea'].includes(kind);
-  const configuredOptions = Array.isArray(field?.config?.options) ? field.config.options : [];
-  const options = configuredOptions.length ? configuredOptions :
-    getResearchRapChoices(field).map(value => ({ value, label: value + ' mmHg' }));
   const unit = cleanString(field?.config?.unit);
+  const configuredOptions = Array.isArray(field?.config?.options) ? field.config.options : [];
+  const options = configuredOptions.length
+    ? configuredOptions.map(option => ({
+        ...option,
+        label: field.componentKey === 'rap' && unit.toLowerCase() === 'mmhg' &&
+          !String(option.label || '').toLowerCase().includes('mmhg')
+          ? String(option.label || option.value) + ' mmHg'
+          : option.label,
+      }))
+    : getResearchRapChoices(field).map(value => ({ value, label: value + ' mmHg' }));
   const calculated = cleanString(field?.config?.calculation?.type).toLowerCase() === 'rvsp';
 
   return (
