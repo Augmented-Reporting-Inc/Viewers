@@ -50,5 +50,12 @@ describe('Echo Research mirrors existing guided education controls', () => {
     expect(getResearchCompanionField(fields[0], fields)).toEqual(fields[1]);
     expect(isResearchCompanionHidden(fields[1], fields)).toBe(true);
     expect(isResearchCompanionHidden(fields[2], fields)).toBe(false);
+    const other = [
+      { componentKey: 'quality', key: 'quality|' },
+      { componentKey: 'notes', key: 'notes|',
+        config: { groupWithComponentKey: 'quality' } },
+    ];
+    expect(getResearchCompanionField(other[0], other)).toEqual(other[1]);
+    expect(isResearchCompanionHidden(other[1], other)).toBe(true);
   });
 });
