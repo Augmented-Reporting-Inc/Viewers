@@ -89,6 +89,7 @@ export default function ResearchEchoGuidedControls({
             }
             return command('startLVSimpsonEFWorkflow', {
               efContourTargets: field.config?.compositeFrameTargets || null,
+              allowCanonicalFrameTargets: true,
               questionKey: field.key,
             });
           }, hasIncompleteRequiredEF)}
