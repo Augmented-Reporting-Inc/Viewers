@@ -86,3 +86,25 @@ export function createCalibratedLengthTextLines(nativeGetTextLines) {
 export function formatCalibratedLength(lengthMm: number) {
   return `${csUtilities.roundNumber(lengthMm, 2)} mm`;
 }
+
+/**
+ * Register the existing native Length tool with the same calibrated renderer
+ * used by the measurement adapter. The class keeps toolName="Length", all
+ * native interaction/geometry and inherited hydration behavior. Registering
+ * the upstream LengthTool directly bypasses the calibrated getTextLines
+ * wrapper and can show a smaller native cm-US-Region number while the panel
+ * records the correct mm value.
+ */
+export function createCalibratedLengthToolClass(BaseLengthTool: any): any {
+  return class ARCalibratedLengthTool extends BaseLengthTool {
+    static toolName = BaseLengthTool.toolName;
+
+    constructor(...args: any[]) {
+      super(...args);
+      const original = this.configuration?.getTextLines;
+      if (typeof original === 'function') {
+        this.configuration.getTextLines = createCalibratedLengthTextLines(original);
+      }
+    }
+  };
+}
