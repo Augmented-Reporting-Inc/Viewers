@@ -9915,9 +9915,14 @@ function commandsModule({
                 annotation?.metadata?.SOPInstanceUID || '');
               const sourceSeries = String(entry?.referenceSeriesUID ||
                 annotation?.metadata?.SeriesInstanceUID || '');
-              const sourceSet = sameSource && sourceSop && sourceSeries
-                ? displaySetService?.getDisplaySetForSOPInstanceUID?.(
-                    sourceSop, sourceSeries)
+              // Reuse the existing robust display-set lookup, including
+              // displaySetInstanceUID and series fallback. Always verify the
+              // exact source SOP within the returned set before calibrating.
+              const sourceSet = sameSource && sourceSop
+                ? getDisplaySetForViewerMeasurement(displaySetService, {
+                    ...entry, SOPInstanceUID: sourceSop,
+                    referenceSeriesUID: sourceSeries,
+                  })
                 : null;
               const sourceInstance = getDisplaySetInstances(sourceSet).find(
                 instance => String(getSopInstanceIdFromSource(instance) || '') === sourceSop
