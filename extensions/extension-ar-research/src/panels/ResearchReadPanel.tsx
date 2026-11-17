@@ -477,6 +477,100 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
     savedAnnotations,
   ]);
 
+  const removeResearchSourceIds = useCallback(async (ids: string[]) => {
+    const unique = Array.from(new Set(ids.map(cleanString).filter(Boolean)));
+    if (!unique.length) return;
+    const removed = new Set(unique);
+    // Tombstone first. A subsequent MeasurementService update or snapshot must
+    // never resurrect superseded evidence before the Research Read is saved.
+    unique.forEach(id => deletedAnnotationIdsRef.current.add(id));
+    setSavedAnnotations(current =>
+      current.filter(item => !removed.has(getAnnotationKey(item)))
+    );
+    setLiveAnnotations(current =>
+      current.filter(item => !removed.has(getAnnotationKey(item)))
+    );
+    setViewerCandidates(current => (current || []).filter(candidate =>
+      !getResearchSourceAnnotationIds(candidate?.sourceMeasurementKey)
+        .some(id => removed.has(id))
+    ));
+    const affected = new Set(Object.entries(valueSourcesRef.current)
+      .filter(([, source]) =>
+        getResearchSourceAnnotationIds(source?.sourceMeasurementKey)
+          .some(id => removed.has(id))
+      )
+      .map(([key]) => key));
+    setValueSources(current => {
+      const next = { ...current };
+      affected.forEach(key => delete next[key]);
+      valueSourcesRef.current = next;
+      return next;
+    });
+    setValues(current => {
+      const next = { ...current };
+      affected.forEach(key => delete next[key]);
+      return next;
+    });
+    for (const id of unique) {
+      try {
+        await commandsManager?.runCommand('removeMeasurement', { uid: id });
+      } catch (removeError) {
+        // The tombstone still prevents the old evidence from being persisted.
+        // A viewer restart will rehydrate only the saved Research annotations.
+        console.warn('[AR Research] could not remove old on-screen measurement', removeError);
+      }
+    }
+  }, [commandsManager]);
+
+  const beginIVCPhaseRedraw = useCallback(
+    (field: any, slot: string, existingSources: any[] = []) => {
+      pendingIVCReplacementRef.current = {
+        slot, fieldKey: field.key,
+        priorIds: existingSources.map(getAnnotationKey).filter(Boolean),
+      };
+    }, []
+  );
+
+  const completeIVCPhaseRedraw = useCallback(async (measurementId: string) => {
+    const pending = pendingIVCReplacementRef.current;
+    const id = cleanString(measurementId);
+    if (!pending || !pending.priorIds.length || !id ||
+        pending.priorIds.includes(id) || !commandsManager) return;
+    const field = fields.find(item => item.key === pending.fieldKey &&
+      item.componentKey === 'ivcCollapsibility');
+    if (!field) return;
+    try {
+      const snapshot = await commandsManager.runCommand(
+        'getSerializedViewerMeasurements',
+        { domain: 'echo', workflow: VIEWER_MEASUREMENTS_WORKFLOW }
+      );
+      const newAnnotation = (snapshot?.annotations || []).find(
+        item => getAnnotationKey(item) === id
+      );
+      // A user might select another label or draw on another frame. Never
+      // discard a previous measurement until its replacement is validated.
+      if (!isValidResearchIVCPhaseSource(field, pending.slot, newAnnotation)) {
+        notify(servicesManager,
+          'The new IVC measurement was not calibrated on the configured phase frame. The previous source is preserved.',
+          'warning');
+        return;
+      }
+      // Only the most recently armed redraw may consume the old sources.
+      if (pendingIVCReplacementRef.current !== pending) return;
+      pendingIVCReplacementRef.current = null;
+      await removeResearchSourceIds(pending.priorIds);
+      notify(servicesManager,
+        'IVC source replaced. Save the Research Read to persist the change.');
+      void refreshViewerMeasurementBindings();
+    } catch (error) {
+      console.warn('[AR Research] could not complete IVC redraw', error);
+      notify(servicesManager,
+        'Could not verify the replacement IVC source. The previous measurement was preserved.',
+        'warning');
+    }
+  }, [commandsManager, fields, removeResearchSourceIds, servicesManager,
+      refreshViewerMeasurementBindings]);
+
   useEffect(() => {
     const measurementService =
       servicesManager?.services?.measurementService;
