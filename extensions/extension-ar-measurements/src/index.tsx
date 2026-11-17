@@ -7,11 +7,7 @@ import {
 } from './utils/measurementLabelConfig';
 
 export { buildViewerMeasurementValueCandidates } from './utils/measurementValueCandidates';
-export {
-  calculateRVSP,
-  calculateIVCFromMeasurements,
-  isIVCDiameterMeasurement,
-} from './utils/rightHeartMeasurements';
+export { calculateRVSP } from './utils/rightHeartMeasurements';
 
 const arMeasurementsExtension = {
   id,
