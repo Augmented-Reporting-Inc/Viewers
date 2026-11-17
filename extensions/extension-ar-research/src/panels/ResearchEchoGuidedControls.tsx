@@ -13,7 +13,7 @@ import {
  */
 export default function ResearchEchoGuidedControls({
   field, commandsManager, disabled = false, readOnly = false, onError,
-  sourceAnnotations = [],
+  sourceAnnotations = [], ivcMeasurementState = null, ivcReadValue = null,
 }: {
   field: any;
   commandsManager: any;
@@ -21,6 +21,8 @@ export default function ResearchEchoGuidedControls({
   readOnly?: boolean;
   onError?: (message: string) => void;
   sourceAnnotations?: any[];
+  ivcMeasurementState?: any;
+  ivcReadValue?: any;
 }) {
   const [busy, setBusy] = useState('');
   const kind = String(field?.componentKey || '');
@@ -159,7 +161,21 @@ export default function ResearchEchoGuidedControls({
             const blocked = isRequiredResearchPhaseMissing(field, phase.slot);
             return (
               <div key={phase.slot} className="border-t border-gray-700 pt-2">
-                <div className="mb-2 font-medium text-gray-100">{phase.label}</div>
+                <div className="mb-2 flex flex-wrap items-center justify-between gap-2 font-medium text-gray-100">
+                  <span>{phase.label}</span>
+                  {kind === 'ivcCollapsibility' ? (() => {
+                    const diameter = phase.slot === 'IVC_EXP'
+                      ? ivcMeasurementState?.values?.expirationDiameterMM
+                      : ivcMeasurementState?.values?.inspirationDiameterMM;
+                    return (
+                      <span className="text-cyan-100">
+                        {diameter != null && Number.isFinite(Number(diameter))
+                          ? Number(diameter).toFixed(1) + ' mm'
+                          : 'No calibrated diameter'}
+                      </span>
+                    );
+                  })() : null}
+                </div>
                 <div className="flex flex-wrap gap-2">
                   {kind === 'laVolumeDisks'
                     ? <>
@@ -204,6 +220,39 @@ export default function ResearchEchoGuidedControls({
               </div>
             );
           })}
+          {kind === 'ivcCollapsibility' ? (
+            <div className="border-t border-gray-700 pt-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="font-semibold text-gray-100">
+                  Calculated IVC collapsibility
+                </span>
+                <span className="font-semibold text-cyan-100">
+                  {ivcMeasurementState?.candidate &&
+                    ivcReadValue !== null && ivcReadValue !== undefined &&
+                    String(ivcReadValue).trim() !== '' &&
+                    Number.isFinite(Number(ivcReadValue))
+                    ? Number(ivcReadValue).toFixed(1) + '%'
+                    : 'Not yet calculated'}
+                </span>
+              </div>
+              {!ivcMeasurementState?.candidate ? (
+                <p className="mt-1 text-amber-200">
+                  {ivcMeasurementState?.message ||
+                    'Draw both calibrated IVC measurements on the assigned frames.'}
+                </p>
+              ) : (
+                <p className="mt-1 text-gray-400">
+                  Derived from the two calibrated diameters on their configured DICOM frames.
+                </p>
+              )}
+              {ivcMeasurementState?.unmatchedSources > 0 ? (
+                <p className="mt-1 text-amber-200">
+                  {ivcMeasurementState.unmatchedSources} IVC source(s) were drawn
+                  outside the configured phase frames and are excluded.
+                </p>
+              ) : null}
+            </div>
+          ) : null}
         </div>
       )}
     </div>
