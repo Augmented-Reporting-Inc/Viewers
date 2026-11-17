@@ -32,6 +32,12 @@ describe('Research Manager source-frame authoring', () => {
     });
   });
 
+  it('accepts a standard OHIF hash-router query without changing its case identity', () => {
+    expect(getResearchFramePickerIntent('', '#/viewer?' + search)).toEqual(
+      getResearchFramePickerIntent('?' + search)
+    );
+  });
+
   it('rejects untrusted origin, bad session and unrecognized DICOM study', () => {
     const original = new URLSearchParams(search);
     const evil = new URLSearchParams(search);
