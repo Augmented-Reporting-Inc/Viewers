@@ -5042,7 +5042,9 @@ function getDisplaySetForViewerQuizTarget(displaySetService, target = {}) {
   return seriesDisplaySets[0] || null;
 }
 
-function findImageIdIndexForViewerQuizTarget(viewport, target = {}) {
+function findImageIdIndexForViewerQuizTarget(
+  viewport, target = {}, { requireExactSopFrame = false } = {}
+) {
   const imageIds = getViewportImageIds(viewport);
 
   if (!imageIds.length) {
@@ -5063,7 +5065,8 @@ function findImageIdIndexForViewerQuizTarget(viewport, target = {}) {
         normalized.endsWith(normalizedReference);
       // An image URL hint cannot override the required SOP + cine frame.
       return sameImage && (
-        !target.sopInstanceId || !Number.isFinite(target.frameNumber) ||
+        !requireExactSopFrame || !target.sopInstanceId ||
+        !Number.isFinite(target.frameNumber) ||
         isExactViewerQuizSopFrameImageId(
           imageId, target.sopInstanceId, target.frameNumber
         )
@@ -5081,10 +5084,12 @@ function findImageIdIndexForViewerQuizTarget(viewport, target = {}) {
   }
 
   if (target.sopInstanceId && Number.isFinite(target.frameNumber)) {
-    const index = imageIds.findIndex(imageId =>
-      isExactViewerQuizSopFrameImageId(
-        imageId, target.sopInstanceId, target.frameNumber
-      )
+    const expectedInstanceFrame = `/instances/${String(target.sopInstanceId).toLowerCase()}/frames/${target.frameNumber}`;
+    const index = imageIds.findIndex(imageId => requireExactSopFrame
+      ? isExactViewerQuizSopFrameImageId(
+          imageId, target.sopInstanceId, target.frameNumber
+        )
+      : normalizeImageIdForCompare(imageId).includes(expectedInstanceFrame)
     );
 
     if (index >= 0) {
@@ -5095,15 +5100,17 @@ function findImageIdIndexForViewerQuizTarget(viewport, target = {}) {
         source: 'sop-frame',
       };
     }
-    // A fixed target may arrive while its display set is still loading.
-    // Retry rather than silently accepting another SOP or the Nth image of
-    // the current stack, which could lead to a measurement on a wrong frame.
-    return {
-      index: -1,
-      imageId: '',
-      imageIds,
-      source: 'exact-sop-frame-not-yet-loaded',
-    };
+    if (requireExactSopFrame) {
+      // A fixed target may arrive while its display set is still loading.
+      // Retry rather than silently accepting another SOP or the Nth image of
+      // the current stack, which could lead to a measurement on a wrong frame.
+      return {
+        index: -1,
+        imageId: '',
+        imageIds,
+        source: 'exact-sop-frame-not-yet-loaded',
+      };
+    }
   }
 
   if (target.sopInstanceId) {
@@ -5156,7 +5163,8 @@ function findImageIdIndexForViewerQuizTarget(viewport, target = {}) {
 }
 
 async function waitForViewerQuizTargetImageMatch(
-  viewport, target = {}, attempts = 20, resolveViewport = null
+  viewport, target = {}, attempts = 20, resolveViewport = null,
+  { requireExactSopFrame = false } = {}
 ) {
   let lastMatch = {
     index: -1,
@@ -5171,7 +5179,9 @@ async function waitForViewerQuizTargetImageMatch(
     // current instance instead of a stale previous image stack.
     const resolved = typeof resolveViewport === 'function' ? resolveViewport() : null;
     latestViewport = resolved || latestViewport;
-    lastMatch = findImageIdIndexForViewerQuizTarget(latestViewport, target);
+    lastMatch = findImageIdIndexForViewerQuizTarget(
+      latestViewport, target, { requireExactSopFrame }
+    );
 
     if (lastMatch.index >= 0) {
       return { ...lastMatch, viewport: latestViewport };
@@ -5183,12 +5193,17 @@ async function waitForViewerQuizTargetImageMatch(
   return { ...lastMatch, viewport: latestViewport };
 }
 
-async function jumpViewportToViewerQuizTargetImage(viewport, target = {}, resolveViewport = null) {
+async function jumpViewportToViewerQuizTargetImage(
+  viewport, target = {}, resolveViewport = null,
+  { requireExactSopFrame = false } = {}
+) {
   // Instance-only quiz guidance has no gold frame and may require an
   // asynchronous cine display-set transition.
   const attempts = target.sopInstanceId && !Number.isFinite(target.frameNumber) ? 70 : 20;
   const { viewport: latestViewport, ...match } =
-    await waitForViewerQuizTargetImageMatch(viewport, target, attempts, resolveViewport);
+    await waitForViewerQuizTargetImageMatch(
+      viewport, target, attempts, resolveViewport, { requireExactSopFrame }
+    );
 
   if (match.index < 0) {
     console.warn('[ViewerQuiz] could not find target image in viewport stack', {
@@ -15494,7 +15509,9 @@ function commandsModule({
         annotationIds: orderedAnnotations.map(getAnnotationId),
       };
     },
-    jumpToViewerQuizTarget: async ({ viewerTarget, questionKey = '' } = {}) => {
+    jumpToViewerQuizTarget: async ({
+      viewerTarget, questionKey = '', requireExactSopFrame = false,
+    } = {}) => {
       const target = normalizeViewerQuizTarget(viewerTarget);
 
       if (!hasViewerQuizTargetIdentity(target)) {
@@ -15565,7 +15582,7 @@ function commandsModule({
       }
 
       const jumpResult = await jumpViewportToViewerQuizTargetImage(
-        viewport, target, resolveTargetViewport
+        viewport, target, resolveTargetViewport, { requireExactSopFrame }
       );
 
       // Navigating between saved quiz source frames can change the viewport's
