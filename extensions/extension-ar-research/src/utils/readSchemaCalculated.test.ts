@@ -1,5 +1,5 @@
 import { buildViewerMeasurementValueCandidates } from '../../../extension-ar-measurements/src/utils/measurementValueCandidates';
-import { getResearchCompatibleMeasurementCandidates } from './researchFieldNavigation';
+import { getResearchCompatibleMeasurementCandidates, getResearchBindingSources } from './researchFieldNavigation';
 import {
   buildViewerMeasurementReadUpdates,
   buildReadFields,
@@ -253,4 +253,24 @@ describe('Research IVC frame-bound calculation and persistence', () => {
     );
     expect(buildViewerMeasurementReadUpdates([ivcField], compatible, {})).toEqual([]);
   });
+});
+
+test('fixed IVC evidence takes precedence over a stale manual placeholder, not over other fields', () => {
+  const config = {
+    componentKey: 'ivcCollapsibility', key: 'ivcCollapsibility|',
+    config: { compositeFrameTargets: { IVC_EXP: {}, IVC_INSP: {} } },
+  };
+  const existing = {
+    'ivcCollapsibility|': { source: 'manual', sourceMeasurementKey: '' },
+    'trVmax|': { source: 'manual', sourceMeasurementKey: '' },
+  };
+  const next = getResearchBindingSources(config, existing);
+  expect(next['ivcCollapsibility|']).toEqual({
+    source: 'viewer-derived', sourceMeasurementKey: '',
+  });
+  expect(next['trVmax|']).toEqual(existing['trVmax|']);
+  expect(existing['ivcCollapsibility|'].source).toBe('manual');
+  expect(getResearchBindingSources({
+    ...config, config: {},
+  }, existing)).toBe(existing);
 });
