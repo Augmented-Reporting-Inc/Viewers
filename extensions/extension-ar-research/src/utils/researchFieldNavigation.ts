@@ -192,24 +192,51 @@ export function getResearchProtocolCompatibleCandidates(
  * selection is case-/phase-specific; never choose an arbitrary extra IVC
  * measurement on a different cine frame.
  */
+/** Echo IVC label identity is shared by the calculator, redraw flow and UI. */
+export function getResearchIVCAnnotationSlot(annotation: any): string {
+  const label = cleanString(
+    annotation?.label || annotation?.measurementRole || annotation?.role
+  ).toLowerCase().replace(/[\\s_-]+/g, '');
+  if (['ivcexp', 'ivcexpiration', 'ivcendexpiration', 'ivcendexpirationdiameter'].includes(label))
+    return 'IVC_EXP';
+  if (['ivcinsp', 'ivcinspiration', 'ivcendinspiration', 'ivcendinspirationdiameter'].includes(label))
+    return 'IVC_INSP';
+  return '';
+}
+
+/** Verify the replacement using the calibrated Length engine (never pixels). */
+export function isValidResearchIVCPhaseSource(
+  field: any, slot: string, annotation: any
+) {
+  if (!annotation || getResearchIVCAnnotationSlot(annotation) !== slot ||
+      !isIVCDiameterMeasurement(annotation)) return false;
+  const configuredTarget = field?.config?.compositeFrameTargets?.[slot];
+  if (configuredTarget && !annotationMatchesTarget(annotation, configuredTarget)) {
+    return false;
+  }
+  const measurement = calculateIVCFromMeasurements([annotation]);
+  const diameter = slot === 'IVC_EXP'
+    ? measurement?.values?.expirationDiameterMM
+    : measurement?.values?.inspirationDiameterMM;
+  return diameter != null && Number.isFinite(Number(diameter)) &&
+    (slot === 'IVC_EXP' ? Number(diameter) > 0 : Number(diameter) >= 0);
+}
+
 export function getResearchIVCMeasurementState(field: any, annotations: any[] = []) {
   const targets = field?.config?.compositeFrameTargets || {};
   const allIVC = (Array.isArray(annotations) ? annotations : [])
     .filter(isIVCDiameterMeasurement);
-  const slotOf = (annotation: any) => {
-    const label = cleanString(
-      annotation?.label || annotation?.measurementRole || annotation?.role
-    ).toLowerCase().replace(/[\s_-]+/g, '');
-    return ['ivcexp', 'ivcexpiration', 'ivcendexpiration', 'ivcendexpirationdiameter']
-      .includes(label) ? 'IVC_EXP'
-      : ['ivcinsp', 'ivcinspiration', 'ivcendinspiration', 'ivcendinspirationdiameter']
-        .includes(label) ? 'IVC_INSP' : '';
+  const phaseSources: Record<string, any[]> = {
+    IVC_EXP: [],
+    IVC_INSP: [],
   };
-  const selected = allIVC.filter(annotation => {
-    const slot = slotOf(annotation);
-    const target = targets[slot];
-    return slot && (!target || annotationMatchesTarget(annotation, target));
-  });
+  for (const annotation of allIVC) {
+    const slot = getResearchIVCAnnotationSlot(annotation);
+    if (slot && (!targets[slot] || annotationMatchesTarget(annotation, targets[slot]))) {
+      phaseSources[slot].push(annotation);
+    }
+  }
+  const selected = [...phaseSources.IVC_EXP, ...phaseSources.IVC_INSP];
   const result = calculateIVCFromMeasurements(selected);
   const candidates = buildViewerMeasurementValueCandidates(selected);
   const candidate = getResearchProtocolCompatibleCandidates(
@@ -225,6 +252,7 @@ export function getResearchIVCMeasurementState(field: any, annotations: any[] = 
     message: result?.message || 'Capture both calibrated IVC diameters.',
     candidate,
     annotations: selected,
+    phaseSources,
     unmatchedSources: allIVC.length - selected.length,
   };
 }
@@ -247,15 +275,30 @@ export function getResearchCompatibleMeasurementCandidates(
  * suppress an actual, uniquely verified calculated result. Do not alter
  * manual-source precedence for unconfigured or non-IVC ReadSchema fields.
  */
-export function getResearchBindingSources(field: any, sources: Record<string, any> = {}) {
+export function getResearchBindingSources(
+  field: any, sources: Record<string, any> = {}, candidates: any[] = []
+) {
   const fixedPhases = field?.config?.compositeFrameTargets;
   if (cleanString(field?.componentKey) !== 'ivcCollapsibility' ||
       !fixedPhases || typeof fixedPhases !== 'object' ||
-      !fixedPhases.IVC_EXP || !fixedPhases.IVC_INSP ||
-      cleanString(sources?.[field.key]?.source) !== 'manual') {
-    return sources;
-  }
+      !fixedPhases.IVC_EXP || !fixedPhases.IVC_INSP) return sources;
+
+  const current = sources?.[field.key] || {};
+  const currentKind = cleanString(current.source);
+  const previousKey = cleanString(current.sourceMeasurementKey);
+  // When the reader intentionally replaces a validated Length, both source
+  // annotation IDs change. Keep the no-guessing rule: release the previous key
+  // only if there is exactly one compatible, verified IVC candidate.
+  const eligible = (Array.isArray(candidates) ? candidates : []).filter(item =>
+    cleanString(item.source) === 'viewer-derived' &&
+    cleanString(item.sourceMeasurementKey).startsWith('ivc-collapse:')
+  );
+  const changedVerifiedSource = eligible.length === 1 &&
+    !!previousKey && previousKey !== cleanString(eligible[0].sourceMeasurementKey);
+  if (currentKind !== 'manual' && !changedVerifiedSource) return sources;
+
   return { ...sources, [field.key]: {
-    source: 'viewer-derived', sourceMeasurementKey: '',
+    source: 'viewer-derived', sourceMeasurementKey:
+      changedVerifiedSource ? '' : previousKey,
   } };
 }
