@@ -816,6 +816,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
       const result = await commandsManager.runCommand('jumpToViewerQuizTarget', {
         viewerTarget: target,
         questionKey: fieldKey,
+        requireExactSopFrame: true,
       });
       if (result?.ok !== true) {
         throw new Error(result?.reason || 'protocol target navigation failed');
