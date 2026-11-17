@@ -43,10 +43,21 @@ export default function ResearchEchoGuidedControls({
       throw new Error('The configured ' + (slot || 'measurement') + ' frame is incomplete.');
     }
     if (target) {
-      const result = await command('jumpToViewerQuizTarget', {
-        viewerTarget: target, questionKey: field.key,
-      });
-      if (result?.ok !== true) throw new Error('The configured image/frame could not be opened.');
+      try {
+        const result = await command('jumpToViewerQuizTarget', {
+          viewerTarget: target, questionKey: field.key,
+        });
+        if (result?.ok !== true) {
+          throw new Error(result?.reason || 'navigation did not complete');
+        }
+      } catch (error) {
+        // Never activate a measuring tool on a different, currently visible
+        // instance/frame when the fixed source could not be reached.
+        throw new Error(
+          'Could not open the configured ' + (slot || 'measurement') +
+          ' source frame (' + (error?.message || 'navigation failed') + ').'
+        );
+      }
     }
   };
   const run = async (key: string, action: () => Promise<any>) => {
@@ -185,6 +196,9 @@ export default function ResearchEchoGuidedControls({
                         }, blocked)}
                   {viewTarget(phase.slot)}
                   {blocked ? <span className="text-amber-300">Missing required protocol frame</span> : null}
+                  {!blocked && !getResearchEchoPhaseTarget(field, phase.slot)
+                    ? <span className="text-gray-400">No fixed frame for this phase — uses the current viewer image</span>
+                    : null}
                 </div>
               </div>
             );
