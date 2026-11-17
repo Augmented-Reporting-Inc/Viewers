@@ -3,6 +3,7 @@ name: Validate guided Echo Research workflows
 on:
   pull_request:
     branches:
+      - feature/research-guided-echo-measurements-20261116
       - feature/research-quiz-style-read-20261116
       - port/3.11-custom
     paths:
