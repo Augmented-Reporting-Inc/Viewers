@@ -36,7 +36,8 @@ jobs:
             extensions/extension-ar-research/src/utils/readSchemaCalculated.test.ts \
             extensions/extension-ar-research/src/utils/researchFieldNavigation.test.ts \
             extensions/extension-ar-research/src/utils/researchEchoWorkflow.test.ts \
-            extensions/extension-ar-research/src/utils/researchFramePicker.test.ts
+            extensions/extension-ar-research/src/utils/researchFramePicker.test.ts \
+            extensions/extension-ar-research/src/utils/researchCaseFrameTargets.test.ts
       - name: Compile both viewer panels
         run: |
           node - <<'NODE'
