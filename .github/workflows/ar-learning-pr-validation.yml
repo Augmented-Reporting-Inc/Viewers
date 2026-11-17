@@ -11,6 +11,7 @@ on:
       - feature/ef-authored-contour-frame-navigation-20261024
       - fix/ef-panel-contour-actions-20261025
       - fix/iuscan-restored-length-calibration-20261116
+      - fix/length-restored-parity-20261117
   pull_request:
     branches:
       - fix/ef-sticky-tool-between-contours-20261020
