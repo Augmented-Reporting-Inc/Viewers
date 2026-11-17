@@ -536,10 +536,9 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
 
   const beginIVCPhaseRedraw = useCallback(
     (field: any, slot: string, existingSources: any[] = []) => {
-      pendingIVCReplacementRef.current = {
-        slot, fieldKey: field.key,
-        priorIds: existingSources.map(getAnnotationKey).filter(Boolean),
-      };
+      const priorIds = existingSources.map(getAnnotationKey).filter(Boolean);
+      pendingIVCReplacementRef.current = priorIds.length
+        ? { slot, fieldKey: field.key, priorIds } : null;
     }, []
   );
 
@@ -994,6 +993,9 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
   const selectField = (key: string) => {
     const field = fields.find(item => item.key === key);
     if (!field) return;
+    // Leaving an unfinished redraw abandons the pending replacement, not the
+    // old source. No annotation is removed until a new one has been verified.
+    pendingIVCReplacementRef.current = null;
     setSelectedFieldKey(key);
     void navigateToField(field);
   };
