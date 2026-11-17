@@ -1069,6 +1069,8 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
     : null;
   const guidedIVCValue = selectedField
     ? calculatedReadState.values[selectedField.key] : null;
+  const showInlineIVCSources = readDomain === 'echo' &&
+    selectedField?.componentKey === 'ivcCollapsibility';
   const showGuidedIVCValue = guidedOwnsProtocolFrames &&
     selectedField?.componentKey === 'ivcCollapsibility' &&
     protocolTargets.length > 0;
@@ -1229,12 +1231,15 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
               sourceAnnotations={selectedSources}
               ivcMeasurementState={ivcMeasurementState}
               ivcReadValue={guidedIVCValue}
+              onBeginIVCPhaseRedraw={beginIVCPhaseRedraw}
+              onViewIVCSource={annotation => void jumpToAnnotation(annotation)}
+              onDeleteIVCSource={annotation => void deleteResearchAnnotation(annotation)}
               disabled={context.readOnly || context.preview || isBusy}
               readOnly={context.readOnly || context.preview}
               onError={message => notify(servicesManager, message, 'warning')}
             />
           ) : null}
-          {(isSelectedMeasurement || genericProtocolTargets.length > 0) ? (
+          {!showInlineIVCSources && (isSelectedMeasurement || genericProtocolTargets.length > 0) ? (
             <div className="rounded border border-gray-700 bg-gray-950 p-3 text-xs">
               <div className="font-semibold text-gray-100">Measurement sources</div>
               {genericProtocolTargets.length ? (
