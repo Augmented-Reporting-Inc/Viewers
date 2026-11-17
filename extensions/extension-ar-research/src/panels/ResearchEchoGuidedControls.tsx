@@ -287,10 +287,39 @@ export default function ResearchEchoGuidedControls({
                 </p>
               )}
               {ivcMeasurementState?.unmatchedSources > 0 ? (
-                <p className="mt-1 text-amber-200">
-                  {ivcMeasurementState.unmatchedSources} IVC source(s) were drawn
-                  outside the configured phase frames and are excluded.
-                </p>
+                <div className="mt-2 space-y-2 text-amber-200">
+                  <p>
+                    {ivcMeasurementState.unmatchedSources} IVC source(s) do not
+                    match the configured DICOM phase frame and are excluded
+                    from the calculated result.
+                  </p>
+                  {(ivcMeasurementState.excludedAnnotations || []).map(
+                    (annotation: any, index: number) => (
+                      <div key={String(annotation?.annotationId ||
+                        annotation?.annotationUID || annotation?.uid || index)}
+                        className="flex flex-wrap items-center gap-2 rounded border border-amber-800 px-2 py-1">
+                        <span>
+                          Excluded {String(annotation?.label || 'IVC source')}
+                          {annotation?.measurements?.length != null &&
+                            Number.isFinite(Number(annotation.measurements.length))
+                            ? ' · ' + Number(annotation.measurements.length).toFixed(2) +
+                              ' ' + String(annotation.measurements.unit || 'mm')
+                            : ''}
+                        </span>
+                        <button type="button" className="text-cyan-200 hover:underline"
+                          disabled={!onViewIVCSource}
+                          onClick={() => onViewIVCSource?.(annotation)}
+                        >View source</button>
+                        {!readOnly && !disabled ? (
+                          <button type="button" className="text-red-300 hover:underline"
+                            disabled={!onDeleteIVCSource}
+                            onClick={() => onDeleteIVCSource?.(annotation)}
+                          >Delete</button>
+                        ) : null}
+                      </div>
+                    )
+                  )}
+                </div>
               ) : null}
             </div>
           ) : null}
