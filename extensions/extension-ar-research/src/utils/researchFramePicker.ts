@@ -8,8 +8,15 @@ export const RESEARCH_FRAME_CAPTURE_MESSAGE = 'ar.research.frame-target-captured
 
 const getString = (value: unknown) => String(value ?? '').trim();
 
-export function getResearchFramePickerIntent(search: string) {
+export function getResearchFramePickerIntent(search: string, hash = '') {
   const params = new URLSearchParams(search);
+  // Match the existing Research viewer context parser: OHIF deployments can
+  // carry route arguments either in location.search or the hash query.
+  const hashQuery = String(hash || '').includes('?')
+    ? String(hash).slice(String(hash).indexOf('?') + 1).split('#')[0] : '';
+  new URLSearchParams(hashQuery).forEach((value, key) => {
+    if (!params.has(key)) params.set(key, value);
+  });
   const session = getString(params.get('arResearchFramePickerSession'));
   if (!session) return null;
   const parentOrigin = getString(params.get('arResearchFramePickerParentOrigin'));
