@@ -3,6 +3,7 @@ import {
   getResearchSourceAnnotationIds,
   getResearchFieldSourceAnnotations,
   getResearchProtocolViewerTargets,
+  getResearchQuestionEntryTarget,
   isResearchCandidateOnProtocolFrames,
   getResearchProtocolCompatibleCandidates,
   getResearchIVCMeasurementState,
@@ -267,5 +268,42 @@ describe('Research IVC redraw source safety', () => {
       length('IVCinsp', 22, 8))).toBe(true);
     expect(isValidResearchIVCPhaseSource(field, 'IVC_INSP',
       { ...length('IVCinsp', 22, 8), SOPInstanceUID: 'different' })).toBe(false);
+  });
+});
+
+describe('Research question-entry source frame navigation', () => {
+  const source = (frameNumber: number) => ({
+    studyInstanceUID: 'study', seriesInstanceUID: 'series',
+    sopInstanceUID: 'sop', frameNumber,
+  });
+
+  it('opens fixed IVC expiration first, never guessed inspiration or ordering', () => {
+    const field = {
+      componentKey: 'ivcCollapsibility', config: {
+        compositeFrameTargets: { IVC_INSP: source(22), IVC_EXP: source(2) },
+      },
+    };
+    expect(getResearchQuestionEntryTarget(field)).toEqual(source(2));
+    expect(getResearchQuestionEntryTarget({
+      ...field,
+      config: { compositeFrameTargets: { IVC_INSP: source(22) } },
+    })).toBeNull();
+    expect(getResearchQuestionEntryTarget({
+      ...field,
+      config: { compositeFrameTargets: { IVC_EXP: { sopInstanceUID: 'sop' } } },
+    })).toBeNull();
+  });
+
+  it('preserves other composite question phase choice and single TR navigation', () => {
+    expect(getResearchQuestionEntryTarget({
+      componentKey: 'rvFac', config: {
+        compositeFrameTargets: { RV_ED: source(2), RV_ES: source(22) },
+      },
+    })).toBeNull();
+    expect(getResearchQuestionEntryTarget({
+      componentKey: 'trVmax', config: { viewerTarget: source(9) },
+    })).toEqual(source(9));
+    expect(getResearchQuestionEntryTarget({ componentKey: 'ivcCollapsibility', config: {} }))
+      .toBeNull();
   });
 });
