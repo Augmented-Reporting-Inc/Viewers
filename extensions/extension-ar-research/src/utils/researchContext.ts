@@ -1,5 +1,6 @@
 import { buildFormApiFetchOptions, buildFormApiUrl } from './formApi';
 import { normalizeReadSchema } from './readSchema';
+import { resolveResearchCaseReadSchema } from './researchCaseFrameTargets';
 
 function cleanString(value: unknown) {
   return String(value || '').trim();
@@ -36,6 +37,12 @@ export function getResearchViewerContext() {
   return {
     studyKey: cleanString(params.get('arResearchStudyKey')),
     reviewKey: cleanString(params.get('arResearchReviewKey')),
+    sourceStudyInstanceUID: cleanString(
+      params.get('arResearchFramePickerStudyInstanceUID') ||
+      params.get('StudyInstanceUIDs') ||
+      params.get('StudyInstanceUID') ||
+      params.get('study')
+    ),
     imagingProfileKey: cleanString(
       params.get('arResearchImagingProfileKey')
     ).toLowerCase(),
@@ -102,7 +109,15 @@ export async function loadResearchReadContext() {
     protocol,
     review?.imagingProfileKey || viewer.imagingProfileKey
   );
-  const readSchema = normalizeReadSchema(imagingProfile?.readSchema || {});
+  const sourceStudyInstanceUID = cleanString(
+    review?.sourceStudyInstanceUID || viewer.sourceStudyInstanceUID
+  );
+  // A protocol spans multiple Research cases. Use only the configured
+  // source frames for THIS DICOM case, never another case's SOP/frame.
+  const readSchema = resolveResearchCaseReadSchema(
+    normalizeReadSchema(imagingProfile?.readSchema || {}),
+    sourceStudyInstanceUID
+  );
   const accessReadOnly = ['read', 'readonly'].includes(viewer.measurementAccess);
   const completed = cleanString(review?.status).toLowerCase() === 'completed';
 
@@ -111,6 +126,7 @@ export async function loadResearchReadContext() {
     study,
     review,
     imagingProfile,
+    sourceStudyInstanceUID,
     readSchema,
     readOnly: viewer.preview || completed || accessReadOnly,
   };
