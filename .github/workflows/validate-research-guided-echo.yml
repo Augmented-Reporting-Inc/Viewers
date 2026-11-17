@@ -3,6 +3,7 @@ name: Validate guided Echo Research workflows
 on:
   pull_request:
     branches:
+      - fix/research-live-length-source-reconciliation-20261117
       - fix/research-ivc-navigation-shared-length-display-20261117
       - fix/research-ivc-redraw-single-source-controls-20261117
       - fix/research-ivc-values-panel-dedupe-20261117

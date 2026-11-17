@@ -286,44 +286,8 @@ export default function ResearchEchoGuidedControls({
                   Derived from the two calibrated diameters on their configured DICOM frames.
                 </p>
               )}
-              {ivcMeasurementState?.unmatchedSources > 0 ? (
-                <div className="mt-2 space-y-2 text-amber-200">
-                  <p>
-                    {ivcMeasurementState.unmatchedSources} IVC source(s) do not
-                    match the configured DICOM phase frame and are excluded
-                    from the calculated result.
-                  </p>
-                  {(ivcMeasurementState.excludedAnnotations || []).map(
-                    (annotation: any, index: number) => (
-                      <div key={String(annotation?.annotationId ||
-                        annotation?.annotationUID || annotation?.uid || index)}
-                        className="flex flex-wrap items-center gap-2 rounded border border-amber-800 px-2 py-1">
-                        <span>
-                          Excluded {String(annotation?.label || 'IVC source')}
-                          {annotation?.measurements?.length != null &&
-                            Number.isFinite(Number(annotation.measurements.length)) &&
-                            (annotation?.measurements?.lengthUnit ||
-                              annotation?.measurements?.unit)
-                            ? ' · ' + Number(annotation.measurements.length).toFixed(2) +
-                              ' ' + String(annotation.measurements.lengthUnit ||
-                                annotation.measurements.unit)
-                            : ''}
-                        </span>
-                        <button type="button" className="text-cyan-200 hover:underline"
-                          disabled={!onViewIVCSource}
-                          onClick={() => onViewIVCSource?.(annotation)}
-                        >View source</button>
-                        {!readOnly && !disabled ? (
-                          <button type="button" className="text-red-300 hover:underline"
-                            disabled={!onDeleteIVCSource}
-                            onClick={() => onDeleteIVCSource?.(annotation)}
-                          >Delete</button>
-                        ) : null}
-                      </div>
-                    )
-                  )}
-                </div>
-              ) : null}
+              {/* Off-protocol annotations remain excluded by the validation
+                  engine; they are diagnostic evidence, not reader results. */}
             </div>
           ) : null}
         </div>
