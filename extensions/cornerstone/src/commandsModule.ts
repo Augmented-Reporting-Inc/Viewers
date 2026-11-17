@@ -8886,6 +8886,23 @@ function commandsModule({
     return true;
   }
 
+  /**
+   * Saved-source review may be entered while a multiframe cine is playing.
+   * Stop playback without changing the active measurement tool, then assert
+   * the exact saved image again so a late cine tick cannot move the frame.
+   * Research opts into this; other saved-source navigation is unchanged.
+   */
+  const stopSourceCineForViewport = (viewportId: string) => {
+    if (!viewportId) return;
+    const state = cineService.getState();
+    const cine = state.cines?.[viewportId];
+    cineService.setCine({
+      id: viewportId,
+      frameRate: cine?.frameRate ?? state.default?.frameRate ?? 24,
+      isPlaying: false,
+    });
+  };
+
   const actions = {
     clearViewerMeasurementsCreatedInSession: () => {
       viewerMeasurementsCreatedInSession.clear();
@@ -15021,6 +15038,7 @@ function commandsModule({
       annotation: savedAnnotation,
       selectAnnotation = true,
       runDelayedDisplayRefresh = true,
+      pauseCineOnSource = false,
     } = {}) => {
       const annotationId = getAnnotationId(savedAnnotation);
 
@@ -15079,6 +15097,7 @@ function commandsModule({
           });
 
       const targetViewportId = viewportToUpdate?.viewportId || activeViewportId;
+      if (pauseCineOnSource) stopSourceCineForViewport(targetViewportId);
 
       if (!activeDisplaySetAlreadyMatches) {
         const viewportsToUpdate = getViewportsToUpdateSafely({
@@ -15347,6 +15366,21 @@ function commandsModule({
 
           hydratedViewport.render?.();
         }
+      }
+
+      if (pauseCineOnSource) {
+        const sourceViewportId = hydratedViewport.id || targetViewportId;
+        stopSourceCineForViewport(sourceViewportId);
+        const finalImage = await jumpViewportToSavedAnnotationImage(
+          hydratedViewport, savedAnnotation
+        );
+        if (!finalImage || !await waitForViewportImageReady(
+          hydratedViewport, finalImage
+        )) {
+          return { ok: false, reason: 'saved-source-frame-not-ready-after-cine-stop',
+            annotationId, viewportId: sourceViewportId };
+        }
+        hydratedViewport.render?.();
       }
 
       return {
