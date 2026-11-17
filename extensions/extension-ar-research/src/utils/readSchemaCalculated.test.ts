@@ -1,4 +1,5 @@
 import { buildViewerMeasurementValueCandidates } from '../../../extension-ar-measurements/src/utils/measurementValueCandidates';
+import { getResearchCompatibleMeasurementCandidates } from './researchFieldNavigation';
 import {
   buildViewerMeasurementReadUpdates,
   buildReadFields,
@@ -183,5 +184,73 @@ describe('optional source-linked Research Read RVSP calculation', () => {
     });
     const original = { 'comment|': 'reviewed' };
     expect(buildCalculatedReadState(regular, original).values).toEqual(original);
+  });
+});
+
+describe('Research IVC frame-bound calculation and persistence', () => {
+  const study = '1.2.study';
+  const series = '1.2.series';
+  const instance = '1.2.instance';
+  const ivcField = buildReadFields({ domain: 'echo', components: [{
+    componentKey: 'ivcCollapsibility', kind: 'measurement',
+    config: {
+      unit: '%', step: 0.1, measurementLabels: ['IVCCollapsibility'],
+      compositeFrameGuidanceEnabled: true,
+      compositeFrameTargets: {
+        IVC_EXP: { studyInstanceUID: study, seriesInstanceUID: series,
+          sopInstanceUID: instance, frameNumber: 2 },
+        IVC_INSP: { studyInstanceUID: study, seriesInstanceUID: series,
+          sopInstanceUID: instance, frameNumber: 22 },
+      },
+    },
+  }] })[0];
+
+  function length(label: string, lengthMM: number, frame: number) {
+    return {
+      annotationId: label + frame, label, toolName: 'Length',
+      points: [[0, 0, 0], [1, 0, 0]],
+      measurements: { length: lengthMM, lengthUnit: 'mm', unit: 'mm' },
+      StudyInstanceUID: study, SeriesInstanceUID: series,
+      SOPInstanceUID: instance,
+      frameNumber: 1,
+      referencedImageId:
+        `wadors:/studies/${study}/series/${series}/instances/${instance}/frames/${frame}`,
+    };
+  }
+
+  it('binds IVC 60% from exact source frames, then serializes a viewer-derived result', () => {
+    const annotations = [length('IVCexp', 20, 2), length('IVCinsp', 8, 22)];
+    const compatible = getResearchCompatibleMeasurementCandidates(
+      ivcField, buildViewerMeasurementValueCandidates(annotations), annotations
+    );
+    expect(compatible).toHaveLength(1);
+    const updates = buildViewerMeasurementReadUpdates([ivcField], compatible, {});
+    expect(updates).toHaveLength(1);
+    expect(updates[0]).toMatchObject({
+      fieldKey: 'ivcCollapsibility|',
+      value: 60, source: 'viewer-derived',
+    });
+    const entries = buildReadResultEntries([ivcField], {
+      [updates[0].fieldKey]: updates[0].value,
+    }, {
+      [updates[0].fieldKey]: {
+        source: updates[0].source,
+        sourceMeasurementKey: updates[0].sourceMeasurementKey,
+      },
+    });
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      componentKey: 'ivcCollapsibility', value: 60, unit: '%',
+      source: 'viewer-derived',
+    });
+    expect(entries[0].sourceMeasurementKey).toContain('IVCexp2,IVCinsp22');
+  });
+
+  it('does not bind or serialize IVC collapse from a wrong source frame', () => {
+    const annotations = [length('IVCexp', 20, 2), length('IVCinsp', 8, 21)];
+    const compatible = getResearchCompatibleMeasurementCandidates(
+      ivcField, buildViewerMeasurementValueCandidates(annotations), annotations
+    );
+    expect(buildViewerMeasurementReadUpdates([ivcField], compatible, {})).toEqual([]);
   });
 });
