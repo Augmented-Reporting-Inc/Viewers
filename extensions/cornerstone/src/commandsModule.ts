@@ -4951,7 +4951,7 @@ function normalizeViewerQuizTarget(target = {}) {
   };
 }
 
-function getEFContourFrameTarget(targets: any, slot: string) {
+function getEFContourFrameTarget(targets: any, slot: string, { allowCanonical = false } = {}) {
   if (!targets || typeof targets !== 'object' || Array.isArray(targets) ||
       !LV_TRACE_REQUIRED_SLOTS.includes(slot)) {
     return null;
@@ -4959,7 +4959,12 @@ function getEFContourFrameTarget(targets: any, slot: string) {
   const target = targets[slot];
   if (!target || typeof target !== 'object' || Array.isArray(target)) return null;
   const normalized = normalizeViewerQuizTarget(target);
-  if (!normalized.referencedImageId || !normalized.sopInstanceId ||
+  // Research Manager protocols may store the canonical SOP Instance UID +
+  // 1-based frame instead of a transient viewer image URL. Both are exact
+  // DICOM targets. The EF navigator still verifies the resulting image's
+  // *actual* SOP and frame before permitting the contour workflow.
+  if ((!normalized.referencedImageId && !allowCanonical) ||
+      !normalized.sopInstanceId ||
       !Number.isInteger(normalized.frameNumber) || normalized.frameNumber < 1) return null;
   return target;
 }
@@ -9454,6 +9459,7 @@ function commandsModule({
       sessionId: requestedSessionId = '',
       singleSlot = false,
       efContourTargets = null,
+      allowCanonicalFrameTargets = false,
       questionKey = '',
       viewportId: requestedViewportId = '',
       captureMethod = 'axisApex',
@@ -9635,7 +9641,7 @@ function commandsModule({
       // Selecting a guided EF question opens its first authored frame. A later
       // Continue performs its own jump before invoking this next slot.
       const initialTarget = !requestedSessionId && !reviewExistingContours
-        ? getEFContourFrameTarget(efContourTargets, slotSelection.slotInfo.slot)
+        ? getEFContourFrameTarget(efContourTargets, slotSelection.slotInfo.slot, { allowCanonical: allowCanonicalFrameTargets })
         : null;
       if (initialTarget && !isWorkflowCancelled()) {
         const currentImageId = String(viewport?.getCurrentImageId?.() || '');
@@ -9770,7 +9776,7 @@ function commandsModule({
             }
             // No unique saved source: an explicitly authored target is still
             // valid, but an ambiguous contour must not be guessed.
-            return saved.length > 1 ? null : getEFContourFrameTarget(efContourTargets, slot);
+            return saved.length > 1 ? null : getEFContourFrameTarget(efContourTargets, slot, { allowCanonical: allowCanonicalFrameTargets });
           },
           canNavigateSlot(slot: string) {
             return isActiveStudy() && !!this.getNavigationTarget(slot);
@@ -9813,7 +9819,7 @@ function commandsModule({
               hideLVSimpsonWorkflowPanel();
             }
             void actions.startLVSimpsonEFWorkflow({
-              slot, efContourTargets, questionKey, captureMethod: method,
+              slot, efContourTargets, allowCanonicalFrameTargets, questionKey, captureMethod: method,
               viewportId: viewportGridService.getActiveViewportId(),
             }).catch(error => console.warn('[LV EF] selected contour redraw failed:', error));
           },
@@ -10003,6 +10009,7 @@ function commandsModule({
             singleSlot,
             captureMethod,
             efContourTargets,
+            allowCanonicalFrameTargets,
             questionKey,
             viewportId: activeViewportId,
           });
@@ -10409,7 +10416,7 @@ function commandsModule({
 
       if (nextSlot && !singleSlot && !isWorkflowCancelled()) {
         const nextDisplayName = getLVSimpsonSlotDisplayName(nextSlot);
-        const nextTarget = getEFContourFrameTarget(efContourTargets, nextSlot);
+        const nextTarget = getEFContourFrameTarget(efContourTargets, nextSlot, { allowCanonical: allowCanonicalFrameTargets });
         const normalInstruction = nextTarget
           ? `${slotDisplayName} recorded. Select Continue to open the educator-assigned ${nextDisplayName} instance/frame.`
           : `${slotDisplayName} recorded. Navigate to the correct ${nextDisplayName} image/frame, then continue.`;
@@ -10450,6 +10457,7 @@ function commandsModule({
             singleSlot,
             captureMethod,
             efContourTargets,
+            allowCanonicalFrameTargets,
             questionKey,
             viewportId: nextViewportId,
           }).catch(error => {

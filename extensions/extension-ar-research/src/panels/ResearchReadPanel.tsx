@@ -6,6 +6,12 @@ import React, {
   useState,
 } from 'react';
 import { buildViewerMeasurementValueCandidates } from 'extension-ar-measurements';
+import ResearchEchoGuidedControls from './ResearchEchoGuidedControls';
+import {
+  getResearchRapChoices,
+  getResearchCompanionField,
+  isResearchCompanionHidden,
+} from '../utils/researchEchoWorkflow';
 import {
   buildReadFields,
   buildCalculatedReadState,
@@ -18,6 +24,9 @@ import {
   getResearchFieldMeasurementCandidates,
   getResearchFieldSourceAnnotations,
   getResearchProtocolViewerTargets,
+  getResearchSourceAnnotationIds,
+  getResearchProtocolCompatibleCandidates,
+  isResearchCandidateOnProtocolFrames,
 } from '../utils/researchFieldNavigation';
 import {
   completeResearchReadReview,
@@ -40,12 +49,15 @@ function getAnnotationKey(annotation: any = {}) {
   );
 }
 
-function mergeMeasurementAnnotations(saved: any[] = [], live: any[] = []) {
+function mergeMeasurementAnnotations(
+  saved: any[] = [], live: any[] = [],
+  deletedIds: Set<string> = new Set()
+) {
   const merged = new Map<string, any>();
 
   for (const annotation of [...(saved || []), ...(live || [])]) {
     const key = getAnnotationKey(annotation);
-    if (key) {
+    if (key && !deletedIds.has(key)) {
       merged.set(key, annotation);
     }
   }
@@ -105,18 +117,29 @@ function ReadField({
   source,
   disabled,
   onChange,
+  readDomain,
 }: {
   field: any;
   value: any;
   source?: any;
   disabled: boolean;
   onChange: (value: any) => void;
+  readDomain?: string;
 }) {
   const kind = cleanString(field.kind).toLowerCase();
   const numeric = ['measurement', 'continuous', 'number', 'numeric'].includes(kind);
   const text = ['text', 'comment', 'textarea'].includes(kind);
-  const options = Array.isArray(field?.config?.options) ? field.config.options : [];
   const unit = cleanString(field?.config?.unit);
+  const configuredOptions = Array.isArray(field?.config?.options) ? field.config.options : [];
+  const options = configuredOptions.length
+    ? configuredOptions.map(option => ({
+        ...option,
+        label: field.componentKey === 'rap' && unit.toLowerCase() === 'mmhg' &&
+          !String(option.label || '').toLowerCase().includes('mmhg')
+          ? String(option.label || option.value) + ' mmHg'
+          : option.label,
+      }))
+    : getResearchRapChoices(field, readDomain).map(value => ({ value, label: value + ' mmHg' }));
   const calculated = cleanString(field?.config?.calculation?.type).toLowerCase() === 'rvsp';
 
   return (
@@ -192,6 +215,9 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
   const valueSourcesRef = useRef<Record<string, any>>({});
   const [savedAnnotations, setSavedAnnotations] = useState<any[]>([]);
   const [liveAnnotations, setLiveAnnotations] = useState<any[]>([]);
+  // Explicit research-source deletion is carried through Save even if
+  // legacy clinical Series hydration is unavailable for this research case.
+  const deletedAnnotationIdsRef = useRef<Set<string>>(new Set());
   const [selectedFieldKey, setSelectedFieldKey] = useState('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -214,6 +240,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
       setValueSources(readState.sources);
       const persistedAnnotations = Array.isArray(next?.review?.measurementAnnotations)
         ? next.review.measurementAnnotations : [];
+      deletedAnnotationIdsRef.current = new Set();
       setLiveAnnotations([]);
       setViewerCandidates(buildViewerMeasurementValueCandidates(persistedAnnotations));
       setSavedAnnotations(persistedAnnotations);
@@ -233,16 +260,23 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
     () => buildReadFields(context?.readSchema || {}),
     [context?.readSchema]
   );
+  const readDomain = cleanString(context?.readSchema?.domain).toLowerCase();
+  const visibleFields = useMemo(
+    () => fields.filter(field => !isResearchCompanionHidden(field, fields, readDomain)),
+    [fields, readDomain]
+  );
   useEffect(() => {
-    if (!fields.length) return;
+    if (!visibleFields.length) return;
     setSelectedFieldKey(current =>
-      fields.some(field => field.key === current) ? current :
-      (fields.find(field => field.required)?.key || fields[0].key)
+      visibleFields.some(field => field.key === current) ? current :
+      (visibleFields.find(field => field.required)?.key || visibleFields[0].key)
     );
-  }, [fields]);
+  }, [visibleFields]);
 
   const allAnnotations = useMemo(
-    () => mergeMeasurementAnnotations(savedAnnotations, liveAnnotations),
+    () => mergeMeasurementAnnotations(
+      savedAnnotations, liveAnnotations, deletedAnnotationIdsRef.current
+    ),
     [savedAnnotations, liveAnnotations]
   );
 
@@ -297,21 +331,28 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
         }
       );
 
-      const snapshot = Array.isArray(serialized?.annotations)
-        ? serialized.annotations : [];
+      const snapshot = (Array.isArray(serialized?.annotations)
+        ? serialized.annotations : []).filter(annotation =>
+        !deletedAnnotationIdsRef.current.has(getAnnotationKey(annotation))
+      );
       setLiveAnnotations(snapshot);
       // A Research Review owns its persisted annotations. Unlike clinical
       // reports, this shared Research study need not have an AR Series doc.
       // Rebind from this review's saved evidence as well as current live work.
       const candidates = buildViewerMeasurementValueCandidates(
-        mergeMeasurementAnnotations(savedAnnotations, snapshot)
+        mergeMeasurementAnnotations(
+          savedAnnotations, snapshot, deletedAnnotationIdsRef.current
+        )
       );
 
       setViewerCandidates(candidates);
-      const updates = buildViewerMeasurementReadUpdates(
-        fields,
-        candidates,
-        valueSourcesRef.current
+      const available = mergeMeasurementAnnotations(savedAnnotations, snapshot);
+      const updates = fields.flatMap(field =>
+        buildViewerMeasurementReadUpdates(
+          [field],
+          getResearchProtocolCompatibleCandidates(field, candidates, available),
+          valueSourcesRef.current
+        )
       );
 
       if (!updates.length) {
@@ -456,14 +497,17 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
 
       return mergeMeasurementAnnotations(
         savedAnnotations,
-        Array.isArray(serialized?.annotations) ? serialized.annotations : []
+        Array.isArray(serialized?.annotations) ? serialized.annotations : [],
+        deletedAnnotationIdsRef.current
       );
     } catch (captureError) {
       console.warn(
         '[AR Research] viewer measurement capture failed; preserving saved annotations',
         captureError
       );
-      return savedAnnotations;
+      return savedAnnotations.filter(annotation =>
+        !deletedAnnotationIdsRef.current.has(getAnnotationKey(annotation))
+      );
     }
   }, [commandsManager, context?.readSchema?.domain, savedAnnotations]);
 
@@ -481,8 +525,12 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
       // fresh toolbar measurement can race the React event/state update and
       // save as an unlinked viewer annotation with an empty numeric field.
       const latestCandidates = buildViewerMeasurementValueCandidates(measurementAnnotations);
-      const freshUpdates = buildViewerMeasurementReadUpdates(
-        fields, latestCandidates, valueSourcesRef.current
+      const freshUpdates = fields.flatMap(field =>
+        buildViewerMeasurementReadUpdates(
+          [field],
+          getResearchProtocolCompatibleCandidates(field, latestCandidates, measurementAnnotations),
+          valueSourcesRef.current
+        )
       );
       const latestValues = { ...values };
       const latestSources = { ...valueSourcesRef.current };
@@ -492,6 +540,22 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
           source: update.source,
           sourceMeasurementKey: update.sourceMeasurementKey,
         };
+      }
+      // Fixed-frame protocols must not accept a manually entered value or
+      // an annotation captured from a different DICOM frame as verified.
+      // The UI and the persisted source evidence must agree.
+      for (const field of fields) {
+        const targets = getResearchProtocolViewerTargets(field);
+        const mustUseFrames = field?.config?.compositeFrameGuidanceEnabled === true;
+        if (!targets.length && !mustUseFrames) continue;
+        const value = latestValues[field.key];
+        if (value === '' || value === null || value === undefined) continue;
+        const source = latestSources[field.key] || {};
+        const match = getResearchFieldMeasurementCandidates(field, latestCandidates)
+          .find(candidate => candidate.sourceMeasurementKey === source.sourceMeasurementKey);
+        if (!match || !isResearchCandidateOnProtocolFrames(field, match, measurementAnnotations)) {
+          throw new Error(field.label + ': the value does not have verified evidence on the protocol-configured DICOM source frame.');
+        }
       }
       const latestReadState = buildCalculatedReadState(
         fields, latestValues, latestSources, latestCandidates
@@ -528,6 +592,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
           ? saved.measurementAnnotations
           : measurementAnnotations
       );
+      deletedAnnotationIdsRef.current = new Set();
       notify(
         servicesManager,
         `Research Read saved (${readResults.entries.length} structured result${
@@ -633,6 +698,52 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
     [commandsManager, servicesManager]
   );
 
+  const deleteResearchAnnotation = async (annotation: any) => {
+    if (context?.readOnly || context?.preview || saving || completing) return;
+    const id = getAnnotationKey(annotation);
+    if (!id || !window.confirm('Delete this saved research measurement annotation?')) return;
+    try {
+      // This deletes the current viewer annotation when hydrated, and the
+      // Research-local tombstone ensures it is also removed from Save.
+      deletedAnnotationIdsRef.current.add(id);
+      try {
+        await commandsManager?.runCommand('removeMeasurement', { uid: id });
+      } catch (removeError) {
+        console.warn('[AR Research] viewer annotation removal unavailable', removeError);
+      }
+      setSavedAnnotations(current =>
+        current.filter(item => getAnnotationKey(item) !== id)
+      );
+      setLiveAnnotations(current =>
+        current.filter(item => getAnnotationKey(item) !== id)
+      );
+      setViewerCandidates(current => (current || []).filter(candidate =>
+        !getResearchSourceAnnotationIds(candidate?.sourceMeasurementKey).includes(id)
+      ));
+      const affected = new Set(Object.entries(valueSourcesRef.current)
+        .filter(([, source]) =>
+          getResearchSourceAnnotationIds(source?.sourceMeasurementKey).includes(id)
+        )
+        .map(([key]) => key));
+      setValueSources(current => {
+        const next = { ...current };
+        affected.forEach(key => delete next[key]);
+        valueSourcesRef.current = next;
+        return next;
+      });
+      setValues(current => {
+        const next = { ...current };
+        affected.forEach(key => delete next[key]);
+        return next;
+      });
+      notify(servicesManager, 'Research source deleted. Save the read to persist the change.');
+    } catch (removeError) {
+      deletedAnnotationIdsRef.current.delete(id);
+      console.warn('[AR Research] source deletion failed', removeError);
+      notify(servicesManager, 'Unable to delete this research source.', 'warning');
+    }
+  };
+
   const jumpToProtocolTarget = async (target: any, fieldKey: string) => {
     if (!commandsManager) return;
     try {
@@ -722,9 +833,15 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
     'Research Study';
   const reviewStatus = cleanString(context?.review?.status || 'preview');
   const isBusy = saving || completing;
-  const selectedField = fields.find(field => field.key === selectedFieldKey) || fields[0];
+  const selectedField = visibleFields.find(field => field.key === selectedFieldKey) ||
+    visibleFields[0];
+  const companionField = getResearchCompanionField(selectedField, fields, readDomain);
   const selectedCandidates = selectedField
-    ? getResearchFieldMeasurementCandidates(selectedField, viewerCandidates || []) : [];
+    ? getResearchProtocolCompatibleCandidates(
+        selectedField,
+        getResearchFieldMeasurementCandidates(selectedField, viewerCandidates || []),
+        allAnnotations
+      ) : [];
   const selectedSources = selectedField
     ? getResearchFieldSourceAnnotations(
         calculatedReadState.sources[selectedField.key], allAnnotations, selectedCandidates
@@ -734,7 +851,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
     ['measurement', 'continuous'].includes(cleanString(selectedField.kind).toLowerCase()) ||
     !!selectedField?.config?.calculation
   );
-  const completedFields = fields.filter(field => {
+  const completedFields = visibleFields.filter(field => {
     const value = calculatedReadState.values[field.key];
     return value !== null && value !== undefined && String(value).trim() !== '';
   }).length;
@@ -802,7 +919,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
           onChange={event => selectField(event.target.value)}
           disabled={isBusy}
         >
-          {fields.map((field, index) => {
+          {visibleFields.map((field, index) => {
             const value = calculatedReadState.values[field.key];
             const answered = value !== undefined && value !== null && String(value).trim() !== '';
             return <option key={field.key} value={field.key}>
@@ -811,19 +928,19 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
           })}
         </select>
         <div className="mt-2 flex items-center justify-between gap-2">
-          <span className="text-xs text-gray-400">{completedFields}/{fields.length} fields entered</span>
+          <span className="text-xs text-gray-400">{completedFields}/{visibleFields.length} questions answered</span>
           <div className="flex items-center gap-1">
             <button
               type="button"
               className="rounded border border-gray-600 px-2 py-1 text-xs text-gray-200 disabled:opacity-40"
-              disabled={isBusy || fields.indexOf(selectedField) <= 0}
-              onClick={() => selectField(fields[fields.indexOf(selectedField) - 1].key)}
+              disabled={isBusy || visibleFields.indexOf(selectedField) <= 0}
+              onClick={() => selectField(visibleFields[visibleFields.indexOf(selectedField) - 1].key)}
             >Previous</button>
             <button
               type="button"
               className="rounded border border-gray-600 px-2 py-1 text-xs text-gray-200 disabled:opacity-40"
-              disabled={isBusy || fields.indexOf(selectedField) >= fields.length - 1}
-              onClick={() => selectField(fields[fields.indexOf(selectedField) + 1].key)}
+              disabled={isBusy || visibleFields.indexOf(selectedField) >= visibleFields.length - 1}
+              onClick={() => selectField(visibleFields[visibleFields.indexOf(selectedField) + 1].key)}
             >Next</button>
           </div>
         </div>
@@ -834,11 +951,33 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
           <ReadField
             key={selectedField.key}
             field={selectedField}
+            readDomain={readDomain}
             value={calculatedReadState.values[selectedField.key] ?? ''}
             source={calculatedReadState.sources[selectedField.key]}
             disabled={context.readOnly || context.preview || isBusy}
             onChange={nextValue => updateValue(selectedField.key, nextValue)}
           />
+          {companionField ? (
+            <ReadField
+              key={companionField.key}
+              field={companionField}
+              readDomain={readDomain}
+              value={calculatedReadState.values[companionField.key] ?? ''}
+              source={calculatedReadState.sources[companionField.key]}
+              disabled={context.readOnly || context.preview || isBusy}
+              onChange={nextValue => updateValue(companionField.key, nextValue)}
+            />
+          ) : null}
+          {cleanString(context?.readSchema?.domain).toLowerCase() === 'echo' ? (
+            <ResearchEchoGuidedControls
+              field={selectedField}
+              commandsManager={commandsManager}
+              sourceAnnotations={selectedSources}
+              disabled={context.readOnly || context.preview || isBusy}
+              readOnly={context.readOnly || context.preview}
+              onError={message => notify(servicesManager, message, 'warning')}
+            />
+          ) : null}
           {(isSelectedMeasurement || protocolTargets.length > 0) ? (
             <div className="rounded border border-gray-700 bg-gray-950 p-3 text-xs">
               <div className="font-semibold text-gray-100">Viewer measurement and source frames</div>
@@ -863,19 +1002,26 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
                 <div className="mt-2 space-y-1">
                   <div className="text-gray-400">Captured measurement sources — select to inspect</div>
                   {selectedSources.map(annotation => (
-                    <button
+                    <div
                       key={getAnnotationKey(annotation)}
-                      type="button"
-                      className="flex w-full min-w-0 items-center justify-between gap-2 rounded border border-gray-700 bg-black p-2 text-left hover:border-blue-500 disabled:opacity-50"
-                      disabled={!commandsManager}
-                      onClick={() => void jumpToAnnotation(annotation)}
+                      className="flex min-w-0 items-center gap-2 rounded border border-gray-700 bg-black p-2"
                     >
-                      <span className="min-w-0 break-words text-gray-200">
+                      <span className="min-w-0 flex-1 break-words text-gray-200">
                         {getAnnotationLabel(annotation)}
-                        {getAnnotationValue(annotation) ? ' · ' + getAnnotationValue(annotation) : ''}
                       </span>
-                      <span className="shrink-0 text-blue-300">View source</span>
-                    </button>
+                      <button type="button"
+                        className="shrink-0 text-blue-300 hover:underline disabled:opacity-40"
+                        disabled={!commandsManager}
+                        onClick={() => void jumpToAnnotation(annotation)}
+                      >View source</button>
+                      {!context.readOnly && !context.preview ? (
+                        <button type="button"
+                          className="shrink-0 text-red-300 hover:underline disabled:opacity-40"
+                          disabled={isBusy}
+                          onClick={() => void deleteResearchAnnotation(annotation)}
+                        >Delete</button>
+                      ) : null}
+                    </div>
                   ))}
                 </div>
               ) : null}

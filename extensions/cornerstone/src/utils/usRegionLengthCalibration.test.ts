@@ -85,7 +85,10 @@ describe('computeUSRegionLength', () => {
 
   it('is correct when world units are pixels (multi-region images get no PixelSpacing)', () => {
     const result = computeUSRegionLength({
-      regions: [region()],
+      regions: [
+        region(),
+        region({ regionLocationMinX0: 900, regionLocationMaxX1: 1100 }),
+      ],
       imagePlane: null,
       points: [
         [10, 10, 0],
@@ -95,11 +98,33 @@ describe('computeUSRegionLength', () => {
     expect(result.lengthCm).toBeCloseTo(50 * 0.0327, 12); // 3-4-5 triangle of 50 px
   });
 
+  it('rejects missing image-plane spacing for a single spatial region (Samsung BWT)', () => {
+    const samsung = region({
+      regionLocationMinY0: 90,
+      regionLocationMaxX1: 640,
+      regionLocationMaxY1: 480,
+      physicalDeltaX: 0.016649011522531509,
+      physicalDeltaY: 0.016649011522531509,
+    });
+    const points = [
+      [58.43999978430569, 49.632292140051725, 0],
+      [59.94383364222944, 42.814911984130745, 0],
+    ];
+    expect(computeUSRegionLength({ regions: [samsung], imagePlane: null, points })).toBeNull();
+    expect(
+      computeUSRegionLength({
+        regions: [samsung],
+        imagePlane: { columnPixelSpacing: 0.1664901152253151, rowPixelSpacing: 0.1664901152253151 },
+        points,
+      }).lengthMm
+    ).toBeCloseTo(6.9812741288809885, 9);
+  });
+
   it('applies X and Y deltas separately for anisotropic regions', () => {
     const anisotropic = region({ physicalDeltaX: 0.02, physicalDeltaY: 0.05 });
     const result = computeUSRegionLength({
       regions: [anisotropic],
-      imagePlane: null,
+      imagePlane: { rowPixelSpacing: 1, columnPixelSpacing: 1 },
       points: [
         [100, 100, 0],
         [130, 140, 0],
@@ -112,7 +137,7 @@ describe('computeUSRegionLength', () => {
   it('is independent of how the image plane maps pixels to world (no double calibration)', () => {
     const anisotropic = region({ physicalDeltaX: 0.02, physicalDeltaY: 0.05 });
     const planes = [
-      null,
+      { rowPixelSpacing: 1, columnPixelSpacing: 1 },
       // OHIF puts [|dX|*10, |dY|*10] into PixelSpacing -> row/column swapped.
       { rowPixelSpacing: 0.2, columnPixelSpacing: 0.5 },
       { rowPixelSpacing: 0.5, columnPixelSpacing: 0.2 },
@@ -234,7 +259,7 @@ describe('computeUSRegionLength', () => {
       expect(
         computeUSRegionLength({
           regions: [region({ physicalUnitsXDirection: '3', physicalUnitsYDirection: '3' })],
-          imagePlane: null,
+          imagePlane: { rowPixelSpacing: 1, columnPixelSpacing: 1 },
           points,
         }).lengthCm
       ).toBeCloseTo(0.327, 12);
@@ -245,7 +270,7 @@ describe('computeUSRegionLength', () => {
     expect(
       computeUSRegionLength({
         regions: [region({ physicalDeltaX: -0.0327, physicalDeltaY: -0.0327 })],
-        imagePlane: null,
+        imagePlane: { rowPixelSpacing: 1, columnPixelSpacing: 1 },
         points: [
           [0, 0, 0],
           [10, 0, 0],
