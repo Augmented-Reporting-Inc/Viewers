@@ -35,6 +35,7 @@ import toggleImageSliceSync from './utils/imageSliceSync/toggleImageSliceSync';
 import { getFirstAnnotationSelected } from './utils/measurementServiceMappings/utils/selection';
 import { getMeasurementSnapshotStudyInstanceId } from './utils/measurementSnapshotStudy';
 import { reconcileLearnerIvcSnapshotSources } from './utils/learnerIvcSourceSnapshot';
+import { isExactViewerQuizSopFrameImageId } from './utils/exactViewerQuizSopFrame';
 import { getViewportEnabledElement } from './utils/getViewportEnabledElement';
 import getActiveViewportEnabledElement from './utils/getActiveViewportEnabledElement';
 import toggleVOISliceSync from './utils/toggleVOISliceSync';
@@ -5058,7 +5059,15 @@ function findImageIdIndexForViewerQuizTarget(viewport, target = {}) {
   if (normalizedReference) {
     const index = imageIds.findIndex(imageId => {
       const normalized = normalizeImageIdForCompare(imageId);
-      return normalized === normalizedReference || normalized.endsWith(normalizedReference);
+      const sameImage = normalized === normalizedReference ||
+        normalized.endsWith(normalizedReference);
+      // An image URL hint cannot override the required SOP + cine frame.
+      return sameImage && (
+        !target.sopInstanceId || !Number.isFinite(target.frameNumber) ||
+        isExactViewerQuizSopFrameImageId(
+          imageId, target.sopInstanceId, target.frameNumber
+        )
+      );
     });
 
     if (index >= 0) {
@@ -5072,9 +5081,10 @@ function findImageIdIndexForViewerQuizTarget(viewport, target = {}) {
   }
 
   if (target.sopInstanceId && Number.isFinite(target.frameNumber)) {
-    const expectedInstanceFrame = `/instances/${String(target.sopInstanceId).toLowerCase()}/frames/${target.frameNumber}`;
     const index = imageIds.findIndex(imageId =>
-      normalizeImageIdForCompare(imageId).includes(expectedInstanceFrame)
+      isExactViewerQuizSopFrameImageId(
+        imageId, target.sopInstanceId, target.frameNumber
+      )
     );
 
     if (index >= 0) {
@@ -5085,6 +5095,15 @@ function findImageIdIndexForViewerQuizTarget(viewport, target = {}) {
         source: 'sop-frame',
       };
     }
+    // A fixed target may arrive while its display set is still loading.
+    // Retry rather than silently accepting another SOP or the Nth image of
+    // the current stack, which could lead to a measurement on a wrong frame.
+    return {
+      index: -1,
+      imageId: '',
+      imageIds,
+      source: 'exact-sop-frame-not-yet-loaded',
+    };
   }
 
   if (target.sopInstanceId) {
