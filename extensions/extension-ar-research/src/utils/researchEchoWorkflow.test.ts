@@ -6,6 +6,9 @@ import {
   isUsableResearchTarget,
   getResearchRapChoices,
   getResearchCompanionField,
+  getResearchGroupedFields,
+  getResearchQuestionLabel,
+  isResearchQuestionAnswered,
   isResearchCompanionHidden,
 } from './researchEchoWorkflow';
 
@@ -43,6 +46,62 @@ describe('Echo Research mirrors existing guided education controls', () => {
     expect(getResearchRapChoices({ componentKey: 'rap', config: { unit: 'mmHg' } }, 'ct'))
       .toEqual([]);
   });
+  it('bundles IVC, RAP and RVSP into one Echo question while retaining independent values', () => {
+    const fields = [
+      { componentKey: 'trVmax', key: 'trVmax|', label: 'TR peak velocity' },
+      { componentKey: 'ivcCollapsibility', key: 'ivcCollapsibility|',
+        label: 'IVC collapsibility' },
+      { componentKey: 'rap', key: 'rap|', label: 'Selected RAP (per protocol)',
+        config: { options: ['3', '8', '15'] } },
+      { componentKey: 'rvsp', key: 'rvsp|', label: 'Calculated RVSP',
+        config: { calculation: { type: 'rvsp' } } },
+    ];
+    expect(getResearchGroupedFields(fields[1], fields).map(item => item.key))
+      .toEqual(['rap|', 'rvsp|']);
+    expect(getResearchQuestionLabel(fields[1], fields)).toBe('IVC / RAP / RVSP');
+    expect(fields.filter(field => !isResearchCompanionHidden(field, fields))
+      .map(field => field.key)).toEqual(['trVmax|', 'ivcCollapsibility|']);
+    const values = {
+      'trVmax|': 2.56,
+      'ivcCollapsibility|': 40,
+      'rap|': 3,
+      'rvsp|': 29.2144,
+    };
+    expect(isResearchQuestionAnswered(fields[1], fields, values)).toBe(true);
+    expect(isResearchQuestionAnswered(fields[1], fields, {
+      ...values, 'rvsp|': '',
+    })).toBe(false);
+    // Grouped presentation does not rename, remove or recompute fields.
+    expect(values['rap|']).toBe(3);
+    expect(values['rvsp|']).toBeCloseTo(29.2144);
+  });
+  it('does not hide RAP or RVSP when IVC is absent or on non-Echo profiles', () => {
+    const fields = [
+      { componentKey: 'rap', key: 'rap|' },
+      { componentKey: 'rvsp', key: 'rvsp|' },
+    ];
+    expect(fields.every(field => !isResearchCompanionHidden(field, fields))).toBe(true);
+    const full = [
+      { componentKey: 'ivcCollapsibility', key: 'ivcCollapsibility|' },
+      ...fields,
+    ];
+    expect(full.every(field => !isResearchCompanionHidden(field, full, 'ct')))
+      .toBe(true);
+  });
+  it('respects a different explicit group assignment instead of applying Echo fallback', () => {
+    const fields = [
+      { componentKey: 'ivcCollapsibility', key: 'ivcCollapsibility|' },
+      { componentKey: 'rap', key: 'rap|',
+        config: { groupWithComponentKey: 'trVmax' } },
+      { componentKey: 'rvsp', key: 'rvsp|' },
+      { componentKey: 'trVmax', key: 'trVmax|' },
+    ];
+    expect(getResearchGroupedFields(fields[0], fields).map(x => x.componentKey))
+      .toEqual(['rvsp']);
+    expect(getResearchGroupedFields(fields[3], fields).map(x => x.componentKey))
+      .toEqual(['rap']);
+  });
+
   it('groups Image quality and Reader comment without changing stored keys', () => {
     const fields = [
       { componentKey: 'imageQuality', key: 'imageQuality|' },

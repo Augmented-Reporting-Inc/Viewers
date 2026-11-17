@@ -9,7 +9,9 @@ import { buildViewerMeasurementValueCandidates } from 'extension-ar-measurements
 import ResearchEchoGuidedControls from './ResearchEchoGuidedControls';
 import {
   getResearchRapChoices,
-  getResearchCompanionField,
+  getResearchGroupedFields,
+  getResearchQuestionLabel,
+  isResearchQuestionAnswered,
   isResearchCompanionHidden,
 } from '../utils/researchEchoWorkflow';
 import {
@@ -835,7 +837,10 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
   const isBusy = saving || completing;
   const selectedField = visibleFields.find(field => field.key === selectedFieldKey) ||
     visibleFields[0];
-  const companionField = getResearchCompanionField(selectedField, fields, readDomain);
+  const groupedFields = getResearchGroupedFields(selectedField, fields, readDomain);
+  const isIVCRapRVSPQuestion = readDomain === 'echo' &&
+    selectedField?.componentKey === 'ivcCollapsibility' &&
+    groupedFields.some(item => ['rap', 'rvsp'].includes(item.componentKey));
   const selectedCandidates = selectedField
     ? getResearchProtocolCompatibleCandidates(
         selectedField,
@@ -851,10 +856,9 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
     ['measurement', 'continuous'].includes(cleanString(selectedField.kind).toLowerCase()) ||
     !!selectedField?.config?.calculation
   );
-  const completedFields = visibleFields.filter(field => {
-    const value = calculatedReadState.values[field.key];
-    return value !== null && value !== undefined && String(value).trim() !== '';
-  }).length;
+  const completedFields = visibleFields.filter(field =>
+    isResearchQuestionAnswered(field, fields, calculatedReadState.values, readDomain)
+  ).length;
   const linkedAnnotationKeys = new Set(fields.flatMap(field =>
     getResearchFieldSourceAnnotations(
       calculatedReadState.sources[field.key], allAnnotations,
@@ -920,10 +924,13 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
           disabled={isBusy}
         >
           {visibleFields.map((field, index) => {
-            const value = calculatedReadState.values[field.key];
-            const answered = value !== undefined && value !== null && String(value).trim() !== '';
+            const answered = isResearchQuestionAnswered(
+              field, fields, calculatedReadState.values, readDomain
+            );
             return <option key={field.key} value={field.key}>
-              {index + 1}. {answered ? '✓ ' : ''}{field.label}{field.required ? ' (required)' : ''}
+              {index + 1}. {answered ? '✓ ' : ''}
+              {getResearchQuestionLabel(field, fields, readDomain)}
+              {field.required ? ' (required)' : ''}
             </option>;
           })}
         </select>
@@ -957,7 +964,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
             disabled={context.readOnly || context.preview || isBusy}
             onChange={nextValue => updateValue(selectedField.key, nextValue)}
           />
-          {companionField ? (
+          {!isIVCRapRVSPQuestion ? groupedFields.map(companionField => (
             <ReadField
               key={companionField.key}
               field={companionField}
@@ -967,7 +974,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
               disabled={context.readOnly || context.preview || isBusy}
               onChange={nextValue => updateValue(companionField.key, nextValue)}
             />
-          ) : null}
+          )) : null}
           {cleanString(context?.readSchema?.domain).toLowerCase() === 'echo' ? (
             <ResearchEchoGuidedControls
               field={selectedField}
@@ -1049,6 +1056,40 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
                     ? 'A compatible value is available. Its source frame will appear when the annotation is ready.'
                     : 'Choose the appropriate image and frame in the viewer, then use the measurement toolbar. The calibrated value will populate here automatically.'}
                 </div>
+              ) : null}
+            </div>
+          ) : null}
+          {isIVCRapRVSPQuestion ? (
+            <div className="space-y-2 rounded border border-cyan-700/70 bg-cyan-950/10 p-2">
+              <div className="text-xs font-semibold text-cyan-100">
+                RAP selection and calculated RVSP
+              </div>
+              <div className="text-xs text-gray-300">
+                After measuring IVC expiration and inspiration, select RAP
+                explicitly. RVSP uses the previously measured TR peak velocity;
+                AR does not infer RAP from IVC collapsibility.
+              </div>
+              {groupedFields.map(groupedField => (
+                <ReadField
+                  key={groupedField.key}
+                  field={groupedField}
+                  readDomain={readDomain}
+                  value={calculatedReadState.values[groupedField.key] ?? ''}
+                  source={calculatedReadState.sources[groupedField.key]}
+                  disabled={context.readOnly || context.preview || isBusy}
+                  onChange={nextValue => updateValue(groupedField.key, nextValue)}
+                />
+              ))}
+              {fields.some(field => field.componentKey === 'trVmax') ? (
+                <button
+                  type="button"
+                  className="text-xs text-blue-300 hover:underline disabled:opacity-40"
+                  disabled={isBusy}
+                  onClick={() => {
+                    const trField = fields.find(field => field.componentKey === 'trVmax');
+                    if (trField) selectField(trField.key);
+                  }}
+                >View the linked TR peak velocity question</button>
               ) : null}
             </div>
           ) : null}
