@@ -87,6 +87,7 @@ import {
   deriveLVSimpsonGeometryFromFreehand,
 } from './utils/lvSimpsonContour';
 import { buildRVFACContourFromAnnulusApex } from './utils/rvFacContour';
+import { recalibrateEditedLVSimpsonContour } from './utils/lvSimpsonContourRecalibration';
 import { resolveSpectralVmaxClick } from './utils/spectralVmaxClick';
 import {
   SPECTRAL_DOPPLER_LABEL,
@@ -653,6 +654,22 @@ function getCurrentViewerMeasurementSnapshot(
         ? cornerstoneTools.annotation.state.getAnnotation?.(measurementId)
         : null;
       const spectralDoppler = annotation?.data?.spectralDoppler;
+
+      // Always prefer the exact live EF annotation's geometry over a stale
+      // MeasurementService/session copy. Source-frame matching stays mandatory.
+      // This also ensures a recalibrated edit is saved and survives reopening.
+      if (isLVSimpsonMeasurement(measurement) && annotation?.data?.lvSimpson) {
+        const sourceImage = String(annotation?.metadata?.referencedImageId || '');
+        if (sourceImage && isSavedLVSimpsonImageMatch(
+          { ...measurement, lvSimpson: annotation.data.lvSimpson }, sourceImage
+        )) {
+          return {
+            ...measurement,
+            lvSimpson: annotation.data.lvSimpson,
+            points: annotation?.data?.contour?.polyline || measurement.points,
+          };
+        }
+      }
 
       // Preserve anatomical LA landmarks while following edited spline points
       // on the exact source frame. The session fallback handles early adapters
@@ -9879,13 +9896,78 @@ function commandsModule({
               ? cornerstoneTools.annotation.state.getAnnotation?.(measurementId)
               : null;
             const handles = annotation?.data?.handles?.points;
-            // An absent annotation must not silently inherit an unedited
-            // session snapshot when computing clinically meaningful EF.
+            const liveControls = Array.isArray(handles)
+              ? handles.map(point => Array.isArray(point) ? [...point] : point)
+              : [];
+            const sourceGeometry = annotation?.data?.lvSimpson ||
+              entry?.lvSimpson || entry?.measurements?.lvSimpson;
+            let updatedEntry = entry;
+            if (sourceGeometry?.measurementKind === LV_SIMPSON_MEASUREMENT_KIND &&
+                liveControls.length >= 6) {
+              // Recalibrate an edited spline from its OWN original DICOM frame,
+              // never from the currently displayed cine frame or raw world units.
+              const savedImage = String(entry?.referencedImageId || '');
+              const sourceImage = String(annotation?.metadata?.referencedImageId || '');
+              const sameSource = !!savedImage && !!sourceImage &&
+                isSavedLVSimpsonImageMatch(
+                  { ...entry, lvSimpson: sourceGeometry }, sourceImage);
+              const sourceSop = String(entry?.SOPInstanceUID ||
+                annotation?.metadata?.SOPInstanceUID || '');
+              const sourceSeries = String(entry?.referenceSeriesUID ||
+                annotation?.metadata?.SeriesInstanceUID || '');
+              const sourceSet = sameSource && sourceSop && sourceSeries
+                ? displaySetService?.getDisplaySetForSOPInstanceUID?.(
+                    sourceSop, sourceSeries)
+                : null;
+              const sourceInstance = getDisplaySetInstances(sourceSet).find(
+                instance => String(getSopInstanceIdFromSource(instance) || '') === sourceSop
+              );
+              const regions = sourceInstance
+                ? getUltrasoundRegionsFromSource(sourceInstance)
+                    .map(normalizeUltrasoundRegion).filter(Boolean)
+                : [];
+              const sourcePlane = sourceInstance
+                ? metaData.get?.('imagePlaneModule', savedImage) : null;
+              const refreshed = recalibrateEditedLVSimpsonContour({
+                geometry: sourceGeometry,
+                controlPoints: liveControls,
+                imagePlane: sourcePlane,
+                regions,
+              });
+              if (refreshed.status === 'recalibrated') {
+                // Both the visible annotation and persistence snapshot must
+                // receive one atomic new calibration for the adjusted handles.
+                annotation.data.lvSimpson = refreshed.geometry;
+                updatedEntry = { ...entry, lvSimpson: refreshed.geometry };
+                try {
+                  measurementService.update(measurementId, updatedEntry, true);
+                } catch (error) {
+                  console.warn('[LV EF recalibration] measurement update failed');
+                }
+                upsertLVSimpsonSessionMeasurement(updatedEntry);
+                console.info('[LV EF recalibration] edited source contour verified', {
+                  slot: refreshed.geometry.slot, method: refreshed.geometry.contourSource,
+                });
+              } else if (refreshed.status === 'invalid') {
+                // A failed or ambiguous DICOM lookup must NEVER turn an edited
+                // shape into a trusted physical measurement.
+                updatedEntry = {
+                  ...entry,
+                  lvSimpson: {
+                    ...sourceGeometry,
+                    calibrationError: 'edited_contour_' + refreshed.reason,
+                  },
+                };
+                console.warn('[LV EF recalibration] source not verified', {
+                  slot: sourceGeometry.slot, reason: refreshed.reason,
+                });
+              }
+            }
+            // Preserve strict invalidation if handles are missing or altered
+            // again after this explicit Calculate EF checkpoint.
             return {
-              ...entry,
-              lvSimpsonControlPoints: Array.isArray(handles)
-                ? handles.map(point => Array.isArray(point) ? [...point] : point)
-                : [],
+              ...updatedEntry,
+              lvSimpsonControlPoints: liveControls,
             };
           });
         const resolved = resolveViewerQuizLVSimpsonForStudy(currentStudyId, measurementsForCalculation);
