@@ -15545,6 +15545,7 @@ function commandsModule({
     },
     jumpToViewerQuizTarget: async ({
       viewerTarget, questionKey = '', requireExactSopFrame = false,
+      pauseCineOnTarget = false,
     } = {}) => {
       const target = normalizeViewerQuizTarget(viewerTarget);
 
@@ -15602,6 +15603,7 @@ function commandsModule({
           viewportGridService.getActiveViewportId()
         );
       const viewport = resolveTargetViewport();
+      if (pauseCineOnTarget) stopSourceCineForViewport(targetViewportId);
 
       if (!viewport) {
         console.warn('[ViewerQuiz] no viewport available for target navigation', {
@@ -15627,6 +15629,18 @@ function commandsModule({
           viewportId: targetViewportId,
           measurementService, viewportGridService, displaySetService, toolGroupService,
         });
+        if (pauseCineOnTarget) {
+          stopSourceCineForViewport(targetViewportId);
+          // Cine may advance while the target image is asynchronously loaded.
+          // Reassert the exact SOP/frame once playback is paused.
+          const settled = await jumpViewportToViewerQuizTargetImage(
+            resolveTargetViewport(), target, resolveTargetViewport,
+            { requireExactSopFrame }
+          );
+          if (settled?.ok !== true) {
+            return { ...settled, viewportId: targetViewportId };
+          }
+        }
       }
 
       return {
