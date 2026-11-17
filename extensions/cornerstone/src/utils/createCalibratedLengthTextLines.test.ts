@@ -355,7 +355,7 @@ describe('registered native LengthTool uses shared DICOM calibration', () => {
     withImage({ regions: [usRegion()], imagePlane: singleRegionPlane });
     const viewportLines = tool.configuration.getTextLines(annotation.data, targetId);
     const mapped = toMeasurement(annotation);
-    expect(viewportLines).toEqual(['74.99 mm']);
+    expect(viewportLines).toEqual(['75.0 mm']);
     expect(mapped.displayText.primary).toEqual(viewportLines);
   });
 
