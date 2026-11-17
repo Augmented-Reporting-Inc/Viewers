@@ -89,10 +89,10 @@ export function getResearchProtocolViewerTargets(field: any): Array<{label: stri
  */
 export function getResearchQuestionEntryTarget(field: any) {
   const targets = getResearchProtocolViewerTargets(field);
-  if (targets.length === 1) return targets[0].viewerTarget;
   if (String(field?.componentKey || '').trim() === 'ivcCollapsibility') {
     return targets.find(item => item.label === 'IVC_EXP')?.viewerTarget || null;
   }
+  if (targets.length === 1) return targets[0].viewerTarget;
   return null;
 }
 
