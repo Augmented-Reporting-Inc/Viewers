@@ -101,9 +101,26 @@ export function createCalibratedLengthToolClass(BaseLengthTool: any): any {
 
     constructor(...args: any[]) {
       super(...args);
-      const original = this.configuration?.getTextLines;
-      if (typeof original === 'function') {
-        this.configuration.getTextLines = createCalibratedLengthTextLines(original);
+      const ensureRenderer = () => {
+        const original = this.configuration?.getTextLines;
+        if (typeof original === 'function') {
+          this.configuration.getTextLines = createCalibratedLengthTextLines(original);
+        }
+      };
+      ensureRenderer();
+
+      // Tool-group and viewer-mode setup can replace getTextLines AFTER
+      // the tool has been constructed. Cornerstone's LengthTool can also
+      // define renderAnnotation as an instance field, so a subclass prototype
+      // override is not sufficient. Reapply the idempotent formatter on the
+      // actual render path; never change its geometry, native cachedStats or
+      // the value persisted by MeasurementService.
+      const renderBase = this.renderAnnotation;
+      if (typeof renderBase === 'function') {
+        this.renderAnnotation = (...renderArgs: any[]) => {
+          ensureRenderer();
+          return renderBase.apply(this, renderArgs);
+        };
       }
     }
   };
