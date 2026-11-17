@@ -3,6 +3,7 @@ name: Validate guided Echo Research workflows
 on:
   pull_request:
     branches:
+      - fix/research-ivc-navigation-shared-length-display-20261117
       - fix/research-ivc-redraw-single-source-controls-20261117
       - fix/research-ivc-values-panel-dedupe-20261117
       - fix/research-ivc-phase-navigation-20261117
@@ -16,7 +17,6 @@ on:
       - 'extensions/cornerstone/src/commandsModule.ts'
       - 'extensions/cornerstone/src/initCornerstoneTools.js'
       - 'extensions/cornerstone/src/utils/**'
-      - 'extensions/cornerstone/src/initCornerstoneTools.js'
       - '.github/workflows/validate-research-guided-echo.yml'
   workflow_dispatch:
 
