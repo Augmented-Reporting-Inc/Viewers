@@ -14,16 +14,16 @@ describe('case-scoped Research measurement frame guidance', () => {
       config: {
         unit: 'mL',
         compositeFrameGuidanceEnabled: true,
-        caseFrameTargets: {
-          [caseA]: { compositeFrameTargets: {
+        caseFrameTargets: [
+          { studyInstanceUID: caseA, compositeFrameTargets: {
             A4C: { studyInstanceUID: caseA, sopInstanceUID: 'a4c-a', frameNumber: 5 },
             A2C: { studyInstanceUID: caseA, sopInstanceUID: 'a2c-a', frameNumber: 8 },
           } },
-          [caseB]: { compositeFrameTargets: {
+          { studyInstanceUID: caseB, compositeFrameTargets: {
             A4C: { studyInstanceUID: caseB, sopInstanceUID: 'a4c-b', frameNumber: 11 },
             A2C: { studyInstanceUID: caseB, sopInstanceUID: 'a2c-b', frameNumber: 13 },
           } },
-        },
+        ],
       },
     }],
   };
@@ -40,8 +40,9 @@ describe('case-scoped Research measurement frame guidance', () => {
     const result = resolveResearchCaseReadSchema(schema, caseB);
     expect(result.components[0].config.compositeFrameTargets.A4C.sopInstanceUID)
       .toBe('a4c-b');
-    expect(schema.components[0].config.caseFrameTargets[caseA].compositeFrameTargets.A4C.frameNumber)
-      .toBe(5);
+    expect(schema.components[0].config.caseFrameTargets.find(item =>
+      item.studyInstanceUID === caseA
+    ).compositeFrameTargets.A4C.frameNumber).toBe(5);
   });
   it('does not reuse another case source when this case is unconfigured', () => {
     const result = resolveResearchCaseReadSchema(schema, '1.2.840.113619.30');
