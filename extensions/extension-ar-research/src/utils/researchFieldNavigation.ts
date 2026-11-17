@@ -186,17 +186,11 @@ export function getResearchProtocolCompatibleCandidates(
   );
 }
 
-/**
- * Uses the existing calibrated IVC calculator, but restricts Research evidence
- * to the configured DICOM phase source when a fixed frame is provided. The
- * selection is case-/phase-specific; never choose an arbitrary extra IVC
- * measurement on a different cine frame.
- */
 /** Echo IVC label identity is shared by the calculator, redraw flow and UI. */
 export function getResearchIVCAnnotationSlot(annotation: any): string {
   const label = cleanString(
     annotation?.label || annotation?.measurementRole || annotation?.role
-  ).toLowerCase().replace(/[\\s_-]+/g, '');
+  ).toLowerCase().replace(/[\s_-]+/g, '');
   if (['ivcexp', 'ivcexpiration', 'ivcendexpiration', 'ivcendexpirationdiameter'].includes(label))
     return 'IVC_EXP';
   if (['ivcinsp', 'ivcinspiration', 'ivcendinspiration', 'ivcendinspirationdiameter'].includes(label))
@@ -222,6 +216,10 @@ export function isValidResearchIVCPhaseSource(
     (slot === 'IVC_EXP' ? Number(diameter) > 0 : Number(diameter) >= 0);
 }
 
+/**
+ * Uses the existing calibrated IVC calculator, but restricts Research evidence
+ * to the configured DICOM phase source when a fixed frame is provided.
+ */
 export function getResearchIVCMeasurementState(field: any, annotations: any[] = []) {
   const targets = field?.config?.compositeFrameTargets || {};
   const allIVC = (Array.isArray(annotations) ? annotations : [])
