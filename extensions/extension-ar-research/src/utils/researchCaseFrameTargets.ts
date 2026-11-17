@@ -16,9 +16,9 @@ export function resolveResearchCaseFrameConfig(
 ) {
   const next = { ...(config || {}) };
   const source = cleanString(sourceStudyInstanceUID);
-  const caseFrames = next.caseFrameTargets && typeof next.caseFrameTargets === 'object'
-    ? next.caseFrameTargets : {};
-  const caseKeys = Object.keys(caseFrames);
+  const caseFrames = Array.isArray(next.caseFrameTargets)
+    ? next.caseFrameTargets : [];
+  const anyCaseTargets = caseFrames.length > 0;
   if (!source) {
     // Cannot safely choose a case-scoped frame when the review identity is
     // missing. Do not default to the first case.
@@ -26,7 +26,9 @@ export function resolveResearchCaseFrameConfig(
     delete next.compositeFrameTargets;
     return next;
   }
-  const current = caseFrames[source];
+  const current = caseFrames.find(item =>
+    cleanString(item?.studyInstanceUID) === source
+  );
 
   // A named case-scoped target always takes precedence over legacy globals.
   if (current && typeof current === 'object' && !Array.isArray(current)) {
@@ -41,7 +43,7 @@ export function resolveResearchCaseFrameConfig(
 
   // If the component has any case-scoped targets, do not reuse a different
   // case's global fallback for an unmatched study.
-  if (caseKeys.length) {
+  if (anyCaseTargets) {
     delete next.viewerTarget;
     delete next.compositeFrameTargets;
     return next;
