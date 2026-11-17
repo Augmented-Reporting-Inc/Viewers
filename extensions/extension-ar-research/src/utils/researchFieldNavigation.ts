@@ -241,3 +241,21 @@ export function getResearchCompatibleMeasurementCandidates(
     field, getResearchFieldMeasurementCandidates(field, candidates), annotations
   );
 }
+
+/**
+ * With an explicitly pinned IVC source, a manual placeholder must never
+ * suppress an actual, uniquely verified calculated result. Do not alter
+ * manual-source precedence for unconfigured or non-IVC ReadSchema fields.
+ */
+export function getResearchBindingSources(field: any, sources: Record<string, any> = {}) {
+  const fixedPhases = field?.config?.compositeFrameTargets;
+  if (cleanString(field?.componentKey) !== 'ivcCollapsibility' ||
+      !fixedPhases || typeof fixedPhases !== 'object' ||
+      !fixedPhases.IVC_EXP || !fixedPhases.IVC_INSP ||
+      cleanString(sources?.[field.key]?.source) !== 'manual') {
+    return sources;
+  }
+  return { ...sources, [field.key]: {
+    source: 'viewer-derived', sourceMeasurementKey: '',
+  } };
+}
