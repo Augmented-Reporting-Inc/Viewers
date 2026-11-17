@@ -230,7 +230,8 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
   const [capturedProtocolFrame, setCapturedProtocolFrame] = useState('');
   const protocolFramePickerIntent = useMemo(
     () => getResearchFramePickerIntent(
-      typeof window !== 'undefined' ? window.location.search : ''
+      typeof window !== 'undefined' ? window.location.search : '',
+      typeof window !== 'undefined' ? window.location.hash : ''
     ),
     []
   );
