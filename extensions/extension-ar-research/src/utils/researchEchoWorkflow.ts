@@ -107,7 +107,7 @@ export function getResearchGroupedFields(field: any, fields: any[] = [], domain 
   // Stable protocol order for the IVC follow-up: RAP selection before RVSP.
   // Do not reorder other explicitly configured groups.
   if (isEcho && componentKey === 'ivcCollapsibility') {
-    const order = { rap: 0, rvsp: 1 };
+    const order: Record<string, number> = { rap: 0, rvsp: 1 };
     grouped.sort((a, b) =>
       (order[a.componentKey] ?? 2) - (order[b.componentKey] ?? 2)
     );
