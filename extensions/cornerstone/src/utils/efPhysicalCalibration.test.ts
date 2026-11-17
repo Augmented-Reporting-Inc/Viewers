@@ -1,5 +1,6 @@
 import { calibrateUSContourPoints } from './usRegionLengthCalibration';
 import { buildLVSimpsonContourFromHingeApex } from './lvSimpsonContour';
+import { recalibrateEditedLVSimpsonContour } from './lvSimpsonContourRecalibration';
 import { calculateLVSimpson } from '../../../extension-ar-measurements/src/utils/lvSimpson';
 import { getSavedVolumeContourMetadata, getSavedLVSimpsonControlPoints, isSavedLVSimpsonImageMatch, resolveSavedLVSimpsonHydrationImage } from './savedVolumeContourMetadata';
 
@@ -475,4 +476,102 @@ describe('LV EF calibrated geometry', () => {
     expect(calculateLVSimpson(records)?.status).not.toBe('complete');
   });
 
+});
+
+describe('recalibrate edited EF contour from its verified source DICOM region', () => {
+  const fourContours = () => [
+    makeMeasurement('A4C_ED', 70, 190),
+    makeMeasurement('A4C_ES', 55, 170),
+    makeMeasurement('A2C_ED', 65, 190),
+    makeMeasurement('A2C_ES', 50, 170),
+  ];
+  const editedControls = (record: any) =>
+    record.points.map((point: number[]) => [...point]);
+
+  test('Axis + Apex edits fail stale-calibration checks, then pass after exact DICOM revalidation', () => {
+    const records = fourContours();
+    expect(calculateLVSimpson(records)?.status).toBe('complete');
+    const controlPoints = editedControls(records[0]);
+    controlPoints[3][0] += 5;
+    records[0].lvSimpsonControlPoints = controlPoints;
+    expect(calculateLVSimpson(records)?.status).not.toBe('complete');
+
+    const updated = recalibrateEditedLVSimpsonContour({
+      geometry: records[0].lvSimpson, controlPoints, imagePlane, regions,
+    });
+    expect(updated.status).toBe('recalibrated');
+    records[0].lvSimpson = updated.geometry;
+    expect(updated.geometry.originalContourPoints).toEqual(controlPoints);
+    expect(updated.geometry.calibratedContourPoints).toHaveLength(controlPoints.length);
+    expect(calculateLVSimpson(records)?.status).toBe('complete');
+    // A second change after acceptance invalidates the new calibration again.
+    records[0].lvSimpsonControlPoints[3][0] += 2;
+    expect(calculateLVSimpson(records)?.status).not.toBe('complete');
+  });
+
+  test('moving the guided apex recalculates the long axis from the final handles', () => {
+    const record = makeMeasurement('A4C_ED', 70, 190);
+    const originalLength = record.lvSimpson.calibratedLongAxisLengthMM;
+    const controls = editedControls(record);
+    controls[record.lvSimpson.axisPointIndex][1] += 5;
+    const result = recalibrateEditedLVSimpsonContour({
+      geometry: record.lvSimpson, controlPoints: controls, imagePlane, regions,
+    });
+    expect(result.status).toBe('recalibrated');
+    expect(result.geometry.calibratedLongAxisLengthMM).toBeGreaterThan(originalLength);
+    expect(result.geometry.apexPoint).toEqual(controls[record.lvSimpson.axisPointIndex]);
+  });
+
+  test('unchanged contour needs no new calibration and preserves the original record', () => {
+    const record = makeMeasurement('A4C_ED', 70, 190);
+    const result = recalibrateEditedLVSimpsonContour({
+      geometry: record.lvSimpson,
+      controlPoints: editedControls(record),
+      imagePlane: null,
+      regions: [],
+    });
+    expect(result).toEqual({ status: 'unchanged', geometry: record.lvSimpson });
+  });
+
+  test('rejects missing source region, conflicting spatial regions and out-of-region edits', () => {
+    const record = makeMeasurement('A4C_ED', 70, 190);
+    const controls = editedControls(record);
+    controls[3][0] += 5;
+    expect(recalibrateEditedLVSimpsonContour({
+      geometry: record.lvSimpson, controlPoints: controls, imagePlane, regions: [],
+    })).toMatchObject({ status: 'invalid', reason: 'source_dicom_calibration_unavailable' });
+    expect(recalibrateEditedLVSimpsonContour({
+      geometry: record.lvSimpson, controlPoints: controls, imagePlane,
+      regions: [regions[0], { ...regions[0], column: 0.8 }],
+    })).toMatchObject({ status: 'invalid', reason: 'edited_contour_outside_calibrated_dicom_region' });
+    const outside = editedControls(record);
+    outside[3][0] = 600;
+    expect(recalibrateEditedLVSimpsonContour({
+      geometry: record.lvSimpson, controlPoints: outside, imagePlane, regions,
+    })).toMatchObject({ status: 'invalid', reason: 'edited_contour_outside_calibrated_dicom_region' });
+  });
+
+  test('does not reinterpret changed point cardinality as the original apex', () => {
+    const record = makeMeasurement('A4C_ED', 70, 190);
+    const extra = editedControls(record);
+    extra.splice(2, 0, [100, 110, 0]);
+    const result = recalibrateEditedLVSimpsonContour({
+      geometry: record.lvSimpson, controlPoints: extra, imagePlane, regions,
+    });
+    expect(result).toMatchObject({
+      status: 'invalid', reason: 'missing_or_changed_control_point_layout',
+    });
+  });
+
+  test('freehand remains supported without bypassing revalidation', () => {
+    const record = makeMeasurement('A4C_ED', 70, 190);
+    record.lvSimpson.contourSource = 'freehandDerived';
+    const controls = editedControls(record);
+    controls[3][0] += 2;
+    const result = recalibrateEditedLVSimpsonContour({
+      geometry: record.lvSimpson, controlPoints: controls, imagePlane, regions,
+    });
+    expect(result.status).toBe('recalibrated');
+    expect(result.geometry.contourSource).toBe('freehandDerived');
+  });
 });
