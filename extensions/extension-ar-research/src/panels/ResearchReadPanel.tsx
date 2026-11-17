@@ -325,17 +325,26 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
     const ivcField = fields.find(field =>
       field.componentKey === 'ivcCollapsibility'
     );
+    const ivcCandidates = ivcField
+      ? getResearchCompatibleMeasurementCandidates(
+          ivcField, viewerCandidates || [], allAnnotations
+        )
+      : [];
     const updates = ivcField
       ? buildViewerMeasurementReadUpdates(
-          [ivcField],
-          getResearchCompatibleMeasurementCandidates(
-            ivcField, viewerCandidates || [], allAnnotations
-          ),
-          getResearchBindingSources(ivcField, valueSources)
+          [ivcField], ivcCandidates,
+          getResearchBindingSources(ivcField, valueSources, ivcCandidates)
         )
       : [];
     const nextValues = { ...values };
     const nextSources = { ...valueSources };
+    // Do not display an old collapsibility percentage when its source pair
+    // has been deleted, is duplicated, or no longer matches the fixed frames.
+    if (ivcField && getResearchProtocolViewerTargets(ivcField).length &&
+        !ivcCandidates.length) {
+      delete nextValues[ivcField.key];
+      delete nextSources[ivcField.key];
+    }
     for (const update of updates) {
       nextValues[update.fieldKey] = update.value;
       nextSources[update.fieldKey] = {
@@ -409,13 +418,15 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
 
       setViewerCandidates(candidates);
       const available = mergeMeasurementAnnotations(savedAnnotations, snapshot);
-      const updates = fields.flatMap(field =>
-        buildViewerMeasurementReadUpdates(
-          [field],
-          getResearchCompatibleMeasurementCandidates(field, candidates, available),
-          getResearchBindingSources(field, valueSourcesRef.current)
-        )
-      );
+      const updates = fields.flatMap(field => {
+        const compatible = getResearchCompatibleMeasurementCandidates(
+          field, candidates, available
+        );
+        return buildViewerMeasurementReadUpdates(
+          [field], compatible,
+          getResearchBindingSources(field, valueSourcesRef.current, compatible)
+        );
+      });
 
       if (!updates.length) {
         return;
@@ -691,13 +702,15 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
       // fresh toolbar measurement can race the React event/state update and
       // save as an unlinked viewer annotation with an empty numeric field.
       const latestCandidates = buildViewerMeasurementValueCandidates(measurementAnnotations);
-      const freshUpdates = fields.flatMap(field =>
-        buildViewerMeasurementReadUpdates(
-          [field],
-          getResearchCompatibleMeasurementCandidates(field, latestCandidates, measurementAnnotations),
-          getResearchBindingSources(field, valueSourcesRef.current)
-        )
-      );
+      const freshUpdates = fields.flatMap(field => {
+        const compatible = getResearchCompatibleMeasurementCandidates(
+          field, latestCandidates, measurementAnnotations
+        );
+        return buildViewerMeasurementReadUpdates(
+          [field], compatible,
+          getResearchBindingSources(field, valueSourcesRef.current, compatible)
+        );
+      });
       const latestValues = { ...values };
       const latestSources = { ...valueSourcesRef.current };
       for (const update of freshUpdates) {
@@ -706,6 +719,27 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
           source: update.source,
           sourceMeasurementKey: update.sourceMeasurementKey,
         };
+      }
+      const ivcField = fields.find(field =>
+        field.componentKey === 'ivcCollapsibility'
+      );
+      if (ivcField && getResearchProtocolViewerTargets(ivcField).length) {
+        const state = getResearchIVCMeasurementState(
+          ivcField, measurementAnnotations
+        );
+        if (state.phaseSources?.IVC_EXP?.length > 1 ||
+            state.phaseSources?.IVC_INSP?.length > 1) {
+          throw new Error(
+            'Multiple IVC measurements exist for the same protocol phase. ' +
+            'Use the phase View/Delete controls to resolve duplicates before saving.'
+          );
+        }
+        // A partially redrawn IVC question is an incomplete draft, not a
+        // valid old percentage. Keep annotations and allow draft Save.
+        if (!state.candidate) {
+          delete latestValues[ivcField.key];
+          delete latestSources[ivcField.key];
+        }
       }
       // Fixed-frame protocols must not accept a manually entered value or
       // an annotation captured from a different DICOM frame as verified.
