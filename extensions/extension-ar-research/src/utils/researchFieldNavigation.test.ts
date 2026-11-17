@@ -5,6 +5,8 @@ import {
   getResearchProtocolViewerTargets,
   isResearchCandidateOnProtocolFrames,
   getResearchProtocolCompatibleCandidates,
+  getResearchIVCMeasurementState,
+  getResearchCompatibleMeasurementCandidates,
 } from './researchFieldNavigation';
 
 describe('Research quiz-style field sources and navigation', () => {
@@ -94,5 +96,108 @@ describe('Research protocol frame enforcement', () => {
     expect(isResearchCandidateOnProtocolFrames({
       componentKey: 'trVmax', config: {},
     }, candidate, [])).toBe(true);
+  });
+});
+
+describe('Research IVC phase measurements and visible calculated values', () => {
+  const study = '1.2.study';
+  const series = '1.2.series';
+  const sop = '1.2.sop';
+  const image = (frame: number, instance = sop) =>
+    `wadors:/orthanc/dicom-web/studies/${study}/series/${series}/instances/${instance}/frames/${frame}`;
+  const field = { componentKey: 'ivcCollapsibility', config: {
+    unit: '%', measurementLabels: ['IVCCollapsibility'],
+    compositeFrameGuidanceEnabled: true,
+    compositeFrameTargets: {
+      IVC_EXP: { studyInstanceUID: study, seriesInstanceUID: series,
+        sopInstanceUID: sop, frameNumber: 2 },
+      IVC_INSP: { studyInstanceUID: study, seriesInstanceUID: series,
+        sopInstanceUID: sop, frameNumber: 22 },
+    },
+  } };
+  const length = (label: string, mm: number, frame: number, instance = sop) => ({
+    annotationId: label + '-' + frame,
+    label, toolName: 'Length',
+    points: [[0, 0, 0], [1, 0, 0]],
+    measurements: { length: mm, unit: 'mm', lengthUnit: 'mm' },
+    referenceStudyUID: study,
+    referenceSeriesUID: series,
+    SOPInstanceUID: instance,
+    // Legacy adapter may retain frameNumber 1 even after cine navigation.
+    frameNumber: 1,
+    referencedImageId: image(frame, instance),
+  });
+
+  it('shows exact calibrated IVCexp/IVCinsp and 60% collapse on frames 2/22', () => {
+    const annotations = [length('IVCexp', 20, 2), length('IVCinsp', 8, 22)];
+    const state = getResearchIVCMeasurementState(field, annotations);
+    expect(state.status).toBe('complete');
+    expect(state.values).toMatchObject({
+      expirationDiameterMM: 20,
+      inspirationDiameterMM: 8,
+      collapsibilityPercent: 60,
+    });
+    expect(state.candidate).toMatchObject({
+      value: 60, unit: '%', source: 'viewer-derived',
+    });
+    expect(state.candidate.sourceMeasurementKey).toContain('IVCexp-2,IVCinsp-22');
+    expect(getResearchCompatibleMeasurementCandidates(field, [], annotations))
+      .toEqual([state.candidate]);
+  });
+
+  it('uses image identity instead of stale frameNumber and excludes extra wrong frames', () => {
+    const annotations = [
+      length('IVCexp', 20, 2), length('IVCinsp', 8, 22),
+      length('IVCexp', 30, 11),
+    ];
+    const state = getResearchIVCMeasurementState(field, annotations);
+    expect(state.candidate?.value).toBe(60);
+    expect(state.unmatchedSources).toBe(1);
+    expect(state.annotations).toHaveLength(2);
+  });
+
+  it('rejects same-frame, wrong-SOP, and mismatched stored SOP evidence', () => {
+    const wrongFrame = getResearchIVCMeasurementState(field, [
+      length('IVCexp', 20, 2), length('IVCinsp', 8, 21),
+    ]);
+    expect(wrongFrame.candidate).toBeNull();
+    expect(wrongFrame.values?.expirationDiameterMM).toBe(20);
+    expect(wrongFrame.values?.inspirationDiameterMM).toBeNull();
+
+    const wrongSop = getResearchIVCMeasurementState(field, [
+      length('IVCexp', 20, 2), length('IVCinsp', 8, 22, 'different-sop'),
+    ]);
+    expect(wrongSop.candidate).toBeNull();
+
+    const contradictory = length('IVCexp', 20, 2);
+    contradictory.referencedImageId = image(2, 'different-sop');
+    expect(getResearchIVCMeasurementState(field, [
+      contradictory, length('IVCinsp', 8, 22),
+    ]).candidate).toBeNull();
+  });
+
+  it('does not invent a collapsibility value from missing or uncalibrated Length', () => {
+    const uncalibrated = length('IVCinsp', 8, 22);
+    uncalibrated.measurements = { length: 8, unit: 'px', lengthUnit: 'px' };
+    const state = getResearchIVCMeasurementState(field, [
+      length('IVCexp', 20, 2), uncalibrated,
+    ]);
+    expect(state.candidate).toBeNull();
+    expect(state.values?.expirationDiameterMM).toBe(20);
+    expect(state.values?.inspirationDiameterMM).toBeNull();
+  });
+
+  it('does not change other measurement types or unconstrained IVC workflows', () => {
+    const annotations = [length('IVCexp', 20, 2), length('IVCinsp', 8, 22)];
+    const flexible = { ...field, config: {
+      unit: '%', measurementLabels: ['IVCCollapsibility'],
+    } };
+    expect(getResearchIVCMeasurementState(flexible, annotations).candidate?.value)
+      .toBe(60);
+    expect(getResearchCompatibleMeasurementCandidates(
+      { componentKey: 'trVmax', config: { measurementLabels: ['TRVel'] } },
+      [{ labels: ['TRVel'], sourceMeasurementKey: 'TR-1', value: 2.56 }],
+      []
+    )).toHaveLength(1);
   });
 });

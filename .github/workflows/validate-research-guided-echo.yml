@@ -3,6 +3,7 @@ name: Validate guided Echo Research workflows
 on:
   pull_request:
     branches:
+      - fix/research-ivc-phase-navigation-20261117
       - feature/research-frame-picker-20261116
       - feature/research-ivc-rap-rvsp-group-20261116
       - feature/research-guided-echo-measurements-20261116
