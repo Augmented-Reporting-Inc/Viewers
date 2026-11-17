@@ -609,15 +609,18 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
       'ar-measurements:live-measurements-updated',
       'ar-measurements:lv-simpson-session-updated',
       'ar-measurements:saved-annotations-updated',
-      // Length label selection can update MeasurementService silently. Research
-      // must refresh AFTER the user chooses IVCexp / IVCinsp, not just when the
-      // earlier unlabelled annotation was first created.
-      'ar-learning:quiz-measurement-labelled',
     ];
-
+    const labelled = (event: Event) => {
+      const measurementId = cleanString((event as CustomEvent)?.detail?.measurementId);
+      if (measurementId) void completeIVCPhaseRedraw(measurementId);
+      refresh();
+    };
     windowEvents.forEach(eventName =>
       window.addEventListener(eventName, refresh)
     );
+    // Keep the old source until the newly labelled Length has been verified
+    // on the exact target frame. Never tombstone it just on button click.
+    window.addEventListener('ar-learning:quiz-measurement-labelled', labelled);
 
     const timers = [0, 250, 1000].map(delay =>
       window.setTimeout(refresh, delay)
@@ -635,6 +638,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
       windowEvents.forEach(eventName =>
         window.removeEventListener(eventName, refresh)
       );
+      window.removeEventListener('ar-learning:quiz-measurement-labelled', labelled);
     };
   }, [
     servicesManager,
@@ -642,6 +646,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
     context?.preview,
     fields.length,
     refreshViewerMeasurementBindings,
+    completeIVCPhaseRedraw,
   ]);
 
   const captureViewerAnnotations = useCallback(async () => {
