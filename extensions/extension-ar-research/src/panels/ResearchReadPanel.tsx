@@ -868,44 +868,12 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
   const deleteResearchAnnotation = async (annotation: any) => {
     if (context?.readOnly || context?.preview || saving || completing) return;
     const id = getAnnotationKey(annotation);
-    if (!id || !window.confirm('Delete this saved research measurement annotation?')) return;
+    if (!id || !window.confirm('Delete this research measurement source? Save the Read to persist the deletion.')) return;
     try {
-      // This deletes the current viewer annotation when hydrated, and the
-      // Research-local tombstone ensures it is also removed from Save.
-      deletedAnnotationIdsRef.current.add(id);
-      try {
-        await commandsManager?.runCommand('removeMeasurement', { uid: id });
-      } catch (removeError) {
-        console.warn('[AR Research] viewer annotation removal unavailable', removeError);
-      }
-      setSavedAnnotations(current =>
-        current.filter(item => getAnnotationKey(item) !== id)
-      );
-      setLiveAnnotations(current =>
-        current.filter(item => getAnnotationKey(item) !== id)
-      );
-      setViewerCandidates(current => (current || []).filter(candidate =>
-        !getResearchSourceAnnotationIds(candidate?.sourceMeasurementKey).includes(id)
-      ));
-      const affected = new Set(Object.entries(valueSourcesRef.current)
-        .filter(([, source]) =>
-          getResearchSourceAnnotationIds(source?.sourceMeasurementKey).includes(id)
-        )
-        .map(([key]) => key));
-      setValueSources(current => {
-        const next = { ...current };
-        affected.forEach(key => delete next[key]);
-        valueSourcesRef.current = next;
-        return next;
-      });
-      setValues(current => {
-        const next = { ...current };
-        affected.forEach(key => delete next[key]);
-        return next;
-      });
-      notify(servicesManager, 'Research source deleted. Save the read to persist the change.');
+      pendingIVCReplacementRef.current = null;
+      await removeResearchSourceIds([id]);
+      notify(servicesManager, 'Research source deleted. Save the Read to persist the change.');
     } catch (removeError) {
-      deletedAnnotationIdsRef.current.delete(id);
       console.warn('[AR Research] source deletion failed', removeError);
       notify(servicesManager, 'Unable to delete this research source.', 'warning');
     }
