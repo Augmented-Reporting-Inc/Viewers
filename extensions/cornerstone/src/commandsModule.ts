@@ -88,6 +88,7 @@ import {
   deriveLVSimpsonGeometryFromFreehand,
 } from './utils/lvSimpsonContour';
 import { buildRVFACContourFromAnnulusApex } from './utils/rvFacContour';
+import { recalibrateEditedLVSimpsonContour } from './utils/lvSimpsonContourRecalibration';
 import { resolveSpectralVmaxClick } from './utils/spectralVmaxClick';
 import {
   SPECTRAL_DOPPLER_LABEL,
@@ -654,6 +655,22 @@ function getCurrentViewerMeasurementSnapshot(
         ? cornerstoneTools.annotation.state.getAnnotation?.(measurementId)
         : null;
       const spectralDoppler = annotation?.data?.spectralDoppler;
+
+      // Edited LV contour geometry is authoritative only when matched to the
+      // exact original SOP/frame. Retain the recalibrated snapshot on save and
+      // reopen rather than copying stale MeasurementService/session geometry.
+      if (isLVSimpsonMeasurement(measurement) && annotation?.data?.lvSimpson) {
+        const sourceImage = String(annotation?.metadata?.referencedImageId || '');
+        if (sourceImage && isSavedLVSimpsonImageMatch(
+          { ...measurement, lvSimpson: annotation.data.lvSimpson }, sourceImage
+        )) {
+          return {
+            ...measurement,
+            lvSimpson: annotation.data.lvSimpson,
+            points: annotation?.data?.contour?.polyline || measurement.points,
+          };
+        }
+      }
 
       // Preserve anatomical LA landmarks while following edited spline points
       // on the exact source frame. The session fallback handles early adapters
