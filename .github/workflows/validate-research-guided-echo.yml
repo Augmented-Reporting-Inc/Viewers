@@ -3,6 +3,7 @@ name: Validate guided Echo Research workflows
 on:
   pull_request:
     branches:
+      - fix/research-ivc-redraw-single-source-controls-20261117
       - fix/research-ivc-values-panel-dedupe-20261117
       - fix/research-ivc-phase-navigation-20261117
       - feature/research-frame-picker-20261116
@@ -13,6 +14,7 @@ on:
     paths:
       - 'extensions/extension-ar-research/src/**'
       - 'extensions/cornerstone/src/commandsModule.ts'
+      - 'extensions/cornerstone/src/initCornerstoneTools.js'
       - 'extensions/cornerstone/src/utils/**'
       - '.github/workflows/validate-research-guided-echo.yml'
   workflow_dispatch:
@@ -41,7 +43,7 @@ jobs:
             extensions/extension-ar-research/src/utils/researchEchoWorkflow.test.ts \
             extensions/extension-ar-research/src/utils/researchFramePicker.test.ts \
             extensions/extension-ar-research/src/utils/researchCaseFrameTargets.test.ts
-      - name: Compile both viewer panels
+      - name: Compile Research panels and shared Length registration
         run: |
           node - <<'NODE'
           const babel = require('@babel/core');
@@ -49,6 +51,9 @@ jobs:
             'extensions/extension-ar-research/src/panels/ResearchReadPanel.tsx',
             'extensions/extension-ar-research/src/panels/ResearchEchoGuidedControls.tsx',
             'extensions/cornerstone/src/commandsModule.ts',
+            'extensions/cornerstone/src/initCornerstoneTools.js',
+            'extensions/cornerstone/src/utils/createCalibratedLengthTextLines.ts',
+            'extensions/cornerstone/src/utils/measurementServiceMappings/Length.ts',
           ];
           for (const file of files) {
             const result = babel.transformFileSync(file, { envName: 'production' });
