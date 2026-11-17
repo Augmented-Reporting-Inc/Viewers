@@ -3,6 +3,7 @@ name: Validate guided Echo Research workflows
 on:
   pull_request:
     branches:
+      - feature/research-ivc-rap-rvsp-group-20261116
       - feature/research-guided-echo-measurements-20261116
       - feature/research-quiz-style-read-20261116
       - port/3.11-custom
@@ -34,7 +35,8 @@ jobs:
           yarn jest --config extensions/extension-ar-research/jest.config.js --runInBand --coverage=false --runTestsByPath \
             extensions/extension-ar-research/src/utils/readSchemaCalculated.test.ts \
             extensions/extension-ar-research/src/utils/researchFieldNavigation.test.ts \
-            extensions/extension-ar-research/src/utils/researchEchoWorkflow.test.ts
+            extensions/extension-ar-research/src/utils/researchEchoWorkflow.test.ts \
+            extensions/extension-ar-research/src/utils/researchFramePicker.test.ts
       - name: Compile both viewer panels
         run: |
           node - <<'NODE'
