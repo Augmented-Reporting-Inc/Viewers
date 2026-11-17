@@ -67,25 +67,96 @@ export function getResearchRapChoices(field: any, domain = 'echo') {
   return [];
 }
 
-export function getResearchCompanionField(field: any, fields: any[] = [], domain = 'echo') {
-  if (!field) return null;
-  const explicitlyGrouped = fields.find(item =>
+/**
+ * Presentation-only grouping of ReadSchema components into reader questions.
+ * Each component retains its own key, value, provenance, validation and
+ * persistence. Explicit schema groupWithComponentKey takes precedence over
+ * the backwards-compatible Echo defaults.
+ *
+ * Echo IVC / RAP / RVSP matches the established Education workflow: IVC
+ * has guided exp/insp measurements, RAP is explicitly selected, and RVSP
+ * is derived independently from source-linked TR Vmax + selected RAP.
+ */
+export function getResearchGroupedFields(field: any, fields: any[] = [], domain = 'echo') {
+  if (!field) return [];
+  const componentKey = String(field.componentKey || '');
+  const isEcho = String(domain).toLowerCase() === 'echo';
+
+  const grouped = fields.filter(item =>
     item.key !== field.key &&
-    String(item.config?.groupWithComponentKey || '') === String(field.componentKey)
+    String(item?.config?.groupWithComponentKey || '').trim() === componentKey
   );
-  if (explicitlyGrouped) return explicitlyGrouped;
-  // Backwards-compatible Echo starter schemas created before the grouping flag.
-  return String(domain).toLowerCase() === 'echo' && field.componentKey === 'imageQuality'
-    ? fields.find(item => item.key !== field.key &&
-        item.componentKey === 'readerComment' &&
-        !item.config?.groupWithComponentKey) || null
-    : null;
+
+  const addLegacyCompanion = (key: string) => {
+    const match = fields.find(item =>
+      item.key !== field.key &&
+      item.componentKey === key &&
+      !String(item?.config?.groupWithComponentKey || '').trim()
+    );
+    if (match && !grouped.some(item => item.key === match.key)) grouped.push(match);
+  };
+
+  if (isEcho && componentKey === 'imageQuality') {
+    addLegacyCompanion('readerComment');
+  }
+  if (isEcho && componentKey === 'ivcCollapsibility') {
+    addLegacyCompanion('rap');
+    addLegacyCompanion('rvsp');
+  }
+
+  // Stable protocol order for the IVC follow-up: RAP selection before RVSP.
+  // Do not reorder other explicitly configured groups.
+  if (isEcho && componentKey === 'ivcCollapsibility') {
+    const order = { rap: 0, rvsp: 1 };
+    grouped.sort((a, b) =>
+      (order[a.componentKey] ?? 2) - (order[b.componentKey] ?? 2)
+    );
+  }
+  return grouped;
+}
+
+// Preserve the older single-companion API for consumers using it.
+export function getResearchCompanionField(field: any, fields: any[] = [], domain = 'echo') {
+  return getResearchGroupedFields(field, fields, domain)[0] || null;
 }
 
 export function isResearchCompanionHidden(field: any, fields: any[] = [], domain = 'echo') {
   if (!field) return false;
-  return !!fields.find(item =>
-    item.key !== field.key &&
-    getResearchCompanionField(item, fields, domain)?.key === field.key
+  return fields.some(parent =>
+    parent.key !== field.key &&
+    getResearchGroupedFields(parent, fields, domain).some(child => child.key === field.key)
   );
+}
+
+export function getResearchQuestionLabel(field: any, fields: any[] = [], domain = 'echo') {
+  const grouped = getResearchGroupedFields(field, fields, domain);
+  if (String(domain).toLowerCase() === 'echo' &&
+      field?.componentKey === 'ivcCollapsibility' && grouped.length) {
+    const items = ['IVC', ...grouped.map(item =>
+      item.componentKey === 'rap' ? 'RAP'
+        : item.componentKey === 'rvsp' ? 'RVSP' : String(item.label || item.componentKey)
+    )];
+    return items.join(' / ');
+  }
+  return String(field?.label || field?.componentKey || '');
+}
+
+export function isResearchQuestionAnswered(
+  field: any, fields: any[] = [], values: Record<string, any> = {}, domain = 'echo'
+) {
+  if (!field) return false;
+  const isAnswered = (item: any) => {
+    const value = values[item.key];
+    return value !== null && value !== undefined && String(value).trim() !== '';
+  };
+  if (!isAnswered(field)) return false;
+
+  // The IVC question represents a three-part assessment, not three
+  // independent dropdown questions. Other grouped optional fields (such as
+  // Reader Comment) must not change the original completion semantics.
+  if (String(domain).toLowerCase() === 'echo' &&
+      field.componentKey === 'ivcCollapsibility') {
+    return getResearchGroupedFields(field, fields, domain).every(isAnswered);
+  }
+  return true;
 }
