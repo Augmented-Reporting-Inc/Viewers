@@ -3,10 +3,8 @@ import { getIsLocked } from './utils/getIsLocked';
 import { getIsVisible } from './utils/getIsVisible';
 import getSOPInstanceAttributes from './utils/getSOPInstanceAttributes';
 import { utils } from '@ohif/core';
-import {
-  getUSRegionLengthCalibrationForTarget,
-  hasUnresolvedSingleRegionLengthCalibration,
-} from '../correctUSRegionLength';
+import { hasUnresolvedSingleRegionLengthCalibration } from '../correctUSRegionLength';
+import { resolveLengthValueForTarget } from '../resolveLengthValue';
 import { getImageIdForLengthTarget } from '../usRegionLengthCalibration';
 
 const Length = {
@@ -73,7 +71,8 @@ const Length = {
     // ultrasound region has no image-plane spacing. Native Cornerstone can
     // apply PhysicalDelta twice in this state (6.98 mm -> 1.16 mm).
     if (
-      mappedAnnotations.some(({ targetId }) =>
+      mappedAnnotations.some(({ targetId, resolved }) =>
+        !resolved &&
         hasUnresolvedSingleRegionLengthCalibration(
           getImageIdForLengthTarget(targetId, referencedImageId)
         )
@@ -90,9 +89,9 @@ const Length = {
     // code (e.g. iUSCAN unit normalisation) mutates measurement.data, which
     // must never reach the live annotation.
     const calibratedData = Object.fromEntries(
-      mappedAnnotations.map(({ targetId, nativeStats, length, unit, calibrated }) => [
+      mappedAnnotations.map(({ targetId, nativeStats, length, unit, resolved }) => [
         targetId,
-        calibrated ? { ...nativeStats, length, unit } : { ...nativeStats },
+        resolved ? { ...nativeStats, length, unit } : { ...nativeStats },
       ])
     );
 
@@ -145,20 +144,21 @@ function getMappedAnnotations(annotation, displaySetService) {
   return targets.map(targetId => {
     const nativeStats = cachedStats[targetId];
     const { length: rawLength, unit: nativeUnit = 'mm' } = nativeStats || {};
-    // Spatial DICOM US region => calibrated mm. Anything else => the native
-    // Cornerstone value and unit, untouched (never relabelled as mm).
-    const calibration = getUSRegionLengthCalibrationForTarget(targetId, data, referencedImageId);
+    // Shared with the on-image Length text: unchanged restored mm first,
+    // otherwise the current frame's DICOM ultrasound region calibration.
+    // Native non-US/unsupported values pass through unchanged.
+    const resolved = resolveLengthValueForTarget(targetId, data, referencedImageId);
 
     return {
       targetId,
       nativeStats,
-      calibrated: !!calibration,
+      resolved,
       SeriesInstanceUID,
       SOPInstanceUID,
       SeriesNumber,
       frameNumber,
-      unit: calibration ? calibration.unit : nativeUnit,
-      length: calibration ? calibration.lengthMm : rawLength,
+      unit: resolved ? resolved.unit : nativeUnit,
+      length: resolved ? resolved.lengthMm : rawLength,
     };
   });
 }
