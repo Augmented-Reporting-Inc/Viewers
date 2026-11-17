@@ -34,6 +34,8 @@ import {
   getResearchSourceAnnotationIds,
   getResearchCompatibleMeasurementCandidates,
   getResearchIVCMeasurementState,
+  getResearchIVCAnnotationSlot,
+  isValidResearchIVCPhaseSource,
   getResearchBindingSources,
   isResearchCandidateOnProtocolFrames,
 } from '../utils/researchFieldNavigation';
@@ -227,6 +229,12 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
   // Explicit research-source deletion is carried through Save even if
   // legacy clinical Series hydration is unavailable for this research case.
   const deletedAnnotationIdsRef = useRef<Set<string>>(new Set());
+  // Redraw is transactional in the local draft: retain the old source until
+  // a NEW calibrated, correctly labelled annotation lands on the pinned SOP/
+  // frame. Closing the viewer without completing does not delete old evidence.
+  const pendingIVCReplacementRef = useRef<null | {
+    slot: string; fieldKey: string; priorIds: string[];
+  }>(null);
   const [selectedFieldKey, setSelectedFieldKey] = useState('');
   const [capturingProtocolFrame, setCapturingProtocolFrame] = useState(false);
   const [capturedProtocolFrame, setCapturedProtocolFrame] = useState('');
@@ -259,6 +267,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
       const persistedAnnotations = Array.isArray(next?.review?.measurementAnnotations)
         ? next.review.measurementAnnotations : [];
       deletedAnnotationIdsRef.current = new Set();
+      pendingIVCReplacementRef.current = null;
       setLiveAnnotations([]);
       setViewerCandidates(buildViewerMeasurementValueCandidates(persistedAnnotations));
       setSavedAnnotations(persistedAnnotations);
