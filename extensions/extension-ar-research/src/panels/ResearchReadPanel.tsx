@@ -34,6 +34,7 @@ import {
   getResearchSourceAnnotationIds,
   getResearchCompatibleMeasurementCandidates,
   getResearchIVCMeasurementState,
+  getResearchQuestionEntryTarget,
   getResearchIVCAnnotationSlot,
   isValidResearchIVCPhaseSource,
   getResearchBindingSources,
@@ -883,6 +884,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
         const result = await commandsManager.runCommand('jumpToSavedViewerAnnotation', {
           annotation,
           selectAnnotation: true,
+          pauseCineOnSource: true,
         });
         if (result?.ok !== true) {
           throw new Error(result?.reason || 'saved source navigation was unsuccessful');
@@ -962,6 +964,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
         viewerTarget: target,
         questionKey: fieldKey,
         requireExactSopFrame: true,
+        pauseCineOnTarget: true,
       });
       if (result?.ok !== true) {
         throw new Error(result?.reason || 'protocol target navigation failed');
@@ -974,10 +977,11 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
 
   const navigateToField = async (field: any) => {
     const targets = getResearchProtocolViewerTargets(field);
-    // When a composite has multiple configured phases, let the reader pick the
-    // exact A4C/A2C, ED/ES or other source: never choose the wrong phase.
-    if (targets.length === 1) {
-      await jumpToProtocolTarget(targets[0].viewerTarget, field.key);
+    const initialTarget = getResearchQuestionEntryTarget(field);
+    // Research IVC starts at the explicit expiration frame, as Education
+    // does; other multi-phase questions still require an explicit choice.
+    if (initialTarget) {
+      await jumpToProtocolTarget(initialTarget, field.key);
       return;
     }
     if (targets.length > 1) return;

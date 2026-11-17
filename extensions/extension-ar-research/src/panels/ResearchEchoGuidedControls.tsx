@@ -53,6 +53,7 @@ export default function ResearchEchoGuidedControls({
         const result = await command('jumpToViewerQuizTarget', {
           viewerTarget: target, questionKey: field.key,
           requireExactSopFrame: true,
+          pauseCineOnTarget: true,
         });
         if (result?.ok !== true) {
           throw new Error(result?.reason || 'navigation did not complete');

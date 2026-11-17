@@ -3,6 +3,7 @@ name: Validate guided Echo Research workflows
 on:
   pull_request:
     branches:
+      - fix/research-ivc-redraw-single-source-controls-20261117
       - fix/research-ivc-values-panel-dedupe-20261117
       - fix/research-ivc-phase-navigation-20261117
       - feature/research-frame-picker-20261116
@@ -13,7 +14,9 @@ on:
     paths:
       - 'extensions/extension-ar-research/src/**'
       - 'extensions/cornerstone/src/commandsModule.ts'
+      - 'extensions/cornerstone/src/initCornerstoneTools.js'
       - 'extensions/cornerstone/src/utils/**'
+      - 'extensions/cornerstone/src/initCornerstoneTools.js'
       - '.github/workflows/validate-research-guided-echo.yml'
   workflow_dispatch:
 
@@ -41,7 +44,7 @@ jobs:
             extensions/extension-ar-research/src/utils/researchEchoWorkflow.test.ts \
             extensions/extension-ar-research/src/utils/researchFramePicker.test.ts \
             extensions/extension-ar-research/src/utils/researchCaseFrameTargets.test.ts
-      - name: Compile both viewer panels
+      - name: Compile Research panels and shared Length registration
         run: |
           node - <<'NODE'
           const babel = require('@babel/core');
@@ -49,6 +52,9 @@ jobs:
             'extensions/extension-ar-research/src/panels/ResearchReadPanel.tsx',
             'extensions/extension-ar-research/src/panels/ResearchEchoGuidedControls.tsx',
             'extensions/cornerstone/src/commandsModule.ts',
+            'extensions/cornerstone/src/initCornerstoneTools.js',
+            'extensions/cornerstone/src/utils/createCalibratedLengthTextLines.ts',
+            'extensions/cornerstone/src/utils/measurementServiceMappings/Length.ts',
           ];
           for (const file of files) {
             const result = babel.transformFileSync(file, { envName: 'production' });
@@ -56,6 +62,20 @@ jobs:
             console.log('Compiled', file);
           }
           NODE
+
+      - name: Validate PR 156 edited LV Simpson physical recalibration and contour safety
+        # This targets the modified EF logic. The separate legacy saved-contour
+        # hydration suite currently has 4 pre-existing failures on PR #156 too
+        # (LA/RV saved overlay mock expectations); do not conflate it with
+        # these changes or silently rewrite unrelated hydration behavior.
+        run: |
+          yarn jest --config extensions/cornerstone/jest.config.js --runInBand --coverage=false --runTestsByPath \
+            extensions/cornerstone/src/utils/efPhysicalCalibration.test.ts \
+            extensions/cornerstone/src/utils/lvSimpsonContour.test.ts
+      - name: Validate EF report compatibility after incorporating PR 156
+        run: |
+          yarn jest --config extensions/extension-ar-measurements/jest.config.js --runInBand --coverage=false --runTestsByPath \
+            extensions/extension-ar-measurements/src/utils/lvSimpsonReportMapping.test.ts
 
       - name: Validate Samsung ultrasound Length calibration and restoration (#150)
         run: |

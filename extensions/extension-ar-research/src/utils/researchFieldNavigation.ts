@@ -82,6 +82,21 @@ export function getResearchProtocolViewerTargets(field: any): Array<{label: stri
 }
 
 /**
+ * A multi-phase question normally waits for the reader to choose a phase.
+ * For Research IVC, the initial expiration phase is explicitly defined by
+ * protocol and is also the natural starting point in Education. Never use
+ * generic "first target" ordering for EF/LA/RV or invent a missing IVC frame.
+ */
+export function getResearchQuestionEntryTarget(field: any) {
+  const targets = getResearchProtocolViewerTargets(field);
+  if (String(field?.componentKey || '').trim() === 'ivcCollapsibility') {
+    return targets.find(item => item.label === 'IVC_EXP')?.viewerTarget || null;
+  }
+  if (targets.length === 1) return targets[0].viewerTarget;
+  return null;
+}
+
+/**
  * Exact protocol source guard. Composite results can contain multiple source
  * annotation IDs, so compare their *sets* to distinct configured phase targets;
  * never accept a visually similar but different DICOM frame.
