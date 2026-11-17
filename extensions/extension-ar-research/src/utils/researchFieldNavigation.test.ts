@@ -214,9 +214,12 @@ describe('Research IVC redraw source safety', () => {
   });
   const field = {
     componentKey: 'ivcCollapsibility',
-    config: { compositeFrameTargets: {
-      IVC_EXP: target(2), IVC_INSP: target(22),
-    } },
+    config: {
+      measurementLabels: ['IVCCollapsibility'], unit: '%',
+      compositeFrameTargets: {
+        IVC_EXP: target(2), IVC_INSP: target(22),
+      },
+    },
   };
   const length = (label: string, frame: number, value = 16, unit = 'mm') => ({
     annotationId: label + frame,
