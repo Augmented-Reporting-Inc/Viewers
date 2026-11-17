@@ -301,9 +301,12 @@ export default function ResearchEchoGuidedControls({
                         <span>
                           Excluded {String(annotation?.label || 'IVC source')}
                           {annotation?.measurements?.length != null &&
-                            Number.isFinite(Number(annotation.measurements.length))
+                            Number.isFinite(Number(annotation.measurements.length)) &&
+                            (annotation?.measurements?.lengthUnit ||
+                              annotation?.measurements?.unit)
                             ? ' · ' + Number(annotation.measurements.length).toFixed(2) +
-                              ' ' + String(annotation.measurements.unit || 'mm')
+                              ' ' + String(annotation.measurements.lengthUnit ||
+                                annotation.measurements.unit)
                             : ''}
                         </span>
                         <button type="button" className="text-cyan-200 hover:underline"
