@@ -204,9 +204,13 @@ describe('Shared native Length US calibration — live vs completed', () => {
     withImage({ regions: [samsungRegion], imagePlane: undefined });
     const live = createCalibratedLengthTextLines(nativeDefaultGetTextLines);
     expect(live(annotation.data, targetId)).toEqual(['6.98 mm']);
-    // New measurements must not persist the incorrect native 1.16 value
-    // while this required image-plane calibration is unresolved.
-    expect(toMeasurement(annotation)).toBeNull();
+    // Restored saved evidence is valid for the unchanged original frame, so
+    // MeasurementService must agree with the viewport even while frame
+    // metadata is loading. Fresh/edited calipers remain guarded below.
+    const restoredRecord = toMeasurement(annotation);
+    expect(restoredRecord.data[targetId]).toMatchObject({ length: 6.98, unit: 'mm' });
+    expect(restoredRecord.displayText.primary).toEqual(live(annotation.data, targetId));
+    expect(restoredRecord.getReport().values).toContain(6.98);
 
     // Once frame imagePlane arrives, the calibrated geometry is used instead.
     withImage({
@@ -217,6 +221,7 @@ describe('Shared native Length US calibration — live vs completed', () => {
       },
     });
     expect(live(annotation.data, targetId)).toEqual(['6.98 mm']);
+    expect(toMeasurement(annotation).displayText.primary).toEqual(['6.98 mm']);
 
     // After an edit, the old saved value cannot mask new/unverified geometry.
     annotation.data.handles.points[1][0] += 1;
@@ -227,6 +232,101 @@ describe('Shared native Length US calibration — live vs completed', () => {
     annotation.data.handles.points = worldPoints.map(p => [...p]);
     annotation.data.cachedStats['imageId:other-frame'] = { length: 1.16, unit: 'cm US Region' };
     expect(live(annotation.data, 'imageId:other-frame')).toEqual(['Physical calibration unavailable']);
+  });
+
+  it('restored two-caliper cine labels match saved panel even if live metadata recalibrates differently', () => {
+    // Reproduces the November 16 symptom: saved 6.98/6.52 mm but on-image
+    // native labels near 0.562/0.601 mm. Physical metadata for this *new*
+    // study has not been obtained; this is a deliberately synthetic conflict.
+    const physicalDelta = 0.016649011522531509;
+    withImage({
+      regions: [
+        usRegion({
+          regionLocationMinY0: 0,
+          regionLocationMaxX1: 640,
+          regionLocationMaxY1: 480,
+          physicalDeltaX: physicalDelta,
+          physicalDeltaY: physicalDelta,
+        }),
+      ],
+      imagePlane: { rowPixelSpacing: 2, columnPixelSpacing: 2 },
+    });
+
+    const lineText = createCalibratedLengthTextLines(nativeDefaultGetTextLines);
+    for (const [index, savedMm, nativeMm] of [
+      [0, 6.98, 0.562],
+      [1, 6.52, 0.601],
+    ]) {
+      const annotation = mohawkLikeAnnotation();
+      annotation.annotationUID = `restored-bwt-${index}`;
+      annotation.data.handles.points = [
+        [40 + index * 10, 50, 0],
+        [40 + index * 10, 50 + savedMm, 0],
+      ];
+      annotation.data.cachedStats[targetId] = { length: nativeMm, unit: 'cm US Region' };
+      annotation.data.arRestoredLengthEvidence = {
+        valueMm: savedMm,
+        referencedImageId: imageId,
+        points: annotation.data.handles.points.map(p => [...p]),
+      };
+
+      const expected = `${savedMm.toFixed(2)} mm`;
+      expect(lineText(annotation.data, targetId)).toEqual([expected]);
+      const record = toMeasurement(annotation);
+      expect(record.data[targetId].length).toBe(savedMm);
+      expect(record.data[targetId].unit).toBe('mm');
+      expect(record.displayText.primary).toEqual([expected]);
+      expect(record.getReport().values).toContain(savedMm);
+
+      // The same resolver must ignore the old value when a handle is edited:
+      // the live viewport and MeasurementService now use fresh calibration.
+      annotation.data.handles.points[1][1] += 2;
+      const freshText = lineText(annotation.data, targetId);
+      const editedRecord = toMeasurement(annotation);
+      expect(editedRecord.displayText.primary).toEqual(freshText);
+      expect(editedRecord.data[targetId].length).not.toBe(savedMm);
+    }
+  });
+
+  it('never shows a plausible native mm label for an uncalibrated single-region fresh caliper', () => {
+    const annotation = mohawkLikeAnnotation();
+    annotation.data.cachedStats[targetId] = { length: 0.562, unit: 'mm' };
+    withImage({ regions: [usRegion()], imagePlane: undefined });
+
+    expect(createCalibratedLengthTextLines(nativeDefaultGetTextLines)(
+      annotation.data, targetId
+    )).toEqual(['Physical calibration unavailable']);
+    expect(toMeasurement(annotation)).toBeNull();
+  });
+
+  it('does not let restored evidence bypass the calibration guard after editing', () => {
+    const annotation = mohawkLikeAnnotation();
+    annotation.data.arRestoredLengthEvidence = {
+      valueMm: 6.98,
+      referencedImageId: imageId,
+      points: annotation.data.handles.points.map(p => [...p]),
+    };
+    withImage({ regions: [usRegion()], imagePlane: undefined });
+    expect(toMeasurement(annotation).displayText.primary).toEqual(['6.98 mm']);
+
+    annotation.data.handles.points[1][0] += 1;
+    expect(toMeasurement(annotation)).toBeNull();
+  });
+
+  it('never uses another cine frame\'s saved value in preview or MeasurementService', () => {
+    const annotation = mohawkLikeAnnotation();
+    annotation.data.arRestoredLengthEvidence = {
+      valueMm: 6.98,
+      referencedImageId: imageId.replace('/frames/1', '/frames/2'),
+      points: annotation.data.handles.points.map(p => [...p]),
+    };
+    withImage({ regions: undefined, imagePlane: undefined });
+    expect(createCalibratedLengthTextLines(nativeDefaultGetTextLines)(
+      annotation.data, targetId
+    )).toEqual(['2.45 cm US Region']);
+    // Since metadata frame differs, the saved 6.98 mm cannot overwrite
+    // the native fallback on this frame.
+    expect(toMeasurement(annotation).data[targetId].length).not.toBe(6.98);
   });
 
   it('never mutates the live annotation (frozen input still maps)', () => {
