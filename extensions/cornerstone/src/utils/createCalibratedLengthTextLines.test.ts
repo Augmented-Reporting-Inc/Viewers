@@ -288,6 +288,17 @@ describe('Shared native Length US calibration — live vs completed', () => {
     }
   });
 
+  it('never shows a plausible native mm label for an uncalibrated single-region fresh caliper', () => {
+    const annotation = mohawkLikeAnnotation();
+    annotation.data.cachedStats[targetId] = { length: 0.562, unit: 'mm' };
+    withImage({ regions: [usRegion()], imagePlane: undefined });
+
+    expect(createCalibratedLengthTextLines(nativeDefaultGetTextLines)(
+      annotation.data, targetId
+    )).toEqual(['Physical calibration unavailable']);
+    expect(toMeasurement(annotation)).toBeNull();
+  });
+
   it('does not let restored evidence bypass the calibration guard after editing', () => {
     const annotation = mohawkLikeAnnotation();
     annotation.data.arRestoredLengthEvidence = {
