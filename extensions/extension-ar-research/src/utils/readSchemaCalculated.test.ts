@@ -274,3 +274,40 @@ test('fixed IVC evidence takes precedence over a stale manual placeholder, not o
     ...config, config: {},
   }, existing)).toBe(existing);
 });
+
+test('corrected IVC replaces stale bound source key only when exactly one verified candidate exists', () => {
+  const ivc = {
+    componentKey: 'ivcCollapsibility', kind: 'measurement', key: 'ivcCollapsibility|',
+    config: {
+      unit: '%', measurementLabels: ['IVCCollapsibility'],
+      compositeFrameTargets: { IVC_EXP: {}, IVC_INSP: {} },
+    },
+  };
+  const existing = {
+    'ivcCollapsibility|': {
+      source: 'viewer-derived',
+      sourceMeasurementKey: 'ivc-collapse:old-exp,old-insp',
+    },
+  };
+  const latest = [{
+    labels: ['IVCCollapsibility'], value: 80, unit: '%',
+    source: 'viewer-derived',
+    sourceMeasurementKey: 'ivc-collapse:new-exp,old-insp',
+  }];
+  const rebinding = getResearchBindingSources(ivc, existing, latest);
+  expect(existing['ivcCollapsibility|'].sourceMeasurementKey)
+    .toBe('ivc-collapse:old-exp,old-insp');
+  expect(rebinding[ivc.key]).toEqual({
+    source: 'viewer-derived', sourceMeasurementKey: '',
+  });
+  expect(buildViewerMeasurementReadUpdates([ivc], latest, rebinding))
+    .toMatchObject([{ fieldKey: ivc.key, value: 80,
+      sourceMeasurementKey: 'ivc-collapse:new-exp,old-insp' }]);
+  expect(getResearchBindingSources(ivc, existing, [])).toBe(existing);
+  expect(getResearchBindingSources(ivc, existing, [latest[0], {
+    ...latest[0], sourceMeasurementKey: 'ivc-collapse:ambiguous-exp,old-insp',
+  }])).toBe(existing);
+  expect(getResearchBindingSources(
+    { ...ivc, componentKey: 'trVmax' }, existing, latest
+  )).toBe(existing);
+});
