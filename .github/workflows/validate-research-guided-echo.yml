@@ -8,6 +8,7 @@ on:
     paths:
       - 'extensions/extension-ar-research/src/**'
       - 'extensions/cornerstone/src/commandsModule.ts'
+      - 'extensions/cornerstone/src/utils/**'
       - '.github/workflows/validate-research-guided-echo.yml'
   workflow_dispatch:
 
@@ -48,3 +49,10 @@ jobs:
             console.log('Compiled', file);
           }
           NODE
+
+      - name: Validate Samsung ultrasound Length calibration and restoration (#150)
+        run: |
+          yarn jest --config extensions/cornerstone/jest.config.js --runInBand --coverage=false --runTestsByPath \
+            extensions/cornerstone/src/utils/usRegionLengthCalibration.test.ts \
+            extensions/cornerstone/src/utils/correctUSRegionLength.test.ts \
+            extensions/cornerstone/src/utils/createCalibratedLengthTextLines.test.ts
