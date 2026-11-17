@@ -8,6 +8,11 @@ import React, {
 import { buildViewerMeasurementValueCandidates } from 'extension-ar-measurements';
 import ResearchEchoGuidedControls from './ResearchEchoGuidedControls';
 import {
+  getResearchFramePickerIntent,
+  getResearchCapturedFrameTarget,
+  RESEARCH_FRAME_CAPTURE_MESSAGE,
+} from '../utils/researchFramePicker';
+import {
   getResearchRapChoices,
   getResearchGroupedFields,
   getResearchQuestionLabel,
@@ -221,6 +226,14 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
   // legacy clinical Series hydration is unavailable for this research case.
   const deletedAnnotationIdsRef = useRef<Set<string>>(new Set());
   const [selectedFieldKey, setSelectedFieldKey] = useState('');
+  const [capturingProtocolFrame, setCapturingProtocolFrame] = useState(false);
+  const [capturedProtocolFrame, setCapturedProtocolFrame] = useState('');
+  const protocolFramePickerIntent = useMemo(
+    () => getResearchFramePickerIntent(
+      typeof window !== 'undefined' ? window.location.search : ''
+    ),
+    []
+  );
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [completing, setCompleting] = useState(false);
@@ -274,6 +287,14 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
       (visibleFields.find(field => field.required)?.key || visibleFields[0].key)
     );
   }, [visibleFields]);
+
+  useEffect(() => {
+    if (!protocolFramePickerIntent || !visibleFields.length) return;
+    const target = visibleFields.find(field =>
+      field.componentKey === protocolFramePickerIntent.componentKey
+    );
+    if (target) setSelectedFieldKey(target.key);
+  }, [protocolFramePickerIntent, visibleFields]);
 
   const allAnnotations = useMemo(
     () => mergeMeasurementAnnotations(
@@ -746,6 +767,48 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
     }
   };
 
+  const captureCurrentProtocolFrame = async () => {
+    if (!context?.preview || !protocolFramePickerIntent ||
+        capturingProtocolFrame || !commandsManager) return;
+    if (!window.opener || window.opener.closed) {
+      notify(servicesManager,
+        'The Research Manager window is unavailable. Reopen the frame picker from the manager.',
+        'warning');
+      return;
+    }
+    setCapturingProtocolFrame(true);
+    setCapturedProtocolFrame('');
+    try {
+      // EXACTLY the Education authoring frame command: it captures active
+      // OHIF viewport study/series/SOP/frame, not a display-text guess.
+      const response = await commandsManager.runCommand('getCurrentViewerQuizFrameAnswer', {});
+      const target = getResearchCapturedFrameTarget(response, protocolFramePickerIntent);
+      window.opener.postMessage({
+        type: RESEARCH_FRAME_CAPTURE_MESSAGE,
+        session: protocolFramePickerIntent.session,
+        studyInstanceUID: protocolFramePickerIntent.studyInstanceUID,
+        componentKey: protocolFramePickerIntent.componentKey,
+        phaseKey: protocolFramePickerIntent.phaseKey,
+        target,
+      }, protocolFramePickerIntent.parentOrigin);
+      setCapturedProtocolFrame(
+        'Captured frame ' + target.frameNumber +
+        ' for ' + protocolFramePickerIntent.componentKey +
+        (protocolFramePickerIntent.phaseKey
+          ? ' / ' + protocolFramePickerIntent.phaseKey : '') +
+        '. Return to Research Manager and click Save.'
+      );
+      notify(servicesManager, 'Frame sent to Research Manager. Save the protocol there.');
+    } catch (captureError) {
+      console.warn('[AR Research] unable to capture authoring frame', captureError);
+      notify(servicesManager,
+        captureError?.message || 'Unable to capture the active DICOM frame.',
+        'warning');
+    } finally {
+      setCapturingProtocolFrame(false);
+    }
+  };
+
   const jumpToProtocolTarget = async (target: any, fieldKey: string) => {
     if (!commandsManager) return;
     try {
@@ -903,6 +966,31 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
         <div className="mb-3 rounded border border-blue-900 bg-blue-950 p-3 text-xs text-blue-100">
           Protocol preview. Fields are shown exactly as readers will receive them;
           no Research Review will be saved.
+        </div>
+      ) : null}
+
+      {context.preview && protocolFramePickerIntent ? (
+        <div className="mb-3 rounded border border-cyan-700 bg-cyan-950/30 p-3 text-xs text-cyan-100">
+          <div className="font-semibold text-sm">Research protocol frame authoring</div>
+          <p className="mt-1">
+            Capture the source for {protocolFramePickerIntent.componentKey}
+            {protocolFramePickerIntent.phaseKey
+              ? ' / ' + protocolFramePickerIntent.phaseKey : ''}.
+            Select the correct instance and cine frame in the viewer first.
+          </p>
+          <button
+            type="button"
+            className="mt-2 rounded border border-cyan-500 bg-cyan-900 px-3 py-2 font-semibold text-white disabled:opacity-40"
+            disabled={capturingProtocolFrame || !commandsManager}
+            onClick={() => void captureCurrentProtocolFrame()}
+          >
+            {capturingProtocolFrame ? 'Capturing current frame…' : 'Capture current frame'}
+          </button>
+          {capturedProtocolFrame ? (
+            <div role="status" className="mt-2 text-green-200">
+              {capturedProtocolFrame}
+            </div>
+          ) : null}
         </div>
       ) : null}
 
