@@ -1,5 +1,5 @@
 import { metaData, utilities as csUtilities } from '@cornerstonejs/core';
-import { createCalibratedLengthTextLines } from './createCalibratedLengthTextLines';
+import { createCalibratedLengthTextLines, createCalibratedLengthToolClass } from './createCalibratedLengthTextLines';
 import Length from './measurementServiceMappings/Length';
 
 // jest.mock calls below are hoisted above these imports by babel-jest.
@@ -337,5 +337,39 @@ describe('Shared native Length US calibration — live vs completed', () => {
     };
     expect(once.call(self, data, targetId)).toEqual(['bound']);
     expect(native).toHaveBeenCalledTimes(1);
+  });
+});
+
+
+describe('registered native LengthTool uses shared DICOM calibration', () => {
+  class NativeLengthToolStub {
+    static toolName = 'Length';
+    configuration = { getTextLines: nativeDefaultGetTextLines };
+  }
+  const RegisteredLengthTool = createCalibratedLengthToolClass(NativeLengthToolStub);
+
+  it('retains native tool identity and displays same calibrated mm as mapper', () => {
+    const tool = new RegisteredLengthTool();
+    expect(RegisteredLengthTool.toolName).toBe('Length');
+    const annotation = mohawkLikeAnnotation();
+    withImage({ regions: [usRegion()], imagePlane: singleRegionPlane });
+    const viewportLines = tool.configuration.getTextLines(annotation.data, targetId);
+    const mapped = toMeasurement(annotation);
+    expect(viewportLines).toEqual(['74.99 mm']);
+    expect(mapped.displayText.primary).toEqual(viewportLines);
+  });
+
+  it('does not change the native display for a non-ultrasound Length', () => {
+    withImage({ regions: undefined, imagePlane: undefined });
+    const tool = new RegisteredLengthTool();
+    const native = { cachedStats: { [targetId]: { length: 4.72, unit: 'mm' } } };
+    expect(tool.configuration.getTextLines(native, targetId)).toEqual(['4.72 mm']);
+  });
+
+  it('does not wrap an already wrapped native formatter twice', () => {
+    const once = createCalibratedLengthTextLines(nativeDefaultGetTextLines);
+    const Stub = class { static toolName = 'Length'; configuration = { getTextLines: once }; };
+    const tool = new (createCalibratedLengthToolClass(Stub))();
+    expect(tool.configuration.getTextLines).toBe(once);
   });
 });
