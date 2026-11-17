@@ -1,3 +1,9 @@
+import {
+  calculateIVCFromMeasurements,
+  isIVCDiameterMeasurement,
+} from '../../../extension-ar-measurements/src/utils/rightHeartMeasurements';
+import { buildViewerMeasurementValueCandidates } from '../../../extension-ar-measurements/src/utils/measurementValueCandidates';
+
 /**
  * Reuse existing OHIF viewer navigation commands rather than duplicating image
  * or frame selection in Research. Targets are optional ReadSchema configuration;
@@ -89,15 +95,29 @@ function getAnnotationSourceFrame(annotation: any = {}) {
   );
   const frameFromImage = referencedImageId.match(/\/frames\/(\d+)(?:\b|[/?#])/i) ||
     referencedImageId.match(/[?&]frame(?:Number)?=(\d+)/i);
+  // A Length adapter can retain frameNumber=1 after a cine navigation.
+  // The actual DICOMweb image frame is authoritative when present.
   const frame = Number(
-    annotation?.frameNumber ?? annotation?.FrameNumber ??
-    (frameFromImage ? frameFromImage[1] : '')
+    frameFromImage ? frameFromImage[1] :
+    (annotation?.frameNumber ?? annotation?.FrameNumber ?? '')
   );
+  const storedSop = cleanString(
+    annotation?.SOPInstanceUID || annotation?.sopInstanceUID ||
+    annotation?.metadata?.SOPInstanceUID
+  );
+  const imageSopMatch = referencedImageId.match(/\/instances\/([^/?#]+)/i);
+  let imageSop = '';
+  if (imageSopMatch) {
+    try {
+      imageSop = decodeURIComponent(imageSopMatch[1]);
+    } catch {
+      imageSop = 'invalid-dicom-instance';
+    }
+  }
   return {
-    sop: cleanString(
-      annotation?.SOPInstanceUID || annotation?.sopInstanceUID ||
-      annotation?.metadata?.SOPInstanceUID
-    ),
+    // Never treat contradictory SOP IDs as a verified protocol source.
+    sop: storedSop && imageSop && storedSop !== imageSop
+      ? '' : (storedSop || imageSop),
     series: cleanString(
       annotation?.referenceSeriesUID || annotation?.SeriesInstanceUID ||
       annotation?.seriesInstanceUID
@@ -163,5 +183,61 @@ export function getResearchProtocolCompatibleCandidates(
 ) {
   return candidates.filter(candidate =>
     isResearchCandidateOnProtocolFrames(field, candidate, annotations)
+  );
+}
+
+/**
+ * Uses the existing calibrated IVC calculator, but restricts Research evidence
+ * to the configured DICOM phase source when a fixed frame is provided. The
+ * selection is case-/phase-specific; never choose an arbitrary extra IVC
+ * measurement on a different cine frame.
+ */
+export function getResearchIVCMeasurementState(field: any, annotations: any[] = []) {
+  const targets = field?.config?.compositeFrameTargets || {};
+  const allIVC = (Array.isArray(annotations) ? annotations : [])
+    .filter(isIVCDiameterMeasurement);
+  const slotOf = (annotation: any) => {
+    const label = cleanString(
+      annotation?.label || annotation?.measurementRole || annotation?.role
+    ).toLowerCase().replace(/[\s_-]+/g, '');
+    return ['ivcexp', 'ivcexpiration', 'ivcendexpiration', 'ivcendexpirationdiameter']
+      .includes(label) ? 'IVC_EXP'
+      : ['ivcinsp', 'ivcinspiration', 'ivcendinspiration', 'ivcendinspirationdiameter']
+        .includes(label) ? 'IVC_INSP' : '';
+  };
+  const selected = allIVC.filter(annotation => {
+    const slot = slotOf(annotation);
+    const target = targets[slot];
+    return slot && (!target || annotationMatchesTarget(annotation, target));
+  });
+  const result = calculateIVCFromMeasurements(selected);
+  const candidates = buildViewerMeasurementValueCandidates(selected);
+  const candidate = getResearchProtocolCompatibleCandidates(
+    field, getResearchFieldMeasurementCandidates(field, candidates), selected
+  ).find(item =>
+    item.source === 'viewer-derived' &&
+    cleanString(item.sourceMeasurementKey).startsWith('ivc-collapse:')
+  ) || null;
+
+  return {
+    status: result?.status || 'incomplete',
+    values: result?.values || null,
+    message: result?.message || 'Capture both calibrated IVC diameters.',
+    candidate,
+    annotations: selected,
+    unmatchedSources: allIVC.length - selected.length,
+  };
+}
+
+/** Reuse protocol verification for all other measurements unchanged. */
+export function getResearchCompatibleMeasurementCandidates(
+  field: any, candidates: any[] = [], annotations: any[] = []
+) {
+  if (cleanString(field?.componentKey) === 'ivcCollapsibility') {
+    const state = getResearchIVCMeasurementState(field, annotations);
+    return state.candidate ? [state.candidate] : [];
+  }
+  return getResearchProtocolCompatibleCandidates(
+    field, getResearchFieldMeasurementCandidates(field, candidates), annotations
   );
 }
