@@ -410,14 +410,15 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
       // A Research Review owns its persisted annotations. Unlike clinical
       // reports, this shared Research study need not have an AR Series doc.
       // Rebind from this review's saved evidence as well as current live work.
-      const candidates = buildViewerMeasurementValueCandidates(
-        mergeMeasurementAnnotations(
-          savedAnnotations, snapshot, deletedAnnotationIdsRef.current
-        )
+      // Source selection must use the same tombstone-filtered snapshot as
+      // candidate creation; otherwise a replaced IVC phase is still counted
+      // twice until the next React render.
+      const available = mergeMeasurementAnnotations(
+        savedAnnotations, snapshot, deletedAnnotationIdsRef.current
       );
+      const candidates = buildViewerMeasurementValueCandidates(available);
 
       setViewerCandidates(candidates);
-      const available = mergeMeasurementAnnotations(savedAnnotations, snapshot);
       const updates = fields.flatMap(field => {
         const compatible = getResearchCompatibleMeasurementCandidates(
           field, candidates, available
