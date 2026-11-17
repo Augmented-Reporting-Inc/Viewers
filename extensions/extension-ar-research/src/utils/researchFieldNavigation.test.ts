@@ -6,6 +6,8 @@ import {
   isResearchCandidateOnProtocolFrames,
   getResearchProtocolCompatibleCandidates,
   getResearchIVCMeasurementState,
+  getResearchIVCAnnotationSlot,
+  isValidResearchIVCPhaseSource,
   getResearchCompatibleMeasurementCandidates,
 } from './researchFieldNavigation';
 
@@ -199,5 +201,71 @@ describe('Research IVC phase measurements and visible calculated values', () => 
       [{ labels: ['TRVel'], sourceMeasurementKey: 'TR-1', value: 2.56 }],
       []
     )).toHaveLength(1);
+  });
+});
+
+describe('Research IVC redraw source safety', () => {
+  const study = 'study-case';
+  const series = 'series-case';
+  const sop = 'sop-ivc';
+  const target = (frameNumber: number) => ({
+    studyInstanceUID: study, seriesInstanceUID: series,
+    sopInstanceUID: sop, frameNumber,
+  });
+  const field = {
+    componentKey: 'ivcCollapsibility',
+    config: {
+      measurementLabels: ['IVCCollapsibility'], unit: '%',
+      compositeFrameTargets: {
+        IVC_EXP: target(2), IVC_INSP: target(22),
+      },
+    },
+  };
+  const length = (label: string, frame: number, value = 16, unit = 'mm') => ({
+    annotationId: label + frame,
+    label, toolName: 'Length',
+    points: [[0, 0, 0], [1, 0, 0]],
+    measurements: { length: value, unit, lengthUnit: unit },
+    referenceStudyUID: study, referenceSeriesUID: series,
+    SOPInstanceUID: sop, frameNumber: 1,
+    referencedImageId:
+      `wadors:/studies/${study}/series/${series}/instances/${sop}/frames/${frame}`,
+  });
+  it('recognizes only explicitly labelled and calibrated replacement Length', () => {
+    const good = length('IVCexp', 2, 20);
+    expect(getResearchIVCAnnotationSlot(good)).toBe('IVC_EXP');
+    expect(isValidResearchIVCPhaseSource(field, 'IVC_EXP', good)).toBe(true);
+    expect(isValidResearchIVCPhaseSource(field, 'IVC_INSP', good)).toBe(false);
+    expect(isValidResearchIVCPhaseSource(field, 'IVC_EXP', length('IVCexp', 3)))
+      .toBe(false);
+    expect(isValidResearchIVCPhaseSource(field, 'IVC_EXP', length('IVCexp', 2, 10, 'px')))
+      .toBe(false);
+    expect(isValidResearchIVCPhaseSource(field, 'IVC_EXP',
+      { ...length('IVCexp', 2), label: 'Length' })).toBe(false);
+  });
+  it('exposes one phase-owned source; duplicate same-phase sources remain explicit', () => {
+    const sources = [
+      length('IVCexp', 2, 20), length('IVCinsp', 22, 8),
+      { ...length('IVCexp', 2, 21), annotationId: 'exp-redrawn' },
+    ];
+    const state = getResearchIVCMeasurementState(field, sources);
+    expect(state.phaseSources.IVC_EXP).toHaveLength(2);
+    expect(state.phaseSources.IVC_INSP).toHaveLength(1);
+    expect(state.candidate).toBeNull();
+    const validAfterReplacement = getResearchIVCMeasurementState(field, [
+      sources[2], sources[1],
+    ]);
+    expect(validAfterReplacement.phaseSources.IVC_EXP).toHaveLength(1);
+    expect(validAfterReplacement.candidate).not.toBeNull();
+    expect(validAfterReplacement.values.collapsibilityPercent)
+      .toBeCloseTo((21 - 8) / 21 * 100, 5);
+  });
+  it('does not replace with a new source from the wrong phase or cine frame', () => {
+    expect(isValidResearchIVCPhaseSource(field, 'IVC_INSP',
+      length('IVCinsp', 21, 8))).toBe(false);
+    expect(isValidResearchIVCPhaseSource(field, 'IVC_INSP',
+      length('IVCinsp', 22, 8))).toBe(true);
+    expect(isValidResearchIVCPhaseSource(field, 'IVC_INSP',
+      { ...length('IVCinsp', 22, 8), SOPInstanceUID: 'different' })).toBe(false);
   });
 });

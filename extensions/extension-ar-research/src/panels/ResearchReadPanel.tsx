@@ -34,6 +34,8 @@ import {
   getResearchSourceAnnotationIds,
   getResearchCompatibleMeasurementCandidates,
   getResearchIVCMeasurementState,
+  getResearchIVCAnnotationSlot,
+  isValidResearchIVCPhaseSource,
   getResearchBindingSources,
   isResearchCandidateOnProtocolFrames,
 } from '../utils/researchFieldNavigation';
@@ -227,6 +229,12 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
   // Explicit research-source deletion is carried through Save even if
   // legacy clinical Series hydration is unavailable for this research case.
   const deletedAnnotationIdsRef = useRef<Set<string>>(new Set());
+  // Redraw is transactional in the local draft: retain the old source until
+  // a NEW calibrated, correctly labelled annotation lands on the pinned SOP/
+  // frame. Closing the viewer without completing does not delete old evidence.
+  const pendingIVCReplacementRef = useRef<null | {
+    slot: string; fieldKey: string; priorIds: string[];
+  }>(null);
   const [selectedFieldKey, setSelectedFieldKey] = useState('');
   const [capturingProtocolFrame, setCapturingProtocolFrame] = useState(false);
   const [capturedProtocolFrame, setCapturedProtocolFrame] = useState('');
@@ -259,6 +267,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
       const persistedAnnotations = Array.isArray(next?.review?.measurementAnnotations)
         ? next.review.measurementAnnotations : [];
       deletedAnnotationIdsRef.current = new Set();
+      pendingIVCReplacementRef.current = null;
       setLiveAnnotations([]);
       setViewerCandidates(buildViewerMeasurementValueCandidates(persistedAnnotations));
       setSavedAnnotations(persistedAnnotations);
@@ -316,17 +325,26 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
     const ivcField = fields.find(field =>
       field.componentKey === 'ivcCollapsibility'
     );
+    const ivcCandidates = ivcField
+      ? getResearchCompatibleMeasurementCandidates(
+          ivcField, viewerCandidates || [], allAnnotations
+        )
+      : [];
     const updates = ivcField
       ? buildViewerMeasurementReadUpdates(
-          [ivcField],
-          getResearchCompatibleMeasurementCandidates(
-            ivcField, viewerCandidates || [], allAnnotations
-          ),
-          getResearchBindingSources(ivcField, valueSources)
+          [ivcField], ivcCandidates,
+          getResearchBindingSources(ivcField, valueSources, ivcCandidates)
         )
       : [];
     const nextValues = { ...values };
     const nextSources = { ...valueSources };
+    // Do not display an old collapsibility percentage when its source pair
+    // has been deleted, is duplicated, or no longer matches the fixed frames.
+    if (ivcField && getResearchProtocolViewerTargets(ivcField).length &&
+        !ivcCandidates.length) {
+      delete nextValues[ivcField.key];
+      delete nextSources[ivcField.key];
+    }
     for (const update of updates) {
       nextValues[update.fieldKey] = update.value;
       nextSources[update.fieldKey] = {
@@ -392,21 +410,24 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
       // A Research Review owns its persisted annotations. Unlike clinical
       // reports, this shared Research study need not have an AR Series doc.
       // Rebind from this review's saved evidence as well as current live work.
-      const candidates = buildViewerMeasurementValueCandidates(
-        mergeMeasurementAnnotations(
-          savedAnnotations, snapshot, deletedAnnotationIdsRef.current
-        )
+      // Source selection must use the same tombstone-filtered snapshot as
+      // candidate creation; otherwise a replaced IVC phase is still counted
+      // twice until the next React render.
+      const available = mergeMeasurementAnnotations(
+        savedAnnotations, snapshot, deletedAnnotationIdsRef.current
       );
+      const candidates = buildViewerMeasurementValueCandidates(available);
 
       setViewerCandidates(candidates);
-      const available = mergeMeasurementAnnotations(savedAnnotations, snapshot);
-      const updates = fields.flatMap(field =>
-        buildViewerMeasurementReadUpdates(
-          [field],
-          getResearchCompatibleMeasurementCandidates(field, candidates, available),
-          getResearchBindingSources(field, valueSourcesRef.current)
-        )
-      );
+      const updates = fields.flatMap(field => {
+        const compatible = getResearchCompatibleMeasurementCandidates(
+          field, candidates, available
+        );
+        return buildViewerMeasurementReadUpdates(
+          [field], compatible,
+          getResearchBindingSources(field, valueSourcesRef.current, compatible)
+        );
+      });
 
       if (!updates.length) {
         return;
@@ -468,6 +489,99 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
     savedAnnotations,
   ]);
 
+  const removeResearchSourceIds = useCallback(async (ids: string[]) => {
+    const unique = Array.from(new Set(ids.map(cleanString).filter(Boolean)));
+    if (!unique.length) return;
+    const removed = new Set(unique);
+    // Tombstone first. A subsequent MeasurementService update or snapshot must
+    // never resurrect superseded evidence before the Research Read is saved.
+    unique.forEach(id => deletedAnnotationIdsRef.current.add(id));
+    setSavedAnnotations(current =>
+      current.filter(item => !removed.has(getAnnotationKey(item)))
+    );
+    setLiveAnnotations(current =>
+      current.filter(item => !removed.has(getAnnotationKey(item)))
+    );
+    setViewerCandidates(current => (current || []).filter(candidate =>
+      !getResearchSourceAnnotationIds(candidate?.sourceMeasurementKey)
+        .some(id => removed.has(id))
+    ));
+    const affected = new Set(Object.entries(valueSourcesRef.current)
+      .filter(([, source]) =>
+        getResearchSourceAnnotationIds(source?.sourceMeasurementKey)
+          .some(id => removed.has(id))
+      )
+      .map(([key]) => key));
+    setValueSources(current => {
+      const next = { ...current };
+      affected.forEach(key => delete next[key]);
+      valueSourcesRef.current = next;
+      return next;
+    });
+    setValues(current => {
+      const next = { ...current };
+      affected.forEach(key => delete next[key]);
+      return next;
+    });
+    for (const id of unique) {
+      try {
+        await commandsManager?.runCommand('removeMeasurement', { uid: id });
+      } catch (removeError) {
+        // The tombstone still prevents the old evidence from being persisted.
+        // A viewer restart will rehydrate only the saved Research annotations.
+        console.warn('[AR Research] could not remove old on-screen measurement', removeError);
+      }
+    }
+  }, [commandsManager]);
+
+  const beginIVCPhaseRedraw = useCallback(
+    (field: any, slot: string, existingSources: any[] = []) => {
+      const priorIds = existingSources.map(getAnnotationKey).filter(Boolean);
+      pendingIVCReplacementRef.current = priorIds.length
+        ? { slot, fieldKey: field.key, priorIds } : null;
+    }, []
+  );
+
+  const completeIVCPhaseRedraw = useCallback(async (measurementId: string) => {
+    const pending = pendingIVCReplacementRef.current;
+    const id = cleanString(measurementId);
+    if (!pending || !pending.priorIds.length || !id ||
+        pending.priorIds.includes(id) || !commandsManager) return;
+    const field = fields.find(item => item.key === pending.fieldKey &&
+      item.componentKey === 'ivcCollapsibility');
+    if (!field) return;
+    try {
+      const snapshot = await commandsManager.runCommand(
+        'getSerializedViewerMeasurements',
+        { domain: 'echo', workflow: VIEWER_MEASUREMENTS_WORKFLOW }
+      );
+      const newAnnotation = (snapshot?.annotations || []).find(
+        item => getAnnotationKey(item) === id
+      );
+      // A user might select another label or draw on another frame. Never
+      // discard a previous measurement until its replacement is validated.
+      if (!isValidResearchIVCPhaseSource(field, pending.slot, newAnnotation)) {
+        notify(servicesManager,
+          'The new IVC measurement was not calibrated on the configured phase frame. The previous source is preserved.',
+          'warning');
+        return;
+      }
+      // Only the most recently armed redraw may consume the old sources.
+      if (pendingIVCReplacementRef.current !== pending) return;
+      pendingIVCReplacementRef.current = null;
+      await removeResearchSourceIds(pending.priorIds);
+      notify(servicesManager,
+        'IVC source replaced. Save the Research Read to persist the change.');
+      void refreshViewerMeasurementBindings();
+    } catch (error) {
+      console.warn('[AR Research] could not complete IVC redraw', error);
+      notify(servicesManager,
+        'Could not verify the replacement IVC source. The previous measurement was preserved.',
+        'warning');
+    }
+  }, [commandsManager, fields, removeResearchSourceIds, servicesManager,
+      refreshViewerMeasurementBindings]);
+
   useEffect(() => {
     const measurementService =
       servicesManager?.services?.measurementService;
@@ -506,15 +620,18 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
       'ar-measurements:live-measurements-updated',
       'ar-measurements:lv-simpson-session-updated',
       'ar-measurements:saved-annotations-updated',
-      // Length label selection can update MeasurementService silently. Research
-      // must refresh AFTER the user chooses IVCexp / IVCinsp, not just when the
-      // earlier unlabelled annotation was first created.
-      'ar-learning:quiz-measurement-labelled',
     ];
-
+    const labelled = (event: Event) => {
+      const measurementId = cleanString((event as CustomEvent)?.detail?.measurementId);
+      if (measurementId) void completeIVCPhaseRedraw(measurementId);
+      refresh();
+    };
     windowEvents.forEach(eventName =>
       window.addEventListener(eventName, refresh)
     );
+    // Keep the old source until the newly labelled Length has been verified
+    // on the exact target frame. Never tombstone it just on button click.
+    window.addEventListener('ar-learning:quiz-measurement-labelled', labelled);
 
     const timers = [0, 250, 1000].map(delay =>
       window.setTimeout(refresh, delay)
@@ -532,6 +649,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
       windowEvents.forEach(eventName =>
         window.removeEventListener(eventName, refresh)
       );
+      window.removeEventListener('ar-learning:quiz-measurement-labelled', labelled);
     };
   }, [
     servicesManager,
@@ -539,6 +657,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
     context?.preview,
     fields.length,
     refreshViewerMeasurementBindings,
+    completeIVCPhaseRedraw,
   ]);
 
   const captureViewerAnnotations = useCallback(async () => {
@@ -583,13 +702,15 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
       // fresh toolbar measurement can race the React event/state update and
       // save as an unlinked viewer annotation with an empty numeric field.
       const latestCandidates = buildViewerMeasurementValueCandidates(measurementAnnotations);
-      const freshUpdates = fields.flatMap(field =>
-        buildViewerMeasurementReadUpdates(
-          [field],
-          getResearchCompatibleMeasurementCandidates(field, latestCandidates, measurementAnnotations),
-          getResearchBindingSources(field, valueSourcesRef.current)
-        )
-      );
+      const freshUpdates = fields.flatMap(field => {
+        const compatible = getResearchCompatibleMeasurementCandidates(
+          field, latestCandidates, measurementAnnotations
+        );
+        return buildViewerMeasurementReadUpdates(
+          [field], compatible,
+          getResearchBindingSources(field, valueSourcesRef.current, compatible)
+        );
+      });
       const latestValues = { ...values };
       const latestSources = { ...valueSourcesRef.current };
       for (const update of freshUpdates) {
@@ -598,6 +719,27 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
           source: update.source,
           sourceMeasurementKey: update.sourceMeasurementKey,
         };
+      }
+      const ivcField = fields.find(field =>
+        field.componentKey === 'ivcCollapsibility'
+      );
+      if (ivcField && getResearchProtocolViewerTargets(ivcField).length) {
+        const state = getResearchIVCMeasurementState(
+          ivcField, measurementAnnotations
+        );
+        if (state.phaseSources?.IVC_EXP?.length > 1 ||
+            state.phaseSources?.IVC_INSP?.length > 1) {
+          throw new Error(
+            'Multiple IVC measurements exist for the same protocol phase. ' +
+            'Use the phase View/Delete controls to resolve duplicates before saving.'
+          );
+        }
+        // A partially redrawn IVC question is an incomplete draft, not a
+        // valid old percentage. Keep annotations and allow draft Save.
+        if (!state.candidate) {
+          delete latestValues[ivcField.key];
+          delete latestSources[ivcField.key];
+        }
       }
       // Fixed-frame protocols must not accept a manually entered value or
       // an annotation captured from a different DICOM frame as verified.
@@ -760,44 +902,12 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
   const deleteResearchAnnotation = async (annotation: any) => {
     if (context?.readOnly || context?.preview || saving || completing) return;
     const id = getAnnotationKey(annotation);
-    if (!id || !window.confirm('Delete this saved research measurement annotation?')) return;
+    if (!id || !window.confirm('Delete this research measurement source? Save the Read to persist the deletion.')) return;
     try {
-      // This deletes the current viewer annotation when hydrated, and the
-      // Research-local tombstone ensures it is also removed from Save.
-      deletedAnnotationIdsRef.current.add(id);
-      try {
-        await commandsManager?.runCommand('removeMeasurement', { uid: id });
-      } catch (removeError) {
-        console.warn('[AR Research] viewer annotation removal unavailable', removeError);
-      }
-      setSavedAnnotations(current =>
-        current.filter(item => getAnnotationKey(item) !== id)
-      );
-      setLiveAnnotations(current =>
-        current.filter(item => getAnnotationKey(item) !== id)
-      );
-      setViewerCandidates(current => (current || []).filter(candidate =>
-        !getResearchSourceAnnotationIds(candidate?.sourceMeasurementKey).includes(id)
-      ));
-      const affected = new Set(Object.entries(valueSourcesRef.current)
-        .filter(([, source]) =>
-          getResearchSourceAnnotationIds(source?.sourceMeasurementKey).includes(id)
-        )
-        .map(([key]) => key));
-      setValueSources(current => {
-        const next = { ...current };
-        affected.forEach(key => delete next[key]);
-        valueSourcesRef.current = next;
-        return next;
-      });
-      setValues(current => {
-        const next = { ...current };
-        affected.forEach(key => delete next[key]);
-        return next;
-      });
-      notify(servicesManager, 'Research source deleted. Save the read to persist the change.');
+      pendingIVCReplacementRef.current = null;
+      await removeResearchSourceIds([id]);
+      notify(servicesManager, 'Research source deleted. Save the Read to persist the change.');
     } catch (removeError) {
-      deletedAnnotationIdsRef.current.delete(id);
       console.warn('[AR Research] source deletion failed', removeError);
       notify(servicesManager, 'Unable to delete this research source.', 'warning');
     }
@@ -883,6 +993,9 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
   const selectField = (key: string) => {
     const field = fields.find(item => item.key === key);
     if (!field) return;
+    // Leaving an unfinished redraw abandons the pending replacement, not the
+    // old source. No annotation is removed until a new one has been verified.
+    pendingIVCReplacementRef.current = null;
     setSelectedFieldKey(key);
     void navigateToField(field);
   };
@@ -959,6 +1072,8 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
     : null;
   const guidedIVCValue = selectedField
     ? calculatedReadState.values[selectedField.key] : null;
+  const showInlineIVCSources = readDomain === 'echo' &&
+    selectedField?.componentKey === 'ivcCollapsibility';
   const showGuidedIVCValue = guidedOwnsProtocolFrames &&
     selectedField?.componentKey === 'ivcCollapsibility' &&
     protocolTargets.length > 0;
@@ -1119,12 +1234,15 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
               sourceAnnotations={selectedSources}
               ivcMeasurementState={ivcMeasurementState}
               ivcReadValue={guidedIVCValue}
+              onBeginIVCPhaseRedraw={beginIVCPhaseRedraw}
+              onViewIVCSource={annotation => void jumpToAnnotation(annotation)}
+              onDeleteIVCSource={annotation => void deleteResearchAnnotation(annotation)}
               disabled={context.readOnly || context.preview || isBusy}
               readOnly={context.readOnly || context.preview}
               onError={message => notify(servicesManager, message, 'warning')}
             />
           ) : null}
-          {(isSelectedMeasurement || genericProtocolTargets.length > 0) ? (
+          {!showInlineIVCSources && (isSelectedMeasurement || genericProtocolTargets.length > 0) ? (
             <div className="rounded border border-gray-700 bg-gray-950 p-3 text-xs">
               <div className="font-semibold text-gray-100">Measurement sources</div>
               {genericProtocolTargets.length ? (

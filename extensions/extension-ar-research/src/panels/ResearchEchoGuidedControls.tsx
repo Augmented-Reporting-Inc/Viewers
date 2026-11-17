@@ -14,6 +14,7 @@ import {
 export default function ResearchEchoGuidedControls({
   field, commandsManager, disabled = false, readOnly = false, onError,
   sourceAnnotations = [], ivcMeasurementState = null, ivcReadValue = null,
+  onBeginIVCPhaseRedraw, onViewIVCSource, onDeleteIVCSource,
 }: {
   field: any;
   commandsManager: any;
@@ -23,6 +24,9 @@ export default function ResearchEchoGuidedControls({
   sourceAnnotations?: any[];
   ivcMeasurementState?: any;
   ivcReadValue?: any;
+  onBeginIVCPhaseRedraw?: (field: any, slot: string, existing: any[]) => void;
+  onViewIVCSource?: (annotation: any) => void;
+  onDeleteIVCSource?: (annotation: any) => void;
 }) {
   const [busy, setBusy] = useState('');
   const kind = String(field?.componentKey || '');
@@ -159,6 +163,9 @@ export default function ResearchEchoGuidedControls({
           )}
           {phases.map(phase => {
             const blocked = isRequiredResearchPhaseMissing(field, phase.slot);
+            const phaseSources = kind === 'ivcCollapsibility'
+              ? (ivcMeasurementState?.phaseSources?.[phase.slot] || [])
+              : [];
             return (
               <div key={phase.slot} className="border-t border-gray-700 pt-2">
                 <div className="mb-2 flex flex-wrap items-center justify-between gap-2 font-medium text-gray-100">
@@ -205,13 +212,46 @@ export default function ResearchEchoGuidedControls({
                           await command('startGuidedRVFACContourWorkflow', { slot: phase.slot });
                         }, blocked)}
                       </>
-                      : button('Measure ' + (phase.slot === 'IVC_EXP' ? 'IVCexp' : 'IVCinsp'),
-                        phase.slot + ':length', async () => {
-                          await openPhase(phase.slot);
-                          await command('resetViewerLengthLabelMode', {});
-                          await command('activateViewerMeasurementTool', { toolName: 'Length', stopCine: true });
-                        }, blocked)}
-                  {viewTarget(phase.slot)}
+                      : <>
+                        {button(
+                          (phaseSources.length ? 'Redraw ' : 'Measure ') +
+                            (phase.slot === 'IVC_EXP' ? 'IVCexp' : 'IVCinsp'),
+                          phase.slot + ':length', async () => {
+                            await openPhase(phase.slot);
+                            await command('resetViewerLengthLabelMode', {});
+                            await command('activateViewerMeasurementTool', {
+                              toolName: 'Length', stopCine: true,
+                            });
+                            // Keep the original annotation until the new
+                            // calibrated source is verified after labelling.
+                            onBeginIVCPhaseRedraw?.(field, phase.slot, phaseSources);
+                          }, blocked)}
+                        {phaseSources.length === 0 ? viewTarget(phase.slot) : null}
+                        {phaseSources.map((annotation: any, index: number) => (
+                          <span key={String(annotation?.annotationId || annotation?.uid || index)}
+                            className="inline-flex flex-wrap items-center gap-2 rounded border border-gray-700 px-2 py-1">
+                            {phaseSources.length > 1 ? (
+                              <span className="text-amber-200">Source {index + 1}</span>
+                            ) : null}
+                            <button type="button" className="text-cyan-200 hover:underline"
+                              disabled={!onViewIVCSource}
+                              onClick={() => onViewIVCSource?.(annotation)}
+                            >View source</button>
+                            {!readOnly && !disabled ? (
+                              <button type="button" className="text-red-300 hover:underline"
+                                disabled={!onDeleteIVCSource}
+                                onClick={() => onDeleteIVCSource?.(annotation)}
+                              >Delete</button>
+                            ) : null}
+                          </span>
+                        ))}
+                      </>}
+                  {kind !== 'ivcCollapsibility' ? viewTarget(phase.slot) : null}
+                  {kind === 'ivcCollapsibility' && phaseSources.length > 1 ? (
+                    <span className="text-amber-200">
+                      Multiple measurements for this phase. Delete extras or redraw.
+                    </span>
+                  ) : null}
                   {blocked ? <span className="text-amber-300">Missing required protocol frame</span> : null}
                   {!blocked && !getResearchEchoPhaseTarget(field, phase.slot)
                     ? <span className="text-gray-400">No fixed frame for this phase — uses the current viewer image</span>
