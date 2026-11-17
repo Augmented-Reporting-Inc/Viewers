@@ -250,6 +250,15 @@ export function getResearchIVCMeasurementState(field: any, annotations: any[] = 
     }
   }
   const selected = [...phaseSources.IVC_EXP, ...phaseSources.IVC_INSP];
+  const acceptedIds = new Set(selected.map(item => String(
+    item?.annotationId || item?.annotationUID || item?.uid || item?.id || ''
+  )));
+  // Unmatched IVC annotations can remain visible in Cornerstone even when
+  // they must not participate in the Research result. Make them inspectable
+  // and explicitly deletable; do not silently discard evidence.
+  const excludedAnnotations = allIVC.filter(item => !acceptedIds.has(String(
+    item?.annotationId || item?.annotationUID || item?.uid || item?.id || ''
+  )));
   const result = calculateIVCFromMeasurements(selected);
   const candidates = buildViewerMeasurementValueCandidates(selected);
   const candidate = getResearchProtocolCompatibleCandidates(
@@ -266,7 +275,8 @@ export function getResearchIVCMeasurementState(field: any, annotations: any[] = 
     candidate,
     annotations: selected,
     phaseSources,
-    unmatchedSources: allIVC.length - selected.length,
+    excludedAnnotations,
+    unmatchedSources: excludedAnnotations.length,
   };
 }
 

@@ -286,12 +286,8 @@ export default function ResearchEchoGuidedControls({
                   Derived from the two calibrated diameters on their configured DICOM frames.
                 </p>
               )}
-              {ivcMeasurementState?.unmatchedSources > 0 ? (
-                <p className="mt-1 text-amber-200">
-                  {ivcMeasurementState.unmatchedSources} IVC source(s) were drawn
-                  outside the configured phase frames and are excluded.
-                </p>
-              ) : null}
+              {/* Off-protocol annotations remain excluded by the validation
+                  engine; they are diagnostic evidence, not reader results. */}
             </div>
           ) : null}
         </div>

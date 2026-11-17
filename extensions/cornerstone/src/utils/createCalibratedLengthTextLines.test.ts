@@ -366,6 +366,31 @@ describe('registered native LengthTool uses shared DICOM calibration', () => {
     expect(tool.configuration.getTextLines(native, targetId)).toEqual(['4.72 mm']);
   });
 
+  it('recovers calibrated text if a viewer mode replaces Length getTextLines after construction', () => {
+    class SimulatedLengthWithInstanceRender {
+      static toolName = 'Length';
+      configuration = { getTextLines: nativeDefaultGetTextLines };
+      // Mirror Cornerstone tools that install renderAnnotation as an
+      // instance field rather than a prototype method.
+      renderAnnotation = (data: any, imageTarget: string) =>
+        this.configuration.getTextLines(data, imageTarget);
+    }
+    const Tool = createCalibratedLengthToolClass(SimulatedLengthWithInstanceRender);
+    const tool = new Tool();
+    const annotation = mohawkLikeAnnotation();
+    withImage({ regions: [usRegion()], imagePlane: singleRegionPlane });
+
+    expect(tool.renderAnnotation(annotation.data, targetId)).toEqual(['75.0 mm']);
+    tool.configuration.getTextLines = nativeDefaultGetTextLines;
+    expect(tool.configuration.getTextLines(annotation.data, targetId))
+      .toEqual(['2.45 cm US Region']);
+    // First live render after a configuration reset must restore the
+    // shared calibrated value. Rendering again must not wrap twice.
+    expect(tool.renderAnnotation(annotation.data, targetId)).toEqual(['75.0 mm']);
+    expect(tool.renderAnnotation(annotation.data, targetId)).toEqual(['75.0 mm']);
+    expect(toMeasurement(annotation).displayText.primary).toEqual(['75.0 mm']);
+  });
+
   it('does not wrap an already wrapped native formatter twice', () => {
     const once = createCalibratedLengthTextLines(nativeDefaultGetTextLines);
     const Stub = class { static toolName = 'Length'; configuration = { getTextLines: once }; };

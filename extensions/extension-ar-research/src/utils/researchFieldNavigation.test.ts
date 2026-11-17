@@ -156,6 +156,10 @@ describe('Research IVC phase measurements and visible calculated values', () => 
     const state = getResearchIVCMeasurementState(field, annotations);
     expect(state.candidate?.value).toBe(60);
     expect(state.unmatchedSources).toBe(1);
+    expect(state.excludedAnnotations).toHaveLength(1);
+    expect(state.excludedAnnotations[0]).toMatchObject({
+      annotationId: 'IVCexp-11', label: 'IVCexp',
+    });
     expect(state.annotations).toHaveLength(2);
   });
 
