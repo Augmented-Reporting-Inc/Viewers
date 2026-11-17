@@ -33,6 +33,8 @@ import {
   getResearchProtocolViewerTargets,
   getResearchSourceAnnotationIds,
   getResearchProtocolCompatibleCandidates,
+  getResearchCompatibleMeasurementCandidates,
+  getResearchIVCMeasurementState,
   isResearchCandidateOnProtocolFrames,
 } from '../utils/researchFieldNavigation';
 import {
@@ -304,12 +306,39 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
     [savedAnnotations, liveAnnotations]
   );
 
-  const calculatedReadState = useMemo(
-    () => (context?.readOnly || context?.preview
-      ? { values, sources: valueSources }
-      : buildCalculatedReadState(fields, values, valueSources, viewerCandidates)),
-    [context?.readOnly, context?.preview, fields, values, valueSources, viewerCandidates]
-  );
+  const calculatedReadState = useMemo(() => {
+    if (context?.readOnly || context?.preview) {
+      return { values, sources: valueSources };
+    }
+    // Derive the IVC number from verified, case-scoped Length annotations as
+    // soon as they exist. Do not wait for an unrelated MeasurementService
+    // event to bind the value into local React state.
+    const ivcField = fields.find(field =>
+      field.componentKey === 'ivcCollapsibility'
+    );
+    const updates = ivcField
+      ? buildViewerMeasurementReadUpdates(
+          [ivcField],
+          getResearchCompatibleMeasurementCandidates(
+            ivcField, viewerCandidates || [], allAnnotations
+          ),
+          valueSources
+        )
+      : [];
+    const nextValues = { ...values };
+    const nextSources = { ...valueSources };
+    for (const update of updates) {
+      nextValues[update.fieldKey] = update.value;
+      nextSources[update.fieldKey] = {
+        source: update.source,
+        sourceMeasurementKey: update.sourceMeasurementKey,
+      };
+    }
+    return buildCalculatedReadState(
+      fields, nextValues, nextSources, viewerCandidates
+    );
+  }, [context?.readOnly, context?.preview, fields, values, valueSources,
+      viewerCandidates, allAnnotations]);
   const missingRequired = useMemo(
     () => getMissingRequiredReadFields(fields, calculatedReadState.values),
     [fields, calculatedReadState.values]
@@ -374,7 +403,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
       const updates = fields.flatMap(field =>
         buildViewerMeasurementReadUpdates(
           [field],
-          getResearchProtocolCompatibleCandidates(field, candidates, available),
+          getResearchCompatibleMeasurementCandidates(field, candidates, available),
           valueSourcesRef.current
         )
       );
@@ -552,7 +581,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
       const freshUpdates = fields.flatMap(field =>
         buildViewerMeasurementReadUpdates(
           [field],
-          getResearchProtocolCompatibleCandidates(field, latestCandidates, measurementAnnotations),
+          getResearchCompatibleMeasurementCandidates(field, latestCandidates, measurementAnnotations),
           valueSourcesRef.current
         )
       );
@@ -575,8 +604,9 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
         const value = latestValues[field.key];
         if (value === '' || value === null || value === undefined) continue;
         const source = latestSources[field.key] || {};
-        const match = getResearchFieldMeasurementCandidates(field, latestCandidates)
-          .find(candidate => candidate.sourceMeasurementKey === source.sourceMeasurementKey);
+        const match = getResearchCompatibleMeasurementCandidates(
+          field, latestCandidates, measurementAnnotations
+        ).find(candidate => candidate.sourceMeasurementKey === source.sourceMeasurementKey);
         if (!match || !isResearchCandidateOnProtocolFrames(field, match, measurementAnnotations)) {
           throw new Error(field.label + ': the value does not have verified evidence on the protocol-configured DICOM source frame.');
         }
@@ -907,16 +937,26 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
     selectedField?.componentKey === 'ivcCollapsibility' &&
     groupedFields.some(item => ['rap', 'rvsp'].includes(item.componentKey));
   const selectedCandidates = selectedField
-    ? getResearchProtocolCompatibleCandidates(
-        selectedField,
-        getResearchFieldMeasurementCandidates(selectedField, viewerCandidates || []),
-        allAnnotations
+    ? getResearchCompatibleMeasurementCandidates(
+        selectedField, viewerCandidates || [], allAnnotations
       ) : [];
   const selectedSources = selectedField
     ? getResearchFieldSourceAnnotations(
         calculatedReadState.sources[selectedField.key], allAnnotations, selectedCandidates
       ) : [];
   const protocolTargets = selectedField ? getResearchProtocolViewerTargets(selectedField) : [];
+  const guidedOwnsProtocolFrames = readDomain === 'echo' &&
+    ['trVmax', 'lvEjectionFraction', 'laVolumeDisks', 'rvFac', 'ivcCollapsibility']
+      .includes(cleanString(selectedField?.componentKey));
+  const genericProtocolTargets = guidedOwnsProtocolFrames ? [] : protocolTargets;
+  const ivcMeasurementState = selectedField?.componentKey === 'ivcCollapsibility'
+    ? getResearchIVCMeasurementState(selectedField, allAnnotations)
+    : null;
+  const guidedIVCValue = selectedField
+    ? calculatedReadState.values[selectedField.key] : null;
+  const showGuidedIVCValue = guidedOwnsProtocolFrames &&
+    selectedField?.componentKey === 'ivcCollapsibility' &&
+    protocolTargets.length > 0;
   const isSelectedMeasurement = selectedField && (
     ['measurement', 'continuous'].includes(cleanString(selectedField.kind).toLowerCase()) ||
     !!selectedField?.config?.calculation
@@ -1045,15 +1085,17 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
 
       {selectedField ? (
         <div className="space-y-2">
-          <ReadField
-            key={selectedField.key}
-            field={selectedField}
-            readDomain={readDomain}
-            value={calculatedReadState.values[selectedField.key] ?? ''}
-            source={calculatedReadState.sources[selectedField.key]}
-            disabled={context.readOnly || context.preview || isBusy}
-            onChange={nextValue => updateValue(selectedField.key, nextValue)}
-          />
+          {!showGuidedIVCValue ? (
+            <ReadField
+              key={selectedField.key}
+              field={selectedField}
+              readDomain={readDomain}
+              value={calculatedReadState.values[selectedField.key] ?? ''}
+              source={calculatedReadState.sources[selectedField.key]}
+              disabled={context.readOnly || context.preview || isBusy}
+              onChange={nextValue => updateValue(selectedField.key, nextValue)}
+            />
+          ) : null}
           {!isIVCRapRVSPQuestion ? groupedFields.map(companionField => (
             <ReadField
               key={companionField.key}
@@ -1070,18 +1112,20 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
               field={selectedField}
               commandsManager={commandsManager}
               sourceAnnotations={selectedSources}
+              ivcMeasurementState={ivcMeasurementState}
+              ivcReadValue={guidedIVCValue}
               disabled={context.readOnly || context.preview || isBusy}
               readOnly={context.readOnly || context.preview}
               onError={message => notify(servicesManager, message, 'warning')}
             />
           ) : null}
-          {(isSelectedMeasurement || protocolTargets.length > 0) ? (
+          {(isSelectedMeasurement || genericProtocolTargets.length > 0) ? (
             <div className="rounded border border-gray-700 bg-gray-950 p-3 text-xs">
-              <div className="font-semibold text-gray-100">Viewer measurement and source frames</div>
-              {protocolTargets.length ? (
+              <div className="font-semibold text-gray-100">Measurement sources</div>
+              {genericProtocolTargets.length ? (
                 <div className="mt-2 space-y-1">
                   <div className="text-gray-400">Protocol-selected instance/frame</div>
-                  {protocolTargets.map(({ label, viewerTarget }) => (
+                  {genericProtocolTargets.map(({ label, viewerTarget }) => (
                     <button
                       key={label}
                       type="button"
@@ -1105,6 +1149,8 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
                     >
                       <span className="min-w-0 flex-1 break-words text-gray-200">
                         {getAnnotationLabel(annotation)}
+                        {getAnnotationValue(annotation)
+                          ? ' · ' + getAnnotationValue(annotation) : ''}
                       </span>
                       <button type="button"
                         className="shrink-0 text-blue-300 hover:underline disabled:opacity-40"
@@ -1140,7 +1186,8 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
                   ))}
                 </div>
               ) : null}
-              {isSelectedMeasurement && !selectedSources.length && !protocolTargets.length ? (
+              {isSelectedMeasurement && !selectedSources.length &&
+               !guidedOwnsProtocolFrames && !genericProtocolTargets.length ? (
                 <div className="mt-2 text-gray-400">
                   {selectedCandidates.length
                     ? 'A compatible value is available. Its source frame will appear when the annotation is ready.'
