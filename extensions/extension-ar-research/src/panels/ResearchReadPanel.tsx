@@ -964,6 +964,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
         viewerTarget: target,
         questionKey: fieldKey,
         requireExactSopFrame: true,
+        pauseCineOnTarget: true,
       });
       if (result?.ok !== true) {
         throw new Error(result?.reason || 'protocol target navigation failed');
