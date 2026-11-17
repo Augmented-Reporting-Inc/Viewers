@@ -34,6 +34,7 @@ import {
   getResearchSourceAnnotationIds,
   getResearchCompatibleMeasurementCandidates,
   getResearchIVCMeasurementState,
+  getResearchBindingSources,
   isResearchCandidateOnProtocolFrames,
 } from '../utils/researchFieldNavigation';
 import {
@@ -321,7 +322,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
           getResearchCompatibleMeasurementCandidates(
             ivcField, viewerCandidates || [], allAnnotations
           ),
-          valueSources
+          getResearchBindingSources(ivcField, valueSources)
         )
       : [];
     const nextValues = { ...values };
@@ -403,7 +404,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
         buildViewerMeasurementReadUpdates(
           [field],
           getResearchCompatibleMeasurementCandidates(field, candidates, available),
-          valueSourcesRef.current
+          getResearchBindingSources(field, valueSourcesRef.current)
         )
       );
 
@@ -586,7 +587,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
         buildViewerMeasurementReadUpdates(
           [field],
           getResearchCompatibleMeasurementCandidates(field, latestCandidates, measurementAnnotations),
-          valueSourcesRef.current
+          getResearchBindingSources(field, valueSourcesRef.current)
         )
       );
       const latestValues = { ...values };
