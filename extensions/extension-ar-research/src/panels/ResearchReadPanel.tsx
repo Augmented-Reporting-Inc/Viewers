@@ -32,7 +32,6 @@ import {
   getResearchFieldSourceAnnotations,
   getResearchProtocolViewerTargets,
   getResearchSourceAnnotationIds,
-  getResearchProtocolCompatibleCandidates,
   getResearchCompatibleMeasurementCandidates,
   getResearchIVCMeasurementState,
   isResearchCandidateOnProtocolFrames,
@@ -505,6 +504,11 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
     const windowEvents = [
       'ar-measurements:live-measurements-updated',
       'ar-measurements:lv-simpson-session-updated',
+      'ar-measurements:saved-annotations-updated',
+      // Length label selection can update MeasurementService silently. Research
+      // must refresh AFTER the user chooses IVCexp / IVCinsp, not just when the
+      // earlier unlabelled annotation was first created.
+      'ar-learning:quiz-measurement-labelled',
     ];
 
     windowEvents.forEach(eventName =>
