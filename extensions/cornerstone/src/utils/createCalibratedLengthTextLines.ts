@@ -1,5 +1,7 @@
 import { utilities as csUtilities } from '@cornerstonejs/core';
 import { resolveLengthValueForTarget } from './resolveLengthValue';
+import { hasUnresolvedSingleRegionLengthCalibration } from './correctUSRegionLength';
+import { getImageIdForLengthTarget } from './usRegionLengthCalibration';
 
 const WRAPPED = Symbol.for('ar.calibratedLengthTextLines');
 
@@ -41,7 +43,10 @@ export function createCalibratedLengthTextLines(nativeGetTextLines) {
     // fallback path; iUSCAN may relabel it as mm. Fail closed rather than show
     // a plausible but wrong physical value after an edit or on a fresh trace.
     const statsUnit = String(data?.cachedStats?.[targetId]?.unit || '');
-    if (/cm\s+US\s+Region/i.test(statsUnit)) {
+    if (
+      /cm\s+US\s+Region/i.test(statsUnit) ||
+      hasUnresolvedSingleRegionLengthCalibration(getImageIdForLengthTarget(targetId))
+    ) {
       return ['Physical calibration unavailable'];
     }
 
