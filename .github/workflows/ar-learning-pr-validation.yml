@@ -10,6 +10,7 @@ on:
       - feat/quiz-ef-la-auto-activate-capture-20261021
       - feature/ef-authored-contour-frame-navigation-20261024
       - fix/ef-panel-contour-actions-20261025
+      - fix/iuscan-restored-length-calibration-20261116
   pull_request:
     branches:
       - fix/ef-sticky-tool-between-contours-20261020
@@ -58,6 +59,8 @@ jobs:
         run: node --test modes/mode-ar-learning/tests/toolbar-visibility.test.cjs modes/mode-ar-learning/tests/saved-measurement-question-navigation.test.cjs modes/mode-ar-learning/tests/frame-selection-navigation-mode.test.cjs modes/mode-ar-learning/tests/quiz-single-question-ivc-label.test.cjs modes/mode-ar-learning/tests/quiz-tr-vmax-rvsp.test.cjs
       - name: Validate EF panel, composite quiz capture and calibrated gold-area recovery
         run: npx jest --config extensions/extension-ar-measurements/jest.config.js --runInBand --runTestsByPath extensions/extension-ar-measurements/src/utils/viewerQuizCompositeResults.test.ts extensions/extension-ar-measurements/src/utils/quizGoldAreaBackfill.test.ts
+      - name: Validate ultrasound Length calibration, restoration and frame isolation
+        run: npx jest --config extensions/cornerstone/jest.config.js --runInBand --runTestsByPath extensions/cornerstone/src/utils/usRegionLengthCalibration.test.ts extensions/cornerstone/src/utils/correctUSRegionLength.test.ts extensions/cornerstone/src/utils/createCalibratedLengthTextLines.test.ts
       - name: Validate guided EF mouse ownership and tool restoration
         run: npx jest --config extensions/cornerstone/jest.config.js --runInBand --runTestsByPath extensions/cornerstone/src/utils/guidedMouseToolOwnership.test.ts
       - name: Validate LV EF initial contour landmarks and calculator compatibility

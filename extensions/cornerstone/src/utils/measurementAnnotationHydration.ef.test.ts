@@ -29,6 +29,33 @@ jest.mock('@cornerstonejs/tools', () => {
 const image = (sop: string, frame: number) =>
   `wadors:/dicom-web/studies/study/series/series/instances/${sop}/frames/${frame}`;
 const points = Array.from({ length: 12 }, (_, i) => [i, 40 + i, 0]);
+
+// LA saved contour restoration must not trust a free-standing ROI area scalar.
+// Model a calibrated rectangle whose physical area is the requested cm²,
+// with the complete mitral-annulus and superior-wall landmarks expected by
+// the verified LA biplane geometry contract. A collinear bare point set is
+// intentionally NOT sufficient evidence of physical area.
+const verifiedLAContour = (slot: string, areaCM2: number) => {
+  const longAxisLengthMM = 100;
+  const halfWidth = areaCM2 * 100 / longAxisLengthMM / 2;
+  const contourPoints = [
+    [-halfWidth, 0, 0], [-halfWidth, 25, 0], [-halfWidth, 50, 0],
+    [-halfWidth, 75, 0], [-halfWidth, 100, 0], [0, 100, 0],
+    [halfWidth, 100, 0], [halfWidth, 75, 0], [halfWidth, 50, 0],
+    [halfWidth, 25, 0], [halfWidth, 0, 0], [0, 0, 0],
+  ];
+  return {
+    points: contourPoints,
+    laVolume: {
+      slot, measurementKind: 'laVolumeSlot',
+      contourPoints,
+      baseLeftPoint: [-halfWidth, 0, 0],
+      baseRightPoint: [halfWidth, 0, 0],
+      superiorPoint: [0, 100, 0],
+      longAxisLengthMM,
+    },
+  };
+};
 const originalPoints = Array.from({ length: 8 }, (_, i) => [i, 30 + i, 0]);
 const slots = [
   { slot: 'A4C_ED', sop: 'sop-a', frame: 4 },
@@ -101,6 +128,7 @@ describe('real Cornerstone saved EF annotation hydration frame regression', () =
 describe('saved echo quiz contour hydration units and renderer', () => {
   const template = (slot: string, area: number, areaUnit: string) => {
     const isLA = slot === 'A4C' || slot === 'A2C';
+    const la = isLA ? verifiedLAContour(slot, area) : null;
     return {
       uid: 'quiz-' + slot,
       annotationId: 'quiz-' + slot,
@@ -111,10 +139,10 @@ describe('saved echo quiz contour hydration units and renderer', () => {
       SeriesInstanceUID: 'series',
       referencedImageId: image('quiz-sop-' + slot, 14),
       FrameOfReferenceUID: 'echo-frame-of-reference',
-      points: points.map(p => [...p]),
+      points: (la?.points || points).map(p => [...p]),
       measurementKind: isLA ? 'laVolumeSlot' : 'echoAreaSlot',
       ...(isLA
-        ? { laVolume: { slot, measurementKind: 'laVolumeSlot' } }
+        ? { laVolume: la.laVolume }
         : { echoArea: { slot, phase: slot.endsWith('_ED') ? 'ED' : 'ES', view: 'A4C' } }),
       measurements: { area, areaUnit },
     };
@@ -215,6 +243,8 @@ describe('saved gold comparison overlays retain measured units', () => {
   ])('reopens %s %s from composite gold with cm² evidence', (kind, slot, value) => {
     const { getQuizCompositeGoldContourSlotMetadata } =
       require('./quizEchoAreaCalibration');
+    const isLA = slot === 'A4C' || slot === 'A2C';
+    const la = isLA ? verifiedLAContour(slot as string, value as number) : null;
     const gold = {
       uid: 'gold-' + kind + '-' + slot,
       annotationId: 'gold-' + kind + '-' + slot,
@@ -227,7 +257,8 @@ describe('saved gold comparison overlays retain measured units', () => {
       referencedImageId: image('gold-sop', 3),
       FrameOfReferenceUID: 'gold-frame-reference',
       frameNumber: 3,
-      points: points.map(p => [...p]),
+      points: (la?.points || points).map(p => [...p]),
+      ...(la ? { laVolume: la.laVolume } : {}),
       measurements: { area: value, areaUnit: 'cm2' },
     };
     const hydrated = hydrateSavedViewerAnnotationForViewport({

@@ -35,6 +35,7 @@ import toggleImageSliceSync from './utils/imageSliceSync/toggleImageSliceSync';
 import { getFirstAnnotationSelected } from './utils/measurementServiceMappings/utils/selection';
 import { getMeasurementSnapshotStudyInstanceId } from './utils/measurementSnapshotStudy';
 import { reconcileLearnerIvcSnapshotSources } from './utils/learnerIvcSourceSnapshot';
+import { isExactViewerQuizSopFrameImageId } from './utils/exactViewerQuizSopFrame';
 import { getViewportEnabledElement } from './utils/getViewportEnabledElement';
 import getActiveViewportEnabledElement from './utils/getActiveViewportEnabledElement';
 import toggleVOISliceSync from './utils/toggleVOISliceSync';
@@ -87,6 +88,7 @@ import {
   deriveLVSimpsonGeometryFromFreehand,
 } from './utils/lvSimpsonContour';
 import { buildRVFACContourFromAnnulusApex } from './utils/rvFacContour';
+import { recalibrateEditedLVSimpsonContour } from './utils/lvSimpsonContourRecalibration';
 import { resolveSpectralVmaxClick } from './utils/spectralVmaxClick';
 import {
   SPECTRAL_DOPPLER_LABEL,
@@ -653,6 +655,22 @@ function getCurrentViewerMeasurementSnapshot(
         ? cornerstoneTools.annotation.state.getAnnotation?.(measurementId)
         : null;
       const spectralDoppler = annotation?.data?.spectralDoppler;
+
+      // Edited LV contour geometry is authoritative only when matched to the
+      // exact original SOP/frame. Retain the recalibrated snapshot on save and
+      // reopen rather than copying stale MeasurementService/session geometry.
+      if (isLVSimpsonMeasurement(measurement) && annotation?.data?.lvSimpson) {
+        const sourceImage = String(annotation?.metadata?.referencedImageId || '');
+        if (sourceImage && isSavedLVSimpsonImageMatch(
+          { ...measurement, lvSimpson: annotation.data.lvSimpson }, sourceImage
+        )) {
+          return {
+            ...measurement,
+            lvSimpson: annotation.data.lvSimpson,
+            points: annotation?.data?.contour?.polyline || measurement.points,
+          };
+        }
+      }
 
       // Preserve anatomical LA landmarks while following edited spline points
       // on the exact source frame. The session fallback handles early adapters
@@ -4951,7 +4969,7 @@ function normalizeViewerQuizTarget(target = {}) {
   };
 }
 
-function getEFContourFrameTarget(targets: any, slot: string) {
+function getEFContourFrameTarget(targets: any, slot: string, { allowCanonical = false } = {}) {
   if (!targets || typeof targets !== 'object' || Array.isArray(targets) ||
       !LV_TRACE_REQUIRED_SLOTS.includes(slot)) {
     return null;
@@ -4959,7 +4977,12 @@ function getEFContourFrameTarget(targets: any, slot: string) {
   const target = targets[slot];
   if (!target || typeof target !== 'object' || Array.isArray(target)) return null;
   const normalized = normalizeViewerQuizTarget(target);
-  if (!normalized.referencedImageId || !normalized.sopInstanceId ||
+  // Research Manager protocols may store the canonical SOP Instance UID +
+  // 1-based frame instead of a transient viewer image URL. Both are exact
+  // DICOM targets. The EF navigator still verifies the resulting image's
+  // *actual* SOP and frame before permitting the contour workflow.
+  if ((!normalized.referencedImageId && !allowCanonical) ||
+      !normalized.sopInstanceId ||
       !Number.isInteger(normalized.frameNumber) || normalized.frameNumber < 1) return null;
   return target;
 }
@@ -5036,7 +5059,9 @@ function getDisplaySetForViewerQuizTarget(displaySetService, target = {}) {
   return seriesDisplaySets[0] || null;
 }
 
-function findImageIdIndexForViewerQuizTarget(viewport, target = {}) {
+function findImageIdIndexForViewerQuizTarget(
+  viewport, target = {}, { requireExactSopFrame = false } = {}
+) {
   const imageIds = getViewportImageIds(viewport);
 
   if (!imageIds.length) {
@@ -5053,7 +5078,16 @@ function findImageIdIndexForViewerQuizTarget(viewport, target = {}) {
   if (normalizedReference) {
     const index = imageIds.findIndex(imageId => {
       const normalized = normalizeImageIdForCompare(imageId);
-      return normalized === normalizedReference || normalized.endsWith(normalizedReference);
+      const sameImage = normalized === normalizedReference ||
+        normalized.endsWith(normalizedReference);
+      // An image URL hint cannot override the required SOP + cine frame.
+      return sameImage && (
+        !requireExactSopFrame || !target.sopInstanceId ||
+        !Number.isFinite(target.frameNumber) ||
+        isExactViewerQuizSopFrameImageId(
+          imageId, target.sopInstanceId, target.frameNumber
+        )
+      );
     });
 
     if (index >= 0) {
@@ -5068,8 +5102,11 @@ function findImageIdIndexForViewerQuizTarget(viewport, target = {}) {
 
   if (target.sopInstanceId && Number.isFinite(target.frameNumber)) {
     const expectedInstanceFrame = `/instances/${String(target.sopInstanceId).toLowerCase()}/frames/${target.frameNumber}`;
-    const index = imageIds.findIndex(imageId =>
-      normalizeImageIdForCompare(imageId).includes(expectedInstanceFrame)
+    const index = imageIds.findIndex(imageId => requireExactSopFrame
+      ? isExactViewerQuizSopFrameImageId(
+          imageId, target.sopInstanceId, target.frameNumber
+        )
+      : normalizeImageIdForCompare(imageId).includes(expectedInstanceFrame)
     );
 
     if (index >= 0) {
@@ -5078,6 +5115,17 @@ function findImageIdIndexForViewerQuizTarget(viewport, target = {}) {
         imageId: imageIds[index],
         imageIds,
         source: 'sop-frame',
+      };
+    }
+    if (requireExactSopFrame) {
+      // A fixed target may arrive while its display set is still loading.
+      // Retry rather than silently accepting another SOP or the Nth image of
+      // the current stack, which could lead to a measurement on a wrong frame.
+      return {
+        index: -1,
+        imageId: '',
+        imageIds,
+        source: 'exact-sop-frame-not-yet-loaded',
       };
     }
   }
@@ -5132,7 +5180,8 @@ function findImageIdIndexForViewerQuizTarget(viewport, target = {}) {
 }
 
 async function waitForViewerQuizTargetImageMatch(
-  viewport, target = {}, attempts = 20, resolveViewport = null
+  viewport, target = {}, attempts = 20, resolveViewport = null,
+  { requireExactSopFrame = false } = {}
 ) {
   let lastMatch = {
     index: -1,
@@ -5147,7 +5196,9 @@ async function waitForViewerQuizTargetImageMatch(
     // current instance instead of a stale previous image stack.
     const resolved = typeof resolveViewport === 'function' ? resolveViewport() : null;
     latestViewport = resolved || latestViewport;
-    lastMatch = findImageIdIndexForViewerQuizTarget(latestViewport, target);
+    lastMatch = findImageIdIndexForViewerQuizTarget(
+      latestViewport, target, { requireExactSopFrame }
+    );
 
     if (lastMatch.index >= 0) {
       return { ...lastMatch, viewport: latestViewport };
@@ -5159,12 +5210,17 @@ async function waitForViewerQuizTargetImageMatch(
   return { ...lastMatch, viewport: latestViewport };
 }
 
-async function jumpViewportToViewerQuizTargetImage(viewport, target = {}, resolveViewport = null) {
+async function jumpViewportToViewerQuizTargetImage(
+  viewport, target = {}, resolveViewport = null,
+  { requireExactSopFrame = false } = {}
+) {
   // Instance-only quiz guidance has no gold frame and may require an
   // asynchronous cine display-set transition.
   const attempts = target.sopInstanceId && !Number.isFinite(target.frameNumber) ? 70 : 20;
   const { viewport: latestViewport, ...match } =
-    await waitForViewerQuizTargetImageMatch(viewport, target, attempts, resolveViewport);
+    await waitForViewerQuizTargetImageMatch(
+      viewport, target, attempts, resolveViewport, { requireExactSopFrame }
+    );
 
   if (match.index < 0) {
     console.warn('[ViewerQuiz] could not find target image in viewport stack', {
@@ -8847,6 +8903,23 @@ function commandsModule({
     return true;
   }
 
+  /**
+   * Saved-source review may be entered while a multiframe cine is playing.
+   * Stop playback without changing the active measurement tool, then assert
+   * the exact saved image again so a late cine tick cannot move the frame.
+   * Research opts into this; other saved-source navigation is unchanged.
+   */
+  const stopSourceCineForViewport = (viewportId: string) => {
+    if (!viewportId) return;
+    const state = cineService.getState();
+    const cine = state.cines?.[viewportId];
+    cineService.setCine({
+      id: viewportId,
+      frameRate: cine?.frameRate ?? state.default?.frameRate ?? 24,
+      isPlaying: false,
+    });
+  };
+
   const actions = {
     clearViewerMeasurementsCreatedInSession: () => {
       viewerMeasurementsCreatedInSession.clear();
@@ -9454,6 +9527,7 @@ function commandsModule({
       sessionId: requestedSessionId = '',
       singleSlot = false,
       efContourTargets = null,
+      allowCanonicalFrameTargets = false,
       questionKey = '',
       viewportId: requestedViewportId = '',
       captureMethod = 'axisApex',
@@ -9635,7 +9709,7 @@ function commandsModule({
       // Selecting a guided EF question opens its first authored frame. A later
       // Continue performs its own jump before invoking this next slot.
       const initialTarget = !requestedSessionId && !reviewExistingContours
-        ? getEFContourFrameTarget(efContourTargets, slotSelection.slotInfo.slot)
+        ? getEFContourFrameTarget(efContourTargets, slotSelection.slotInfo.slot, { allowCanonical: allowCanonicalFrameTargets })
         : null;
       if (initialTarget && !isWorkflowCancelled()) {
         const currentImageId = String(viewport?.getCurrentImageId?.() || '');
@@ -9770,7 +9844,7 @@ function commandsModule({
             }
             // No unique saved source: an explicitly authored target is still
             // valid, but an ambiguous contour must not be guessed.
-            return saved.length > 1 ? null : getEFContourFrameTarget(efContourTargets, slot);
+            return saved.length > 1 ? null : getEFContourFrameTarget(efContourTargets, slot, { allowCanonical: allowCanonicalFrameTargets });
           },
           canNavigateSlot(slot: string) {
             return isActiveStudy() && !!this.getNavigationTarget(slot);
@@ -9813,7 +9887,7 @@ function commandsModule({
               hideLVSimpsonWorkflowPanel();
             }
             void actions.startLVSimpsonEFWorkflow({
-              slot, efContourTargets, questionKey, captureMethod: method,
+              slot, efContourTargets, allowCanonicalFrameTargets, questionKey, captureMethod: method,
               viewportId: viewportGridService.getActiveViewportId(),
             }).catch(error => console.warn('[LV EF] selected contour redraw failed:', error));
           },
@@ -9879,13 +9953,83 @@ function commandsModule({
               ? cornerstoneTools.annotation.state.getAnnotation?.(measurementId)
               : null;
             const handles = annotation?.data?.handles?.points;
-            // An absent annotation must not silently inherit an unedited
-            // session snapshot when computing clinically meaningful EF.
+            const liveControls = Array.isArray(handles)
+              ? handles.map(point => Array.isArray(point) ? [...point] : point)
+              : [];
+            const sourceGeometry = annotation?.data?.lvSimpson ||
+              entry?.lvSimpson || entry?.measurements?.lvSimpson;
+            let updatedEntry = entry;
+            if (sourceGeometry?.measurementKind === LV_SIMPSON_MEASUREMENT_KIND &&
+                liveControls.length >= 6) {
+              // Recalibrate an edited spline from its OWN original DICOM frame,
+              // never from the currently displayed cine frame or raw world units.
+              const savedImage = String(entry?.referencedImageId || '');
+              const sourceImage = String(annotation?.metadata?.referencedImageId || '');
+              const sameSource = !!savedImage && !!sourceImage &&
+                isSavedLVSimpsonImageMatch(
+                  { ...entry, lvSimpson: sourceGeometry }, sourceImage);
+              const sourceSop = String(entry?.SOPInstanceUID ||
+                annotation?.metadata?.SOPInstanceUID || '');
+              const sourceSeries = String(entry?.referenceSeriesUID ||
+                annotation?.metadata?.SeriesInstanceUID || '');
+              // Reuse the existing robust display-set lookup, including
+              // displaySetInstanceUID and series fallback. Always verify the
+              // exact source SOP within the returned set before calibrating.
+              const sourceSet = sameSource && sourceSop
+                ? getDisplaySetForViewerMeasurement(displaySetService, {
+                    ...entry, SOPInstanceUID: sourceSop,
+                    referenceSeriesUID: sourceSeries,
+                  })
+                : null;
+              const sourceInstance = getDisplaySetInstances(sourceSet).find(
+                instance => String(getSopInstanceIdFromSource(instance) || '') === sourceSop
+              );
+              const regions = sourceInstance
+                ? getUltrasoundRegionsFromSource(sourceInstance)
+                    .map(normalizeUltrasoundRegion).filter(Boolean)
+                : [];
+              const sourcePlane = sourceInstance
+                ? metaData.get?.('imagePlaneModule', savedImage) : null;
+              const refreshed = recalibrateEditedLVSimpsonContour({
+                geometry: sourceGeometry,
+                controlPoints: liveControls,
+                imagePlane: sourcePlane,
+                regions,
+              });
+              if (refreshed.status === 'recalibrated') {
+                // Both the visible annotation and persistence snapshot must
+                // receive one atomic new calibration for the adjusted handles.
+                annotation.data.lvSimpson = refreshed.geometry;
+                updatedEntry = { ...entry, lvSimpson: refreshed.geometry };
+                try {
+                  measurementService.update(measurementId, updatedEntry, true);
+                } catch (error) {
+                  console.warn('[LV EF recalibration] measurement update failed');
+                }
+                upsertLVSimpsonSessionMeasurement(updatedEntry);
+                console.info('[LV EF recalibration] edited source contour verified', {
+                  slot: refreshed.geometry.slot, method: refreshed.geometry.contourSource,
+                });
+              } else if (refreshed.status === 'invalid') {
+                // A failed or ambiguous DICOM lookup must NEVER turn an edited
+                // shape into a trusted physical measurement.
+                updatedEntry = {
+                  ...entry,
+                  lvSimpson: {
+                    ...sourceGeometry,
+                    calibrationError: 'edited_contour_' + refreshed.reason,
+                  },
+                };
+                console.warn('[LV EF recalibration] source not verified', {
+                  slot: sourceGeometry.slot, reason: refreshed.reason,
+                });
+              }
+            }
+            // Preserve strict invalidation if handles are missing or altered
+            // again after this explicit Calculate EF checkpoint.
             return {
-              ...entry,
-              lvSimpsonControlPoints: Array.isArray(handles)
-                ? handles.map(point => Array.isArray(point) ? [...point] : point)
-                : [],
+              ...updatedEntry,
+              lvSimpsonControlPoints: liveControls,
             };
           });
         const resolved = resolveViewerQuizLVSimpsonForStudy(currentStudyId, measurementsForCalculation);
@@ -10003,6 +10147,7 @@ function commandsModule({
             singleSlot,
             captureMethod,
             efContourTargets,
+            allowCanonicalFrameTargets,
             questionKey,
             viewportId: activeViewportId,
           });
@@ -10409,7 +10554,7 @@ function commandsModule({
 
       if (nextSlot && !singleSlot && !isWorkflowCancelled()) {
         const nextDisplayName = getLVSimpsonSlotDisplayName(nextSlot);
-        const nextTarget = getEFContourFrameTarget(efContourTargets, nextSlot);
+        const nextTarget = getEFContourFrameTarget(efContourTargets, nextSlot, { allowCanonical: allowCanonicalFrameTargets });
         const normalInstruction = nextTarget
           ? `${slotDisplayName} recorded. Select Continue to open the educator-assigned ${nextDisplayName} instance/frame.`
           : `${slotDisplayName} recorded. Navigate to the correct ${nextDisplayName} image/frame, then continue.`;
@@ -10450,6 +10595,7 @@ function commandsModule({
             singleSlot,
             captureMethod,
             efContourTargets,
+            allowCanonicalFrameTargets,
             questionKey,
             viewportId: nextViewportId,
           }).catch(error => {
@@ -14979,6 +15125,7 @@ function commandsModule({
       annotation: savedAnnotation,
       selectAnnotation = true,
       runDelayedDisplayRefresh = true,
+      pauseCineOnSource = false,
     } = {}) => {
       const annotationId = getAnnotationId(savedAnnotation);
 
@@ -15037,6 +15184,7 @@ function commandsModule({
           });
 
       const targetViewportId = viewportToUpdate?.viewportId || activeViewportId;
+      if (pauseCineOnSource) stopSourceCineForViewport(targetViewportId);
 
       if (!activeDisplaySetAlreadyMatches) {
         const viewportsToUpdate = getViewportsToUpdateSafely({
@@ -15307,6 +15455,21 @@ function commandsModule({
         }
       }
 
+      if (pauseCineOnSource) {
+        const sourceViewportId = hydratedViewport.id || targetViewportId;
+        stopSourceCineForViewport(sourceViewportId);
+        const finalImage = await jumpViewportToSavedAnnotationImage(
+          hydratedViewport, savedAnnotation
+        );
+        if (!finalImage || !await waitForViewportImageReady(
+          hydratedViewport, finalImage
+        )) {
+          return { ok: false, reason: 'saved-source-frame-not-ready-after-cine-stop',
+            annotationId, viewportId: sourceViewportId };
+        }
+        hydratedViewport.render?.();
+      }
+
       return {
         ok: true,
         annotationId,
@@ -15467,7 +15630,10 @@ function commandsModule({
         annotationIds: orderedAnnotations.map(getAnnotationId),
       };
     },
-    jumpToViewerQuizTarget: async ({ viewerTarget, questionKey = '' } = {}) => {
+    jumpToViewerQuizTarget: async ({
+      viewerTarget, questionKey = '', requireExactSopFrame = false,
+      pauseCineOnTarget = false,
+    } = {}) => {
       const target = normalizeViewerQuizTarget(viewerTarget);
 
       if (!hasViewerQuizTargetIdentity(target)) {
@@ -15524,6 +15690,7 @@ function commandsModule({
           viewportGridService.getActiveViewportId()
         );
       const viewport = resolveTargetViewport();
+      if (pauseCineOnTarget) stopSourceCineForViewport(targetViewportId);
 
       if (!viewport) {
         console.warn('[ViewerQuiz] no viewport available for target navigation', {
@@ -15538,7 +15705,7 @@ function commandsModule({
       }
 
       const jumpResult = await jumpViewportToViewerQuizTargetImage(
-        viewport, target, resolveTargetViewport
+        viewport, target, resolveTargetViewport, { requireExactSopFrame }
       );
 
       // Navigating between saved quiz source frames can change the viewport's
@@ -15549,6 +15716,18 @@ function commandsModule({
           viewportId: targetViewportId,
           measurementService, viewportGridService, displaySetService, toolGroupService,
         });
+        if (pauseCineOnTarget) {
+          stopSourceCineForViewport(targetViewportId);
+          // Cine may advance while the target image is asynchronously loaded.
+          // Reassert the exact SOP/frame once playback is paused.
+          const settled = await jumpViewportToViewerQuizTargetImage(
+            resolveTargetViewport(), target, resolveTargetViewport,
+            { requireExactSopFrame }
+          );
+          if (settled?.ok !== true) {
+            return { ...settled, viewportId: targetViewportId };
+          }
+        }
       }
 
       return {

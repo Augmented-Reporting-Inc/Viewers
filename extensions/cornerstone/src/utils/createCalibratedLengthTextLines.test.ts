@@ -1,5 +1,5 @@
 import { metaData, utilities as csUtilities } from '@cornerstonejs/core';
-import { createCalibratedLengthTextLines } from './createCalibratedLengthTextLines';
+import { createCalibratedLengthTextLines, createCalibratedLengthToolClass } from './createCalibratedLengthTextLines';
 import Length from './measurementServiceMappings/Length';
 
 // jest.mock calls below are hoisted above these imports by babel-jest.
@@ -178,6 +178,57 @@ describe('Shared native Length US calibration — live vs completed', () => {
     expect(measurement.displayText.primary).toEqual(live);
   });
 
+  it('restores Samsung BWT 6.98 mm without using native double-calibrated 1.16 mm', () => {
+    const physicalDelta = 0.016649011522531509;
+    const worldPoints = [
+      [58.43999978430569, 49.632292140051725, 0],
+      [59.94383364222944, 42.814911984130745, 0],
+    ];
+    const samsungRegion = usRegion({
+      regionLocationMinY0: 90,
+      regionLocationMaxX1: 640,
+      regionLocationMaxY1: 480,
+      physicalDeltaX: physicalDelta,
+      physicalDeltaY: physicalDelta,
+    });
+    const annotation = mohawkLikeAnnotation();
+    annotation.data.handles.points = worldPoints.map(p => [...p]);
+    annotation.data.cachedStats[targetId] = { length: 1.1623, unit: 'cm US Region' };
+    annotation.data.arRestoredLengthEvidence = {
+      valueMm: 6.98,
+      referencedImageId: imageId,
+      points: worldPoints.map(p => [...p]),
+    };
+
+    // Frame metadata is temporarily unavailable while restoring the cine.
+    withImage({ regions: [samsungRegion], imagePlane: undefined });
+    const live = createCalibratedLengthTextLines(nativeDefaultGetTextLines);
+    expect(live(annotation.data, targetId)).toEqual(['6.98 mm']);
+    // New measurements must not persist the incorrect native 1.16 value
+    // while this required image-plane calibration is unresolved.
+    expect(toMeasurement(annotation)).toBeNull();
+
+    // Once frame imagePlane arrives, the calibrated geometry is used instead.
+    withImage({
+      regions: [samsungRegion],
+      imagePlane: {
+        columnPixelSpacing: physicalDelta * 10,
+        rowPixelSpacing: physicalDelta * 10,
+      },
+    });
+    expect(live(annotation.data, targetId)).toEqual(['6.98 mm']);
+
+    // After an edit, the old saved value cannot mask new/unverified geometry.
+    annotation.data.handles.points[1][0] += 1;
+    withImage({ regions: [samsungRegion], imagePlane: undefined });
+    expect(live(annotation.data, targetId)).toEqual(['Physical calibration unavailable']);
+
+    // Never use evidence from a different cine frame.
+    annotation.data.handles.points = worldPoints.map(p => [...p]);
+    annotation.data.cachedStats['imageId:other-frame'] = { length: 1.16, unit: 'cm US Region' };
+    expect(live(annotation.data, 'imageId:other-frame')).toEqual(['Physical calibration unavailable']);
+  });
+
   it('never mutates the live annotation (frozen input still maps)', () => {
     withImage({ regions: [usRegion()], imagePlane: singleRegionPlane });
     const annotation = deepFreeze(mohawkLikeAnnotation());
@@ -286,5 +337,64 @@ describe('Shared native Length US calibration — live vs completed', () => {
     };
     expect(once.call(self, data, targetId)).toEqual(['bound']);
     expect(native).toHaveBeenCalledTimes(1);
+  });
+});
+
+
+describe('registered native LengthTool uses shared DICOM calibration', () => {
+  class NativeLengthToolStub {
+    static toolName = 'Length';
+    configuration = { getTextLines: nativeDefaultGetTextLines };
+  }
+  const RegisteredLengthTool = createCalibratedLengthToolClass(NativeLengthToolStub);
+
+  it('retains native tool identity and displays same calibrated mm as mapper', () => {
+    const tool = new RegisteredLengthTool();
+    expect(RegisteredLengthTool.toolName).toBe('Length');
+    const annotation = mohawkLikeAnnotation();
+    withImage({ regions: [usRegion()], imagePlane: singleRegionPlane });
+    const viewportLines = tool.configuration.getTextLines(annotation.data, targetId);
+    const mapped = toMeasurement(annotation);
+    expect(viewportLines).toEqual(['75.0 mm']);
+    expect(mapped.displayText.primary).toEqual(viewportLines);
+  });
+
+  it('does not change the native display for a non-ultrasound Length', () => {
+    withImage({ regions: undefined, imagePlane: undefined });
+    const tool = new RegisteredLengthTool();
+    const native = { cachedStats: { [targetId]: { length: 4.72, unit: 'mm' } } };
+    expect(tool.configuration.getTextLines(native, targetId)).toEqual(['4.72 mm']);
+  });
+
+  it('recovers calibrated text if a viewer mode replaces Length getTextLines after construction', () => {
+    class SimulatedLengthWithInstanceRender {
+      static toolName = 'Length';
+      configuration = { getTextLines: nativeDefaultGetTextLines };
+      // Mirror Cornerstone tools that install renderAnnotation as an
+      // instance field rather than a prototype method.
+      renderAnnotation = (data: any, imageTarget: string) =>
+        this.configuration.getTextLines(data, imageTarget);
+    }
+    const Tool = createCalibratedLengthToolClass(SimulatedLengthWithInstanceRender);
+    const tool = new Tool();
+    const annotation = mohawkLikeAnnotation();
+    withImage({ regions: [usRegion()], imagePlane: singleRegionPlane });
+
+    expect(tool.renderAnnotation(annotation.data, targetId)).toEqual(['75.0 mm']);
+    tool.configuration.getTextLines = nativeDefaultGetTextLines;
+    expect(tool.configuration.getTextLines(annotation.data, targetId))
+      .toEqual(['2.45 cm US Region']);
+    // First live render after a configuration reset must restore the
+    // shared calibrated value. Rendering again must not wrap twice.
+    expect(tool.renderAnnotation(annotation.data, targetId)).toEqual(['75.0 mm']);
+    expect(tool.renderAnnotation(annotation.data, targetId)).toEqual(['75.0 mm']);
+    expect(toMeasurement(annotation).displayText.primary).toEqual(['75.0 mm']);
+  });
+
+  it('does not wrap an already wrapped native formatter twice', () => {
+    const once = createCalibratedLengthTextLines(nativeDefaultGetTextLines);
+    const Stub = class { static toolName = 'Length'; configuration = { getTextLines: once }; };
+    const tool = new (createCalibratedLengthToolClass(Stub))();
+    expect(tool.configuration.getTextLines).toBe(once);
   });
 });

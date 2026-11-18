@@ -1,3 +1,5 @@
+import { calculateRVSP } from 'extension-ar-measurements';
+
 function cleanString(value: unknown) {
   return String(value || '').trim();
 }
@@ -226,6 +228,90 @@ export function buildReadValueMap(readResults: any = {}) {
   return buildReadValueState(readResults).values;
 }
 
+/**
+ * Optional protocol-defined RVSP calculation. A Research Read schema can mark
+ * its RVSP numeric field with:
+ * config.calculation = {
+ *   type: 'rvsp',
+ *   trVmaxComponentKey: 'trVmax',
+ *   rapComponentKey: 'rap',
+ * }
+ *
+ * TR Vmax must be backed by a viewer measurement (m/s); RAP is a separate
+ * explicit read field (mmHg). We NEVER estimate RAP from an IVC diameter here,
+ * particularly because adult IVC-based rules are not universal in pediatrics.
+ *
+ * Output is recomputed from current values; missing inputs clear stale output.
+ * Existing reads without configured calculation remain unchanged.
+ */
+export function buildCalculatedReadState(
+  fields: any[] = [],
+  values: Record<string, any> = {},
+  sources: Record<string, any> = {},
+  viewerCandidates: any[] | null = null
+) {
+  const nextValues = { ...values };
+  const nextSources = { ...sources };
+
+  for (const field of fields) {
+    const formula = field?.config?.calculation;
+    if (cleanString(formula?.type).toLowerCase() !== 'rvsp') continue;
+
+    // Require all input units and keys explicitly in the protocol.
+    const findSourceField = (key: unknown) => {
+      const componentKey = cleanKey(key);
+      const matches = fields.filter(
+        candidate =>
+          componentKey &&
+          candidate.componentKey === componentKey &&
+          candidate.segmentKey === field.segmentKey
+      );
+      return matches.length === 1 ? matches[0] : null;
+    };
+    const trField = findSourceField(formula.trVmaxComponentKey);
+    const rapField = findSourceField(formula.rapComponentKey);
+    const trSource = trField ? sources[trField.key] : null;
+    const validUnits =
+      normalizeMeasurementUnit(field?.config?.unit) === 'mmhg' &&
+      normalizeMeasurementUnit(trField?.config?.unit) === 'm/s' &&
+      normalizeMeasurementUnit(rapField?.config?.unit) === 'mmhg';
+    const trValue = trField ? values[trField.key] : null;
+    const rapValue = rapField ? values[rapField.key] : null;
+    const hasInputs =
+      trValue !== '' && trValue != null &&
+      rapValue !== '' && rapValue != null &&
+      trSource?.source === 'viewer-measurement' &&
+      !!cleanString(trSource?.sourceMeasurementKey) &&
+      // Once the active annotation snapshot has been received, a removed
+      // TR contour cannot continue to authorize a stale RVSP result.
+      (viewerCandidates == null || viewerCandidates.some(candidate =>
+        candidate.source === 'viewer-measurement' &&
+        candidate.sourceMeasurementKey === trSource.sourceMeasurementKey
+      ));
+
+    const result = validUnits && hasInputs
+      ? calculateRVSP(trValue, rapValue)
+      : null;
+
+    if (result?.status === 'complete' && Number.isFinite(Number(result.rvspMMHG))) {
+      nextValues[field.key] = roundToConfiguredStep(
+        Number(result.rvspMMHG),
+        field?.config?.step
+      );
+      nextSources[field.key] = {
+        source: 'viewer-derived',
+        sourceMeasurementKey:
+          `rvsp:${cleanString(trSource.sourceMeasurementKey)}+rap:${rapField.key}`.slice(0, 200),
+      };
+    } else {
+      delete nextValues[field.key];
+      delete nextSources[field.key];
+    }
+  }
+
+  return { values: nextValues, sources: nextSources };
+}
+
 export function buildReadResultEntries(
   fields: any[] = [],
   values: Record<string, any> = {},
@@ -310,17 +396,30 @@ export function buildViewerMeasurementReadUpdates(
       continue;
     }
 
-    let matchedCandidate = null;
+    const matchingCandidates = (Array.isArray(candidates) ? candidates : [])
+      .filter(candidate => {
+        const candidateTokens = normalizeMeasurementLabels(candidate?.labels)
+          .map(normalizeMeasurementLabelToken)
+          .filter(Boolean);
+        return candidateTokens.some(token => configuredTokens.has(token));
+      })
+      .filter(candidate => !!cleanString(candidate?.sourceMeasurementKey));
 
-    for (const candidate of Array.isArray(candidates) ? candidates : []) {
-      const candidateTokens = normalizeMeasurementLabels(candidate?.labels)
-        .map(normalizeMeasurementLabelToken)
-        .filter(Boolean);
-
-      if (candidateTokens.some(token => configuredTokens.has(token))) {
-        matchedCandidate = candidate;
-      }
-    }
+    const uniqueSources = Array.from(new Map(
+      matchingCandidates.map(candidate => [
+        cleanString(candidate.sourceMeasurementKey), candidate,
+      ])
+    ).values());
+    const previousSourceKey = cleanString(
+      valueSources?.[field.key]?.sourceMeasurementKey
+    );
+    // No arbitrary "last measurement wins" when two spectral acquisitions
+    // or contours have the same label on different instance/frame sources.
+    // An explicitly selected, previously bound source remains stable.
+    const matchedCandidate = previousSourceKey
+      ? uniqueSources.find(candidate =>
+          cleanString(candidate.sourceMeasurementKey) === previousSourceKey)
+      : uniqueSources.length === 1 ? uniqueSources[0] : null;
 
     if (!matchedCandidate) {
       continue;

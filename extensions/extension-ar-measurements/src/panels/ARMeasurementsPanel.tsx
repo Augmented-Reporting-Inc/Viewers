@@ -977,6 +977,8 @@ function getArViewerSaveTargetFromUrl() {
       reviewWorkflowType: String(qs.get('arReviewWorkflowType') || '').trim(),
       measurementAccess: String(qs.get('arMeasurementAccess') || '').trim(),
       integration: String(qs.get('arIntegration') || '').trim(),
+      researchReviewKey: String(qs.get('arResearchReviewKey') || '').trim(),
+      researchStudyKey: String(qs.get('arResearchStudyKey') || '').trim(),
     };
   } catch {
     return {
@@ -990,6 +992,8 @@ function getArViewerSaveTargetFromUrl() {
       reviewWorkflowType: '',
       measurementAccess: '',
       integration: '',
+      researchReviewKey: '',
+      researchStudyKey: '',
     };
   }
 }
@@ -1558,6 +1562,10 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
 
   const isReviewWorkflowReadOnly = isReviewWorkflow && !getWritableMeasurementWorkflow(saveTarget);
   const isClinicalReportSaveTarget = isClinicalReportMeasurementsTarget(saveTarget);
+  // Research assignments reuse the Echo panel and its validated computations;
+  // they save through Research Read rather than the clinical-report endpoint.
+  const isResearchReadContext = !!(saveTarget.researchReviewKey || saveTarget.researchStudyKey);
+  const showAdvancedEchoSummaries = isClinicalReportSaveTarget || isResearchReadContext;
   const [measurements, setMeasurements] = useState([]);
   const [captureReadyLVSimpson, setCaptureReadyLVSimpson] = useState(null);
   const [pendingDeletedMeasurementIds, setPendingDeletedMeasurementIds] = useState<string[]>([]);
@@ -1954,10 +1962,10 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
   }, [domain, visibleMeasurements]);
 
   const laDisksResult = useMemo(
-    () => domain === 'echo' && isClinicalReportSaveTarget
+    () => domain === 'echo' && showAdvancedEchoSummaries
       ? calculateLABiplaneDisks(visibleMeasurements)
       : null,
-    [domain, isClinicalReportSaveTarget, visibleMeasurements]
+    [domain, showAdvancedEchoSummaries, visibleMeasurements]
   );
 
   const raAreaResult = useMemo(
@@ -2591,10 +2599,10 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
 
                   {group.summary === 'la' ? <LAVolumeSummary result={laVolumeResult} disksResult={laDisksResult} /> : null}
                   {group.summary === 'lv' ? <LVSimpsonSummary result={lvSimpsonResult} /> : null}
-                  {group.summary === 'ivc' && isClinicalReportSaveTarget
+                  {group.summary === 'ivc' && showAdvancedEchoSummaries
                     ? <IVCMeasurementSummary result={ivcMeasurementResult} />
                     : null}
-                  {(group.summary === 'ra' || group.summary === 'rv') && isClinicalReportSaveTarget
+                  {(group.summary === 'ra' || group.summary === 'rv') && showAdvancedEchoSummaries
                     ? <RAAndRVAreaSummary
                         raResult={group.summary === 'ra' ? raAreaResult : null}
                         rvResult={group.summary === 'rv' ? rvFacResult : null}
@@ -2705,7 +2713,12 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
           </div>
         ) : null}
 
-        {isReviewWorkflow ? (
+        {isResearchReadContext ? (
+          <div className="text-center text-xs text-blue-200">
+            Research measurements and their source annotations are saved with
+            the Research Read panel. Use Research Read → Save or Complete Read.
+          </div>
+        ) : isReviewWorkflow ? (
           isExternalIuscanSession ? (
             <div className="space-y-2">
               {isReviewWorkflowReadOnly ? (

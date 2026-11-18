@@ -48,6 +48,9 @@ import * as polySeg from '@cornerstonejs/polymorphic-segmentation';
 
 import CalibrationLineTool from './tools/CalibrationLineTool';
 import ImageOverlayViewerTool from './tools/ImageOverlayViewerTool';
+import { createCalibratedLengthToolClass } from './utils/createCalibratedLengthTextLines';
+
+const ARCalibratedLengthTool = createCalibratedLengthToolClass(LengthTool);
 
 function wrapAnnotationTextLine(value, maxChars) {
   const source = String(value ?? '');
@@ -250,7 +253,7 @@ export default function initCornerstoneTools(configuration = {}) {
   addTool(ZoomTool);
   addTool(ProbeTool);
   addTool(MIPJumpToClickTool);
-  addTool(LengthTool);
+  addTool(ARCalibratedLengthTool);
   addTool(RectangleROITool);
   addTool(RectangleROIThresholdTool);
   addTool(EllipticalROITool);

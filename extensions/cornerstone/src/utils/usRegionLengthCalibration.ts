@@ -203,6 +203,22 @@ export function computeUSRegionLength({
   if (!Array.isArray(regions) || !regions.length) {
     return null;
   }
+
+  // A single spatial US region normally gives the OHIF stack its physical
+  // row/column spacing. If that image-plane metadata is unavailable, treating
+  // world coordinates as raw pixels applies PhysicalDelta a second time to
+  // already-calibrated handles (e.g. 6.98 mm -> 1.16 mm). Multi-region images
+  // intentionally lack that spacing, so preserve their pixel-world fallback.
+  if (
+    regions.length === 1 &&
+    normalizeSpatialCmRegion(regions[0], 0) &&
+    (!imagePlane ||
+      !(Number(imagePlane.columnPixelSpacing) > 0) ||
+      !(Number(imagePlane.rowPixelSpacing) > 0))
+  ) {
+    return null;
+  }
+
   if (!Array.isArray(points) || points.length !== 2) {
     return null;
   }

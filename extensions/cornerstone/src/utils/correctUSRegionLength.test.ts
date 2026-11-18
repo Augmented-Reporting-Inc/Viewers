@@ -62,11 +62,18 @@ describe('getUSRegionLengthCalibration (Cornerstone metadata adapter)', () => {
   });
 
   it('uses the target imageId (frame) rather than the referenced imageId', () => {
-    getMetadata.mockImplementation((type, imageId) =>
-      type === 'calibrationModule' && imageId === frameImageId(5)
-        ? { sequenceOfUltrasoundRegions: [region()] }
-        : undefined
-    );
+    getMetadata.mockImplementation((type, imageId) => {
+      if (imageId !== frameImageId(5)) return undefined;
+      if (type === 'calibrationModule') {
+        return { sequenceOfUltrasoundRegions: [region()] };
+      }
+      // A single spatial region must have its own image-plane spacing.
+      // Other cine frames may not borrow this frame's calibration.
+      if (type === 'imagePlaneModule') {
+        return { rowPixelSpacing: 1, columnPixelSpacing: 1 };
+      }
+      return undefined;
+    });
     const data = {
       handles: {
         points: [
@@ -79,6 +86,9 @@ describe('getUSRegionLengthCalibration (Cornerstone metadata adapter)', () => {
       getUSRegionLengthCalibrationForTarget(`imageId:${frameImageId(5)}`, data, frameImageId(1))
         ?.lengthMm
     ).toBeCloseTo(1, 12);
+    expect(
+      getUSRegionLengthCalibrationForTarget(`imageId:${frameImageId(1)}`, data, frameImageId(5))
+    ).toBeNull();
     expect(getUSRegionLengthCalibrationForTarget('volumeId:v', data, frameImageId(5))).toBeNull();
   });
 
