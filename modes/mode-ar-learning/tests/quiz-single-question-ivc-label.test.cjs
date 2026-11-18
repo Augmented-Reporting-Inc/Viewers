@@ -48,7 +48,7 @@ test('explicit learner IVC phase navigates exactly and retains the normal calibr
   assert.match(ivcControls, /label it IVCexp or IVCinsp respectively/);
   assert.doesNotMatch(ivcControls, /labelMode: 'measure-only'/,
     'a global measure-only override would suppress labels on other quiz questions');
-  assert.match(commands, /measurement\.toolName === 'Length'/);
+  assert.match(commands, /measurement\?\.toolName === 'Length'/);
   assert.match(commands, /'ar-learning:quiz-measurement-added'/);
   assert.match(commands, /resetViewerLengthLabelMode:/);
 });
