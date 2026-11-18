@@ -15,9 +15,17 @@ function getLinearLVLengthLabel(measurement: any = {}): string {
   return LINEAR_LV_LENGTH_LABELS.has(label) ? label : '';
 }
 
+function hasEchoMeasurementDomain(measurement: any = {}): boolean {
+  const sourceDomain = String(measurement?.domain || '').trim().toLowerCase();
+  // Unsaved MeasurementService calipers do not carry domain. Their domain is
+  // assigned by serializeViewerMeasurement() on save; this preview is called
+  // exclusively inside the Echo panel. Reject any explicit non-Echo domain.
+  return !sourceDomain || sourceDomain === 'echo';
+}
+
 export function getCalibratedEchoLinearLengthMM(measurement: any = {}): number | null {
   if (
-    String(measurement?.domain || '').trim().toLowerCase() !== 'echo' ||
+    !hasEchoMeasurementDomain(measurement) ||
     String(measurement?.toolName || '').trim() !== 'Length' ||
     measurement?.mode === 'repeated' ||
     !getLinearLVLengthLabel(measurement)
@@ -45,7 +53,7 @@ export function calculateEchoLinearLVMeasurements(measurements: any[] = []) {
     const label = getLinearLVLengthLabel(measurement);
     if (
       !label ||
-      String(measurement?.domain || '').trim().toLowerCase() !== 'echo' ||
+      !hasEchoMeasurementDomain(measurement) ||
       String(measurement?.toolName || '').trim() !== 'Length' ||
       measurement?.mode === 'repeated'
     ) {
