@@ -39,7 +39,8 @@ test('learner bowel measurements bind automatically, without a second capture bu
   assert.match(panelSource, /Bowel measurements: \{bowelEntries\.length\} \/ \{bowelCount\}/);
   assert.match(panelSource, /getLearnerBwtCaptureFailureMessage\(reason\)/);
   assert.doesNotMatch(panelSource, /Completed calipers are added automatically/);
-  assert.match(panelSource, /!bowelSet \? <button/);
+  // The current learner BWT flow automatically queues completed calipers;
+  // no legacy standalone capture button is required or exposed.
   assert.doesNotMatch(panelSource, /Add selected BWT caliper/);
 });
 
@@ -49,9 +50,9 @@ test('viewer authoring retains full quiz ordinals while skipping non-viewer ques
   assert.ok(start > 0 && end > start, 'Missing viewer quiz authoring panel');
   const authoringPanel = panelSource.slice(start, end);
   assert.ok(authoringPanel.includes('authoringQuestions.map((question, index) =>'));
-  assert.ok(authoringPanel.includes(
-    'isViewerNativeQuestion(question) ? renderAuthoringQuestion(question, index) : null'
-  ));
+  assert.match(authoringPanel,
+    /isViewerNativeQuestion\(question\) &&\s*activeQuestionKey === `authoring:\$\{question\.questionKey\}`\s*\? renderAuthoringQuestion\(question, index\) : null/
+  );
   assert.ok(!authoringPanel.includes('authoringQuestions.filter(isViewerNativeQuestion).map'));
   assert.ok(panelSource.includes(
     '{index + 1}. {question.title || question.prompt || question.questionKey}'
@@ -99,7 +100,7 @@ test('restored active learner question re-broadcasts the Bowel domain before lab
   assert.match(effect, /syncQuizMeasurementDomainToUrl\(domain, \{ overwrite: true \}\)/);
   assert.match(effect, /getLearnerQuizMeasurementDomain\(item, payload\)/);
   assert.match(effect, /if \(domains\.length === 1\) domain = domains\[0\]/);
-  assert.match(effect, /\[activeQuestionKey, quizzes, payload, authoringMode, authoringMeasurementDomain, authoringQuestions\]/);
+  assert.match(effect, /\[activeQuestionKey, quizzes, payload, authoringMode, authoringMeasurementDomain, authoringQuestions, commandsManager\]/);
 
   const fs = require('node:fs');
   const path = require('node:path');
@@ -261,7 +262,7 @@ test('frame-only navigation re-resolves the display-set viewport and reports fai
     'utf8'
   );
   assert.match(commandsSource, /await Promise\.resolve\(actions\.setDisplaySetsForViewports\(\{ viewportsToUpdate \}\)\)/);
-  assert.match(commandsSource, /await waitForViewerQuizTargetImageMatch\(viewport, target, attempts, resolveViewport\)/);
+  assert.match(commandsSource, /await waitForViewerQuizTargetImageMatch\(\s*viewport, target, attempts, resolveViewport, \{ requireExactSopFrame \}\s*\)/);
   assert.match(commandsSource, /cornerstoneViewportService\.getCornerstoneViewport\(targetViewportId\)/);
   assert.match(commandsSource, /const targetViewport = latestViewport \|\| viewport/);
   assert.match(commandsSource, /seriesDisplaySets\.find\(displaySet =>\s*displaySetContainsSavedAnnotation/);
