@@ -36,12 +36,18 @@ test('learner composite calculated value appears in only one status area', () =>
   assert.match(panel, /'Recalculate from measured contours'/);
 });
 
-test('explicit learner IVC phase bypasses only the pending first label dialog', () => {
-  assert.match(panel, /labelMode: 'measure-only'/);
-  assert.match(panel, /pendingQuizIVCPhaseRef\.current = \{/);
-  assert.match(panel, /'setViewerQuizIVCPhaseLabel'/);
-  assert.match(commands, /viewerLengthLabelMode === VIEWER_LENGTH_LABEL_MODE_MEASURE_ONLY/);
-  assert.match(commands, /pendingAnnotation\?\.data\?\.arPendingLengthLabel === true/);
+test('explicit learner IVC phase navigates exactly and retains the normal calibrated Length label', () => {
+  const start = panel.indexOf('function renderIVCCaliperControls(');
+  const end = panel.indexOf('\n  function ', start + 1);
+  assert.ok(start >= 0, 'IVC phase control exists');
+  const ivcControls = panel.slice(start, end > start ? end : undefined);
+  assert.match(ivcControls, /ensureConfiguredCompositePhaseFrame\(question, phase\.slot\)/);
+  assert.match(ivcControls, /resetViewerLengthLabelMode'/);
+  assert.match(ivcControls, /'activateViewerMeasurementTool'/);
+  assert.match(ivcControls, /toolName: 'Length', stopCine: true/);
+  assert.match(ivcControls, /label it IVCexp or IVCinsp respectively/);
+  assert.doesNotMatch(ivcControls, /labelMode: 'measure-only'/,
+    'a global measure-only override would suppress labels on other quiz questions');
   assert.match(commands, /measurement\.toolName === 'Length'/);
   assert.match(commands, /'ar-learning:quiz-measurement-added'/);
   assert.match(commands, /resetViewerLengthLabelMode:/);
