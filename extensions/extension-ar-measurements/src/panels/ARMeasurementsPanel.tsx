@@ -10,6 +10,10 @@ import {
   LA_VOLUME_SLOT_ORDER,
 } from '../utils/laVolume';
 import { getViewerMeasurementDomainFromPath } from '../utils/measurementLabelConfig';
+import {
+  calculateEchoLinearLVMeasurements,
+  getCalibratedEchoLinearLengthMM,
+} from '../utils/echoLinearMeasurements';
 import { BOWEL_CURVED_LENGTH_MEASUREMENT_KIND } from '../utils/bowelMeasurementTargets';
 import { calculateIVCFromMeasurements, isIVCDiameterMeasurement } from '../utils/rightHeartMeasurements';
 import {
@@ -457,6 +461,12 @@ function normalizeMeasurementForDisplay(measurement) {
 
   return {
     ...measurement,
+    // Preserve the original physical calibration before display normalization.
+    // Formatting can relabel px as mm; derived clinical values must never do so.
+    arCalibratedEchoLengthMM:
+      measurement?.arCalibratedEchoLengthMM !== undefined
+        ? measurement.arCalibratedEchoLengthMM
+        : getCalibratedEchoLinearLengthMM(measurement),
     displayText: normalizeDisplayTextUnits(measurement?.displayText || [], unitType),
     measurements: {
       ...measurements,
@@ -494,10 +504,22 @@ function mergeLiveMeasurementIntoSavedAnnotation(savedAnnotation, liveMeasuremen
   const normalizedLive = normalizeMeasurementForDisplay(liveMeasurement);
   const livePoints = Array.isArray(liveMeasurement?.points) ? liveMeasurement.points : [];
 
+  const liveLengthSource = liveMeasurement?.measurements || {};
+  const hasLiveLengthValue =
+    String(liveMeasurement?.toolName || '') === 'Length' &&
+    (liveLengthSource.length != null ||
+      liveLengthSource.value != null ||
+      liveMeasurement?.value != null);
+
   return {
     ...normalizedLive,
     ...normalizedSaved,
     ...(livePoints.length >= 3 ? { points: livePoints } : {}),
+    // Prefer a currently edited caliper, including invalid/un-calibrated edits
+    // (which intentionally clear the preview), over the saved source length.
+    arCalibratedEchoLengthMM: hasLiveLengthValue
+      ? normalizedLive.arCalibratedEchoLengthMM
+      : normalizedSaved.arCalibratedEchoLengthMM,
     uid: normalizedSaved.uid || normalizedSaved.annotationId || liveMeasurement.uid,
     isSavedAnnotation: true,
   };
@@ -526,6 +548,12 @@ function getMeasurementKey(measurement) {
 }
 
 function getEchoMeasurementAnatomyGroup(measurement) {
+  if (['LVIDd', 'LVIDs', 'IVSd', 'PWd'].includes(String(
+    measurement?.label || measurement?.measurementRole || ''
+  ).trim())) {
+    return 'lv';
+  }
+
   if (measurement?.laVolume || measurement?.measurements?.laVolume) {
     return 'la';
   }
@@ -849,6 +877,39 @@ function IVCMeasurementSummary({ result }) {
       <div className="mt-2 text-xs text-gray-400">
         RAP is not automatically estimated until respiratory maneuver and breathing status are
         documented. Review the paired calipers before using them clinically.
+      </div>
+    </div>
+  );
+}
+
+function LVLinearMeasurementsSummary({ result }) {
+  if (!result) return null;
+
+  return (
+    <div className="bg-gray-950 mb-3 rounded border border-gray-700 p-3">
+      <div className="text-sm font-semibold">LV Linear Measurements</div>
+      <div className="mt-2 grid grid-cols-2 gap-2 text-sm">
+        {result.relativeWallThickness !== null ? (
+          <div className="rounded bg-black p-2">
+            <div className="text-xs text-gray-400">RWT</div>
+            <div className="font-semibold">{result.relativeWallThickness}</div>
+          </div>
+        ) : null}
+        {result.lvMassG !== null ? (
+          <div className="rounded bg-black p-2">
+            <div className="text-xs text-gray-400">LV Mass (ASE linear)</div>
+            <div className="font-semibold">{result.lvMassG} g</div>
+          </div>
+        ) : (
+          <div className="rounded bg-black p-2">
+            <div className="text-xs text-gray-400">LV Mass (ASE linear)</div>
+            <div className="text-yellow-300">Requires IVSd, LVIDd and PWd</div>
+          </div>
+        )}
+      </div>
+      <div className="mt-2 text-xs text-gray-400">
+        Calculated from calibrated viewer lengths. AR recalculates when
+        measurements are saved and preserves directly supplied LV Mass values.
       </div>
     </div>
   );
@@ -1953,6 +2014,13 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
     return captureReadyLVSimpson?.result || calculateLVSimpson(visibleMeasurements);
   }, [domain, visibleMeasurements, captureReadyLVSimpson]);
 
+  const lvLinearMeasurementsResult = useMemo(
+    () => domain === 'echo' && !isReviewWorkflow
+      ? calculateEchoLinearLVMeasurements(visibleMeasurements)
+      : null,
+    [domain, isReviewWorkflow, visibleMeasurements]
+  );
+
   const laVolumeResult = useMemo(() => {
     if (domain !== 'echo') {
       return null;
@@ -2598,6 +2666,7 @@ export default function ARMeasurementsPanel({ servicesManager, commandsManager }
                   ) : null}
 
                   {group.summary === 'la' ? <LAVolumeSummary result={laVolumeResult} disksResult={laDisksResult} /> : null}
+                  {group.summary === 'lv' ? <LVLinearMeasurementsSummary result={lvLinearMeasurementsResult} /> : null}
                   {group.summary === 'lv' ? <LVSimpsonSummary result={lvSimpsonResult} /> : null}
                   {group.summary === 'ivc' && showAdvancedEchoSummaries
                     ? <IVCMeasurementSummary result={ivcMeasurementResult} />
