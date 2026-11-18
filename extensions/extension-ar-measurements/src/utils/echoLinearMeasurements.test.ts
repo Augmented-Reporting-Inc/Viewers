@@ -20,6 +20,17 @@ describe('Echo linear LV measurements', () => {
     ])).toEqual({ relativeWallThickness: '0.40', lvMassG: '182' });
   });
 
+  it('previews unsaved MeasurementService calipers before domain is assigned on save', () => {
+    const live = [
+      { toolName: 'Length', label: 'LVIDd', value: 50, unit: 'mm' },
+      { toolName: 'Length', label: 'IVSd', value: 10, unit: 'mm' },
+      { toolName: 'Length', label: 'PWd', value: 10, unit: 'mm' },
+    ];
+    expect(calculateEchoLinearLVMeasurements(live)).toEqual({
+      relativeWallThickness: '0.40', lvMassG: '182',
+    });
+  });
+
   it('normalizes cm and mm consistently before calculation', () => {
     expect(calculateEchoLinearLVMeasurements([
       length('LVIDd', 5, 'cm'), length('IVSd', 1, 'cm'), length('PWd', 10),
