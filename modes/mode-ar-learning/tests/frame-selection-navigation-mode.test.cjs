@@ -444,7 +444,8 @@ test('report quiz review lists source-backed measurements without synthetic repo
   const source = measurementsPanel.slice(start, end)
     .replace('export function buildClinicalViewerAnnotationReviewRows(preview: any = {})',
       'function buildClinicalViewerAnnotationReviewRows(preview = {})')
-    .replace('(measurement: any)', '(measurement)');
+    .replace('(measurement: any)', '(measurement)')
+    .replace('new Set<string>()', 'new Set()');
   const vm = require('node:vm');
   const build = vm.runInNewContext(
     [source, 'buildClinicalViewerAnnotationReviewRows'].join('\n'),
