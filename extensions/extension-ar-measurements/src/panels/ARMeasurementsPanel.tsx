@@ -1430,9 +1430,16 @@ function LearnerViewerMeasurementConfirmationModal({
   const knownCalculatedLabels = new Set(calculatedRows.map(row =>
     String(row.label || '').trim().toLowerCase()
   ));
-  const additionalQuizResults = quizResults.filter(row =>
-    !knownCalculatedLabels.has(String(row.label || '').trim().toLowerCase())
-  );
+  const calculatedFields = new Set(calculatedRows.map(row => String(row.key || '')));
+  const evidenceFieldByPrefix = {
+    'quiz-tr': 'TRVel', 'quiz-rap': 'RASP', 'quiz-rvsp': 'RVSP',
+  };
+  const additionalQuizResults = quizResults.filter(row => {
+    const prefix = String(row.key || '').split(':')[0];
+    const correspondingField = evidenceFieldByPrefix[prefix];
+    return !(correspondingField && calculatedFields.has(correspondingField)) &&
+      !knownCalculatedLabels.has(String(row.label || '').trim().toLowerCase());
+  });
   const isSubmitting = review?.saveAction === 'submitted';
   const actionLabel = isSubmitting ? 'Save & Submit Answers' : 'Save Draft';
 
