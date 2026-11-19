@@ -545,6 +545,44 @@ export function calculateLVSimpsonContourVolumeForMeasurement(measurement) {
     ? result.singleViewVolumeML : null;
 }
 
+/**
+ * Viewport labels receive the Cornerstone annotation data, not a MeasurementService
+ * record. Resolve the volume from that specific source annotation so navigating to
+ * another cine frame or adding/deleting a different contour cannot change its label.
+ * Editable handles detect a true geometry edit; no native pixel ROI statistic is used.
+ */
+export function calculateLVSimpsonContourVolumeForAnnotationData(raw) {
+  const data = raw?.annotation?.data || raw?.data || raw;
+  const geometry = data?.lvSimpson;
+  if (geometry?.measurementKind !== 'lvSimpsonSlot' || !getSlot({ lvSimpson: geometry })) {
+    return null;
+  }
+  const controls = data?.handles?.points;
+  return calculateLVSimpsonContourVolumeForMeasurement({
+    measurementKind: 'lvSimpsonSlot',
+    lvSimpson: geometry,
+    points: data?.contour?.polyline || controls || geometry.contourPoints,
+    ...(Array.isArray(controls) ? { lvSimpsonControlPoints: controls } : {}),
+  });
+}
+
+/**
+ * OHIF can normalize a saved SplineROI to generic area/length statistics.
+ * Never let that partial record overwrite the calibrated per-slot session source.
+ * Only an independently verified record from the SAME DICOM image may replace it.
+ */
+export function isVerifiedLVSimpsonSessionReplacement(live, session) {
+  const liveSlot = getSlot(live);
+  const sessionSlot = getSlot(session);
+  if (!liveSlot || liveSlot !== sessionSlot || !live?.toolName ||
+      !live?.referencedImageId || !session?.referencedImageId ||
+      live.referencedImageId !== session.referencedImageId) return false;
+  const sessionStudy = String(session?.referenceStudyUID || session?.StudyInstanceUID || '');
+  const liveStudy = String(live?.referenceStudyUID || live?.StudyInstanceUID || '');
+  if (sessionStudy && sessionStudy !== liveStudy) return false;
+  return calculateLVSimpsonContourVolumeForMeasurement(live) !== null;
+}
+
 function uniqueMessages(messages = []) {
   const seen = new Set();
 
