@@ -234,13 +234,23 @@ describe('study-scoped educator/learner EF parity', () => {
       expect(derived.slotLongAxisMM[slot]).toBeCloseTo(
         (snapshot!.result.slots as any)[slot].longAxisLengthMM, 6
       );
+      expect(derived.slotVolumeML[slot]).toBeCloseTo(
+        (snapshot!.result.slots as any)[slot].singleViewVolumeML, 6
+      );
+      expect(derived.slotVolumeML[slot]).toBeGreaterThan(0);
     }
+    expect(derived.slotVolumeML.A4C_ED).not.toBeCloseTo(derived.edvML, 2);
     expect(derived.edvML).toBeCloseTo(snapshot!.result.values!.edvML, 6);
     expect(derived.esvML).toBeCloseTo(snapshot!.result.values!.esvML, 6);
     expect(isViewerQuizCompositeReviewCurrent(
       snapshot!.result.values!.ejectionFraction,
       snapshot!.composite.value
     )).toBe(true);
+    const status = getViewerQuizCompositeStatus('lvSimpsonEF', makeCompleteStudyEF('study-a'));
+    expect(status.complete).toBe(false); // source metadata absent in these synthetic fixtures
+    for (const slot of ['A4C_ED', 'A4C_ES', 'A2C_ED', 'A2C_ES']) {
+      expect(status.phaseValues[slot]).toBeCloseTo(derived.slotVolumeML[slot], 5);
+    }
   });
 
   it('isolates the requested study even if another complete study is in the viewer snapshot', () => {
