@@ -14,6 +14,7 @@ import {
 import {
   buildClinicalReportReviewRows,
   buildClinicalViewerAnnotationReviewRows,
+  buildLearnerCalculatedMeasurementReviewRows,
   ClinicalReportMeasurementReviewModal,
 } from '../../../extension-ar-measurements/src/panels/ARMeasurementsPanel';
 import {
@@ -4430,6 +4431,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     }
     const rows = buildClinicalReportReviewRows(preview);
     const annotationRows = buildClinicalViewerAnnotationReviewRows(preview);
+    const calculatedRows = buildLearnerCalculatedMeasurementReviewRows(preview);
     const hasRecordedQuizEvidence = quizEvidenceRows.some(row => row.recorded);
     if (!rows.length && !hasRecordedQuizEvidence) {
       if (preview?.measurementAnnotationsChanged === false) return;
@@ -4445,7 +4447,8 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     }
     setQuizMeasurementSelectedRows(rows.filter(row => row.changed).map(row => row.key));
     setQuizMeasurementReview({
-      rows, annotationRows, derivedConsequences: preview?.derivedConsequences, quizEvidenceRows,
+      rows, annotationRows, calculatedRows,
+      derivedConsequences: preview?.derivedConsequences, quizEvidenceRows,
       educationQuizHemodynamics, educationWorkflow: true, saveAction,
     });
     const approved = await new Promise<boolean>(resolve => {
