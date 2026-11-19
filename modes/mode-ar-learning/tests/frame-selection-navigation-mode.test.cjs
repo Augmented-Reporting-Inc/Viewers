@@ -413,3 +413,61 @@ test('review buttons cannot re-trigger question-open navigation on focus', () =>
   assert.match(panelSource, /closest\?\.\('\[data-quiz-review-action\]'\)/);
   assert.match(panelSource, /revealExactFrame: question\.type === 'frameSelection'/);
 });
+
+
+test('single-slot EF redraw keeps the shared panel open for learners and educators', () => {
+  const commands = fs.readFileSync(path.join(
+    __dirname, '..', '..', '..', 'extensions', 'cornerstone', 'src', 'commandsModule.ts'
+  ), 'utf8');
+  const begin = commands.indexOf('if (nextSlot && singleSlot) {');
+  const end = commands.indexOf('// End interactive drawing', begin);
+  assert.ok(begin > 0 && end > begin, 'missing shared single-slot completion path');
+  const completed = commands.slice(begin, end);
+  assert.match(completed, /activeLVSimpsonWorkflowSessionId = ''/);
+  assert.match(completed, /renderLVSimpsonWorkflowPanel\(/);
+  assert.match(completed, /goldAuthoringEditable\s*\?/,
+    'educator and learner receive their respective next-contour instructions');
+  assert.doesNotMatch(completed, /clearLVSimpsonWorkflowIfCurrent\(/,
+    'contour completion must not close the overall EF panel');
+  assert.doesNotMatch(completed, /hideLVSimpsonWorkflowPanel\(\)/,
+    'the panel stays mounted until explicitly closed by the user');
+});
+
+test('report quiz review lists source-backed measurements without synthetic report changes', () => {
+  const measurementsPanel = fs.readFileSync(path.join(
+    __dirname, '..', '..', '..', 'extensions',
+    'extension-ar-measurements', 'src', 'panels', 'ARMeasurementsPanel.tsx'
+  ), 'utf8');
+  const start = measurementsPanel.indexOf('export function buildClinicalViewerAnnotationReviewRows(');
+  const end = measurementsPanel.indexOf('function hasClinicalReportDerivedConsequences(', start);
+  assert.ok(start > 0 && end > start, 'missing source-backed review builder');
+  const source = measurementsPanel.slice(start, end)
+    .replace('export function buildClinicalViewerAnnotationReviewRows(preview: any = {})',
+      'function buildClinicalViewerAnnotationReviewRows(preview = {})')
+    .replace('(measurement: any)', '(measurement)');
+  const vm = require('node:vm');
+  const build = vm.runInNewContext(
+    [source, 'buildClinicalViewerAnnotationReviewRows'].join('\n'),
+    {
+      getMeasurementValue: measurement => measurement.displayText?.[0] || '',
+      formatMeasurementValue: (value, unit) => [value, unit].filter(Boolean).join(' '),
+    }
+  );
+  const withId = (id, value) => ({
+    annotationId: id, toolName: 'Length', measurementRole: 'LV dimension',
+    workflow: 'viewerMeasurements', displayText: [value], frameNumber: 3,
+  });
+  const rows = build({ items: [], annotations: [
+    withId('learner-a', '22 mm'), withId('learner-a', '22 mm'),
+    { ...withId('gold', '25 mm'), workflow: 'viewerQuizGoldDisplay' },
+    withId('learner-b', '26 mm'), { annotationId: 'no-tool' },
+  ] });
+  assert.equal(rows.length, 2);
+  assert.deepEqual(Array.from(rows, row => row.key), ['learner-a', 'learner-b']);
+  assert.deepEqual(Array.from(rows, row => row.value), ['22 mm', '26 mm']);
+  assert.match(measurementsPanel, /review\.educationWorkflow && annotationRows\.length > 0/);
+  assert.match(panelSource, /buildClinicalViewerAnnotationReviewRows\(preview\)/);
+  assert.match(panelSource, /rows, annotationRows, derivedConsequences:/);
+  assert.match(panelSource, /if \(!annotationRows\.length\)\s*\{\s*throw new Error/,
+    'a truly empty annotation preview must fail rather than display a blank review');
+});
