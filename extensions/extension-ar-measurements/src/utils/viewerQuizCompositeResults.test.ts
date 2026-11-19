@@ -247,7 +247,7 @@ describe('study-scoped educator/learner EF parity', () => {
       snapshot!.composite.value
     )).toBe(true);
     const status = getViewerQuizCompositeStatus('lvSimpsonEF', makeCompleteStudyEF('study-a'));
-    expect(status.complete).toBe(false); // source metadata absent in these synthetic fixtures
+    expect(status.complete).toBe(true); // complete calibrated synthetic contour fixture
     for (const slot of ['A4C_ED', 'A4C_ES', 'A2C_ED', 'A2C_ES']) {
       expect(status.phaseValues[slot]).toBeCloseTo(derived.slotVolumeML[slot], 5);
     }
