@@ -1414,7 +1414,6 @@ export function ClinicalReportMeasurementReviewModal({
           </button>
         </div>
 
-        </> /* end report selection controls */
         ) : null}
         {rows.length > 0 ? (
         <div className="min-h-0 flex-1 overflow-auto">
