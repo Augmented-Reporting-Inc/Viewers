@@ -21,6 +21,29 @@ test('TR Vmax quiz activation highlights the Vmax toolbar and starts spectral ca
   assert.match(panel, /'activateViewerQuizMeasurementTool'/);
 });
 
+test('toolbar selection preserves the active learner TR Vmax context for spectral acquisition', () => {
+  const start = commands.indexOf('setToolActiveToolbar: (');
+  const end = commands.indexOf('setViewerLengthLabelMode:', start);
+  assert.ok(start >= 0 && end > start, 'expected toolbar action');
+  const toolbarAction = commands.slice(start, end);
+  assert.doesNotMatch(toolbarAction, /setQuizToolbarMeasurementKind\(''\)/,
+    'a toolbar click must not clear the quiz-selected TR Vmax target');
+  assert.match(commands, /spectralVmax && activeQuizMeasurementKind === 'trVmax'/);
+});
+
+test('learner TR answer uses the same Cornerstone-native source as the report preview', () => {
+  const start = commands.indexOf('captureViewerQuizMeasurement:');
+  const source = commands.indexOf('const nativeTRAnnotation =', start);
+  const end = commands.indexOf('const measurement = restoredSpectralMeasurement || directMeasurement;', source);
+  assert.ok(start >= 0 && source > start && end > source, 'expected TR quiz capture source');
+  const capture = commands.slice(source, end);
+  assert.match(capture, /cornerstoneTools\.annotation\.state\.getAnnotation\?\.\(selectedMeasurementId\)/);
+  assert.match(capture,
+    /requestedKind === 'trVmax'[\s\S]*?getCornerstoneUltrasoundDirectionalMeasurementFallback\(nativeTRAnnotation\)/);
+  assert.match(commands,
+    /getCornerstoneUltrasoundDirectionalMeasurementFallbacks\(\{[\s\S]*?studyInstanceUID: snapshotStudyInstanceId/);
+});
+
 test('manual Vmax toolbar stays spectral and selects the quiz TR target only in TR Vmax context', () => {
   assert.match(commands, /spectralVmax && activeQuizMeasurementKind === 'trVmax'/);
   assert.match(commands, /preferredTargetKey = 'echo\.trPeakVelocity';\s*quizCapture = true/);
