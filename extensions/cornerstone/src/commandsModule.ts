@@ -6609,13 +6609,14 @@ function renderLVSimpsonWorkflowPanel({
       control.addEventListener('click', action);
       row.appendChild(control);
     };
-    if (lvSimpsonPanelController?.onDrawSlot) {
+    if (lvSimpsonPanelController?.onDrawSlot && lvSimpsonPanelController?.canEdit !== false) {
       rowButton('Freehand', `Trace ${displayName} freehand`,
         () => lvSimpsonPanelController?.onDrawSlot?.(slot, 'freehand'));
       rowButton('Axis + Apex', `Draw ${displayName} with axis and apex`,
         () => lvSimpsonPanelController?.onDrawSlot?.(slot, 'axisApex'));
     }
-    if (ids.length && lvSimpsonPanelController?.onDeleteSlot) {
+    if (ids.length && lvSimpsonPanelController?.onDeleteSlot &&
+        lvSimpsonPanelController?.canEdit !== false) {
       rowButton('Delete', `Delete ${displayName} contour`,
         () => lvSimpsonPanelController?.onDeleteSlot?.(slot, ids));
     }
@@ -9827,6 +9828,7 @@ function commandsModule({
         };
         lvSimpsonPanelController = {
           activeSlot: (reviewExistingContours || panelOnly) ? '' : slotInfo.slot,
+          canEdit: !panelOnly || goldAuthoringEditable,
           questionKey,
           savedGoldMeasurement,
           onClearSavedGoldSlot: goldAuthoringEditable && questionKey
@@ -10149,7 +10151,8 @@ function commandsModule({
         lvSimpsonMouseTools.restore();
         refreshLVSimpsonToolbarState();
         const liveSlots = getLVSimpsonSlotCandidates(lvSimpsonPanelController?.getMeasurements?.() || []);
-        const allEditable = LV_TRACE_REQUIRED_SLOTS.every(slot => liveSlots.get(slot)?.length === 1);
+        const allEditable = goldAuthoringEditable &&
+          LV_TRACE_REQUIRED_SLOTS.every(slot => liveSlots.get(slot)?.length === 1);
         if (lvSimpsonPanelController) {
           lvSimpsonPanelController.onCalculate = allEditable ? calculateEF : null;
         }
