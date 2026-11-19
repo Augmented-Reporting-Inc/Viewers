@@ -1252,6 +1252,40 @@ export function buildClinicalReportReviewRows(preview: any = {}) {
   return rows;
 }
 
+/**
+ * A report assessment may have genuine learner measurement annotations even
+ * when FormAPI reports zero AR field replacements. Show source-backed rows
+ * separately from selectable report values; never manufacture report changes.
+ */
+export function buildClinicalViewerAnnotationReviewRows(preview: any = {}) {
+  const annotations = Array.isArray(preview?.annotations) ? preview.annotations : [];
+  const seen = new Set<string>();
+  return annotations.flatMap((measurement: any) => {
+    const id = String(measurement?.annotationId || measurement?.uid || '').trim();
+    if (!id || seen.has(id) || !String(measurement?.toolName || '').trim() ||
+        measurement?.workflow === 'viewerQuizGoldDisplay') return [];
+    seen.add(id);
+    const label = String(
+      measurement?.measurementRole || measurement?.label ||
+      measurement?.role || measurement?.toolName || 'Measurement'
+    ).trim();
+    const display = getMeasurementValue(measurement);
+    const rawValue = measurement?.measurements?.value;
+    const unit = String(measurement?.measurements?.unit || measurement?.unit || '').trim();
+    const fallback = rawValue !== null && rawValue !== undefined &&
+      rawValue !== '' && Number.isFinite(Number(rawValue))
+      ? formatMeasurementValue(rawValue, unit)
+      : '';
+    return [{
+      key: id,
+      label: label || 'Measurement',
+      value: display || fallback || 'Numeric value unavailable; annotation is present',
+      frameNumber: Number.isInteger(Number(measurement?.frameNumber)) &&
+        Number(measurement.frameNumber) >= 1 ? Number(measurement.frameNumber) : null,
+    }];
+  });
+}
+
 function hasClinicalReportDerivedConsequences(review: any = {}) {
   const consequences = review?.derivedConsequences;
 
@@ -1282,6 +1316,7 @@ export function ClinicalReportMeasurementReviewModal({
   }
 
   const rows = Array.isArray(review.rows) ? review.rows : [];
+  const annotationRows = Array.isArray(review.annotationRows) ? review.annotationRows : [];
   const selected = new Set(selectedRowKeys);
   const allSelected = rows.length > 0 && rows.every(row => selected.has(row.key));
   const hasDerivedConsequences = hasClinicalReportDerivedConsequences(review);
@@ -1329,6 +1364,33 @@ export function ClinicalReportMeasurementReviewModal({
               </div>
             </div>
           ) : null}
+          {review.educationWorkflow && annotationRows.length > 0 ? (
+            <div className="mt-3 rounded border border-slate-600 bg-slate-900/40 p-3">
+              <div className="text-sm font-semibold text-slate-100">
+                Viewer measurements in the learner report — {annotationRows.length}
+              </div>
+              <div className="mt-1 text-xs text-gray-300">
+                These viewer annotations are included in the pending save. Updating AR
+                report fields below is a separate choice.
+              </div>
+              <div className="mt-2 max-h-44 space-y-1 overflow-y-auto text-sm">
+                {annotationRows.map((row: any) => (
+                  <div key={row.key} className="flex flex-wrap justify-between gap-x-3 border-b border-gray-800 py-1">
+                    <span className="font-medium text-gray-100">{row.label}</span>
+                    <span className="text-emerald-200">
+                      {row.value}{row.frameNumber != null ? ` · frame ${row.frameNumber}` : ''}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+          {review.educationWorkflow && rows.length === 0 ? (
+            <div className="mt-3 text-xs text-gray-300" role="status">
+              No AR report values need replacing. The learner measurements above and
+              verified quiz evidence can be saved without replacing report values.
+            </div>
+          ) : null}
           {hasDerivedConsequences ? (
             <div className="mt-2 text-xs text-gray-400">
               AR will also recalculate dependent indexed values from any selected source
@@ -1337,6 +1399,7 @@ export function ClinicalReportMeasurementReviewModal({
           ) : null}
         </div>
 
+        {rows.length > 0 ? (
         <div className="flex items-center justify-between gap-3 border-b border-gray-800 px-4 py-3">
           <div className="text-sm text-gray-300">
             {selected.size} of {rows.length} report value{rows.length === 1 ? '' : 's'} selected
@@ -1351,6 +1414,9 @@ export function ClinicalReportMeasurementReviewModal({
           </button>
         </div>
 
+        </> /* end report selection controls */
+        ) : null}
+        {rows.length > 0 ? (
         <div className="min-h-0 flex-1 overflow-auto">
           <table className="w-full table-fixed border-collapse text-sm">
             <thead
@@ -1391,6 +1457,7 @@ export function ClinicalReportMeasurementReviewModal({
             </tbody>
           </table>
         </div>
+        ) : null}
 
         <div className="border-t border-gray-700 p-4">
           <label className="mb-4 flex cursor-pointer items-center gap-2 text-sm text-gray-300">
