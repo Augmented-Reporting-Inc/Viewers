@@ -4321,6 +4321,8 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       questionKey,
       savedGoldMeasurement: plainObject(plainObject(selected?.answerConfig).goldMeasurement),
       goldAuthoringEditable: isDraftDefinition(authoringDefinition) && !authoringSaving,
+      efContourTargets: plainObject(selected?.answerConfig).efContourFrameGuidanceEnabled === true
+        ? plainObject(plainObject(selected?.answerConfig).efContourTargets) : null,
     });
   }, [authoringMode, activeQuestionKey, authoringQuestions, authoringDefinition, authoringSaving]);
 
