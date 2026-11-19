@@ -261,6 +261,15 @@ export function resolveViewerQuizCompositeResult(
               Number.isFinite(length) && length > 0 ? [[slot, length]] : [];
           })
         ),
+        slotVolumeML: Object.fromEntries(
+          LV_SIMPSON_SLOT_ORDER.flatMap(slot => {
+            const verifiedSlot = (result as any).slots[slot];
+            const volume = verifiedSlot?.singleViewVolumeML;
+            return verifiedSlot?.complete === true &&
+              typeof volume === 'number' && Number.isFinite(volume) && volume > 0
+              ? [[slot, volume]] : [];
+          })
+        ),
         slotAreaCM2: Object.fromEntries(
           LV_SIMPSON_SLOT_ORDER.flatMap(slot => {
             const sources = measurements.filter(m =>
@@ -313,6 +322,14 @@ export function resolveViewerQuizCompositeResult(
 /** Preview verified physical phase areas; never infer area from image pixels. */
 function getCompositeCalibratedPhaseAreas(kind: CompositeKind, measurements: Measurement[]) {
   const phaseValues: Record<string, number> = {};
+  if (kind === 'lvSimpsonEF') {
+    const ef = calculateLVSimpson(measurements);
+    for (const slot of LV_SIMPSON_SLOT_ORDER) {
+      const part = ef?.slots?.[slot];
+      if (part?.complete === true && Number.isFinite(part.singleViewVolumeML) &&
+          part.singleViewVolumeML > 0) phaseValues[slot] = part.singleViewVolumeML;
+    }
+  }
   if (kind === 'rvFAC' || kind === 'raArea') {
     for (const slot of (kind === 'rvFAC' ? ['RV_ED', 'RV_ES'] : ['RA_ES'])) {
       const found = measurements.filter(m => getEchoAreaSlot(m) === slot);
