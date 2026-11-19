@@ -13388,7 +13388,10 @@ function commandsModule({
       }
     },
     setToolActiveToolbar: ({ value, itemId, toolName, toolGroupIds = [] }) => {
-      setQuizToolbarMeasurementKind('');
+      // The selected quiz question owns its measurement context. Clearing it
+      // when a toolbar tool is selected loses the TR Vmax target, causing the
+      // spectral toolbar to open the generic target dialog on completion.
+      // Question selection/release explicitly updates this context instead.
       // Sometimes it is passed as value (tools with options), sometimes as itemId (toolbar buttons)
       toolName = toolName || itemId || value;
       if (lvSimpsonMouseTools.isActive() && activeLVSimpsonWorkflowSessionId) {
@@ -17361,11 +17364,21 @@ function commandsModule({
       // Spectral ROI data can survive on its Cornerstone source annotation
       // after MeasurementService remaps the same ROI. Prefer the calibrated
       // source snapshot over a generic area/length representation.
-      const restoredSpectralMeasurement = ['trVmax', 'trVTI'].includes(requestedKind)
-        ? getCurrentViewerMeasurementSnapshot(measurementService).find(
-            entry => getMeasurementAnnotationId(entry) === selectedMeasurementId
-          )
+      // The report preview serializes the Cornerstone-native directional
+      // annotation, not the OHIF MeasurementService adapter. Capture quiz TR
+      // evidence from that SAME annotated source (ID, DICOM frame and calibrated
+      // reportValue), so preview verification cannot see a different copy.
+      // Wait/retry while annotation stats are pending; never substitute gold.
+      const nativeTRAnnotation = requestedKind === 'trVmax' && selectedMeasurementId
+        ? cornerstoneTools.annotation.state.getAnnotation?.(selectedMeasurementId)
         : null;
+      const restoredSpectralMeasurement = requestedKind === 'trVmax'
+        ? getCornerstoneUltrasoundDirectionalMeasurementFallback(nativeTRAnnotation)
+        : requestedKind === 'trVTI'
+          ? getCurrentViewerMeasurementSnapshot(measurementService).find(
+              entry => getMeasurementAnnotationId(entry) === selectedMeasurementId
+            )
+          : null;
       const measurement = restoredSpectralMeasurement || directMeasurement;
 
       if (!isCompositeKind && !selectedMeasurementId) {
