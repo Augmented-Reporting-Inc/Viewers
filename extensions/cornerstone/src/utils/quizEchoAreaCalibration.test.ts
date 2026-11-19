@@ -126,39 +126,40 @@ describe('composite gold comparison source contours retain quiz identity', () =>
 
 
 describe('EF educator gold contour viewport text', () => {
-  it('uses the exact verified gold area and saved axis rather than native ROI stats', () => {
+  it('shows verified single-view volume, not area or long axis', () => {
     expect(getVerifiedEFGoldContourViewportLines({
       origin: 'quiz-gold', slot: 'A4C_ED', areaCM2: 27.516,
-      axisMM: 83.247,
-    })).toEqual([
-      'Gold A4C ED LV contour area: 27.52 cm²',
-      'Gold LV long axis: 83.25 mm',
-    ]);
+      axisMM: 83.247, volumeML: 119.375,
+    })).toEqual(['Gold A4C ED single-view LV volume: 119.38 mL']);
   });
-  it('calls out independently calibrated source areas that disagree with the saved gold', () => {
-    expect(getVerifiedEFGoldContourViewportLines({
-      origin: 'quiz-gold', slot: 'A2C_ES',
-      areaCM2: 14.2, sourceAreaCM2: 15.1, axisMM: 75,
-    })).toEqual([
-      'Gold A2C ES LV contour area: 14.20 cm²',
-      'Source contour area: 15.10 cm² (differs from saved gold; verify)',
-      'Gold LV long axis: 75.00 mm',
-    ]);
-  });
-  it('shows the verified area without inventing a missing axis', () => {
+
+  it('fails closed if the gold volume is absent or not physically validated', () => {
     expect(getVerifiedEFGoldContourViewportLines({
       origin: 'quiz-gold', slot: 'A2C_ES', areaCM2: 14.2,
-    })).toEqual(['Gold A2C ES LV contour area: 14.20 cm²']);
+    })).toEqual(['Gold A2C ES single-view LV volume: unavailable']);
+    expect(getVerifiedEFGoldContourViewportLines({
+      origin: 'quiz-gold', slot: 'A2C_ES', areaCM2: 14.2, volumeML: null,
+    })).toEqual(['Gold A2C ES single-view LV volume: unavailable']);
+    expect(getVerifiedEFGoldContourViewportLines({
+      origin: 'quiz-gold', slot: 'A2C_ES', areaCM2: 14.2, volumeML: 0,
+    })).toEqual(['Gold A2C ES single-view LV volume: unavailable']);
   });
-  it('does not override ordinary contours or unverified areas', () => {
+
+  it('does not present a saved gold volume when the calibrated source area disagrees', () => {
     expect(getVerifiedEFGoldContourViewportLines({
-      slot: 'A4C_ED', areaCM2: 27.5,
+      origin: 'quiz-gold', slot: 'A2C_ES', areaCM2: 14.2,
+      sourceAreaCM2: 15.1, volumeML: 37.45,
+    })).toEqual([
+      'Gold A2C ES single-view LV volume: unavailable (source calibration differs from saved gold; verify)',
+    ]);
+  });
+
+  it('does not override ordinary or unrelated contours', () => {
+    expect(getVerifiedEFGoldContourViewportLines({
+      slot: 'A4C_ED', areaCM2: 27.5, volumeML: 100,
     })).toBeNull();
     expect(getVerifiedEFGoldContourViewportLines({
-      origin: 'quiz-gold', slot: 'A4C_ED', areaCM2: null,
-    })).toBeNull();
-    expect(getVerifiedEFGoldContourViewportLines({
-      origin: 'quiz-gold', slot: 'A4C_ED', areaCM2: 'abc',
+      origin: 'quiz-gold', slot: 'RV_ED', areaCM2: 27.5, volumeML: 100,
     })).toBeNull();
   });
 });
