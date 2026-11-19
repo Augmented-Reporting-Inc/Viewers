@@ -1,5 +1,10 @@
 import { boundEFQuizEvidencePoints, calibratedLVContourAreaCM2, isViewerQuizCompositeReviewCurrent, resolveViewerQuizCompositeResult, resolveViewerQuizLVSimpsonForStudy, getViewerQuizCompositeStatus } from './viewerQuizCompositeResults';
 import { calculateLABiplaneDisks } from './laVolume';
+import {
+  calculateLVSimpsonContourVolumeForMeasurement,
+  calculateLVSimpsonContourVolumeForAnnotationData,
+  isVerifiedLVSimpsonSessionReplacement,
+} from './lvSimpson';
 
 describe('viewer quiz composite result evidence', () => {
   it('rejects missing required Simpson slots', () => {
@@ -210,6 +215,70 @@ function makeCompleteStudyEF(studyId: string, widthScale = 1) {
     makeEFSlot(studyId, 'A2C_ES', 9 * widthScale, 54),
   ];
 }
+
+describe('EF per-contour volumes survive OHIF normalization, navigation and deletion', () => {
+  const annotationFor = measurement => ({
+    annotation: {
+      data: {
+        lvSimpson: measurement.lvSimpson,
+        contour: { polyline: measurement.points },
+        handles: { points: measurement.points },
+      },
+    },
+  });
+
+  it('uses each rendered annotation rather than the active MeasurementService record', () => {
+    const contours = makeCompleteStudyEF('study-a');
+    const volumes = contours.map(contour =>
+      calculateLVSimpsonContourVolumeForAnnotationData(annotationFor(contour)));
+    expect(volumes.every(volume => typeof volume === 'number' && volume > 0)).toBe(true);
+    expect(volumes[0]).toBeCloseTo(
+      calculateLVSimpsonContourVolumeForMeasurement(contours[0]), 6);
+
+    // The renderer receives data directly, not always an annotation wrapper.
+    expect(calculateLVSimpsonContourVolumeForAnnotationData(
+      annotationFor(contours[0]).annotation.data)).toBeCloseTo(volumes[0], 6);
+
+    // Drawing a later slot, switching frames or deleting a different slot
+    // cannot change the source contour's own calibrated display value.
+    const afterDeletingA2CES = contours.filter(c => c.lvSimpson.slot !== 'A2C_ES');
+    expect(afterDeletingA2CES).toHaveLength(3);
+    for (const contour of afterDeletingA2CES) {
+      const index = contours.indexOf(contour);
+      expect(calculateLVSimpsonContourVolumeForAnnotationData(annotationFor(contour)))
+        .toBeCloseTo(volumes[index], 6);
+    }
+  });
+
+  it('invalidates only the contour whose editable handles change', () => {
+    const [first, second] = makeCompleteStudyEF('study-a');
+    const firstVolume = calculateLVSimpsonContourVolumeForAnnotationData(annotationFor(first));
+    const edited = annotationFor(second);
+    edited.annotation.data.handles.points = second.points.map(p => [...p]);
+    edited.annotation.data.handles.points[5][1] += 6;
+    expect(calculateLVSimpsonContourVolumeForAnnotationData(edited)).toBeNull();
+    expect(calculateLVSimpsonContourVolumeForAnnotationData(annotationFor(first)))
+      .toBeCloseTo(firstVolume, 6);
+    expect(calculateLVSimpsonContourVolumeForAnnotationData({
+      lvSimpson: { measurementKind: 'lvSimpsonSlot', slot: 'A4C_ED' },
+    })).toBeNull();
+  });
+
+  it('rejects normalized OHIF partial records as replacements for calibrated session contours', () => {
+    const session = makeCompleteStudyEF('study-a')[0];
+    const normalized = {
+      ...session,
+      lvSimpson: { measurementKind: 'lvSimpsonSlot', slot: 'A4C_ED' },
+    };
+    expect(isVerifiedLVSimpsonSessionReplacement(normalized, session)).toBe(false);
+    expect(isVerifiedLVSimpsonSessionReplacement({ ...session,
+      referencedImageId: 'different-frame' }, session)).toBe(false);
+    expect(isVerifiedLVSimpsonSessionReplacement({ ...session,
+      referenceStudyUID: 'other-study' }, session)).toBe(false);
+    expect(isVerifiedLVSimpsonSessionReplacement(session, session)).toBe(true);
+    expect(calculateLVSimpsonContourVolumeForMeasurement(session)).toBeGreaterThan(0);
+  });
+});
 
 describe('study-scoped educator/learner EF parity', () => {
   it('rejects four complete slots when one lacks verified physical calibration', () => {
