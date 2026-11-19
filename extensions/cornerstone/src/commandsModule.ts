@@ -9828,8 +9828,8 @@ function commandsModule({
         lvSimpsonPanelController = {
           activeSlot: (reviewExistingContours || panelOnly) ? '' : slotInfo.slot,
           questionKey,
-          savedGoldMeasurement: panelOnly ? savedGoldMeasurement : null,
-          onClearSavedGoldSlot: panelOnly && goldAuthoringEditable && questionKey
+          savedGoldMeasurement,
+          onClearSavedGoldSlot: goldAuthoringEditable && questionKey
             ? (slot: string) => {
                 window.dispatchEvent(new CustomEvent('ar-measurements:lv-simpson-gold-delete-requested', {
                   detail: { questionKey, slot },
@@ -9928,7 +9928,9 @@ function commandsModule({
               hideLVSimpsonWorkflowPanel();
             }
             void actions.startLVSimpsonEFWorkflow({
-              slot, efContourTargets, allowCanonicalFrameTargets, questionKey, captureMethod: method,
+              slot, singleSlot: true, efContourTargets, allowCanonicalFrameTargets,
+              questionKey, captureMethod: method, savedGoldMeasurement: this.savedGoldMeasurement,
+              goldAuthoringEditable,
               viewportId: viewportGridService.getActiveViewportId(),
             }).catch(error => console.warn('[LV EF] selected contour redraw failed:', error));
           },
@@ -10677,6 +10679,30 @@ function commandsModule({
       }
 
       if (nextSlot && singleSlot) {
+        if (goldAuthoringEditable) {
+          // The educator's shared EF panel must remain open after a single
+          // contour is redrawn. Do not automatically start the next contour.
+          activeLVSimpsonWorkflowSessionId = '';
+          cancelActiveLVSimpsonCapture();
+          lvSimpsonMouseTools.restore();
+          refreshLVSimpsonToolbarState();
+          const currentSlots = getLVSimpsonSlotCandidates(
+            lvSimpsonPanelController?.getMeasurements?.() || []
+          );
+          const allPresent = LV_TRACE_REQUIRED_SLOTS.every(
+            slot => currentSlots.get(slot)?.length === 1
+          );
+          if (lvSimpsonPanelController) {
+            lvSimpsonPanelController.onCalculate = allPresent ? calculateEF : null;
+          }
+          renderLVSimpsonWorkflowPanel({
+            instruction: `${slotDisplayName} recorded. Continue authoring in this EF panel; ` +
+              'capture the calculated gold EF and Save Draft when complete.',
+            onCalculate: allPresent ? calculateEF : null,
+            onCancel: hideLVSimpsonWorkflowPanel,
+          });
+          return measurement;
+        }
         clearLVSimpsonWorkflowIfCurrent(workflowSessionId);
 
         showLVSimpsonNotification(uiNotificationService, {
@@ -15077,6 +15103,83 @@ function commandsModule({
 
       return { domain, workflow, annotations };
     },
+    // Learner quiz correction must only remove an annotation proven to belong
+    // to this learner's Series (or created in this viewer session). The ordinary
+    // quiz comparison presenter may load base-study sources as locked overlays;
+    // those are never eligible for deletion.
+    deleteViewerQuizLearnerMeasurement: async ({ learnerMeasurement = {} } = {}) => {
+      const saveTarget = getArViewerSaveTargetFromUrl();
+      const isAuthoring = ['1', 'true', 'yes', 'y'].includes(String(
+        getViewerUrlSearchParams().get('arQuizAuthoring') || ''
+      ).toLowerCase());
+      if (isAuthoring || !isLearnerCopyOnSaveTarget(saveTarget) ||
+          String(saveTarget.measurementWorkflowRole || '').toLowerCase() !== 'learner') {
+        return { ok: false, reason: 'learner-measurements-not-editable' };
+      }
+      const sourceId = getViewerQuizMeasurementSourceAnnotationId(learnerMeasurement);
+      if (!sourceId || viewerMeasurementsDeletedInSession.has(sourceId)) {
+        return { ok: false, reason: 'source-id-missing-or-already-deleted' };
+      }
+      const { learnerSeriesDoc } = await getViewerQuizMeasurementSeriesDocs({
+        includeBaseSeries: false,
+      });
+      if (learnerSeriesDoc?.isLearnerCopy !== true) {
+        return { ok: false, reason: 'learner-series-not-verified' };
+      }
+      const persisted = findViewerQuizLearnerOwnedAnnotation(
+        learnerMeasurement, learnerSeriesDoc
+      );
+      const createdHere = viewerMeasurementsCreatedInSession.has(sourceId);
+      if (!persisted && !createdHere) {
+        return { ok: false, reason: 'measurement-not-owned-by-learner' };
+      }
+      const source = persisted || getViewerQuizMeasurementAnnotationFromService(
+        learnerMeasurement
+      );
+      if (!source || getMeasurementAnnotationId(source) !== sourceId) {
+        return { ok: false, reason: 'exact-learner-source-unavailable' };
+      }
+      const expected = getViewerQuizMeasurementReferenceTarget(learnerMeasurement) || {};
+      const actual = getViewerQuizMeasurementReferenceTarget({}, source) || {};
+      const expectedSop = String(expected.sopInstanceUID || '').trim();
+      const actualSop = String(actual.sopInstanceUID || '').trim();
+      const expectedImage = String(expected.referencedImageId || '').trim();
+      const actualImage = String(actual.referencedImageId || '').trim();
+      const expectedFrame = Number(expected.frameNumber);
+      const actualFrame = Number(actual.frameNumber);
+      if ((expectedSop && expectedSop !== actualSop) ||
+          (expectedImage && (!actualImage ||
+            normalizeImageIdForCompare(expectedImage) !==
+              normalizeImageIdForCompare(actualImage))) ||
+          (Number.isInteger(expectedFrame) && expectedFrame > 0 &&
+            actualFrame > 0 && expectedFrame !== actualFrame)) {
+        return { ok: false, reason: 'learner-source-frame-mismatch' };
+      }
+      const live = measurementService.getMeasurement?.(sourceId);
+      const state = annotation.state.getAnnotation?.(sourceId);
+      // Persisted owner/lock state is authoritative. A display-only lock added
+      // when reopening a *verified* learner caliper may be cleared here, but
+      // never override a genuinely locked or read-only saved measurement.
+      if (source?.isLocked || source?.arMeasurementReadOnly ||
+          source?.data?.arMeasurementReadOnly ||
+          (source?.workflow && source.workflow !== VIEWER_MEASUREMENTS_WORKFLOW) ||
+          (source?.measurementOwner &&
+            String(source.measurementOwner).toLowerCase() !== 'learner') ||
+          live?.arMeasurementReadOnly || state?.data?.arMeasurementReadOnly ||
+          state?.data?.arVerifiedQuizEFGoldContour?.origin === 'quiz-gold') {
+        return { ok: false, reason: 'measurement-read-only' };
+      }
+      if (live?.isLocked) live.isLocked = false;
+      if (state?.isLocked) state.isLocked = false;
+      actions.removeMeasurement({ uid: sourceId });
+      if (!viewerMeasurementsDeletedInSession.has(sourceId)) {
+        return { ok: false, reason: 'measurement-deletion-failed' };
+      }
+      dispatchLiveMeasurementsRefresh({
+        reason: 'learner-quiz-measurement-deleted', annotationUID: sourceId,
+      });
+      return { ok: true, annotationId: sourceId, requiresSave: true };
+    },
     getViewerQuizLVSimpsonForActiveStudy: () => {
       const activeViewportId = viewportGridService.getActiveViewportId();
       const activeDisplaySet = getActiveViewportDisplaySet({
@@ -17834,6 +17937,9 @@ function commandsModule({
     },
     getViewerMeasurementSnapshotForPanel: {
       commandFn: actions.getViewerMeasurementSnapshotForPanel,
+    },
+    deleteViewerQuizLearnerMeasurement: {
+      commandFn: actions.deleteViewerQuizLearnerMeasurement,
     },
     getViewerQuizCompositeStatusForActiveStudy: {
       commandFn: actions.getViewerQuizCompositeStatusForActiveStudy,
