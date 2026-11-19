@@ -6601,9 +6601,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                     disabled={disabled}
                     onClick={event => {
                       event.stopPropagation();
-                      setAnswer(quiz.quizKey, question, {
-                        measurements: bowelEntries.filter((_, i) => i !== index),
-                      });
+                      void deleteLearnerQuizSourceMeasurement(
+                         quiz, question, measurement, { bowelSource: true }
+                       );
                     }}>Remove</button>
                 </div>
               ))}
@@ -6642,6 +6642,21 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                           </div>
                         </div>
             )}
+          {!bowelSet && !linkedRVSP &&
+            !isGuidedQuizCompositeKind(cleanString(plainObject(question.answerConfig).measurementKind)) &&
+            cleanString(value?.sourceAnnotationId) ? (
+            <button type="button"
+              className="rounded border border-red-700 px-2 py-1 text-[11px] text-red-200 hover:bg-red-950 disabled:opacity-50"
+              disabled={disabled || captureInProgress}
+              onClick={event => {
+                event.preventDefault();
+                event.stopPropagation();
+                void deleteLearnerQuizSourceMeasurement(quiz, question, value);
+              }}>
+              Delete measurement
+            </button>
+          ) : null}
+
 
           {!bowelSet && (linkedRVSP || ['laVolumeBiplane',
             'laVolumeBiplaneDisks', 'lvSimpsonEF'].includes(
@@ -7300,9 +7315,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
           <div className="mt-2 rounded border border-cyan-700 bg-cyan-950/20 p-2">
             <div className="text-xs font-semibold text-cyan-100">EF contour measurements</div>
             <p className="mt-1 text-xs text-gray-300">
-              Choose an individual A4C/A2C systolic or diastolic contour, then draw with
-              Freehand or Axis + apex. View saved opens that contour's original DICOM frame;
-              Delete clears only the selected draft contour and requires a new EF calculation.
+              Use the shared EF panel in the Viewer to draw, navigate, replace and delete individual
+              A4C/A2C contours. The panel also displays saved gold read-only. Capture
+              the calculated EF and Save Draft to persist the authoring changes.
             </p>
             <div className="mt-2 rounded border border-emerald-700 bg-emerald-950/30 p-2 text-sm font-semibold text-emerald-100">
               Gold EF: {savedEFGold !== undefined
