@@ -352,7 +352,7 @@ export function calculateLVSimpsonSingleViewVolumeML(slotResult) {
   return Number.isFinite(volumeML) && volumeML > 0 ? volumeML : null;
 }
 
-function buildSlotGeometry(measurement, slot) {
+function buildSlotGeometry(measurement, slot, { diagnostic = true } = {}) {
   const geometry = getGeometry(measurement);
   const contourPoints = getContourPoints(measurement);
   const configuredAxisPointIndex = Number(geometry.axisPointIndex);
@@ -372,64 +372,67 @@ function buildSlotGeometry(measurement, slot) {
   const display = LV_SIMPSON_SLOT_INFO[slot].display;
   const messages = [];
 
-  const originalPoints = Array.isArray(geometry.originalContourPoints)
-    ? geometry.originalContourPoints : [];
-  const currentPoints = Array.isArray(measurement?.points) && measurement.points.length >= 6
-    ? measurement.points : Array.isArray(geometry.contourPoints) ? geometry.contourPoints : [];
-  let maximumPointDelta = null;
-  if (originalPoints.length === currentPoints.length && originalPoints.length > 0) {
-    const deltas = originalPoints.map((point, index) => {
-      const before = getPoint(point);
-      const after = getPoint(currentPoints[index]);
-      return before && after ? length(subtract(before, after)) : Number.NaN;
+  if (diagnostic) {
+    const originalPoints = Array.isArray(geometry.originalContourPoints)
+      ? geometry.originalContourPoints : [];
+    const currentPoints = Array.isArray(measurement?.points) && measurement.points.length >= 6
+      ? measurement.points : Array.isArray(geometry.contourPoints) ? geometry.contourPoints : [];
+    let maximumPointDelta = null;
+    if (originalPoints.length === currentPoints.length && originalPoints.length > 0) {
+      const deltas = originalPoints.map((point, index) => {
+        const before = getPoint(point);
+        const after = getPoint(currentPoints[index]);
+        return before && after ? length(subtract(before, after)) : Number.NaN;
+      });
+      maximumPointDelta = deltas.every(Number.isFinite) ? Math.max(...deltas) : null;
+    }
+    const axisDifferenceMM = Number.isFinite(derivedLength) && longAxisLengthMM
+      ? Math.abs(derivedLength - longAxisLengthMM) : null;
+    const originalBoundary = Array.isArray(geometry.originalContourPoints)
+      ? geometry.originalContourPoints : [];
+    const representedBoundary = currentPoints;
+    const baseLeftPoint = getPoint(originalBoundary[0]);
+    const baseRightPoint = getPoint(originalBoundary[originalBoundary.length - 1]);
+    const originalAxisWorldLength = baseLeftPoint && baseRightPoint &&
+      getPoint(originalBoundary[Number(geometry.axisPointIndex)])
+      ? length(subtract(getPoint(originalBoundary[Number(geometry.axisPointIndex)]),
+          getBaseMidpoint(baseLeftPoint, baseRightPoint)))
+      : null;
+    const boundaryTolerance = originalAxisWorldLength && originalAxisWorldLength > 0
+      ? originalAxisWorldLength * 0.015 : null;
+    const measuredBoundary = boundaryTolerance && representedBoundary.length >= 6
+      ? {
+          originalToSpline: describeBoundaryDistance(originalBoundary, representedBoundary, boundaryTolerance),
+          splineToOriginal: describeBoundaryDistance(representedBoundary, originalBoundary, boundaryTolerance),
+        } : null;
+    const firstMismatch = !contourUnchanged && boundaryTolerance
+      ? {
+          originalToSpline: describeFirstPolylineMismatch(originalBoundary, representedBoundary, boundaryTolerance),
+          splineToOriginal: describeFirstPolylineMismatch(representedBoundary, originalBoundary, boundaryTolerance),
+        } : null;
+    // EF-only, temporary, aggregate diagnostics; no identifiers or coordinates.
+    console.info('[LV EF slot validation]', {
+      firstMismatch,
+      liveControlPointCount: measurement?.lvSimpsonControlPoints?.length ?? null,
+      liveControlPointsMatch: Array.isArray(measurement?.lvSimpsonControlPoints)
+        ? contourUnchanged : null,
+      boundaryTolerance,
+      measuredBoundary,
+      slot,
+      originalPointCount: originalPoints.length,
+      currentPointCount: currentPoints.length,
+      calibratedPointCount: contourPoints.length,
+      maximumPointDelta,
+      contourUnchanged,
+      calibrationError: geometry.calibrationError || null,
+      calibratedAxisPresent: Boolean(longAxisLengthMM),
+      derivedAxisValid: Number.isFinite(derivedLength),
+      axisDifferenceMM,
+      axisToleranceMM: longAxisLengthMM
+        ? Math.max(0.01, longAxisLengthMM * 0.001) : null,
     });
-    maximumPointDelta = deltas.every(Number.isFinite) ? Math.max(...deltas) : null;
+
   }
-  const axisDifferenceMM = Number.isFinite(derivedLength) && longAxisLengthMM
-    ? Math.abs(derivedLength - longAxisLengthMM) : null;
-  const originalBoundary = Array.isArray(geometry.originalContourPoints)
-    ? geometry.originalContourPoints : [];
-  const representedBoundary = currentPoints;
-  const baseLeftPoint = getPoint(originalBoundary[0]);
-  const baseRightPoint = getPoint(originalBoundary[originalBoundary.length - 1]);
-  const originalAxisWorldLength = baseLeftPoint && baseRightPoint &&
-    getPoint(originalBoundary[Number(geometry.axisPointIndex)])
-    ? length(subtract(getPoint(originalBoundary[Number(geometry.axisPointIndex)]),
-        getBaseMidpoint(baseLeftPoint, baseRightPoint)))
-    : null;
-  const boundaryTolerance = originalAxisWorldLength && originalAxisWorldLength > 0
-    ? originalAxisWorldLength * 0.015 : null;
-  const measuredBoundary = boundaryTolerance && representedBoundary.length >= 6
-    ? {
-        originalToSpline: describeBoundaryDistance(originalBoundary, representedBoundary, boundaryTolerance),
-        splineToOriginal: describeBoundaryDistance(representedBoundary, originalBoundary, boundaryTolerance),
-      } : null;
-  const firstMismatch = !contourUnchanged && boundaryTolerance
-    ? {
-        originalToSpline: describeFirstPolylineMismatch(originalBoundary, representedBoundary, boundaryTolerance),
-        splineToOriginal: describeFirstPolylineMismatch(representedBoundary, originalBoundary, boundaryTolerance),
-      } : null;
-  // EF-only, temporary, aggregate diagnostics; no identifiers or coordinates.
-  console.info('[LV EF slot validation]', {
-    firstMismatch,
-    liveControlPointCount: measurement?.lvSimpsonControlPoints?.length ?? null,
-    liveControlPointsMatch: Array.isArray(measurement?.lvSimpsonControlPoints)
-      ? contourUnchanged : null,
-    boundaryTolerance,
-    measuredBoundary,
-    slot,
-    originalPointCount: originalPoints.length,
-    currentPointCount: currentPoints.length,
-    calibratedPointCount: contourPoints.length,
-    maximumPointDelta,
-    contourUnchanged,
-    calibrationError: geometry.calibrationError || null,
-    calibratedAxisPresent: Boolean(longAxisLengthMM),
-    derivedAxisValid: Number.isFinite(derivedLength),
-    axisDifferenceMM,
-    axisToleranceMM: longAxisLengthMM
-      ? Math.max(0.01, longAxisLengthMM * 0.001) : null,
-  });
 
   if (geometry.calibrationError) {
     messages.push(`${display}: EF calibration failure (${geometry.calibrationError}). Check the active DICOM instance and spatial ultrasound-region metadata.`);
@@ -527,6 +530,19 @@ function buildSlotGeometry(measurement, slot) {
     coverageRatio,
     messages: [],
   };
+}
+
+/**
+ * Viewport-safe lookup for the exact current contour. Uses the same verified
+ * clinical slot geometry without the verbose diagnostic sampling/logging.
+ * Incomplete, changed or uncalibrated contours have no displayable volume.
+ */
+export function calculateLVSimpsonContourVolumeForMeasurement(measurement) {
+  const slot = getSlot(measurement);
+  if (!slot) return null;
+  const result = buildSlotGeometry(measurement, slot, { diagnostic: false });
+  return result.complete === true && typeof result.singleViewVolumeML === 'number'
+    ? result.singleViewVolumeML : null;
 }
 
 function uniqueMessages(messages = []) {
