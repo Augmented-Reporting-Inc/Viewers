@@ -2448,7 +2448,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       const selectedKind = cleanString(
         plainObject(selectedQuestion?.answerConfig).measurementKind
       );
-      if (['rvFAC', 'raArea', 'laVolumeBiplane', 'laVolumeBiplaneDisks',
+      if (['lvSimpsonEF', 'rvFAC', 'raArea', 'laVolumeBiplane', 'laVolumeBiplaneDisks',
         'ivcCollapsibility'].includes(selectedKind)) {
         const status = await runViewerCommand(
           commandsManager, 'getViewerQuizCompositeStatusForActiveStudy',
@@ -6535,6 +6535,44 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                 ? 'Open EF panel' : 'Recalculate from measured contours'}
           </button> : null}
 
+          {cleanString(plainObject(question.answerConfig).measurementKind) === 'lvSimpsonEF' ? (() => {
+            const key = quiz.quizKey + ':' + question.questionKey;
+            const live = liveCompositeStatus.questionKey === key
+              ? plainObject(liveCompositeStatus.phaseValues) : {};
+            const saved = plainObject(
+              plainObject(value?.compositeResult).derived
+            ).slotVolumeML;
+            const savedValues = plainObject(saved);
+            const hasLive = EF_CONTOUR_FRAME_SLOTS.some(({ slot }) =>
+              typeof live[slot] === 'number' && Number.isFinite(live[slot]) &&
+              live[slot] > 0
+            );
+            const hasSaved = Array.isArray(value?.compositeResult?.components);
+            if (!hasLive && !hasSaved) return null;
+            const volumes = hasLive ? live : savedValues;
+            return (
+              <div className="mt-2 rounded border border-cyan-800 p-2 text-xs text-gray-200">
+                <div className="mb-1 font-semibold text-cyan-100">
+                  {hasLive ? 'Current' : 'Saved'} single-view LV contour volumes (mL)
+                </div>
+                {EF_CONTOUR_FRAME_SLOTS.map(({ slot, label }) => {
+                  const raw = volumes[slot];
+                  const volume = raw == null || raw === '' ? NaN : Number(raw);
+                  return (
+                    <div key={slot} className="flex justify-between gap-2 py-0.5">
+                      <span>{label}</span>
+                      <span className={Number.isFinite(volume) && volume > 0
+                        ? 'font-semibold text-emerald-200' : 'text-amber-200'}>
+                        {Number.isFinite(volume) && volume > 0
+                          ? volume.toFixed(2) + ' mL' : 'Not available'}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })() : null}
+
           {cleanString(
             plainObject(value?.reviewPayload).label ||
             value?.measurementLabel ||
@@ -7206,24 +7244,16 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                         const derived = plainObject(plainObject(
                           plainObject(answerConfig.goldMeasurement).compositeResult
                         ).derived);
-                        const raw = plainObject(derived.slotLongAxisMM)[row.slot];
-                        const measured = raw == null || raw === '' ? NaN : Number(raw);
-                        const areaRaw = plainObject(derived.slotAreaCM2)[row.slot];
-                        const area = areaRaw == null || areaRaw === '' ? NaN : Number(areaRaw);
+                        const volumeRaw = plainObject(derived.slotVolumeML)[row.slot];
+                        const volume = volumeRaw == null || volumeRaw === ''
+                          ? NaN : Number(volumeRaw);
                         return (
-                          <div className="mt-1 space-y-1">
-                            <div className={Number.isFinite(area) && area > 0
-                              ? 'font-semibold text-emerald-200' : 'text-amber-200'}>
-                              Calibrated LV contour area: {Number.isFinite(area) && area > 0
-                                ? area.toFixed(2) + ' cm²'
-                                : 'not stored; recapture or validate the gold contour'}
-                            </div>
-                            <div className={Number.isFinite(measured) && measured > 0
-                              ? 'text-emerald-200' : 'text-amber-200'}>
-                              LV long axis: {Number.isFinite(measured) && measured > 0
-                                ? measured.toFixed(2) + ' mm'
-                                : 'not stored'}
-                            </div>
+                          <div className={Number.isFinite(volume) && volume > 0
+                            ? 'mt-1 font-semibold text-emerald-200'
+                            : 'mt-1 text-amber-200'}>
+                            Single-view LV volume: {Number.isFinite(volume) && volume > 0
+                              ? volume.toFixed(2) + ' mL'
+                              : 'not stored; recalculate and capture the gold EF'}
                           </div>
                         );
                       })() : null}
