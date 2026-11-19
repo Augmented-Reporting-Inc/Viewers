@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom';
 import {
   calculateLVSimpson,
+  calculateLVSimpsonContourVolumeForMeasurement,
   LV_SIMPSON_SLOT_ORDER,
 } from '../utils/lvSimpson';
 import {
@@ -1269,7 +1270,19 @@ export function buildClinicalViewerAnnotationReviewRows(preview: any = {}) {
       measurement?.measurementRole || measurement?.label ||
       measurement?.role || measurement?.toolName || 'Measurement'
     ).trim();
-    const display = getMeasurementValue(measurement);
+    const efSlot = String(measurement?.lvSimpson?.slot || measurement?.slot || '').trim();
+    const isEFContour = (measurement?.measurementKind === 'lvSimpsonSlot' ||
+      measurement?.lvSimpson?.measurementKind === 'lvSimpsonSlot') &&
+      LV_SIMPSON_SLOT_ORDER.includes(efSlot);
+    // The generic SplineROI text contains AREA; never show it as the EF
+    // contour's primary result. Use the same verified 20-disk single-view
+    // volume calculation as the viewport/EF panel.
+    const volumeML = isEFContour
+      ? calculateLVSimpsonContourVolumeForMeasurement(measurement) : null;
+    const display = isEFContour
+      ? (volumeML != null ? `${volumeML.toFixed(2)} mL` :
+        'Volume unavailable (recheck calibration)')
+      : getMeasurementValue(measurement);
     const rawValue = measurement?.measurements?.value;
     const unit = String(measurement?.measurements?.unit || measurement?.unit || '').trim();
     const fallback = rawValue !== null && rawValue !== undefined &&
@@ -1278,12 +1291,110 @@ export function buildClinicalViewerAnnotationReviewRows(preview: any = {}) {
       : '';
     return [{
       key: id,
-      label: label || 'Measurement',
+      label: isEFContour ? `LV ${efSlot.replace('_', ' ')} volume` : (label || 'Measurement'),
       value: display || fallback || 'Numeric value unavailable; annotation is present',
+      reportField: isEFContour ? '' : label,
       frameNumber: Number.isInteger(Number(measurement?.frameNumber)) &&
         Number(measurement.frameNumber) >= 1 ? Number(measurement.frameNumber) : null,
     }];
   });
+}
+
+const LEARNER_REPORT_FIELD_LABELS: Record<string, string> = {
+  RWT: 'Relative wall thickness (RWT)',
+  LVMass: 'LV mass',
+  LVMassIndex: 'LV mass index',
+  LVEDV: 'LV EDV (biplane)',
+  LVESV: 'LV ESV (biplane)',
+  LVEDVx: 'LV EDV index',
+  LVESVx: 'LV ESV index',
+  EFSimpsons: 'LV ejection fraction (biplane)',
+  SV: 'LV stroke volume (biplane)',
+  BSA: 'Body surface area (BSA)',
+};
+
+function formatLearnerIndexedUnit(unit: any) {
+  return String(unit || '').trim()
+    .replace(/ml\/m2/gi, 'mL/m²')
+    .replace(/g\/m2/gi, 'g/m²')
+    .replace(/L\/min\/m2/gi, 'L/min/m²')
+    .replace(/\bm2\b/gi, 'm²');
+}
+
+/**
+ * Read-only calculated results for the learner preview. The server's review
+ * items and derivedConsequences are the authoritative report/index results.
+ * The validated LV Simpson calculator supplies biplane EDV/ESV when the
+ * server condenses multiple LV fields into one EF review group. These rows
+ * MUST NOT influence which AR fields the existing save command applies.
+ */
+export function buildLearnerCalculatedMeasurementReviewRows(preview: any = {}) {
+  const measured = buildClinicalViewerAnnotationReviewRows(preview);
+  const measuredFields = new Set(measured.map(row =>
+    String(row.reportField || '').trim().toUpperCase()).filter(Boolean)
+  );
+  const calculated: Array<{ key: string; label: string; value: string }> = [];
+  const seen = new Set<string>();
+  const append = (field: string, label: string, value: any, uom: string = '') => {
+    const key = String(field || '').trim();
+    const v = String(value == null ? '' : value).trim();
+    if (!key || !v || seen.has(key)) return;
+    seen.add(key);
+    calculated.push({
+      key, label: LEARNER_REPORT_FIELD_LABELS[key] || label || formatClinicalReportFieldLabel(key),
+      value: [v, formatLearnerIndexedUnit(uom)].filter(Boolean).join(' '),
+    });
+  };
+
+  // Server preview items represent report updates (including RWT and LV
+  // mass); exclude duplicate PWd/LVIDs/etc already listed as measured.
+  const reviewRows = buildClinicalReportReviewRows(preview);
+  for (const row of reviewRows) {
+    const field = String(row.fieldNames?.[0] || row.key || '').trim();
+    const isDirectMeasurement = row.fieldNames?.some((name: string) =>
+      measuredFields.has(String(name || '').trim().toUpperCase()));
+    if (!isDirectMeasurement) append(field, row.label, row.incomingValue);
+  }
+
+  // The server explicitly previews ALL indexed consequences, including
+  // calculated or unavailable results. Do not independently infer BSA.
+  for (const consequence of Array.isArray(preview?.derivedConsequences)
+    ? preview.derivedConsequences : []) {
+    const field = String(consequence?.field || '').trim();
+    if (!field) continue;
+    const value = String(consequence?.calculatedValue ?? '').trim();
+    const result = consequence?.status === 'calculated' && value
+      ? value : 'Unavailable (BSA or source value required)';
+    append(field, String(consequence?.label || ''), result,
+      consequence?.status === 'calculated' ? consequence?.uom : '');
+  }
+
+  // The server's EF review item has multiple fields but a single displayed
+  // EF percentage. Derive additional biplane values from exactly four unique,
+  // verified saved learner contours; never compute them from pixel areas.
+  const annotations = Array.isArray(preview?.annotations) ? preview.annotations : [];
+  const efContours = annotations.filter(item =>
+    (item?.measurementKind === 'lvSimpsonSlot' ||
+      item?.lvSimpson?.measurementKind === 'lvSimpsonSlot') &&
+    LV_SIMPSON_SLOT_ORDER.includes(String(item?.lvSimpson?.slot || item?.slot || ''))
+  );
+  const bySlot = new Map<string, any[]>();
+  for (const contour of efContours) {
+    const slot = String(contour.lvSimpson?.slot || contour.slot);
+    bySlot.set(slot, [...(bySlot.get(slot) || []), contour]);
+  }
+  if (LV_SIMPSON_SLOT_ORDER.every(slot => bySlot.get(slot)?.length === 1)) {
+    const validated = calculateLVSimpson(LV_SIMPSON_SLOT_ORDER.map(slot => bySlot.get(slot)![0]));
+    if (validated?.status === 'complete' && validated.values) {
+      const { edvML, esvML, ejectionFraction, strokeVolumeML } = validated.values;
+      append('LVEDV', '', edvML.toFixed(2), 'mL');
+      append('LVESV', '', esvML.toFixed(2), 'mL');
+      append('EFSimpsons', '', ejectionFraction.toFixed(2), '%');
+      append('SV', '', strokeVolumeML.toFixed(2), 'mL');
+    }
+  }
+
+  return calculated;
 }
 
 function hasClinicalReportDerivedConsequences(review: any = {}) {
