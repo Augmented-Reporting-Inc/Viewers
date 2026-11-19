@@ -1423,13 +1423,19 @@ function LearnerViewerMeasurementConfirmationModal({
   onCancel,
   onApply,
 }) {
-  const annotationRows = Array.isArray(review?.annotationRows) ? review.annotationRows : [];
-  const recordedQuizEvidence = Array.isArray(review?.quizEvidenceRows)
-    ? review.quizEvidenceRows.filter(row => row?.recorded)
-    : [];
+  const measuredRows = Array.isArray(review?.annotationRows) ? review.annotationRows : [];
+  const calculatedRows = Array.isArray(review?.calculatedRows) ? review.calculatedRows : [];
+  const quizResults = Array.isArray(review?.quizEvidenceRows)
+    ? review.quizEvidenceRows.filter(row => row?.recorded) : [];
+  const knownCalculatedLabels = new Set(calculatedRows.map(row =>
+    String(row.label || '').trim().toLowerCase()
+  ));
+  const additionalQuizResults = quizResults.filter(row =>
+    !knownCalculatedLabels.has(String(row.label || '').trim().toLowerCase())
+  );
   const isSubmitting = review?.saveAction === 'submitted';
-  const heading = isSubmitting ? 'Confirm answer submission' : 'Save draft answers';
   const actionLabel = isSubmitting ? 'Save & Submit Answers' : 'Save Draft';
+
   return createPortal(
     <div
       className="fixed inset-0 z-50 flex items-center justify-center p-4"
@@ -1438,54 +1444,73 @@ function LearnerViewerMeasurementConfirmationModal({
       aria-modal="true"
       aria-labelledby="ar-learner-measurement-confirmation-title"
     >
-      <div className="w-full max-w-lg overflow-hidden rounded-lg border border-gray-600 bg-gray-900 text-white shadow-2xl">
-        <div className="border-b border-gray-700 p-5">
+      <div className="flex max-h-[90vh] w-full max-w-2xl flex-col overflow-hidden rounded-lg border border-gray-600 bg-gray-900 text-white shadow-2xl">
+        <div className="shrink-0 border-b border-gray-700 px-5 py-4">
           <h2 id="ar-learner-measurement-confirmation-title" className="text-lg font-semibold">
-            {heading}
+            Review your measurements
           </h2>
-          <p className="mt-2 text-sm text-gray-300">
-            Your measurements will be saved with your {isSubmitting ? 'submitted answers' : 'draft answers'}.
-            They will also update your practice report where applicable.
+          <p className="mt-1 text-sm text-gray-300">
+            Review your measured and calculated results before
+            {isSubmitting ? ' submitting your answers.' : ' saving your draft.'}
+            They will be saved with your answers and used in your practice report where applicable.
           </p>
-          <div className="mt-4 rounded border border-gray-700 p-3">
-            <div className="text-sm font-medium text-gray-100">
-              {annotationRows.length} viewer measurement{annotationRows.length === 1 ? '' : 's'} ready to save
-            </div>
-            {recordedQuizEvidence.length > 0 ? (
-              <div className="mt-1 text-xs text-gray-300">
-                {recordedQuizEvidence.length} additional recorded quiz result{recordedQuizEvidence.length === 1 ? '' : 's'}
-              </div>
-            ) : null}
-            {annotationRows.length > 0 ? (
-              <details className="mt-3 text-sm">
-                <summary className="cursor-pointer text-blue-200 hover:text-blue-100">
-                  View measurements
-                </summary>
-                <div className="mt-2 max-h-48 space-y-1 overflow-y-auto">
-                  {annotationRows.map(row => (
-                    <div key={row.key} className="flex justify-between gap-3 border-b border-gray-700 py-1">
-                      <span className="min-w-0 text-gray-300">{row.label}</span>
-                      <span className="shrink-0 text-gray-100">{row.value}</span>
-                    </div>
-                  ))}
-                </div>
-              </details>
-            ) : null}
-          </div>
         </div>
-        <div className="flex justify-end gap-2 p-4">
+        <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-5 py-4">
+          <section aria-label="Measured values">
+            <h3 className="mb-2 text-sm font-semibold text-white">
+              Measured values ({measuredRows.length})
+            </h3>
+            {measuredRows.length > 0 ? (
+              <div className="rounded border border-gray-700">
+                {measuredRows.map((row, index) => (
+                  <div key={row.key}
+                    className={`flex items-baseline justify-between gap-3 px-3 py-2 text-sm ${index > 0 ? 'border-t border-gray-700' : ''}`}>
+                    <span className="min-w-0 text-gray-200">{row.label}</span>
+                    <span className="shrink-0 font-medium tabular-nums text-white">{row.value}</span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="text-sm text-amber-200">
+                No source-backed viewer measurements are available for review.
+              </div>
+            )}
+          </section>
+          <section aria-label="Calculated values">
+            <h3 className="mb-2 text-sm font-semibold text-white">
+              Calculated values ({calculatedRows.length + additionalQuizResults.length})
+            </h3>
+            {calculatedRows.length + additionalQuizResults.length > 0 ? (
+              <div className="rounded border border-gray-700">
+                {[
+                  ...calculatedRows.map(row => ({
+                    key: 'calculated:' + row.key, label: row.label, value: row.value,
+                  })),
+                  ...additionalQuizResults.map(row => ({
+                    key: 'quiz:' + row.key, label: row.label, value: row.display,
+                  })),
+                ].map((row, index) => (
+                  <div key={row.key}
+                    className={`flex items-baseline justify-between gap-3 px-3 py-2 text-sm ${index > 0 ? 'border-t border-gray-700' : ''}`}>
+                    <span className="min-w-0 text-gray-200">{row.label}</span>
+                    <span className="shrink-0 font-medium tabular-nums text-white">{row.value}</span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="text-sm text-gray-400">No calculated results were available.</div>
+            )}
+          </section>
+        </div>
+        <div className="flex shrink-0 justify-end gap-2 border-t border-gray-700 p-4">
           <button type="button"
             className="rounded border border-gray-600 px-4 py-2 text-sm font-semibold hover:bg-gray-800 disabled:opacity-50"
             disabled={isSaving}
-            onClick={onCancel}>
-            Cancel
-          </button>
+            onClick={onCancel}>Cancel</button>
           <button type="button"
             className="rounded bg-blue-600 px-4 py-2 text-sm font-semibold hover:bg-blue-500 disabled:opacity-50"
             disabled={isSaving}
-            onClick={onApply}>
-            {isSaving ? 'Saving…' : actionLabel}
-          </button>
+            onClick={onApply}>{isSaving ? 'Saving…' : actionLabel}</button>
         </div>
       </div>
     </div>,
