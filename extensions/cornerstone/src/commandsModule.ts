@@ -126,7 +126,7 @@ import {
   getBowelCurvedLengthTargetOptions,
   normalizeBowelMeasurementTargetSelection,
 } from '../../extension-ar-measurements/src/utils/bowelMeasurementTargets';
-import { calculateLVSimpson } from '../../extension-ar-measurements/src/utils/lvSimpson';
+import { calculateLVSimpson, calculateLVSimpsonContourVolumeForMeasurement } from '../../extension-ar-measurements/src/utils/lvSimpson';
 import { getEchoAreaSlot } from '../../extension-ar-measurements/src/utils/echoAreaMeasurements';
 import { resolveViewerQuizCompositeResult, resolveViewerQuizLVSimpsonForStudy, isViewerQuizCompositeReviewCurrent, getViewerQuizCompositeStatus, calibratedLVContourAreaCM2 } from '../../extension-ar-measurements/src/utils/viewerQuizCompositeResults';
 import { createGuidedMouseToolOwnership } from './utils/guidedMouseToolOwnership';
@@ -5828,7 +5828,7 @@ function installQuizCompositeContourTextOverrideForViewport({
   }
 }
 
-function installLVSimpsonContourTextCleanupForViewport({ viewport, viewportId = '', toolName }) {
+function installLVSimpsonContourTextCleanupForViewport({ viewport, viewportId = '', toolName, measurementService }) {
   if (!viewport || !toolName) {
     return;
   }
@@ -5865,15 +5865,28 @@ function installLVSimpsonContourTextCleanupForViewport({ viewport, viewportId = 
       );
       if (goldEFText) return goldEFText;
       const lv = data?.lvSimpson || {};
-      // Cornerstone's native ROI statistics can be expressed in image pixels.
-      // EF's physical contour coordinates were independently calibrated in mm.
-      // Display a physical area only when those exact coordinates exist.
-      if (['A4C_ED', 'A4C_ES', 'A2C_ED', 'A2C_ES'].includes(String(lv.slot || '')) &&
-          !lv.calibrationError) {
-        const area = calibratedLVContourAreaCM2(lv.calibratedContourPoints);
-        return area !== null
-          ? [`LV contour area: ${area.toFixed(2)} cm²`]
-          : ['Calibrated LV contour area unavailable'];
+      const slot = String(lv.slot || '');
+      if (['A4C_ED', 'A4C_ES', 'A2C_ED', 'A2C_ES'].includes(slot)) {
+        // Only an exact matching calibrated source contour may provide an
+        // individual-view volume. Never relabel a pixel ROI or biplane EDV.
+        const targetImage = String(args[1] || '')
+          .replace(/^(?:imageId|volumeId):/i, '');
+        const sourceId = String(raw?.annotation?.annotationUID ||
+          raw?.annotationUID || data?.arQuizSourceAnnotationId || '').trim();
+        const sources = getCurrentViewerMeasurementSnapshot(measurementService)
+          .filter(measurement => {
+            if (getLVSimpsonSlotFromMeasurement(measurement) !== slot) return false;
+            const measurementId = String(measurement?.uid ||
+              measurement?.annotationUID || measurement?.annotationId || '').trim();
+            if (sourceId && sourceId !== measurementId) return false;
+            const imageId = String(measurement?.referencedImageId ||
+              measurement?.metadata?.referencedImageId || '').trim();
+            return !targetImage || (imageId && imageId === targetImage);
+          });
+        const volume = sources.length === 1 && !lv.calibrationError
+          ? calculateLVSimpsonContourVolumeForMeasurement(sources[0]) : null;
+        return [slot.replace('_', ' ') + ' single-view LV volume: ' +
+          (volume !== null ? volume.toFixed(2) + ' mL' : 'unavailable')];
       }
       return sanitizeContourTextLines(lines);
     },
@@ -8700,6 +8713,8 @@ function commandsModule({
         !['A4C_ED', 'A4C_ES', 'A2C_ED', 'A2C_ES'].includes(slot)) return;
     const source = annotation.state.getAnnotation?.(annotationId) || hydrated;
     if (!source) return;
+    const rawVolume = gold?.compositeResult?.derived?.slotVolumeML?.[slot];
+    const volume = rawVolume == null || rawVolume === '' ? null : Number(rawVolume);
     const rawAxis = gold?.compositeResult?.derived?.slotLongAxisMM?.[slot];
     const axis = rawAxis == null || rawAxis === '' ? null : Number(rawAxis);
     const lv = source.data?.lvSimpson;
@@ -8715,6 +8730,7 @@ function commandsModule({
       ...(source.data || {}),
       arVerifiedQuizEFGoldContour: {
         origin: 'quiz-gold', slot, areaCM2: area,
+        volumeML: Number.isFinite(volume) && volume > 0 ? volume : null,
         sourceAreaCM2: sourceArea,
         axisMM: Number.isFinite(axis) && axis > 0 ? axis : null,
       },
@@ -10528,6 +10544,7 @@ function commandsModule({
           viewport,
           viewportId: activeViewportId,
           toolName: toolNames.SplineROI || 'SplineROI',
+          measurementService,
         });
         viewport.render?.();
       } catch {}
@@ -11017,6 +11034,7 @@ function commandsModule({
           viewport,
           viewportId: activeViewportId,
           toolName: toolNames.SplineROI || 'SplineROI',
+          measurementService,
         });
         installQuizCompositeContourTextOverrideForViewport({
           viewport, viewportId: activeViewportId,
@@ -16548,7 +16566,7 @@ function commandsModule({
         for (const toolName of [toolNames.SplineROI || 'SplineROI',
           toolNames.PlanarFreehandROI || 'PlanarFreehandROI']) {
           installLVSimpsonContourTextCleanupForViewport({
-            viewport, viewportId: comparisonViewportId, toolName,
+            viewport, viewportId: comparisonViewportId, toolName, measurementService,
           });
         }
       }
