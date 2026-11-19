@@ -250,6 +250,30 @@ describe('EF per-contour volumes survive OHIF normalization, navigation and dele
     }
   });
 
+  it('reads calibrated mL volumes from the compact annotation shape used by report previews', () => {
+    const source = makeCompleteStudyEF('study-a');
+    const compact = source.map(measurement => {
+      const geometry = { ...measurement.lvSimpson };
+      // Serialized MeasurementAnnotations intentionally keep the contour at
+      // top-level points, not a duplicated geometry.contourPoints array.
+      delete geometry.contourPoints;
+      delete geometry.points;
+      return {
+        ...measurement,
+        lvSimpson: geometry,
+        measurementKind: 'lvSimpsonSlot',
+        measurements: { area: 6.31, areaUnit: 'cm²' },
+        displayText: ['6.31 cm²'],
+      };
+    });
+    const originalML = source.map(calculateLVSimpsonContourVolumeForMeasurement);
+    const persistedML = compact.map(calculateLVSimpsonContourVolumeForMeasurement);
+    expect(persistedML.every(value => typeof value === 'number' && value > 0)).toBe(true);
+    for (let index = 0; index < compact.length; index += 1) {
+      expect(persistedML[index]).toBeCloseTo(originalML[index], 6);
+    }
+  });
+
   it('invalidates only the contour whose editable handles change', () => {
     const [first, second] = makeCompleteStudyEF('study-a');
     const firstVolume = calculateLVSimpsonContourVolumeForAnnotationData(annotationFor(first));
