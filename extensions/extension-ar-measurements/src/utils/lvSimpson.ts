@@ -335,6 +335,23 @@ function sampleWidths(projectedPoints, longAxisLengthMM) {
   return widths;
 }
 
+/**
+ * Physically calibrated single-view LV volume using the same 20 transverse
+ * samples as the existing biplane calculation, with a circular cross-section
+ * for this ONE contour. It is not the biplane EDV/ESV and is never used to
+ * compute the clinical EF.
+ */
+export function calculateLVSimpsonSingleViewVolumeML(slotResult) {
+  const axis = Number(slotResult?.longAxisLengthMM);
+  const widths = slotResult?.widths;
+  if (slotResult?.complete !== true || !Number.isFinite(axis) || axis <= 0 ||
+      !Array.isArray(widths) || widths.length !== SAMPLE_COUNT ||
+      widths.some(width => !Number.isFinite(width) || width < 0)) return null;
+  const volumeML = (Math.PI / 4) * (axis / SAMPLE_COUNT) *
+    widths.reduce((sum, width) => sum + width * width, 0) / 1000;
+  return Number.isFinite(volumeML) && volumeML > 0 ? volumeML : null;
+}
+
 function buildSlotGeometry(measurement, slot) {
   const geometry = getGeometry(measurement);
   const contourPoints = getContourPoints(measurement);
@@ -503,6 +520,10 @@ function buildSlotGeometry(measurement, slot) {
     complete: true,
     longAxisLengthMM,
     widths,
+    // Independent display value; the biplane calculation below is unchanged.
+    singleViewVolumeML: calculateLVSimpsonSingleViewVolumeML({
+      complete: true, longAxisLengthMM, widths,
+    }),
     coverageRatio,
     messages: [],
   };
