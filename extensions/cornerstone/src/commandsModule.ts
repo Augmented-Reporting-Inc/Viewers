@@ -15193,6 +15193,7 @@ function commandsModule({
         return { ok: false, reason: 'other-question-or-panel-closed' };
       }
       lvSimpsonPanelController.savedGoldMeasurement = savedGoldMeasurement;
+      lvSimpsonPanelController.canEdit = goldAuthoringEditable;
       lvSimpsonPanelController.onClearSavedGoldSlot = goldAuthoringEditable && questionKey
         ? (slot: string) => window.dispatchEvent(new CustomEvent(
             'ar-measurements:lv-simpson-gold-delete-requested',
