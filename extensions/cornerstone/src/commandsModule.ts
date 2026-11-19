@@ -126,7 +126,10 @@ import {
   getBowelCurvedLengthTargetOptions,
   normalizeBowelMeasurementTargetSelection,
 } from '../../extension-ar-measurements/src/utils/bowelMeasurementTargets';
-import { calculateLVSimpson, calculateLVSimpsonContourVolumeForMeasurement } from '../../extension-ar-measurements/src/utils/lvSimpson';
+import {
+  calculateLVSimpson, calculateLVSimpsonContourVolumeForMeasurement,
+  calculateLVSimpsonContourVolumeForAnnotationData, isVerifiedLVSimpsonSessionReplacement,
+} from '../../extension-ar-measurements/src/utils/lvSimpson';
 import { getEchoAreaSlot } from '../../extension-ar-measurements/src/utils/echoAreaMeasurements';
 import { resolveViewerQuizCompositeResult, resolveViewerQuizLVSimpsonForStudy, isViewerQuizCompositeReviewCurrent, getViewerQuizCompositeStatus, calibratedLVContourAreaCM2 } from '../../extension-ar-measurements/src/utils/viewerQuizCompositeResults';
 import { createGuidedMouseToolOwnership } from './utils/guidedMouseToolOwnership';
@@ -446,19 +449,10 @@ function isViewerMeasurementSessionFallbackReplacementReady(
       return false;
     }
 
-    const liveGeometry =
-      liveMeasurement?.lvSimpson || liveMeasurement?.measurements?.lvSimpson || {};
-    const liveSlot = getLVSimpsonSlotFromMeasurement(liveMeasurement);
-    const sessionSlot = getLVSimpsonSlotFromMeasurement(sessionMeasurement);
-    const livePoints = getViewerMeasurementSnapshotPoints(liveMeasurement, liveGeometry);
-
-    return !!(
-      liveMeasurement?.toolName &&
-      liveSlot &&
-      (!sessionSlot || liveSlot === sessionSlot) &&
-      livePoints.length >= 6 &&
-      (liveMeasurement?.referencedImageId || liveMeasurement?.referenceSeriesUID)
-    );
+    // A normalized SplineROI often retains its label/points but loses physical
+    // calibration. Preserve the authoritative source until a replacement has
+    // independently verified geometry and the exact original DICOM image.
+    return isVerifiedLVSimpsonSessionReplacement(liveMeasurement, sessionMeasurement);
   }
 
   if (isLAVolumeMeasurement(sessionMeasurement)) {
@@ -668,6 +662,8 @@ function getCurrentViewerMeasurementSnapshot(
             ...measurement,
             lvSimpson: annotation.data.lvSimpson,
             points: annotation?.data?.contour?.polyline || measurement.points,
+            ...(Array.isArray(annotation?.data?.handles?.points)
+              ? { lvSimpsonControlPoints: annotation.data.handles.points } : {}),
           };
         }
       }
@@ -5867,24 +5863,11 @@ function installLVSimpsonContourTextCleanupForViewport({ viewport, viewportId = 
       const lv = data?.lvSimpson || {};
       const slot = String(lv.slot || '');
       if (['A4C_ED', 'A4C_ES', 'A2C_ED', 'A2C_ES'].includes(slot)) {
-        // Only an exact matching calibrated source contour may provide an
-        // individual-view volume. Never relabel a pixel ROI or biplane EDV.
-        const targetImage = String(args[1] || '')
-          .replace(/^(?:imageId|volumeId):/i, '');
-        const sourceId = String(raw?.annotation?.annotationUID ||
-          raw?.annotationUID || data?.arQuizSourceAnnotationId || '').trim();
-        const sources = getCurrentViewerMeasurementSnapshot(measurementService)
-          .filter(measurement => {
-            if (getLVSimpsonSlotFromMeasurement(measurement) !== slot) return false;
-            const measurementId = String(measurement?.uid ||
-              measurement?.annotationUID || measurement?.annotationId || '').trim();
-            if (sourceId && sourceId !== measurementId) return false;
-            const imageId = String(measurement?.referencedImageId ||
-              measurement?.metadata?.referencedImageId || '').trim();
-            return !targetImage || (imageId && imageId === targetImage);
-          });
-        const volume = sources.length === 1 && !lv.calibrationError
-          ? calculateLVSimpsonContourVolumeForMeasurement(sources[0]) : null;
+        // Cornerstone invokes getTextLines with annotation data, not a stable
+        // MeasurementService record. Match the volume to THIS annotation's
+        // calibrated geometry and editable handles, independent of active frame
+        // and any subsequent EF contour creation or deletion.
+        const volume = calculateLVSimpsonContourVolumeForAnnotationData(raw);
         return [slot.replace('_', ' ') + ' single-view LV volume: ' +
           (volume !== null ? volume.toFixed(2) + ' mL' : 'unavailable')];
       }
@@ -9783,22 +9766,16 @@ function commandsModule({
           return !!efStudyInstanceId && activeStudy === efStudyInstanceId;
         };
         const getStudyMeasurements = () => {
-          // Read existing sources without running a synchronization/recalculation
-          // pass during every UI render. In particular, panel refresh must not
-          // substitute live geometry into EF session records.
-          const byId = new Set<string>();
-          return [
-            ...(measurementService.getMeasurements?.() || []),
-            ...getLVSimpsonSessionMeasurements(),
-          ].filter(entry => {
-            if (!getLVSimpsonSlotFromMeasurement(entry)) return false;
-            const entryStudy = String(entry?.referenceStudyUID || entry?.StudyInstanceUID || '').trim();
-            if (efStudyInstanceId && entryStudy && entryStudy !== efStudyInstanceId) return false;
-            const id = getMeasurementAnnotationId(entry);
-            if (id && byId.has(id)) return false;
-            if (id) byId.add(id);
-            return true;
-          });
+          // The deduplicated snapshot preserves each calibrated EF session
+          // contour when OHIF later supplies a partial normalized SplineROI.
+          // It also checks the current annotation handles so edits to this
+          // contour (but not other slots) invalidate its own displayed volume.
+          return getCurrentViewerMeasurementSnapshot(measurementService)
+            .filter(entry => {
+              if (!getLVSimpsonSlotFromMeasurement(entry)) return false;
+              const entryStudy = String(entry?.referenceStudyUID || entry?.StudyInstanceUID || '').trim();
+              return !efStudyInstanceId || !entryStudy || entryStudy === efStudyInstanceId;
+            });
         };
         const cancelDrawingWithoutClosingPanel = () => {
           if (!activeLVSimpsonWorkflowSessionId) return;
