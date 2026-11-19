@@ -664,12 +664,30 @@ function getLVSimpsonSlotStatusText(slotResult) {
     return 'missing';
   }
 
+  const axisText = Number.isFinite(Number(slotResult.longAxisLengthMM))
+    ? `axis ${formatSimpsonValue(slotResult.longAxisLengthMM)} mm`
+    : '';
+
+  const coverageText = Number.isFinite(Number(slotResult.coverageRatio))
+    ? `coverage ${formatSimpsonPercent(slotResult.coverageRatio)}`
+    : '';
+
+  if (slotResult.complete) {
+    return ['complete', axisText, coverageText].filter(Boolean).join(' • ');
+  }
+
+  return ['incomplete', axisText, coverageText].filter(Boolean).join(' • ') || 'missing';
+}
+
+// LV-only presentation: LA volume summaries intentionally retain their
+// existing long-axis and coverage information.
+function getLVContourVolumeStatusText(slotResult) {
+  if (!slotResult) return 'missing';
   const volume = slotResult.singleViewVolumeML;
   if (slotResult.complete && typeof volume === 'number' &&
       Number.isFinite(volume) && volume > 0) {
     return `Single-view volume: ${formatSimpsonValue(volume)} mL`;
   }
-
   return slotResult.complete ? 'Single-view volume unavailable' : 'incomplete';
 }
 
@@ -904,7 +922,7 @@ function LVSimpsonSummary({ result }) {
             <div key={slot} className="flex justify-between gap-2 text-xs">
               <span className="text-gray-300">{slot.replace('_', ' ')}</span>
               <span className={slotResult?.complete ? 'text-green-300' : 'text-yellow-300'}>
-                {getLVSimpsonSlotStatusText(slotResult)}
+                {getLVContourVolumeStatusText(slotResult)}
               </span>
             </div>
           );
