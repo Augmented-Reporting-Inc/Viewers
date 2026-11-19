@@ -664,19 +664,13 @@ function getLVSimpsonSlotStatusText(slotResult) {
     return 'missing';
   }
 
-  const axisText = Number.isFinite(Number(slotResult.longAxisLengthMM))
-    ? `axis ${formatSimpsonValue(slotResult.longAxisLengthMM)} mm`
-    : '';
-
-  const coverageText = Number.isFinite(Number(slotResult.coverageRatio))
-    ? `coverage ${formatSimpsonPercent(slotResult.coverageRatio)}`
-    : '';
-
-  if (slotResult.complete) {
-    return ['complete', axisText, coverageText].filter(Boolean).join(' • ');
+  const volume = slotResult.singleViewVolumeML;
+  if (slotResult.complete && typeof volume === 'number' &&
+      Number.isFinite(volume) && volume > 0) {
+    return `Single-view volume: ${formatSimpsonValue(volume)} mL`;
   }
 
-  return ['incomplete', axisText, coverageText].filter(Boolean).join(' • ') || 'missing';
+  return slotResult.complete ? 'Single-view volume unavailable' : 'incomplete';
 }
 
 function LAVolumeSummary({ result, disksResult = null }) {
