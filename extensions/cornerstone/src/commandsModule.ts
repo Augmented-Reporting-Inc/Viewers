@@ -6558,20 +6558,13 @@ function renderLVSimpsonWorkflowPanel({
   for (const slot of LV_TRACE_REQUIRED_SLOTS) {
     const matching = slots.get(slot) || [];
     const measurement = matching[0];
-    const geometry = measurement?.lvSimpson || measurement?.measurements?.lvSimpson || {};
-    const axis = Number(geometry.longAxisLengthMM);
-    // Use the same physically calibrated contour geometry as EF calculation
-    // and the viewport's LV contour label. Never treat pixel-space ROI area
-    // as cm², or substitute an area from a different physiological slot.
-    const areaCM2 = measurement && !geometry.calibrationError
-      ? calibratedLVContourAreaCM2(geometry.calibratedContourPoints)
-      : null;
-    const axisDetail = measurement && Number.isFinite(axis) && axis > 0
-      ? `long axis ${axis.toFixed(1)} mm` : '';
-    const areaDetail = areaCM2 !== null
-      ? `contour area ${areaCM2.toFixed(2)} cm²`
-      : measurement ? 'calibrated contour area unavailable' : '';
-    const detail = [axisDetail, areaDetail].filter(Boolean).join(' · ');
+    // Reuse the same calibrated, validated single-contour calculator as
+    // the viewport. Area and long axis remain preserved as source evidence.
+    const volumeML = matching.length === 1
+      ? calculateLVSimpsonContourVolumeForMeasurement(measurement) : null;
+    const detail = !measurement ? '' : volumeML !== null
+      ? `single-view volume ${volumeML.toFixed(2)} mL`
+      : 'single-view volume unavailable';
     const displayName = getLVSimpsonSlotDisplayName(slot);
     const row = document.createElement('div');
     Object.assign(row.style, {
