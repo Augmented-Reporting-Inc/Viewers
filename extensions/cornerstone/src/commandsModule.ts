@@ -6545,7 +6545,17 @@ function renderLVSimpsonWorkflowPanel({
     // the viewport. Area and long axis remain preserved as source evidence.
     const volumeML = matching.length === 1
       ? calculateLVSimpsonContourVolumeForMeasurement(measurement) : null;
-    const detail = !measurement ? '' : volumeML !== null
+    const gold = lvSimpsonPanelController?.savedGoldMeasurement;
+    const goldComponent = Array.isArray(gold?.compositeResult?.components)
+      ? gold.compositeResult.components.find(item => item?.slot === slot) : null;
+    const rawGoldVolume = gold?.compositeResult?.derived?.slotVolumeML?.[slot];
+    const goldVolume = rawGoldVolume == null || rawGoldVolume === ''
+      ? null : Number(rawGoldVolume);
+    const goldDetail = goldComponent
+      ? `saved gold: ${Number.isFinite(goldVolume) && goldVolume > 0
+          ? goldVolume.toFixed(2) + ' mL' : 'volume unavailable'}`
+      : '';
+    const detail = !measurement ? goldDetail : volumeML !== null
       ? `single-view volume ${volumeML.toFixed(2)} mL`
       : 'single-view volume unavailable';
     const displayName = getLVSimpsonSlotDisplayName(slot);
@@ -6556,7 +6566,7 @@ function renderLVSimpsonWorkflowPanel({
     });
     const canNavigateSlot = !!lvSimpsonPanelController?.canNavigateSlot?.(slot);
     const rowLabel = document.createElement(canNavigateSlot ? 'button' : 'span');
-    rowLabel.textContent = `${measurement ? '✓' : '○'}  ${displayName}${detail ? ' — ' + detail : ''}`;
+    rowLabel.textContent = `${measurement ? '✓' : goldComponent ? '◇' : '○'}  ${displayName}${detail ? ' — ' + detail : ''}`;
     rowLabel.dataset.lvSimpsonSlot = slot;
     rowLabel.dataset.lvSimpsonLabel = rowLabel.textContent;
     rowLabel.style.flex = '1 1 100%';
@@ -6584,16 +6594,17 @@ function renderLVSimpsonWorkflowPanel({
       const source = id && cornerstoneTools.annotation.state.getAnnotation?.(id);
       return item?.isLocked || source?.isLocked || source?.data?.arMeasurementReadOnly;
     });
-    const rowButton = (label: string, title: string, action: () => void) => {
+    const rowButton = (label: string, title: string, action: () => void, allowLocked = false) => {
       const control = document.createElement('button');
       control.type = 'button';
       control.textContent = label;
       control.setAttribute('aria-label', title);
-      control.disabled = !!readOnly;
+      const disabled = !!readOnly && !allowLocked;
+      control.disabled = disabled;
       Object.assign(control.style, {
         border: '1px solid #94a3b8', borderRadius: '6px', padding: '4px 8px',
         background: '#334155', color: '#ffffff',
-        cursor: readOnly ? 'not-allowed' : 'pointer', opacity: readOnly ? '0.5' : '1',
+        cursor: disabled ? 'not-allowed' : 'pointer', opacity: disabled ? '0.5' : '1',
       });
       control.addEventListener('click', action);
       row.appendChild(control);
@@ -6607,6 +6618,10 @@ function renderLVSimpsonWorkflowPanel({
     if (ids.length && lvSimpsonPanelController?.onDeleteSlot) {
       rowButton('Delete', `Delete ${displayName} contour`,
         () => lvSimpsonPanelController?.onDeleteSlot?.(slot, ids));
+    }
+    if (goldComponent && lvSimpsonPanelController?.onClearSavedGoldSlot) {
+      rowButton('Clear gold', `Clear saved gold for ${displayName}`,
+        () => lvSimpsonPanelController?.onClearSavedGoldSlot?.(slot), true);
     }
     panel.appendChild(row);
   }
@@ -7715,7 +7730,7 @@ function buildViewerQuizGoldBwtDisplaySource(reference: any = {}) {
  * Multi-BWT review must read verified learner evidence from the learner copy,
  * not from a client-supplied annotation snapshot or the source teaching case.
  */
-function findViewerQuizBowelLearnerAnnotation(reference: any, learnerSeriesDoc: any) {
+function findViewerQuizLearnerOwnedAnnotation(reference: any, learnerSeriesDoc: any) {
   if (learnerSeriesDoc?.isLearnerCopy !== true) return null;
   const sourceId = getViewerQuizMeasurementSourceAnnotationId(reference);
   if (!sourceId) return null;
@@ -9523,15 +9538,21 @@ function commandsModule({
       questionKey = '',
       viewportId: requestedViewportId = '',
       captureMethod = 'axisApex',
+      panelOnly = false,
+      savedGoldMeasurement = null,
+      goldAuthoringEditable = false,
     } = {}) => {
       clearUltrasoundDirectionalWorkflowListeners();
       const isClinicalReportWorkflow = isClinicalReportMeasurementsSaveTarget(getArViewerSaveTargetFromUrl());
       const workflowSessionId = requestedSessionId || `${csUtils.uuidv4()}`;
 
       if (!requestedSessionId) {
-        // A new contour workflow invalidates any previous explicit EF.
-        explicitLVSimpsonResult = null;
-        reviewedLVSimpsonEF = null;
+        // Opening the educator authoring panel is not a new contour/EF
+        // calculation: do not invalidate a previously reviewed value.
+        if (!panelOnly) {
+          explicitLVSimpsonResult = null;
+          reviewedLVSimpsonEF = null;
+        }
         cancelActiveLVSimpsonCapture();
         lvSimpsonMouseTools.restore();
         activeLVSimpsonWorkflowSessionId = workflowSessionId;
@@ -9562,7 +9583,7 @@ function commandsModule({
       // EF-specific, read-only persistence diagnostic. On reopen the normal
       // initial hydrate is panel-only, so restoredCount=0 says nothing about
       // whether source contours were saved. Query the learner Series itself.
-      if (!requestedSessionId) {
+      if (!requestedSessionId && !panelOnly) {
         try {
           const stored = await actions.getViewerMeasurementAnnotationsForActiveStudy({
             workflows: ['viewerMeasurements'],
@@ -9700,7 +9721,7 @@ function commandsModule({
 
       // Selecting a guided EF question opens its first authored frame. A later
       // Continue performs its own jump before invoking this next slot.
-      const initialTarget = !requestedSessionId && !reviewExistingContours
+      const initialTarget = !panelOnly && !requestedSessionId && !reviewExistingContours
         ? getEFContourFrameTarget(efContourTargets, slotSelection.slotInfo.slot, { allowCanonical: allowCanonicalFrameTargets })
         : null;
       if (initialTarget && !isWorkflowCancelled()) {
@@ -9729,14 +9750,14 @@ function commandsModule({
 
       // Suspend the previously active mouse tool once for the full four-slot
       // workflow. A later Continue may switch to a different viewport/group.
-      if (!lvSimpsonMouseTools.isActive()) {
+      if (!panelOnly && !lvSimpsonMouseTools.isActive()) {
         lvSimpsonMouseTools.start();
       }
       const efToolGroupReference = toolGroupService.getToolGroupForViewport(activeViewportId);
       const efToolGroup = typeof efToolGroupReference === 'string'
         ? toolGroupService.getToolGroup(efToolGroupReference)
         : efToolGroupReference;
-      lvSimpsonMouseTools.suspend(efToolGroup);
+      if (!panelOnly) lvSimpsonMouseTools.suspend(efToolGroup);
       refreshLVSimpsonToolbarState();
 
       const { label, slotInfo } = slotSelection;
@@ -9773,6 +9794,10 @@ function commandsModule({
           return getCurrentViewerMeasurementSnapshot(measurementService)
             .filter(entry => {
               if (!getLVSimpsonSlotFromMeasurement(entry)) return false;
+              if (entry?.workflow === 'viewerQuizGoldDisplay') return false;
+              const id = getMeasurementAnnotationId(entry);
+              const source = id ? cornerstoneTools.annotation.state.getAnnotation?.(id) : null;
+              if (source?.data?.arVerifiedQuizEFGoldContour?.origin === 'quiz-gold') return false;
               const entryStudy = String(entry?.referenceStudyUID || entry?.StudyInstanceUID || '').trim();
               return !efStudyInstanceId || !entryStudy || entryStudy === efStudyInstanceId;
             });
@@ -9801,7 +9826,15 @@ function commandsModule({
           });
         };
         lvSimpsonPanelController = {
-          activeSlot: reviewExistingContours ? '' : slotInfo.slot,
+          activeSlot: (reviewExistingContours || panelOnly) ? '' : slotInfo.slot,
+          questionKey,
+          savedGoldMeasurement: panelOnly ? savedGoldMeasurement : null,
+          onClearSavedGoldSlot: panelOnly && goldAuthoringEditable && questionKey
+            ? (slot: string) => {
+                window.dispatchEvent(new CustomEvent('ar-measurements:lv-simpson-gold-delete-requested', {
+                  detail: { questionKey, slot },
+                }));
+              } : null,
           onCalculate: null,
           getMeasurements: getStudyMeasurements,
           setObservedIds(ids: string[]) {
@@ -9828,6 +9861,15 @@ function commandsModule({
               const verified = getEFContourFrameTarget({ [slot]: sourceTarget }, slot);
               if (verified) return verified;
             }
+            // Saved educator gold is read-only reference evidence, not an
+            // editable live contour. Still offer its exact source frame.
+            if (saved.length === 0 && this.savedGoldMeasurement) {
+              const part = this.savedGoldMeasurement?.compositeResult?.components
+                ?.find(item => item?.slot === slot);
+              const goldTarget = part?.target &&
+                getEFContourFrameTarget({ [slot]: part.target }, slot);
+              if (goldTarget) return goldTarget;
+            }
             // No unique saved source: an explicitly authored target is still
             // valid, but an ambiguous contour must not be guessed.
             return saved.length > 1 ? null : getEFContourFrameTarget(efContourTargets, slot, { allowCanonical: allowCanonicalFrameTargets });
@@ -9840,6 +9882,17 @@ function commandsModule({
             const target = this.getNavigationTarget(slot);
             if (!target) return;
             cancelDrawingWithoutClosingPanel();
+            const hasLive = getStudyMeasurements().some(item =>
+              getLVSimpsonSlotFromMeasurement(item) === slot);
+            if (!hasLive && this.savedGoldMeasurement?.compositeResult?.components
+              ?.some(item => item?.slot === slot)) {
+              // Reuse the verified, read-only gold overlay presenter. The
+              // EF panel never converts saved gold into editable geometry.
+              await actions.showViewerQuizMeasurementComparison({
+                rubricMeasurement: this.savedGoldMeasurement,
+                viewerTarget: target, focusedCompositeSlot: slot, questionKey,
+              });
+            }
             let navigation: any = null;
             try {
               navigation = await actions.jumpToViewerQuizTarget({
@@ -9863,10 +9916,12 @@ function commandsModule({
             this.activeSlot = slot;
             updateLVSimpsonCurrentSlotLabel(slot);
           },
-          onDrawSlot(slot: string, method: string = 'freehand') {
+          async onDrawSlot(slot: string, method: string = 'freehand') {
             if (!LV_TRACE_REQUIRED_SLOTS.includes(slot) || !isActiveStudy()) return;
-            // Starting a new session preserves authored frame targets from the
-            // current EF question and reuses exact-frame navigation.
+            // Do not draw over a read-only educator gold comparison overlay.
+            if (panelOnly) {
+              await actions.clearViewerQuizMeasurementComparison();
+            }
             if (activeLVSimpsonWorkflowSessionId) {
               clearLVSimpsonWorkflowIfCurrent(activeLVSimpsonWorkflowSessionId);
             } else {
@@ -10084,6 +10139,26 @@ function commandsModule({
           onCancel: hideLVSimpsonWorkflowPanel,
         });
       };
+      if (panelOnly) {
+        // Educator authoring uses the same four-slot panel without starting a
+        // drawing session. Choosing Freehand/Axis+Apex explicitly starts one.
+        activeLVSimpsonWorkflowSessionId = '';
+        cancelActiveLVSimpsonCapture();
+        lvSimpsonMouseTools.restore();
+        refreshLVSimpsonToolbarState();
+        const liveSlots = getLVSimpsonSlotCandidates(lvSimpsonPanelController?.getMeasurements?.() || []);
+        const allEditable = LV_TRACE_REQUIRED_SLOTS.every(slot => liveSlots.get(slot)?.length === 1);
+        if (lvSimpsonPanelController) {
+          lvSimpsonPanelController.onCalculate = allEditable ? calculateEF : null;
+        }
+        renderLVSimpsonWorkflowPanel({
+          instruction: 'Educator EF authoring: draw or review each contour here. ' +
+            'Capture the calculated gold EF after all four are ready, then Save Draft in Case Questions.',
+          onCalculate: allEditable ? calculateEF : null,
+          onCancel: hideLVSimpsonWorkflowPanel,
+        });
+        return { ok: true, panelOpened: true };
+      }
       if (reviewExistingContours) {
         // There is nothing left to draw. Do not hold the mouse-capture
         // workflow open or show Step 1/4 on a completed saved assessment.
@@ -13512,6 +13587,9 @@ function commandsModule({
         clearUltrasoundDirectionalWorkflowListeners();
         if (activeLVSimpsonWorkflowSessionId) {
           clearLVSimpsonWorkflowIfCurrent(activeLVSimpsonWorkflowSessionId);
+        } else if (lvSimpsonPanelController) {
+          // Panel-only educator authoring has no active drag session.
+          hideLVSimpsonWorkflowPanel();
         }
         if (activeLAVolumeWorkflowSessionId) {
           clearLAVolumeWorkflowIfCurrent(activeLAVolumeWorkflowSessionId);
@@ -15011,6 +15089,26 @@ function commandsModule({
       ).trim();
       return getExplicitLVSimpsonResult(studyInstanceId);
     },
+    updateLVSimpsonEFPanelGold: ({ questionKey = '', savedGoldMeasurement = null, goldAuthoringEditable = false } = {}) => {
+      if (!lvSimpsonPanelController || lvSimpsonPanelController.questionKey !== questionKey) {
+        return { ok: false, reason: 'other-question-or-panel-closed' };
+      }
+      lvSimpsonPanelController.savedGoldMeasurement = savedGoldMeasurement;
+      lvSimpsonPanelController.onClearSavedGoldSlot = goldAuthoringEditable && questionKey
+        ? (slot: string) => window.dispatchEvent(new CustomEvent(
+            'ar-measurements:lv-simpson-gold-delete-requested',
+            { detail: { questionKey, slot } }
+          )) : null;
+      // Keep the active contour instructions intact while the tool is drawing.
+      if (!activeLVSimpsonWorkflowSessionId) {
+        renderLVSimpsonWorkflowPanel({
+          instruction: 'Educator EF authoring: use this panel for contours; Save Draft in Case Questions.',
+          onCalculate: lvSimpsonPanelController.onCalculate,
+          onCancel: hideLVSimpsonWorkflowPanel,
+        });
+      }
+      return { ok: true };
+    },
     getViewerMeasurementSnapshotForPanel: () => {
       const saveTarget = getArViewerSaveTargetFromUrl();
       const writableWorkflow = getWritableReviewMeasurementWorkflow(saveTarget);
@@ -15800,7 +15898,7 @@ function commandsModule({
       // Newly captured, not-yet-saved calipers can come from the live service.
       const { learnerSeriesDoc } = await getViewerQuizMeasurementSeriesDocs({ includeBaseSeries: false });
       const annotations = references.map(reference => {
-        const saved = findViewerQuizBowelLearnerAnnotation(reference, learnerSeriesDoc);
+        const saved = findViewerQuizLearnerOwnedAnnotation(reference, learnerSeriesDoc);
         if (saved) return saved;
         const sourceId = getViewerQuizMeasurementSourceAnnotationId(reference);
         // Only this viewer session's newly drawn calipers may use a live
@@ -17386,6 +17484,9 @@ function commandsModule({
     },
     startLVSimpsonEFWorkflow: {
       commandFn: actions.startLVSimpsonEFWorkflow,
+    },
+    updateLVSimpsonEFPanelGold: {
+      commandFn: actions.updateLVSimpsonEFPanelGold,
     },
     startLAVolumeWorkflow: {
       commandFn: actions.startLAVolumeWorkflow,
