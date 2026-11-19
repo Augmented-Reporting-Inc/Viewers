@@ -168,7 +168,15 @@ test('multi-BWT opens its complete saved learner annotation set, never the gold 
   const end = source.indexOf('showViewerQuizLearnerMeasurement: async', start);
   assert.ok(start >= 0 && end > start, 'missing dedicated multi-BWT learner display command');
   const command = source.slice(start, end);
-  assert.match(command, /findViewerQuizBowelLearnerAnnotation\(reference, learnerSeriesDoc\)/);
+  assert.match(command, /findViewerQuizLearnerOwnedAnnotation\(reference, learnerSeriesDoc\)/);
+  const ownershipStart = source.indexOf('function findViewerQuizLearnerOwnedAnnotation(');
+  const ownershipEnd = source.indexOf('function getViewerQuizMeasurementReferenceTarget(', ownershipStart);
+  assert.ok(ownershipStart >= 0 && ownershipEnd > ownershipStart,
+    'learner source lookup must keep an exact, learner-copy-only authorization boundary');
+  const ownership = source.slice(ownershipStart, ownershipEnd);
+  assert.match(ownership, /learnerSeriesDoc\?\.isLearnerCopy !== true/);
+  assert.match(ownership, /getRequestedWorkflowAnnotations\(/);
+  assert.match(ownership, /getMeasurementAnnotationId\(item\) === sourceId/);
   assert.match(command, /viewerMeasurementsCreatedInSession\.has\(sourceId\)/);
   assert.doesNotMatch(command, /baseSeriesDoc/, 'never display source-study gold annotations');
   assert.match(command, /getFrameNumberForAnnotation\(saved\)/);
