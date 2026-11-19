@@ -6595,12 +6595,13 @@ function renderLVSimpsonWorkflowPanel({
       const source = id && cornerstoneTools.annotation.state.getAnnotation?.(id);
       return item?.isLocked || source?.isLocked || source?.data?.arMeasurementReadOnly;
     });
-    const rowButton = (label: string, title: string, action: () => void, allowLocked = false) => {
+    const rowButton = (label: string, title: string, action: () => void,
+      allowLocked = false, requiresTarget = false) => {
       const control = document.createElement('button');
       control.type = 'button';
       control.textContent = label;
       control.setAttribute('aria-label', title);
-      const disabled = !!readOnly && !allowLocked;
+      const disabled = (!!readOnly && !allowLocked) || requiresTarget;
       control.disabled = disabled;
       Object.assign(control.style, {
         border: '1px solid #94a3b8', borderRadius: '6px', padding: '4px 8px',
@@ -6611,10 +6612,17 @@ function renderLVSimpsonWorkflowPanel({
       row.appendChild(control);
     };
     if (lvSimpsonPanelController?.onDrawSlot && lvSimpsonPanelController?.canEdit !== false) {
+      const targetMissing = lvSimpsonPanelController?.needsConfiguredTarget?.(slot) === true;
       rowButton('Freehand', `Trace ${displayName} freehand`,
-        () => lvSimpsonPanelController?.onDrawSlot?.(slot, 'freehand'));
+        () => lvSimpsonPanelController?.onDrawSlot?.(slot, 'freehand'), false, targetMissing);
       rowButton('Axis + Apex', `Draw ${displayName} with axis and apex`,
-        () => lvSimpsonPanelController?.onDrawSlot?.(slot, 'axisApex'));
+        () => lvSimpsonPanelController?.onDrawSlot?.(slot, 'axisApex'), false, targetMissing);
+      if (targetMissing) {
+        const hint = document.createElement('span');
+        hint.textContent = 'Capture this slot’s target frame in Case Questions first.';
+        Object.assign(hint.style, { color: '#fcd34d', fontSize: '12px' });
+        row.appendChild(hint);
+      }
     }
     if (ids.length && lvSimpsonPanelController?.onDeleteSlot &&
         lvSimpsonPanelController?.canEdit !== false) {
@@ -9832,6 +9840,11 @@ function commandsModule({
           canEdit: !panelOnly || goldAuthoringEditable,
           questionKey,
           savedGoldMeasurement,
+          efContourTargets,
+          needsConfiguredTarget(slot: string) {
+            return !!(goldAuthoringEditable && this.efContourTargets &&
+              !getEFContourFrameTarget(this.efContourTargets, slot));
+          },
           onClearSavedGoldSlot: goldAuthoringEditable && questionKey
             ? (slot: string) => {
                 window.dispatchEvent(new CustomEvent('ar-measurements:lv-simpson-gold-delete-requested', {
@@ -9875,7 +9888,7 @@ function commandsModule({
             }
             // No unique saved source: an explicitly authored target is still
             // valid, but an ambiguous contour must not be guessed.
-            return saved.length > 1 ? null : getEFContourFrameTarget(efContourTargets, slot, { allowCanonical: allowCanonicalFrameTargets });
+            return saved.length > 1 ? null : getEFContourFrameTarget(this.efContourTargets, slot, { allowCanonical: allowCanonicalFrameTargets });
           },
           canNavigateSlot(slot: string) {
             return isActiveStudy() && !!this.getNavigationTarget(slot);
@@ -9920,9 +9933,17 @@ function commandsModule({
             updateLVSimpsonCurrentSlotLabel(slot);
           },
           async onDrawSlot(slot: string, method: string = 'freehand') {
-            if (!LV_TRACE_REQUIRED_SLOTS.includes(slot) || !isActiveStudy()) return;
+            if (!LV_TRACE_REQUIRED_SLOTS.includes(slot) || !isActiveStudy() ||
+                this.canEdit === false) return;
+            if (this.needsConfiguredTarget(slot)) {
+              uiNotificationService.show({
+                title: 'EF authoring', type: 'warning', duration: 5000,
+                message: 'Capture this contour’s required DICOM target frame before drawing.',
+              });
+              return;
+            }
             // Do not draw over a read-only educator gold comparison overlay.
-            if (panelOnly) {
+            if (goldAuthoringEditable) {
               await actions.clearViewerQuizMeasurementComparison();
             }
             if (activeLVSimpsonWorkflowSessionId) {
@@ -9931,8 +9952,9 @@ function commandsModule({
               hideLVSimpsonWorkflowPanel();
             }
             void actions.startLVSimpsonEFWorkflow({
-              slot, singleSlot: true, efContourTargets, allowCanonicalFrameTargets,
-              questionKey, captureMethod: method, savedGoldMeasurement: this.savedGoldMeasurement,
+              slot, singleSlot: true, efContourTargets: this.efContourTargets,
+              allowCanonicalFrameTargets, questionKey, captureMethod: method,
+              savedGoldMeasurement: this.savedGoldMeasurement,
               goldAuthoringEditable,
               viewportId: viewportGridService.getActiveViewportId(),
             }).catch(error => console.warn('[LV EF] selected contour redraw failed:', error));
@@ -15188,12 +15210,14 @@ function commandsModule({
       ).trim();
       return getExplicitLVSimpsonResult(studyInstanceId);
     },
-    updateLVSimpsonEFPanelGold: ({ questionKey = '', savedGoldMeasurement = null, goldAuthoringEditable = false } = {}) => {
+    updateLVSimpsonEFPanelGold: ({ questionKey = '', savedGoldMeasurement = null, goldAuthoringEditable = false,
+      efContourTargets = null } = {}) => {
       if (!lvSimpsonPanelController || lvSimpsonPanelController.questionKey !== questionKey) {
         return { ok: false, reason: 'other-question-or-panel-closed' };
       }
       lvSimpsonPanelController.savedGoldMeasurement = savedGoldMeasurement;
       lvSimpsonPanelController.canEdit = goldAuthoringEditable;
+      lvSimpsonPanelController.efContourTargets = efContourTargets;
       lvSimpsonPanelController.onClearSavedGoldSlot = goldAuthoringEditable && questionKey
         ? (slot: string) => window.dispatchEvent(new CustomEvent(
             'ar-measurements:lv-simpson-gold-delete-requested',
