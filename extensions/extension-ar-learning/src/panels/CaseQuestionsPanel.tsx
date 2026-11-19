@@ -13,6 +13,7 @@ import {
 } from '../utils/viewerQuizApi';
 import {
   buildClinicalReportReviewRows,
+  buildClinicalViewerAnnotationReviewRows,
   ClinicalReportMeasurementReviewModal,
 } from '../../../extension-ar-measurements/src/panels/ARMeasurementsPanel';
 import {
@@ -4427,11 +4428,23 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       throw new Error(`AR could not verify ${unverified.map(row => row.label).join(', ')} for transfer. Review those source measurements and retry.`);
     }
     const rows = buildClinicalReportReviewRows(preview);
-    if (!rows.length && preview?.measurementAnnotationsChanged === false &&
-        !quizEvidenceRows.length) return;
+    const annotationRows = buildClinicalViewerAnnotationReviewRows(preview);
+    const hasRecordedQuizEvidence = quizEvidenceRows.some(row => row.recorded);
+    if (!rows.length && !hasRecordedQuizEvidence) {
+      if (preview?.measurementAnnotationsChanged === false) return;
+      // An empty report-field diff is expected for many quiz measurements,
+      // but an empty *annotation snapshot* is not evidence that anything
+      // will be persisted. Never present a blank, misleading review dialog.
+      if (!annotationRows.length) {
+        throw new Error(
+          'No source-backed viewer measurements were available for review. ' +
+          'Return to the measurement questions, verify your calipers/contours and retry.'
+        );
+      }
+    }
     setQuizMeasurementSelectedRows(rows.filter(row => row.changed).map(row => row.key));
     setQuizMeasurementReview({
-      rows, derivedConsequences: preview?.derivedConsequences, quizEvidenceRows,
+      rows, annotationRows, derivedConsequences: preview?.derivedConsequences, quizEvidenceRows,
       educationQuizHemodynamics, educationWorkflow: true,
     });
     const approved = await new Promise<boolean>(resolve => {
