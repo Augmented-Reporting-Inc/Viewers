@@ -2093,6 +2093,11 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
   const efCaptureInFlightRef = useRef(false);
   // Only newly captured BWT calipers need an annotation save before quiz save.
   const pendingBowelQuizMeasurementIdsRef = useRef(new Set<string>());
+  // A deleted viewer annotation must be removed from the learner Series on
+  // quiz Save, not merely hidden or omitted from the quiz response JSON.
+  const pendingQuizMeasurementDeletionsRef = useRef<
+    Record<string, Array<{ annotationId: string; domain: 'echo' | 'bowel' }>>
+  >({});
   const autoBowelGoldCaptureInFlightRef = useRef(new Set<string>());
   const autoCompositeGoldCaptureInFlightRef = useRef(new Set<string>());
   const lastCompositeGoldCaptureErrorRef = useRef('');
@@ -2598,6 +2603,15 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
           [question.questionKey]: updated,
         },
       };
+      const domain: 'echo' | 'bowel' =
+        getQuizQuestionMeasurementDomain(quiz, question, payload) === 'bowel'
+          ? 'bowel' : 'echo';
+      const currentDeletes = pendingQuizMeasurementDeletionsRef.current[quiz.quizKey] || [];
+      if (!currentDeletes.some(item => item.annotationId === sourceId)) {
+        pendingQuizMeasurementDeletionsRef.current[quiz.quizKey] = [
+          ...currentDeletes, { annotationId: sourceId, domain },
+        ];
+      }
       setAnswer(quiz.quizKey, question, updated);
       setSpectralLearnerCaptureErrors(current => {
         const key = quiz.quizKey + ':' + question.questionKey;
@@ -4452,6 +4466,37 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     }
 
     try {
+      // Persist and verify annotation removal on the isolated learner Series
+      // before saving a quiz response without that source. Deletion-only saves
+      // must not rewrite other, unrelated viewer measurements.
+      const deletions = pendingQuizMeasurementDeletionsRef.current[quiz.quizKey] || [];
+      if (deletions.length) {
+        await ensureViewerQuizSaveSeriesDoc();
+        for (const domain of ['echo', 'bowel'] as const) {
+          const ids = deletions.filter(item => item.domain === domain)
+            .map(item => item.annotationId);
+          if (!ids.length) continue;
+          const persisted = await runViewerCommand(
+            commandsManager, 'saveViewerMeasurementsForActiveStudy', {
+              domain,
+              measurementIds: [],
+              deleteAnnotationIds: ids,
+              scoringIntent: 'draft',
+              educationAttemptIntent: 'draft',
+              suppressSuccessNotification: true,
+            }
+          );
+          const persistedIds = new Set((Array.isArray(persisted?.annotations)
+            ? persisted.annotations : []).map(item =>
+            cleanString(item?.uid || item?.annotationId)));
+          if (!persisted?.seriesDoc?.isLearnerCopy ||
+              ids.some(id => persistedIds.has(id))) {
+            throw new Error(
+              'AR could not verify learner measurement deletion. Quiz answers were not saved.'
+            );
+          }
+        }
+      }
       // Bowel quiz answers require persisted canonical calipers. Save newly
       // captured measurements on the learner copy before saving quiz JSON.
       const pendingIds = Array.from(new Set((quiz.questions || [])
@@ -4572,6 +4617,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         );
         if (evidenceError) throw new Error(evidenceError);
         // Scoring is a separate operation from verified answer persistence.
+        delete pendingQuizMeasurementDeletionsRef.current[quiz.quizKey];
         reportEducationSaveResult(saveSource, saveRequestId, true);
       } catch (saveError) {
         reportEducationSaveResult(saveSource, saveRequestId, false);
