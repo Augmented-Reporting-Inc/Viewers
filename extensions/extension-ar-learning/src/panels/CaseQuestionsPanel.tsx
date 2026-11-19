@@ -6689,8 +6689,10 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                         </div>
             )}
           {!bowelSet && !linkedRVSP &&
-            !isGuidedQuizCompositeKind(cleanString(plainObject(question.answerConfig).measurementKind)) &&
-            cleanString(value?.sourceAnnotationId) ? (
+            !['lvSimpsonEF', 'laVolumeBiplane', 'laVolumeBiplaneDisks',
+              'rvFAC', 'raArea', 'ivcCollapsibility'].includes(
+              cleanString(plainObject(question.answerConfig).measurementKind)
+            ) && cleanString(value?.sourceAnnotationId) ? (
             <button type="button"
               className="rounded border border-red-700 px-2 py-1 text-[11px] text-red-200 hover:bg-red-950 disabled:opacity-50"
               disabled={disabled || captureInProgress}
