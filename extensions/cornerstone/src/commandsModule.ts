@@ -10705,43 +10705,34 @@ function commandsModule({
       }
 
       if (nextSlot && singleSlot) {
-        if (goldAuthoringEditable) {
-          // The educator's shared EF panel must remain open after a single
-          // contour is redrawn. Do not automatically start the next contour.
-          activeLVSimpsonWorkflowSessionId = '';
-          cancelActiveLVSimpsonCapture();
-          lvSimpsonMouseTools.restore();
-          refreshLVSimpsonToolbarState();
-          const currentSlots = getLVSimpsonSlotCandidates(
-            lvSimpsonPanelController?.getMeasurements?.() || []
-          );
-          const allPresent = LV_TRACE_REQUIRED_SLOTS.every(
-            slot => currentSlots.get(slot)?.length === 1
-          );
-          if (lvSimpsonPanelController) {
-            lvSimpsonPanelController.onCalculate = allPresent ? calculateEF : null;
-          }
-          renderLVSimpsonWorkflowPanel({
-            instruction: `${slotDisplayName} recorded. Continue authoring in this EF panel; ` +
-              'capture the calculated gold EF and Save Draft when complete.',
-            onCalculate: allPresent ? calculateEF : null,
-            onCancel: hideLVSimpsonWorkflowPanel,
-          });
-          return measurement;
+        // A single-slot drawing action is launched from the persistent four-row
+        // EF panel for both learners and educators. Finishing that annotation
+        // ends only mouse capture; it must never tear down the panel/controller.
+        // The next contour is selected explicitly from the same panel.
+        activeLVSimpsonWorkflowSessionId = '';
+        cancelActiveLVSimpsonCapture();
+        lvSimpsonMouseTools.restore();
+        refreshLVSimpsonToolbarState();
+        const currentSlots = getLVSimpsonSlotCandidates(
+          lvSimpsonPanelController?.getMeasurements?.() || []
+        );
+        const allPresent = LV_TRACE_REQUIRED_SLOTS.every(
+          slot => currentSlots.get(slot)?.length === 1
+        );
+        if (lvSimpsonPanelController) {
+          lvSimpsonPanelController.onCalculate = allPresent ? calculateEF : null;
+          lvSimpsonPanelController.activeSlot = '';
         }
-        clearLVSimpsonWorkflowIfCurrent(workflowSessionId);
-
-        showLVSimpsonNotification(uiNotificationService, {
-          title: 'LV EF',
-          message: `${slotDisplayName} recorded. Simpson LVEF still requires all four A4C/A2C end-diastolic and end-systolic contours. Next missing: ${getLVSimpsonSlotDisplayName(
-            nextSlot
-          )}.`,
-          type: axisWarning ? 'warning' : 'info',
-          duration: axisWarning
-            ? LV_SIMPSON_WARNING_DURATION_MS
-            : LV_SIMPSON_GUIDANCE_DURATION_MS,
+        renderLVSimpsonWorkflowPanel({
+          instruction: goldAuthoringEditable
+            ? `${slotDisplayName} recorded. Continue authoring in this EF panel; ` +
+              'capture the calculated gold EF and Save Draft when complete.'
+            : `${slotDisplayName} recorded. Choose ${getLVSimpsonSlotDisplayName(nextSlot)} ` +
+              'or another contour in this panel to continue.',
+          warnings: axisWarning ? [axisWarning] : [],
+          onCalculate: allPresent ? calculateEF : null,
+          onCancel: hideLVSimpsonWorkflowPanel,
         });
-
         return measurement;
       }
 
