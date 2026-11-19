@@ -15389,6 +15389,17 @@ function commandsModule({
         });
       }
 
+      if (isLVSimpsonMeasurement(savedAnnotation)) {
+        for (const toolName of [toolNames.SplineROI || 'SplineROI',
+          toolNames.PlanarFreehandROI || 'PlanarFreehandROI']) {
+          installLVSimpsonContourTextCleanupForViewport({
+            viewport: hydratedViewport,
+            viewportId: hydratedViewport.id || targetViewportId,
+            toolName, measurementService,
+          });
+        }
+      }
+
       // Cornerstone-owned AR annotations (VTI traces and directional US measurements)
       // must not round-trip through MeasurementService here. Their persisted AR payload
       // and Cornerstone annotation state are the source of truth for viewport display.
@@ -15727,6 +15738,15 @@ function commandsModule({
           viewportId: targetViewportId,
           measurementService, viewportGridService, displaySetService, toolGroupService,
         });
+        // The destination tool group can differ from the one that rendered the
+        // original EF contour. Install volume labels on target navigation too.
+        for (const toolName of [toolNames.SplineROI || 'SplineROI',
+          toolNames.PlanarFreehandROI || 'PlanarFreehandROI']) {
+          installLVSimpsonContourTextCleanupForViewport({
+            viewport: resolveTargetViewport(), viewportId: targetViewportId,
+            toolName, measurementService,
+          });
+        }
         if (pauseCineOnTarget) {
           stopSourceCineForViewport(targetViewportId);
           // Cine may advance while the target image is asynchronously loaded.
