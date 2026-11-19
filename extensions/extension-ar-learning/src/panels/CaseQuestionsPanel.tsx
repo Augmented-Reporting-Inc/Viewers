@@ -7409,54 +7409,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                         );
                       })() : null}
                       <div className="mt-2 flex flex-wrap gap-2">
-                        {[
-                          { label: 'Freehand', method: 'freehand' },
-                          { label: 'Axis + apex', method: 'axisApex' },
-                        ].map(choice => (
-                          <button key={choice.method} type="button"
-                            className="rounded border border-cyan-600 px-2 py-1 text-cyan-100 disabled:opacity-40"
-                            disabled={isCapturing || authoringSaving || !isDraftDefinition(authoringDefinition) ||
-                              (guidanceEnabled && !row.configuredComplete)}
-                            onClick={event => {
-                              event.preventDefault();
-                              event.stopPropagation();
-                              void (async () => {
-                                await selectQuestion({ quizKey: 'authoring', quizVersion: 1 },
-                                  question, { force: true });
-                                if (guidanceEnabled) {
-                                  const opened = await runViewerCommand(commandsManager,
-                                    'jumpToViewerQuizTarget', {
-                                      viewerTarget: row.configuredTarget,
-                                      questionKey: question.questionKey,
-                                    });
-                                  if (opened?.ok !== true) throw new Error('The contour target frame is unavailable.');
-                                  if (cleanString(opened?.viewportId)) {
-                                    await runViewerCommand(commandsManager, 'setViewportActive', {
-                                      viewportId: opened.viewportId,
-                                    });
-                                  }
-                                  const frame = await runViewerCommand(commandsManager,
-                                    'getCurrentViewerQuizFrameAnswer', {});
-                                  if (frame?.ok !== true || !matchesConfiguredCompositeFrame(
-                                    plainObject(frame?.answer?.selectedTarget), row.configuredTarget
-                                  )) throw new Error('The selected contour frame does not match its saved target.');
-                                }
-                                await runViewerCommand(commandsManager, 'startLVSimpsonEFWorkflow', {
-                                  slot: row.slot,
-                                  singleSlot: true,
-                                  captureMethod: choice.method,
-                                  efContourTargets: guidanceEnabled
-                                    ? plainObject(answerConfig.efContourTargets) : null,
-                                  questionKey: question.questionKey,
-                                });
-                              })().catch(error => uiNotificationService.show({
-                                title: 'EF contour', type: 'warning', duration: 6000,
-                                message: String(error?.message || error),
-                              }));
-                            }}>
-                            {choice.label}
-                          </button>
-                        ))}
+                         <span className="text-[11px] text-cyan-200">
+                           Draw or replace this contour from the shared EF panel.
+                         </span>
                         {guidanceEnabled ? (
                           <button type="button"
                             className="rounded border border-blue-500 px-2 py-1 text-blue-100 disabled:opacity-50"
@@ -7467,82 +7422,6 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                               void captureAuthoringEFContourFrame(question, row.slot);
                             }}>
                             {targetCaptured ? 'Replace target' : 'Capture target'}
-                          </button>
-                        ) : null}
-                        {row.goldVerified ? (
-                          <button type="button"
-                            className="rounded border border-emerald-600 px-2 py-1 text-emerald-100 disabled:opacity-40"
-                            disabled={authoringSaving}
-                            onClick={event => {
-                              event.preventDefault();
-                              event.stopPropagation();
-                              setActiveQuestionKey(`authoring:${question.questionKey}`);
-                              // Use the same focused, source-backed overlay restoration as
-                              // LAV and RV FAC. Reopen the specific saved slot rather than
-                              // the composite answer's final (fourth) frame.
-                              void (async () => {
-                                const result = await runViewerCommand(
-                                  commandsManager, 'showViewerQuizMeasurementComparison', {
-                                    rubricMeasurement: plainObject(answerConfig.goldMeasurement),
-                                    viewerTarget: row.savedTarget,
-                                    focusedCompositeSlot: row.slot,
-                                    questionKey: question.questionKey,
-                                  }
-                                );
-                                const navigation = await runViewerCommand(
-                                  commandsManager, 'jumpToViewerQuizTarget', {
-                                    viewerTarget: row.savedTarget,
-                                    questionKey: question.questionKey,
-                                  }
-                                );
-                                if (cleanString(navigation?.viewportId)) {
-                                  await runViewerCommand(commandsManager, 'setViewportActive', {
-                                    viewportId: navigation.viewportId,
-                                  });
-                                }
-                                const currentFrame = await runViewerCommand(
-                                  commandsManager, 'getCurrentViewerQuizFrameAnswer', {}
-                                );
-                                const openedExpectedFrame = currentFrame?.ok === true &&
-                                  matchesConfiguredCompositeFrame(
-                                    plainObject(currentFrame?.answer?.selectedTarget), row.savedTarget
-                                  );
-                                if (navigation?.ok !== true || !openedExpectedFrame ||
-                                    result?.rubricRendered !== true) {
-                                  uiNotificationService.show({
-                                    title: 'Saved EF contour', type: 'warning', duration: 5000,
-                                    message: 'The saved contour or its exact source frame could not be displayed.',
-                                  });
-                                }
-                              })().catch(error => console.warn(
-                                '[CaseQuestionsPanel] EF saved contour navigation failed', error
-                              ));
-                            }}>
-                            View saved gold
-                          </button>
-                        ) : null}
-                        {row.goldVerified ? (
-                          <button type="button"
-                            className="rounded border border-red-600 px-2 py-1 text-red-100 disabled:opacity-40"
-                            disabled={isCapturing || authoringSaving || !isDraftDefinition(authoringDefinition)}
-                            onClick={event => {
-                              event.preventDefault();
-                              event.stopPropagation();
-                              const savedComponent = plainObject(
-                                plainObject(answerConfig.goldMeasurement).compositeResult
-                              ).components;
-                              const component = Array.isArray(savedComponent)
-                                ? savedComponent.find(item => cleanString(item?.slot) === row.slot)
-                                : null;
-                              void deleteCompositePhaseMeasurement(
-                                { quizKey: 'authoring', quizVersion: 1 } as QuizDefinition,
-                                question, row.slot, {
-                                  annotationId: cleanString(component?.annotationId),
-                                  target: row.savedTarget,
-                                }
-                              );
-                            }}>
-                            Delete contour
                           </button>
                         ) : null}
                         {guidanceEnabled && row.configuredComplete &&
