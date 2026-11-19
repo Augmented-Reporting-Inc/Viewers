@@ -5824,7 +5824,7 @@ function installQuizCompositeContourTextOverrideForViewport({
   }
 }
 
-function installLVSimpsonContourTextCleanupForViewport({ viewport, viewportId = '', toolName, measurementService }) {
+function installLVSimpsonContourTextCleanupForViewport({ viewport, viewportId = '', toolName }) {
   if (!viewport || !toolName) {
     return;
   }
@@ -10514,7 +10514,6 @@ function commandsModule({
           viewport,
           viewportId: activeViewportId,
           toolName: toolNames.SplineROI || 'SplineROI',
-          measurementService,
         });
         viewport.render?.();
       } catch {}
@@ -11004,7 +11003,6 @@ function commandsModule({
           viewport,
           viewportId: activeViewportId,
           toolName: toolNames.SplineROI || 'SplineROI',
-          measurementService,
         });
         installQuizCompositeContourTextOverrideForViewport({
           viewport, viewportId: activeViewportId,
@@ -15372,7 +15370,7 @@ function commandsModule({
           installLVSimpsonContourTextCleanupForViewport({
             viewport: hydratedViewport,
             viewportId: hydratedViewport.id || targetViewportId,
-            toolName, measurementService,
+            toolName,
           });
         }
       }
@@ -15721,7 +15719,7 @@ function commandsModule({
           toolNames.PlanarFreehandROI || 'PlanarFreehandROI']) {
           installLVSimpsonContourTextCleanupForViewport({
             viewport: resolveTargetViewport(), viewportId: targetViewportId,
-            toolName, measurementService,
+            toolName,
           });
         }
         if (pauseCineOnTarget) {
@@ -16556,7 +16554,7 @@ function commandsModule({
         for (const toolName of [toolNames.SplineROI || 'SplineROI',
           toolNames.PlanarFreehandROI || 'PlanarFreehandROI']) {
           installLVSimpsonContourTextCleanupForViewport({
-            viewport, viewportId: comparisonViewportId, toolName, measurementService,
+            viewport, viewportId: comparisonViewportId, toolName,
           });
         }
       }
