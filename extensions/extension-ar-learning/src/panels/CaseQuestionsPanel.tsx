@@ -58,6 +58,7 @@ import { getCompositePhaseSlot, getCompositePhaseMeasurementId, matchesComposite
 const AR_QUIZ_MEASUREMENT_ADDED_EVENT = 'ar-learning:quiz-measurement-added';
 const AR_QUIZ_MEASUREMENT_LABELLED_EVENT = 'ar-learning:quiz-measurement-labelled';
 const AR_LV_SIMPSON_CAPTURE_REQUESTED_EVENT = 'ar-measurements:lv-simpson-capture-requested';
+const AR_LV_SIMPSON_GOLD_DELETE_REQUESTED_EVENT = 'ar-measurements:lv-simpson-gold-delete-requested';
 const AR_VIEWER_QUIZ_AUTHORING_SAVED_EVENT = 'ar:viewer-quiz-authoring-saved';
 function reportEducationChange(source: string) {
   window.dispatchEvent(new CustomEvent('ar:education-work-changed', { detail: { source } }));
@@ -2546,6 +2547,77 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     return { kind, saved, live, phaseSource };
   }
 
+  // Delete the learner-owned annotation first, then clear the exact quiz
+  // answer. Never clear a newer answer or remove educator gold by slot alone.
+  async function deleteLearnerQuizSourceMeasurement(
+    quiz: QuizDefinition, question: QuizQuestion, sourceAnswer: any,
+    { bowelSource = false }: { bowelSource?: boolean } = {}
+  ) {
+    if (authoringMode || getQuizScoreItem(viewerQuizScore, quiz)) return;
+    const sourceId = cleanString(sourceAnswer?.sourceAnnotationId ||
+      plainObject(sourceAnswer?.sourceRefs).annotationId);
+    if (!sourceId) {
+      uiNotificationService.show({
+        title: 'Delete measurement', type: 'warning', duration: 4000,
+        message: 'This answer has no identifiable viewer measurement.',
+      });
+      return;
+    }
+    if (!window.confirm('Delete this measurement and clear its quiz answer? ' +
+      'You can redraw it and save your correction.')) return;
+    try {
+      const result = await runViewerCommand(commandsManager,
+        'deleteViewerQuizLearnerMeasurement', { learnerMeasurement: sourceAnswer });
+      if (result?.ok !== true || cleanString(result.annotationId) !== sourceId) {
+        uiNotificationService.show({
+          title: 'Delete measurement', type: 'warning', duration: 6000,
+          message: 'Measurement was not deleted (' +
+            cleanString(result?.reason || 'source-not-found') +
+            '). Your answer has not been changed.',
+        });
+        return;
+      }
+      const latest = latestLearnerAnswersRef.current[quiz.quizKey]?.[question.questionKey];
+      let updated: any;
+      if (bowelSource) {
+        const previous = getBowelMeasurementSetEntries(plainObject(latest).measurements);
+        updated = { measurements: previous.filter(item =>
+          cleanString(item.sourceAnnotationId) !== sourceId) };
+        pendingBowelQuizMeasurementIdsRef.current.delete(sourceId);
+      } else if (cleanString(plainObject(latest).sourceAnnotationId) === sourceId) {
+        updated = null;
+      } else {
+        // A newly captured answer must survive deletion of an older source.
+        await refreshLiveCompositeMeasurements();
+        return;
+      }
+      latestLearnerAnswersRef.current = {
+        ...latestLearnerAnswersRef.current,
+        [quiz.quizKey]: {
+          ...(latestLearnerAnswersRef.current[quiz.quizKey] || {}),
+          [question.questionKey]: updated,
+        },
+      };
+      setAnswer(quiz.quizKey, question, updated);
+      setSpectralLearnerCaptureErrors(current => {
+        const key = quiz.quizKey + ':' + question.questionKey;
+        if (!current[key]) return current;
+        const next = { ...current }; delete next[key]; return next;
+      });
+      await refreshLiveCompositeMeasurements();
+      uiNotificationService.show({
+        title: 'Measurement deleted', type: 'info', duration: 5000,
+        message: 'Measurement removed. Draw the correction and Save to persist it.',
+      });
+    } catch (error) {
+      console.warn('[CaseQuestionsPanel] learner measurement deletion failed', error);
+      uiNotificationService.show({
+        title: 'Delete measurement', type: 'error', duration: 5000,
+        message: 'Could not delete this measurement. Your answer has not changed.',
+      });
+    }
+  }
+
   async function deleteCompositePhaseMeasurement(
     quiz: QuizDefinition, question: QuizQuestion, slot: string,
     phaseSource: { annotationId?: string; target?: any }
@@ -3214,11 +3286,33 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       : [];
     const hasSavedGoldComposite = savedGoldComponents.length > 0 &&
       savedGoldComponents.every(component => component.complete);
+    const educatorEF = authoringMode && measurementKind === 'lvSimpsonEF';
     const deferGuidedActivation = isNewQuestion &&
       isGuidedQuizCompositeKind(measurementKind) &&
       !hasSavedGoldComposite;
     const activateGuidedAfterNavigation = async () => {
-      if (!deferGuidedActivation || lastActivatedQuestionRef.current !== nextActiveQuestionKey) return;
+      if (lastActivatedQuestionRef.current !== nextActiveQuestionKey) return;
+      if (educatorEF) {
+        // Open the same four-slot EF panel for saved and unsaved gold.
+        // Selection/review must never initiate a drawing gesture.
+        const config = plainObject(question.answerConfig);
+        const result = await runViewerCommand(commandsManager, 'startLVSimpsonEFWorkflow', {
+          panelOnly: true,
+          questionKey: question.questionKey,
+          efContourTargets: config.efContourFrameGuidanceEnabled === true
+            ? plainObject(config.efContourTargets) : null,
+          savedGoldMeasurement: plainObject(config.goldMeasurement),
+          goldAuthoringEditable: isDraftDefinition(authoringDefinition) && !authoringSaving,
+        });
+        if (!result || result.ok === false) {
+          uiNotificationService.show({
+            title: 'EF authoring', type: 'warning', duration: 5000,
+            message: 'Could not open the EF panel. Select this question to retry.',
+          });
+        }
+        return;
+      }
+      if (!deferGuidedActivation) return;
       const result = await runViewerCommand(commandsManager, 'activateViewerQuizMeasurementTool', {
         toolName: 'Length',
         measurementKind,
@@ -4201,6 +4295,48 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       AR_LV_SIMPSON_CAPTURE_REQUESTED_EVENT, handleCalculatedEFCapture
     );
   }, [activeQuestionKey, authoringMode, payload, authoringDefinition, authoringSaving]);
+
+  // Synchronize saved educator gold in the shared EF panel without
+  // restarting a contour drawing session or selecting a different question.
+  useEffect(() => {
+    if (!authoringMode || !activeQuestionKey.startsWith('authoring:')) return;
+    const questionKey = activeQuestionKey.slice('authoring:'.length);
+    const selected = authoringQuestions.find(item => item.questionKey === questionKey);
+    if (cleanString(plainObject(selected?.answerConfig).measurementKind) !== 'lvSimpsonEF') return;
+    void runViewerCommand(commandsManager, 'updateLVSimpsonEFPanelGold', {
+      questionKey,
+      savedGoldMeasurement: plainObject(plainObject(selected?.answerConfig).goldMeasurement),
+      goldAuthoringEditable: isDraftDefinition(authoringDefinition) && !authoringSaving,
+    });
+  }, [authoringMode, activeQuestionKey, authoringQuestions, authoringDefinition, authoringSaving]);
+
+  useEffect(() => {
+    if (!authoringMode) return;
+    const onClearGoldSlot = (event: Event) => {
+      const { questionKey, slot } = (event as CustomEvent)?.detail || {};
+      if (activeQuestionKey !== 'authoring:' + questionKey ||
+          !EF_CONTOUR_FRAME_SLOTS.some(item => item.slot === slot) ||
+          !isDraftDefinition(authoringDefinition) || authoringSaving) return;
+      const selected = authoringQuestionsRef.current.find(item =>
+        item.questionKey === questionKey);
+      if (!selected ||
+          cleanString(plainObject(selected.answerConfig).measurementKind) !== 'lvSimpsonEF') return;
+      const components = plainObject(plainObject(
+        plainObject(selected.answerConfig).goldMeasurement
+      ).compositeResult).components;
+      const saved = Array.isArray(components)
+        ? components.find(item => cleanString(item.slot) === slot) : null;
+      if (!saved?.annotationId) return;
+      void deleteCompositePhaseMeasurement(
+        { quizKey: 'authoring', quizVersion: 1 } as QuizDefinition,
+        selected, slot, { annotationId: cleanString(saved.annotationId), target: saved.target }
+      );
+    };
+    window.addEventListener(AR_LV_SIMPSON_GOLD_DELETE_REQUESTED_EVENT, onClearGoldSlot);
+    return () => window.removeEventListener(
+      AR_LV_SIMPSON_GOLD_DELETE_REQUESTED_EVENT, onClearGoldSlot
+    );
+  }, [authoringMode, activeQuestionKey, authoringDefinition, authoringSaving]);
 
   // Case Questions owns this review. It must not depend on AR Measurements being mounted.
   const finishQuizMeasurementReview = (ok: boolean) => {
