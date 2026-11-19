@@ -94,7 +94,7 @@ test('learner TR/RAP/RVSP transfer survives simplified submission confirmation',
     'the prior AR learner-report transfer selection remains the save contract');
   assert.match(reviewModal, /function LearnerViewerMeasurementConfirmationModal/);
   assert.match(reviewModal, /review\.educationWorkflow === true/);
-  assert.match(reviewModal, /They will also update your practice report where applicable/);
+  assert.match(reviewModal, /used in your practice report where applicable/);
   assert.match(reviewModal, /review\.quizEvidenceRows\.map/,
     'the detailed hemodynamic review is preserved for clinical workflows');
 });
