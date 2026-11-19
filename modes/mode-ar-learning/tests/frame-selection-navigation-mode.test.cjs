@@ -472,3 +472,30 @@ test('report quiz review lists source-backed measurements without synthetic repo
   assert.match(panelSource, /if \(!annotationRows\.length\)\s*\{\s*throw new Error/,
     'a truly empty annotation preview must fail rather than display a blank review');
 });
+
+test('learner quiz confirmation hides clinical review mechanics but keeps the same save path', () => {
+  const measurementPanel = fs.readFileSync(path.join(
+    __dirname, '..', '..', '..', 'extensions',
+    'extension-ar-measurements', 'src', 'panels', 'ARMeasurementsPanel.tsx'
+  ), 'utf8');
+  const confirmationStart = measurementPanel.indexOf('function LearnerViewerMeasurementConfirmationModal(');
+  const clinicalStart = measurementPanel.indexOf('export function ClinicalReportMeasurementReviewModal(', confirmationStart);
+  assert.ok(confirmationStart > 0 && clinicalStart > confirmationStart,
+    'learner confirmation and existing clinical report modal must both exist');
+  const confirmation = measurementPanel.slice(confirmationStart, clinicalStart);
+  assert.match(confirmation, /Confirm answer submission/);
+  assert.match(confirmation, /Save draft answers/);
+  assert.match(confirmation, /View measurements/);
+  assert.match(confirmation, /onClick=\{onApply\}/);
+  assert.doesNotMatch(confirmation, /selectedRowKeys|Select All|Apply Selected|Review AR report values/,
+    'learner should not see clinical field selection or review preferences');
+  const clinical = measurementPanel.slice(clinicalStart);
+  assert.match(clinical, /review\.educationWorkflow === true/);
+  assert.match(clinical, /<LearnerViewerMeasurementConfirmationModal/);
+  assert.match(clinical, /selected\.size\} of \{rows\.length\} report value/,
+    'original clinical report review must remain available for other workflows');
+  assert.match(panelSource, /confirmReportOwnedMeasurementSave\(quiz, quizAnswers, status\)/);
+  assert.match(panelSource, /educationWorkflow: true, saveAction/);
+  assert.match(panelSource, /reportFieldNames: fields/,
+    'learner confirmation must retain exactly the existing report-field save contract');
+});
