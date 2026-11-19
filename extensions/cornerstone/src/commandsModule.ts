@@ -37,6 +37,7 @@ import { getMeasurementSnapshotStudyInstanceId } from './utils/measurementSnapsh
 import { reconcileLearnerIvcSnapshotSources } from './utils/learnerIvcSourceSnapshot';
 import { isExactViewerQuizSopFrameImageId } from './utils/exactViewerQuizSopFrame';
 import { getViewportEnabledElement } from './utils/getViewportEnabledElement';
+import { getLearnerQuizMeasurementDeleteDenial } from './utils/quizLearnerMeasurementDeletion';
 import getActiveViewportEnabledElement from './utils/getActiveViewportEnabledElement';
 import toggleVOISliceSync from './utils/toggleVOISliceSync';
 import { usePositionPresentationStore, useSegmentationPresentationStore } from './stores';
@@ -15144,34 +15145,26 @@ function commandsModule({
       }
       const expected = getViewerQuizMeasurementReferenceTarget(learnerMeasurement) || {};
       const actual = getViewerQuizMeasurementReferenceTarget({}, source) || {};
-      const expectedSop = String(expected.sopInstanceUID || '').trim();
-      const actualSop = String(actual.sopInstanceUID || '').trim();
-      const expectedImage = String(expected.referencedImageId || '').trim();
-      const actualImage = String(actual.referencedImageId || '').trim();
-      const expectedFrame = Number(expected.frameNumber);
-      const actualFrame = Number(actual.frameNumber);
-      if ((expectedSop && expectedSop !== actualSop) ||
-          (expectedImage && (!actualImage ||
-            normalizeImageIdForCompare(expectedImage) !==
-              normalizeImageIdForCompare(actualImage))) ||
-          (Number.isInteger(expectedFrame) && expectedFrame > 0 &&
-            actualFrame > 0 && expectedFrame !== actualFrame)) {
-        return { ok: false, reason: 'learner-source-frame-mismatch' };
-      }
       const live = measurementService.getMeasurement?.(sourceId);
       const state = annotation.state.getAnnotation?.(sourceId);
-      // Persisted owner/lock state is authoritative. A display-only lock added
-      // when reopening a *verified* learner caliper may be cleared here, but
-      // never override a genuinely locked or read-only saved measurement.
-      if (source?.isLocked || source?.arMeasurementReadOnly ||
-          source?.data?.arMeasurementReadOnly ||
-          (source?.workflow && source.workflow !== VIEWER_MEASUREMENTS_WORKFLOW) ||
-          (source?.measurementOwner &&
-            String(source.measurementOwner).toLowerCase() !== 'learner') ||
-          live?.arMeasurementReadOnly || state?.data?.arMeasurementReadOnly ||
-          state?.data?.arVerifiedQuizEFGoldContour?.origin === 'quiz-gold') {
-        return { ok: false, reason: 'measurement-read-only' };
-      }
+      // The persisted learner copy is authoritative. Reopened learner-source
+      // overlays may have only a temporary presentation lock; gold and
+      // genuinely read-only measurements still fail closed.
+      const denial = getLearnerQuizMeasurementDeleteDenial({
+        canEdit: true,
+        isLearnerCopy: learnerSeriesDoc.isLearnerCopy === true,
+        sourceId,
+        persistedOwned: !!persisted,
+        createdInSession: createdHere,
+        source,
+        expectedTarget: expected,
+        actualTarget: actual,
+        liveReadOnly: !!live?.arMeasurementReadOnly,
+        stateReadOnly: !!state?.data?.arMeasurementReadOnly ||
+          state?.data?.arVerifiedQuizEFGoldContour?.origin === 'quiz-gold',
+        normalizeImageId: normalizeImageIdForCompare,
+      });
+      if (denial) return { ok: false, reason: denial };
       if (live?.isLocked) live.isLocked = false;
       if (state?.isLocked) state.isLocked = false;
       actions.removeMeasurement({ uid: sourceId });
