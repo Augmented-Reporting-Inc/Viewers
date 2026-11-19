@@ -4406,7 +4406,8 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
   };
 
   async function confirmReportOwnedMeasurementSave(
-    quiz: QuizDefinition, quizAnswers: Record<string, any>
+    quiz: QuizDefinition, quizAnswers: Record<string, any>,
+    saveAction: 'draft' | 'submitted'
   ): Promise<void> {
     const quizEvidenceRows = getLearnerHemodynamicQuizReviewRows(quiz, quizAnswers);
     const educationQuizHemodynamics = getLearnerHemodynamicTransferEvidence(quiz, quizAnswers);
@@ -4445,7 +4446,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     setQuizMeasurementSelectedRows(rows.filter(row => row.changed).map(row => row.key));
     setQuizMeasurementReview({
       rows, annotationRows, derivedConsequences: preview?.derivedConsequences, quizEvidenceRows,
-      educationQuizHemodynamics, educationWorkflow: true,
+      educationQuizHemodynamics, educationWorkflow: true, saveAction,
     });
     const approved = await new Promise<boolean>(resolve => {
       quizMeasurementResolveRef.current = resolve;
@@ -4547,7 +4548,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       // Combined report assessment: measurement review and persistence precede quiz answer save.
       // Ordinary imaging quizzes retain their existing independent save/score workflow.
       if (deferredReportScoring && quiz.questions.some(q => q.type === 'measurementNumeric')) {
-        await confirmReportOwnedMeasurementSave(quiz, quizAnswers);
+        await confirmReportOwnedMeasurementSave(quiz, quizAnswers, status);
       }
       // A quiz JSON answer is not proof its source annotations were
       // saved. Persist only the exact missing source annotations on the learner's
