@@ -18657,11 +18657,13 @@ function commandsModule({
                 });
                 return candidates.length === 1 ? candidates[0] : null;
               });
-              const rvReviewResult = rvReviewSources.every(Boolean) &&
-                rvReviewSources[0] !== rvReviewSources[1] &&
-                rvReviewSources.some(source =>
+              const verifiedRVSources = rvReviewSources.filter(Boolean) as Record<string, any>[];
+              const rvReviewResult = verifiedRVSources.length === 2 &&
+                new Set(verifiedRVSources.map(source =>
+                  getMeasurementAnnotationId(source))).size === 2 &&
+                verifiedRVSources.some(source =>
                   changedClinicalMeasurementIds.has(getMeasurementAnnotationId(source)))
-                ? calculateRVFACFromMeasurements(rvReviewSources) : null;
+                ? calculateRVFACFromMeasurements(verifiedRVSources) : null;
               const reviewOnlyRVFACPercent = rvReviewResult?.status === 'complete'
                 ? Number(rvReviewResult.values?.facPercent) : null;
 
