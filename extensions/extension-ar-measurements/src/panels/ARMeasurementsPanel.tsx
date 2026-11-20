@@ -1260,11 +1260,17 @@ export function buildClinicalReportReviewRows(preview: any = {}) {
  */
 export function buildClinicalViewerAnnotationReviewRows(preview: any = {}) {
   const annotations = Array.isArray(preview?.annotations) ? preview.annotations : [];
+  const changedIds = Array.isArray(preview?.reviewOnlyChangedAnnotationIds)
+    ? new Set(preview.reviewOnlyChangedAnnotationIds.map((id: any) => String(id || '').trim()))
+    : null;
+  const quizTRSourceId = String(preview?.educationQuizHemodynamics?.trVmax?.sourceAnnotationId || '').trim();
   const seen = new Set<string>();
   return annotations.flatMap((measurement: any) => {
     const id = String(measurement?.annotationId || measurement?.uid || '').trim();
     if (!id || seen.has(id) || !String(measurement?.toolName || '').trim() ||
-        measurement?.workflow === 'viewerQuizGoldDisplay') return [];
+        measurement?.workflow === 'viewerQuizGoldDisplay' ||
+        (changedIds && !changedIds.has(id)) ||
+        (quizTRSourceId && id === quizTRSourceId)) return [];
     seen.add(id);
     const label = String(
       measurement?.measurementRole || measurement?.label ||
@@ -1277,7 +1283,8 @@ export function buildClinicalViewerAnnotationReviewRows(preview: any = {}) {
     // The generic SplineROI text contains AREA; never show it as the EF
     // contour's primary result. Use the same verified 20-disk single-view
     // volume calculation as the viewport/EF panel.
-    const reviewedVolumeML = Number(measurement?.reviewOnlySingleViewVolumeML);
+    const reviewedVolumeML = measurement?.reviewOnlySingleViewVolumeML == null
+      ? NaN : Number(measurement.reviewOnlySingleViewVolumeML);
     const volumeML = isEFContour
       ? (Number.isFinite(reviewedVolumeML) && reviewedVolumeML > 0
         ? reviewedVolumeML : calculateLVSimpsonContourVolumeForMeasurement(measurement))
@@ -1288,7 +1295,8 @@ export function buildClinicalViewerAnnotationReviewRows(preview: any = {}) {
     const isLAContour = (measurement?.measurementKind === 'laVolumeSlot' ||
       measurement?.laVolume?.measurementKind === 'laVolumeSlot') &&
       LA_VOLUME_SLOT_ORDER.includes(laSlot);
-    const reviewedLAAreaCM2 = Number(measurement?.reviewOnlyLAContourAreaCM2);
+    const reviewedLAAreaCM2 = measurement?.reviewOnlyLAContourAreaCM2 == null
+      ? NaN : Number(measurement.reviewOnlyLAContourAreaCM2);
     const hasReviewedLAArea = isLAContour &&
       Number.isFinite(reviewedLAAreaCM2) && reviewedLAAreaCM2 > 0;
     const display = isEFContour
@@ -1348,6 +1356,13 @@ export function buildLearnerCalculatedMeasurementReviewRows(preview: any = {}) {
   const measuredFields = new Set(measured.map(row =>
     String(row.reportField || '').trim().toUpperCase()).filter(Boolean)
   );
+  // The server's report-update items contain both source measurements and
+  // calculated consequences. Raw diameter/wall thickness fields and the
+  // quiz's source TR/entered RAP must never appear under Calculated values.
+  const directSourceFields = new Set([
+    'LVIDD', 'LVIDS', 'IVSD', 'PWD', 'IVSS', 'PWS',
+    'TRVEL', 'RASP', 'RVEDA', 'RVESA', 'RAA',
+  ]);
   const calculated: Array<{ key: string; label: string; value: string }> = [];
   const seen = new Set<string>();
   const append = (field: string, label: string, value: any, uom: string = '') => {
@@ -1366,9 +1381,13 @@ export function buildLearnerCalculatedMeasurementReviewRows(preview: any = {}) {
   const reviewRows = buildClinicalReportReviewRows(preview);
   for (const row of reviewRows) {
     const field = String(row.fieldNames?.[0] || row.key || '').trim();
-    const isDirectMeasurement = row.fieldNames?.some((name: string) =>
-      measuredFields.has(String(name || '').trim().toUpperCase()));
-    if (!isDirectMeasurement) append(field, row.label, row.incomingValue);
+    const isDirectMeasurement = row.fieldNames?.some((name: string) => {
+      const normalized = String(name || '').trim().toUpperCase();
+      return measuredFields.has(normalized) || directSourceFields.has(normalized);
+    });
+    if (!isDirectMeasurement && !['TRVEL', 'RASP', 'RVSP'].includes(field.toUpperCase())) {
+      append(field, row.label, row.incomingValue);
+    }
   }
 
   // The server explicitly previews ALL indexed consequences, including
@@ -1409,6 +1428,12 @@ export function buildLearnerCalculatedMeasurementReviewRows(preview: any = {}) {
     }
   }
 
+  const facPercent = preview?.reviewOnlyRVFACPercent == null
+    ? NaN : Number(preview.reviewOnlyRVFACPercent);
+  if (Number.isFinite(facPercent) && facPercent > 0 && facPercent <= 100) {
+    append('RVFAC', 'RV fractional area change (FAC)', facPercent.toFixed(2), '%');
+  }
+
   return calculated;
 }
 
@@ -1438,23 +1463,37 @@ function LearnerViewerMeasurementConfirmationModal({
   onCancel,
   onApply,
 }) {
-  const measuredRows = Array.isArray(review?.annotationRows) ? review.annotationRows : [];
+  const annotationRows = Array.isArray(review?.annotationRows) ? review.annotationRows : [];
   const calculatedRows = Array.isArray(review?.calculatedRows) ? review.calculatedRows : [];
   const quizResults = Array.isArray(review?.quizEvidenceRows)
     ? review.quizEvidenceRows.filter(row => row?.recorded) : [];
-  const knownCalculatedLabels = new Set(calculatedRows.map(row =>
-    String(row.label || '').trim().toLowerCase()
-  ));
-  const calculatedFields = new Set(calculatedRows.map(row => String(row.key || '')));
-  const evidenceFieldByPrefix = {
-    'quiz-tr': 'TRVel', 'quiz-rap': 'RASP', 'quiz-rvsp': 'RVSP',
+  const quizLabel = (row: any) => {
+    const kind = String(row?.key || '').split(':')[0];
+    return ({ 'quiz-tr': 'TR Vmax', 'quiz-rap': 'RAP', 'quiz-rvsp': 'RVSP' } as any)[kind] ||
+      String(row?.label || '').replace(/^Learner\\s+/i, '');
   };
-  const additionalQuizResults = quizResults.filter(row => {
-    const prefix = String(row.key || '').split(':')[0];
-    const correspondingField = evidenceFieldByPrefix[prefix];
-    return !(correspondingField && calculatedFields.has(correspondingField)) &&
-      !knownCalculatedLabels.has(String(row.label || '').trim().toLowerCase());
-  });
+  // Quiz source TR Vmax and learner-selected RAP are measured/entered, not
+  // calculated. RVSP is derived from the measured TR source and selected RAP.
+  const measuredQuizResults = quizResults.filter(row =>
+    ['quiz-tr', 'quiz-rap'].includes(String(row?.key || '').split(':')[0])
+  );
+  const calculatedQuizResults = quizResults.filter(row =>
+    String(row?.key || '').split(':')[0] === 'quiz-rvsp'
+  );
+  const calculatedFields = new Set(calculatedRows.map(row =>
+    String(row.key || '').trim().toUpperCase()
+  ));
+  const measuredRows = [
+    ...annotationRows.map(row => ({
+      key: 'annotation:' + row.key, label: row.label, value: row.value,
+    })),
+    ...measuredQuizResults.map(row => ({
+      key: 'quiz:' + row.key, label: quizLabel(row), value: row.display,
+    })),
+  ];
+  const additionalQuizResults = calculatedQuizResults
+    .filter(row => !calculatedFields.has('RVSP'))
+    .map(row => ({ key: 'quiz:' + row.key, label: quizLabel(row), value: row.display }));
   const isSubmitting = review?.saveAction === 'submitted';
   const actionLabel = isSubmitting ? 'Save & Submit Answers' : 'Save Draft';
 
@@ -1508,9 +1547,7 @@ function LearnerViewerMeasurementConfirmationModal({
                   ...calculatedRows.map(row => ({
                     key: 'calculated:' + row.key, label: row.label, value: row.value,
                   })),
-                  ...additionalQuizResults.map(row => ({
-                    key: 'quiz:' + row.key, label: row.label, value: row.display,
-                  })),
+                  ...additionalQuizResults,
                 ].map((row, index) => (
                   <div key={row.key}
                     className={`flex items-baseline justify-between gap-3 px-3 py-2 text-sm ${index > 0 ? 'border-t border-gray-700' : ''}`}>
