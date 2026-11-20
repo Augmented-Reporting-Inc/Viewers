@@ -68,6 +68,7 @@ test('staged saves list only changed source annotations in learner confirmation'
   assert.match(viewerCommands, /reviewOnlyChangedAnnotationIds: Array\.from\(changedClinicalMeasurementIds\)/);
   assert.match(review, /const changedIds = Array\.isArray\(preview\?\.reviewOnlyChangedAnnotationIds\)/);
   assert.match(review, /\(changedIds && !changedIds\.has\(id\)\)/);
+  assert.match(review, /const efChangedInCurrentSave = !changedIds/);
   assert.match(review, /educationQuizHemodynamics\?\.trVmax\?\.sourceAnnotationId/);
 });
 
