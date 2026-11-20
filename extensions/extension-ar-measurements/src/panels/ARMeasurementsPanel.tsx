@@ -1417,7 +1417,14 @@ export function buildLearnerCalculatedMeasurementReviewRows(preview: any = {}) {
     const slot = String(contour.lvSimpson?.slot || contour.slot);
     bySlot.set(slot, [...(bySlot.get(slot) || []), contour]);
   }
-  if (LV_SIMPSON_SLOT_ORDER.every(slot => bySlot.get(slot)?.length === 1)) {
+  const changedIds = Array.isArray(preview?.reviewOnlyChangedAnnotationIds)
+    ? new Set(preview.reviewOnlyChangedAnnotationIds.map((id: any) => String(id || '').trim()))
+    : null;
+  const efChangedInCurrentSave = !changedIds || efContours.some(contour =>
+    changedIds.has(String(contour?.annotationId || contour?.uid || '').trim())
+  );
+  if (efChangedInCurrentSave &&
+      LV_SIMPSON_SLOT_ORDER.every(slot => bySlot.get(slot)?.length === 1)) {
     const validated = calculateLVSimpson(LV_SIMPSON_SLOT_ORDER.map(slot => bySlot.get(slot)![0]));
     if (validated?.status === 'complete' && validated.values) {
       const { edvML, esvML, ejectionFraction, strokeVolumeML } = validated.values;
