@@ -6,7 +6,7 @@ const path = require('node:path');
 const { test } = require('node:test');
 
 const panel = fs.readFileSync(
-  path.resolve(__dirname, '../../../extension-ar-learning/src/panels/CaseQuestionsPanel.tsx'),
+  path.resolve(__dirname, '../../../extensions/extension-ar-learning/src/panels/CaseQuestionsPanel.tsx'),
   'utf8'
 );
 
