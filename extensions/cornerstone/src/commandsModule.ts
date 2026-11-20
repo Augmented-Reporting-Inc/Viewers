@@ -132,7 +132,7 @@ import {
   calculateLVSimpsonContourVolumeForAnnotationData, isVerifiedLVSimpsonSessionReplacement,
 } from '../../extension-ar-measurements/src/utils/lvSimpson';
 import { getVerifiedLAVolumeContourAreaCM2 } from '../../extension-ar-measurements/src/utils/laVolume';
-import { getEchoAreaSlot } from '../../extension-ar-measurements/src/utils/echoAreaMeasurements';
+import { getEchoAreaSlot, calculateRVFACFromMeasurements } from '../../extension-ar-measurements/src/utils/echoAreaMeasurements';
 import { resolveViewerQuizCompositeResult, resolveViewerQuizLVSimpsonForStudy, isViewerQuizCompositeReviewCurrent, getViewerQuizCompositeStatus, calibratedLVContourAreaCM2 } from '../../extension-ar-measurements/src/utils/viewerQuizCompositeResults';
 import { createGuidedMouseToolOwnership } from './utils/guidedMouseToolOwnership';
 import { calibrateUSContourPoints, worldToImageIndex } from './utils/usRegionLengthCalibration';
@@ -18279,7 +18279,33 @@ function commandsModule({
                 // never write review-only scalars into MeasurementAnnotations.
                 const efSlot = getLVSimpsonSlotFromMeasurement(sourceMeasurement);
                 if (efSlot && annotation?.lvSimpson?.slot === efSlot) {
-                  const volumeML = calculateLVSimpsonContourVolumeForMeasurement(sourceMeasurement);
+                  // The first preview can arrive before MeasurementService
+                  // has merged the completed EF contour's calibrated geometry.
+                  // Resolve the same annotation ID from the live EF session and
+                  // Cornerstone native state, verifying the exact DICOM image
+                  // before accepting any display-only single-view volume.
+                  const native = cornerstoneTools.annotation.state.getAnnotation?.(measurementId);
+                  const nativeImageId = String(native?.metadata?.referencedImageId || '');
+                  const contourCandidates = [
+                    sourceMeasurement,
+                    lvSimpsonSessionMeasurementsByUid.get(measurementId),
+                    cornerstoneFallbackMeasurements.find(item =>
+                      getMeasurementAnnotationId(item) === measurementId
+                    ),
+                  ].filter(Boolean);
+                  const volumeML = contourCandidates
+                    .filter(candidate =>
+                      getLVSimpsonSlotFromMeasurement(candidate) === efSlot &&
+                      isSavedLVSimpsonImageMatch(candidate, String(annotation?.referencedImageId || ''))
+                    )
+                    .map(candidate => calculateLVSimpsonContourVolumeForMeasurement(candidate))
+                    .find(value => typeof value === 'number' && Number.isFinite(value) && value > 0)
+                    ?? (native && nativeImageId === String(annotation?.referencedImageId || '') &&
+                        native?.data?.lvSimpson?.slot === efSlot &&
+                        native?.metadata?.arMeasurementReadOnly !== true &&
+                        native?.data?.arMeasurementReadOnly !== true
+                      ? calculateLVSimpsonContourVolumeForAnnotationData(native)
+                      : null);
                   if (typeof volumeML === 'number' && Number.isFinite(volumeML) && volumeML > 0) {
                     reviewContourValuesById.set(measurementId, {
                       kind: 'lvSimpsonSlot', slot: efSlot, value: volumeML,
@@ -18289,7 +18315,21 @@ function commandsModule({
                 } else {
                   const laSlot = getLAVolumeSlotFromMeasurement(sourceMeasurement);
                   if (laSlot && annotation?.laVolume?.slot === laSlot) {
-                    const areaCM2 = getVerifiedLAVolumeContourAreaCM2(sourceMeasurement);
+                    // Same first-preview availability rule for LA: use
+                    // only the matching live/session contour, never a saved
+                    // display scalar from a different DICOM frame.
+                    const laCandidates = [
+                      sourceMeasurement,
+                      laVolumeSessionMeasurementsByUid.get(measurementId),
+                    ].filter(Boolean);
+                    const areaCM2 = laCandidates
+                      .filter(candidate =>
+                        getLAVolumeSlotFromMeasurement(candidate) === laSlot &&
+                        String(candidate?.referencedImageId || '') ===
+                          String(annotation?.referencedImageId || '')
+                      )
+                      .map(candidate => getVerifiedLAVolumeContourAreaCM2(candidate))
+                      .find(value => typeof value === 'number' && Number.isFinite(value) && value > 0);
                     if (typeof areaCM2 === 'number' && Number.isFinite(areaCM2) && areaCM2 > 0) {
                       reviewContourValuesById.set(measurementId, {
                         kind: 'laVolumeSlot', slot: laSlot, value: areaCM2,
@@ -18598,6 +18638,33 @@ function commandsModule({
                 VIEWER_MEASUREMENTS_WORKFLOW,
               ]);
 
+              // RV FAC is a calculated answer, not an independently drawn
+              // clinical annotation. The review can show it on FIRST save
+              // only when both unique, calibrated ED/ES sources are present in
+              // the actual pending annotation snapshot on their exact images.
+              // It is display-only; FormAPI's existing source validation and
+              // report persistence policy are unchanged.
+              const rvReviewSources = ['RV_ED', 'RV_ES'].map(slot => {
+                const candidates = measurements.filter(measurement => {
+                  if (getEchoAreaSlot(measurement) !== slot) return false;
+                  const id = getMeasurementAnnotationId(measurement);
+                  const saved = reportAnnotations.find(annotation =>
+                    id && getMeasurementAnnotationId(annotation) === id &&
+                    getEchoAreaSlot(annotation) === slot);
+                  return !!saved && !!String(measurement?.referencedImageId || '') &&
+                    String(measurement.referencedImageId) ===
+                      String(saved?.referencedImageId || '');
+                });
+                return candidates.length === 1 ? candidates[0] : null;
+              });
+              const rvReviewResult = rvReviewSources.every(Boolean) &&
+                rvReviewSources[0] !== rvReviewSources[1] &&
+                rvReviewSources.some(source =>
+                  changedClinicalMeasurementIds.has(getMeasurementAnnotationId(source)))
+                ? calculateRVFACFromMeasurements(rvReviewSources) : null;
+              const reviewOnlyRVFACPercent = rvReviewResult?.status === 'complete'
+                ? Number(rvReviewResult.values?.facPercent) : null;
+
               // FormAPI independently derives chamber measurements from the
               // canonical incoming MeasurementAnnotations; do not copy UI
               // display scalars into a second, potentially stale report path.
@@ -18649,6 +18716,13 @@ function commandsModule({
                   previewOnly: true,
                   isClinicalReportSave: true,
                   shouldSyncReportFields: true,
+                  // Presentation-only changed-ID list avoids redisplaying
+                  // previously accepted dimensions on each staged save.
+                  // No information is sent to scoring or persistence.
+                  reviewOnlyChangedAnnotationIds: Array.from(changedClinicalMeasurementIds),
+                  ...(Number.isFinite(reviewOnlyRVFACPercent) &&
+                    reviewOnlyRVFACPercent > 0 && reviewOnlyRVFACPercent <= 100
+                    ? { reviewOnlyRVFACPercent } : {}),
                   seriesDoc,
                   saveTarget,
                   domain,
