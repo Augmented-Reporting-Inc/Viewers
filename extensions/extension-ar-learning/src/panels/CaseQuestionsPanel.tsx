@@ -5958,7 +5958,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       <div className="mt-2 rounded border border-cyan-700 bg-cyan-950/20 p-2 text-xs">
         <div className="mb-1 font-semibold text-cyan-100">LA volume contour technique</div>
         <p className="mb-2 text-gray-300">
-          For each apical view, navigate to its selected end-systolic DICOM frame.
+          For each apical view, click the desired measuring tool to navigate to its selected image.
           Freehand: click a mitral hinge, trace the LA cavity without holding the mouse,
           and finish at the opposite hinge. Axis + apex: draw the annular line and superior LA axis.
         </p>
@@ -6008,8 +6008,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       <div className="mt-2 rounded border border-cyan-700 bg-cyan-950/20 p-2 text-xs">
         <div className="mb-1 font-semibold text-cyan-100">RV FAC contour technique</div>
         <div className="mb-2 text-gray-300">
-          Choose either freehand tracing or annulus-axis + apex placement.
-          The measurement result, not the drawing technique, is scored.
+          For each area click the desired measuring tool to navigate to its image.
         </div>
         {slots.map(({ slot, label }) => (
           <div key={slot} className="mb-2 flex flex-wrap items-center gap-2">
