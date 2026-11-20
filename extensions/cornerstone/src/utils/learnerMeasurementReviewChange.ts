@@ -12,9 +12,15 @@ function sourceId(source: any): string {
 }
 
 function isSameSourceGeometry(left: any, right: any): boolean {
-  if (String(left?.referencedImageId || '') !== String(right?.referencedImageId || '') ||
-      String(left?.toolName || '') !== String(right?.toolName || '') ||
-      JSON.stringify(left?.points || []) !== JSON.stringify(right?.points || [])) {
+  // Saved annotations are the authoritative source. A hydrated display
+  // adapter may omit geometry/image metadata without representing an edit.
+  // When live metadata IS present, it must agree with the persisted source.
+  if ((right?.referencedImageId &&
+        String(left?.referencedImageId || '') !== String(right.referencedImageId)) ||
+      (right?.toolName &&
+        String(left?.toolName || '') !== String(right.toolName)) ||
+      (Array.isArray(right?.points) && right.points.length > 0 &&
+        JSON.stringify(left?.points || []) !== JSON.stringify(right.points))) {
     return false;
   }
   // A missing frame number on a hydrated source is not a new frame; the
