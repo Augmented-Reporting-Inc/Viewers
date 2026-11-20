@@ -13412,9 +13412,19 @@ function commandsModule({
       if (
         toolName === ULTRASOUND_DIRECTIONAL_TOOL_NAME &&
         inferDomainWithoutSeriesDoc('') === 'echo' &&
-        isClinicalReportMeasurementsSaveTarget(getArViewerSaveTargetFromUrl())
+        (isClinicalReportMeasurementsSaveTarget(getArViewerSaveTargetFromUrl()) ||
+          isReportOwnedLearnerMeasurementTarget(getArViewerSaveTargetFromUrl()))
       ) {
-        return actions.startUltrasoundDirectionalWorkflow();
+        // A toolbar click can replace the quiz's already-armed Vmax command.
+        // Preserve its spectral acquisition mode and exact TR target; otherwise
+        // the generic annotation handler prompts for a target and may save a
+        // source without spectralVmax metadata, which FormAPI must reject.
+        const quizTrVmax = activeQuizMeasurementKind === 'trVmax';
+        return actions.startUltrasoundDirectionalWorkflow({
+          spectralVmax: quizTrVmax,
+          preferredTargetKey: quizTrVmax ? 'echo.trPeakVelocity' : '',
+          quizCapture: quizTrVmax,
+        });
       }
 
       clearUltrasoundDirectionalWorkflowListeners();
