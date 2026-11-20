@@ -34,6 +34,7 @@ import { vec3, mat4 } from 'gl-matrix';
 import toggleImageSliceSync from './utils/imageSliceSync/toggleImageSliceSync';
 import { getFirstAnnotationSelected } from './utils/measurementServiceMappings/utils/selection';
 import { getMeasurementSnapshotStudyInstanceId } from './utils/measurementSnapshotStudy';
+import { hasUnpersistedLearnerMeasurementChanges } from './utils/learnerMeasurementReviewChange';
 import { reconcileLearnerIvcSnapshotSources } from './utils/learnerIvcSourceSnapshot';
 import { isExactViewerQuizSopFrameImageId } from './utils/exactViewerQuizSopFrame';
 import { getViewportEnabledElement } from './utils/getViewportEnabledElement';
@@ -18597,11 +18598,30 @@ function commandsModule({
                   throw new Error('FormAPI did not return a clinical measurement review preview.');
                 }
 
+                // A second Submit after Save Draft can have no pending viewer
+                // changes: the exact source annotations already exist on the
+                // learner's own Series. Confirm that state independently of
+                // the (cleared) created/modified-in-session sets, including
+                // untracked live additions or edits, before skipping review.
+                const measurementAnnotationsChanged =
+                  hasUnpersistedLearnerMeasurementChanges({
+                    isLearnerCopy: isReportOwnedMeasurementSave &&
+                      seriesDoc?.isLearnerCopy === true,
+                    persistedAnnotations: existingScorableAnnotations,
+                    liveAnnotations,
+                    changedIds: Array.from(changedClinicalMeasurementIds),
+                    deletedIds: [
+                      ...viewerMeasurementsDeletedInSession,
+                      ...explicitDeleteIds,
+                    ],
+                  });
+
                 return {
                   ...serverPreview,
                   previewOnly: true,
                   isClinicalReportSave: true,
                   shouldSyncReportFields: true,
+                  measurementAnnotationsChanged,
                   seriesDoc,
                   saveTarget,
                   domain,
