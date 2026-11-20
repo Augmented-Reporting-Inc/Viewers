@@ -2874,7 +2874,6 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
             {qualityWarnings.map((warning: string, index: number) => (
               <div key={index} className="mt-1">{warning}</div>
             ))}
-            <div className="mt-1">Review LA view selection and contour placement if possible. This warning does not prevent capturing, saving or submitting the measurement.</div>
           </div>
         ) : null}
         {hasGold && hasLive && !sameGold ? (
@@ -2903,7 +2902,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
   }
 
   function renderCompositePhaseStatusAndDelete(
-    quiz: QuizDefinition, question: QuizQuestion, slot: string, disabled: boolean
+    quiz: QuizDefinition, question: QuizQuestion, slot: string, disabled: boolean, label = slot
   ) {
     const { kind, saved, live, phaseSource } =
       getCompositePhaseDisplayEvidence(quiz, question, slot);
@@ -2925,36 +2924,14 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       Number(liveArea) > 0 ? Number(liveArea) : null;
     const phaseValue = liveValue ?? savedValue;
     const units = kind === 'ivcCollapsibility' || kind === 'ivcRapRvsp' ? 'mm' : 'cm²';
-    const areaLabel = phaseValue != null && Number.isFinite(phaseValue)
-      ? ' · ' + phaseValue.toFixed(2) + ' ' + units : '';
+    const displayValue = phaseValue != null && Number.isFinite(Number(phaseValue)) && Number(phaseValue) > 0
+      ? Number(phaseValue).toFixed(2) + ' ' + units : 'Not measured';
     return (
       <>
-        <div className="inline-flex max-w-full items-center rounded border border-gray-600 bg-gray-900/60 text-[11px]">
-          <span className={`min-w-0 px-2 py-1 ${live || hasSaved ? 'text-emerald-200' : 'text-amber-200'}`}>
-            {live ? 'Measured' : hasSaved ? (authoringMode ? 'Gold saved' : 'Learner saved') : 'Not measured'}
-            {areaLabel}
-            {hasSaved ? (authoringMode ? ' · Gold source saved' : '') : ''}
-          </span>
-          {(getCompositePhaseMeasurementId(live) || hasSaved) ? (
-            <button
-              type="button"
-              data-quiz-review-action="delete"
-              aria-label={`Delete ${slot} measurement`}
-              title={`Delete ${slot} measurement`}
-              className="shrink-0 border-l border-gray-600 px-2 py-1 font-bold text-red-200 hover:bg-red-950 disabled:opacity-40"
-              disabled={disabled}
-              onClick={event => {
-                event.preventDefault();
-                event.stopPropagation();
-                void deleteCompositePhaseMeasurement(quiz, question, slot, phaseSource);
-              }}
-            >×</button>
-          ) : null}
-        </div>
         {hasSaved && targetHasNavigationIdentity(saved?.target) ? (
           <button
             type="button"
-            className="rounded border border-emerald-600 px-2 py-1 text-emerald-100"
+            className="min-w-0 text-left font-medium text-cyan-100 hover:underline" data-quiz-review-action="navigation" aria-label={`Jump to ${label} saved source`}
             onClick={event => {
               event.preventDefault();
               event.stopPropagation();
@@ -3000,8 +2977,52 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                 '[CaseQuestionsPanel] composite gold phase navigation failed', error
               ));
             }}
-          >View saved</button>
+          >{label}</button>
         ) : null}
+        {!hasSaved && targetHasNavigationIdentity(phaseSource.target) ? (
+          <button type="button" data-quiz-review-action="navigation"
+            aria-label={`Jump to ${label} source`}
+            className="min-w-0 text-left font-medium text-cyan-100 hover:underline"
+            onClick={event => {
+              event.preventDefault(); event.stopPropagation();
+              void (async () => {
+                const jumped = await runViewerCommand(commandsManager, 'jumpToViewerQuizTarget', {
+                  viewerTarget: phaseSource.target, questionKey: question.questionKey,
+                });
+                if (jumped?.ok && cleanString(jumped.viewportId)) {
+                  await runViewerCommand(commandsManager, 'setViewportActive', {
+                    viewportId: jumped.viewportId,
+                  });
+                }
+              })().catch(error => console.warn(
+                '[CaseQuestionsPanel] composite source jump failed', error
+              ));
+            }}
+          >{label}</button>
+        ) : !hasSaved ? <span className="text-gray-300">{label}</span> : null}
+        <div className="inline-flex max-w-full items-center rounded border border-gray-600 bg-black text-xs">
+          <input type="text" readOnly aria-label={`${label} measured value`}
+            value={displayValue}
+            className="w-28 min-w-0 bg-transparent px-2 py-1 text-emerald-200"
+          />
+          {(getCompositePhaseMeasurementId(live) || hasSaved) ? (
+            <button
+              type="button"
+              data-quiz-review-action="delete"
+              aria-label={`Delete ${slot} measurement`}
+              title={`Delete ${slot} measurement`}
+              className="shrink-0 border-l border-gray-600 px-2 py-1 font-bold text-red-200 hover:bg-red-950 disabled:opacity-40"
+              disabled={disabled}
+              onClick={event => {
+                event.preventDefault();
+                event.stopPropagation();
+                void deleteCompositePhaseMeasurement(quiz, question, slot, phaseSource);
+              }}
+            >×</button>
+          ) : null}
+        </div>
+
+
       </>
     );
   }
@@ -5917,7 +5938,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
             >
               {phase.label}
             </button>
-            {renderCompositePhaseStatusAndDelete(quiz, question, phase.slot, disabled)}
+            {renderCompositePhaseStatusAndDelete(quiz, question, phase.slot, disabled, phase.slot === 'IVC_EXP' ? 'IVCexp' : 'IVCinsp')}
             </div>
           ))}
         </div>
@@ -5941,7 +5962,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         </p>
         {views.map(({ slot, label }) => (
           <div key={slot} className="mb-2 flex flex-wrap items-center gap-2">
-            <span className="min-w-40 font-medium text-gray-100">{label}</span>
+            
             {[
               { text: 'Freehand', contourTechnique: 'freehand' },
               { text: 'Axis + apex', contourTechnique: 'axisApex' },
@@ -5969,7 +5990,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                 {choice.text}
               </button>
             ))}
-            {renderCompositePhaseStatusAndDelete(quiz, question, slot, disabled)}
+            {renderCompositePhaseStatusAndDelete(quiz, question, slot, disabled, label)}
           </div>
         ))}
       </div>
@@ -5991,7 +6012,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         </div>
         {slots.map(({ slot, label }) => (
           <div key={slot} className="mb-2 flex flex-wrap items-center gap-2">
-            <span className="min-w-44 font-medium text-gray-100">{label}</span>
+            
             {[
               { text: 'Freehand', command: 'startEchoAreaContourWorkflow' },
               { text: 'Axis + apex', command: 'startGuidedRVFACContourWorkflow' },
@@ -6017,7 +6038,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                 {choice.text}
               </button>
             ))}
-            {renderCompositePhaseStatusAndDelete(quiz, question, slot, disabled)}
+            {renderCompositePhaseStatusAndDelete(quiz, question, slot, disabled, label)}
           </div>
         ))}
       </div>
