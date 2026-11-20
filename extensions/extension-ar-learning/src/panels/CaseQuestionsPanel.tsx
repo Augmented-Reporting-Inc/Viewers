@@ -2929,11 +2929,28 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       ? ' · ' + phaseValue.toFixed(2) + ' ' + units : '';
     return (
       <>
-        <span className={live || hasSaved ? 'text-emerald-200 text-[11px]' : 'text-amber-200 text-[11px]'}>
-          {live ? 'Measured' : hasSaved ? (authoringMode ? 'Gold saved' : 'Learner saved') : 'Not measured'}
-          {areaLabel}
-          {hasSaved ? (authoringMode ? ' · Gold source saved' : '') : ''}
-        </span>
+        <div className="inline-flex max-w-full items-center rounded border border-gray-600 bg-gray-900/60 text-[11px]">
+          <span className={`min-w-0 px-2 py-1 ${live || hasSaved ? 'text-emerald-200' : 'text-amber-200'}`}>
+            {live ? 'Measured' : hasSaved ? (authoringMode ? 'Gold saved' : 'Learner saved') : 'Not measured'}
+            {areaLabel}
+            {hasSaved ? (authoringMode ? ' · Gold source saved' : '') : ''}
+          </span>
+          {(getCompositePhaseMeasurementId(live) || hasSaved) ? (
+            <button
+              type="button"
+              data-quiz-review-action="delete"
+              aria-label={`Delete ${slot} measurement`}
+              title={`Delete ${slot} measurement`}
+              className="shrink-0 border-l border-gray-600 px-2 py-1 font-bold text-red-200 hover:bg-red-950 disabled:opacity-40"
+              disabled={disabled}
+              onClick={event => {
+                event.preventDefault();
+                event.stopPropagation();
+                void deleteCompositePhaseMeasurement(quiz, question, slot, phaseSource);
+              }}
+            >×</button>
+          ) : null}
+        </div>
         {hasSaved && targetHasNavigationIdentity(saved?.target) ? (
           <button
             type="button"
@@ -2985,15 +3002,6 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
             }}
           >View saved</button>
         ) : null}
-        <button
-          type="button"
-          className="rounded border border-red-600 px-2 py-1 text-red-100 disabled:opacity-40"
-          disabled={disabled || (!getCompositePhaseMeasurementId(live) && !hasSaved)}
-          onClick={event => {
-            event.preventDefault(); event.stopPropagation();
-            void deleteCompositePhaseMeasurement(quiz, question, slot, phaseSource);
-          }}
-        >Delete</button>
       </>
     );
   }
@@ -6591,10 +6599,22 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                   <div className={captured
                     ? 'rounded border border-emerald-700 bg-emerald-950/20 p-2 text-xs text-emerald-100'
                     : 'rounded border border-amber-700 bg-amber-950/20 p-2 text-xs text-amber-100'}>
-                    {captured
-                      ? 'Saved learner TR Vmax: ' + Number(value.value).toFixed(2) +
-                        ' m/s · Available for IVC / RVSP calculation'
-                      : (issue || 'No source-linked learner TR Vmax is recorded yet. Complete the calibrated spectral Vmax measurement before proceeding to IVC.')}
+                    <div className="flex items-center justify-between gap-2">
+                      <span>{captured
+                        ? 'Saved learner TR Vmax: ' + Number(value.value).toFixed(2) +
+                          ' m/s · Available for IVC / RVSP calculation'
+                        : (issue || 'No source-linked learner TR Vmax is recorded yet. Complete the calibrated spectral Vmax measurement before proceeding to IVC.')}</span>
+                      {captured && !disabled ? (
+                        <button type="button" data-quiz-review-action="delete"
+                          className="shrink-0 rounded border border-red-700 px-2 py-1 text-sm font-bold text-red-200 hover:bg-red-950"
+                          title="Delete TR Vmax measurement" aria-label="Delete TR Vmax measurement"
+                          onClick={event => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            void deleteLearnerQuizSourceMeasurement(quiz, question, value);
+                          }}>×</button>
+                      ) : null}
+                    </div>
                   </div>
                 );
               })() : null}
@@ -6681,48 +6701,45 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
             ) ? null : cleanString(plainObject(question.answerConfig).measurementKind) === 'trVmax'
               ? null : (
                         <div className="flex w-full min-w-0 max-w-full items-center gap-2 overflow-hidden">
-                          <input
-                            className="min-w-0 flex-1 rounded border border-gray-700 bg-black px-2 py-1 text-sm text-white"
-                            type="number"
-                            inputMode="decimal"
-                            step="0.01"
-                            value={numberOrEmpty(value?.value)}
-                            onChange={event =>
-                              setAnswer(
-                                quiz.quizKey,
-                                question,
-                                setObjectAnswerPart(value, {
-                                  value: event.target.value,
-                                  measurementType:
-                                    value?.measurementType || question?.answerConfig?.measurementType || '',
-                                  unit: value?.unit || question?.answerConfig?.unit || '',
-                                })
-                              )
-                            }
-                            disabled={disabled}
-                            placeholder="Measurement value"
-                          />
+                          <div className="flex min-w-0 flex-1 items-center rounded border border-gray-700 bg-black">
+                            <input
+                              className="min-w-0 flex-1 bg-transparent px-2 py-1 text-sm text-white"
+                              type="number"
+                              inputMode="decimal"
+                              step="0.01"
+                              value={numberOrEmpty(value?.value)}
+                              onChange={event =>
+                                setAnswer(
+                                  quiz.quizKey,
+                                  question,
+                                  setObjectAnswerPart(value, {
+                                    value: event.target.value,
+                                    measurementType:
+                                      value?.measurementType || question?.answerConfig?.measurementType || '',
+                                    unit: value?.unit || question?.answerConfig?.unit || '',
+                                  })
+                                )
+                              }
+                              disabled={disabled}
+                              placeholder="Measurement value"
+                            />
+                            {cleanString(value?.sourceAnnotationId) ? (
+                              <button type="button" data-quiz-review-action="delete"
+                                className="shrink-0 border-l border-gray-700 px-2 py-1 font-bold text-red-200 hover:bg-red-950 disabled:opacity-40"
+                                title="Delete measurement" aria-label="Delete measurement"
+                                disabled={disabled || captureInProgress}
+                                onClick={event => {
+                                  event.preventDefault();
+                                  event.stopPropagation();
+                                  void deleteLearnerQuizSourceMeasurement(quiz, question, value);
+                                }}>×</button>
+                            ) : null}
+                          </div>
                           <div className="w-14 shrink-0 truncate rounded border border-gray-700 px-2 py-1 text-center text-sm text-gray-300">
                             {value?.unit || question?.answerConfig?.unit || ''}
                           </div>
                         </div>
             )}
-          {!bowelSet && !linkedRVSP &&
-            !['lvSimpsonEF', 'laVolumeBiplane', 'laVolumeBiplaneDisks',
-              'rvFAC', 'raArea', 'ivcCollapsibility'].includes(
-              cleanString(plainObject(question.answerConfig).measurementKind)
-            ) && cleanString(value?.sourceAnnotationId) ? (
-            <button type="button"
-              className="rounded border border-red-700 px-2 py-1 text-[11px] text-red-200 hover:bg-red-950 disabled:opacity-50"
-              disabled={disabled || captureInProgress}
-              onClick={event => {
-                event.preventDefault();
-                event.stopPropagation();
-                void deleteLearnerQuizSourceMeasurement(quiz, question, value);
-              }}>
-              Delete measurement
-            </button>
-          ) : null}
 
 
           {!bowelSet && (linkedRVSP || ['laVolumeBiplane',
@@ -8222,6 +8239,41 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     );
   }
 
+  function renderQuestionNavigation(
+    quiz: QuizDefinition,
+    question: QuizQuestion,
+    orderedQuestions: QuizQuestion[],
+    disabled = false
+  ) {
+    const index = orderedQuestions.findIndex(item => item.questionKey === question.questionKey);
+    if (index < 0) return null;
+    const navigatingDisabled = disabled || !!capturingMeasurementKey ||
+      !!capturingFrameKey || !!capturingPointKey || !!capturingAuthoringKey;
+    return (
+      <nav aria-label="Question navigation" className="mt-3 flex items-center justify-between gap-2 border-t border-gray-700 pt-3">
+        {([-1, 1] as const).map(direction => {
+          const target = orderedQuestions[index + direction];
+          const label = direction === -1 ? 'Previous' : 'Next';
+          return (
+            <button
+              key={direction}
+              type="button"
+              data-quiz-review-action="navigation"
+              aria-label={`${label} question`}
+              className="rounded border border-blue-600 px-3 py-2 text-xs font-semibold text-blue-100 hover:bg-blue-950 disabled:cursor-not-allowed disabled:opacity-40"
+              disabled={navigatingDisabled || !target}
+              onClick={event => {
+                event.preventDefault();
+                event.stopPropagation();
+                if (target) void selectQuestion(quiz, target);
+              }}
+            >{label}</button>
+          );
+        })}
+      </nav>
+    );
+  }
+
   if (authoringMode) {
     const canEditDraft = !!authoringDefinition && isDraftDefinition(authoringDefinition);
 
@@ -8264,6 +8316,14 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                 </option>
               ) : null)}
           </select>
+          {(() => {
+            const ordered = authoringQuestions.filter(isViewerNativeQuestion);
+            const current = ordered.find(item => activeQuestionKey === `authoring:${item.questionKey}`);
+            return current ? renderQuestionNavigation(
+              { quizKey: 'authoring', quizVersion: 1 }, current, ordered,
+              loading || authoringSaving || !!capturingAuthoringKey
+            ) : null;
+          })()}
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto p-3 pb-20">
@@ -8531,6 +8591,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
 
                           {renderQuestion(quiz, question, submitted)}
                           {renderQuestionReview(quiz, question, quizScore)}
+                          {renderQuestionNavigation(quiz, question, questions, submitted || quizSaving)}
                         </div>
                       );
                     })}
