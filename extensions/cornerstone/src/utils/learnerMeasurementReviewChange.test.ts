@@ -27,6 +27,17 @@ describe('report-owned learner saved measurement review', () => {
     })).toBe(false);
   });
 
+  it('permits a sparse hydrated display adapter for an already saved source', () => {
+    expect(hasUnpersistedLearnerMeasurementChanges({
+      ...unchanged,
+      liveAnnotations: [{
+        annotationId: source.annotationId,
+        toolName: source.toolName,
+        referencedImageId: source.referencedImageId,
+      }],
+    })).toBe(false);
+  });
+
   it('never treats an empty or non-learner source record as unchanged', () => {
     expect(hasUnpersistedLearnerMeasurementChanges({
       ...unchanged, persistedAnnotations: [],
