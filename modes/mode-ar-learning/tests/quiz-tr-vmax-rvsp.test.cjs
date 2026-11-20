@@ -26,8 +26,8 @@ test('toolbar selection preserves the active learner TR Vmax context for spectra
   const end = commands.indexOf('setViewerLengthLabelMode:', start);
   assert.ok(start >= 0 && end > start, 'expected toolbar action');
   const toolbarAction = commands.slice(start, end);
-  assert.doesNotMatch(toolbarAction, /setQuizToolbarMeasurementKind\(''\)/,
-    'a toolbar click must not clear the quiz-selected TR Vmax target');
+  assert.match(toolbarAction, /if \(activeQuizMeasurementKind !== 'trVmax'\) \{\s*setQuizToolbarMeasurementKind\(''\);/,
+    'only the TR quiz keeps its selected target; other workflows must still clear toolbar context');
   assert.match(commands, /spectralVmax && activeQuizMeasurementKind === 'trVmax'/);
 });
 
@@ -42,6 +42,9 @@ test('learner TR answer uses the same Cornerstone-native source as the report pr
     /requestedKind === 'trVmax'[\s\S]*?getCornerstoneUltrasoundDirectionalMeasurementFallback\(nativeTRAnnotation\)/);
   assert.match(commands,
     /getCornerstoneUltrasoundDirectionalMeasurementFallbacks\(\{[\s\S]*?studyInstanceUID: snapshotStudyInstanceId/);
+  assert.match(commands,
+    /const measurement = requestedKind === 'trVmax'\s*\? restoredSpectralMeasurement\s*: restoredSpectralMeasurement \|\| directMeasurement/,
+    'never silently accept an OHIF-only TR source that the native report preview cannot verify');
 });
 
 test('manual Vmax toolbar stays spectral and selects the quiz TR target only in TR Vmax context', () => {
