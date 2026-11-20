@@ -28,6 +28,20 @@ test('measurement clear actions are inline, accessible, and retain source-aware 
   assert.doesNotMatch(panel, />\s*Delete measurement\s*<\/button>/);
 });
 
+const viewerCommands = fs.readFileSync(
+  path.resolve(__dirname, '../../../extensions/cornerstone/src/commandsModule.ts'),
+  'utf8'
+);
+
+test('TR toolbar preserves exact quiz spectral capture and clinical workflows', () => {
+  assert.match(viewerCommands, /const quizTrVmax = activeQuizMeasurementKind === 'trVmax'/);
+  assert.match(viewerCommands, /spectralVmax: quizTrVmax/);
+  assert.match(viewerCommands, /preferredTargetKey: quizTrVmax \? 'echo\.trPeakVelocity' : ''/);
+  assert.match(viewerCommands, /quizCapture: quizTrVmax/);
+  assert.match(viewerCommands, /isReportOwnedLearnerMeasurementTarget\(getArViewerSaveTargetFromUrl\(\)\)/);
+  assert.match(viewerCommands, /const isCurrentTrQuizCapture = spectralVmax &&/);
+});
+
 test('source-backed hemodynamics transfer remains fail-closed', () => {
   assert.match(panel, /AR could not verify \$\{unverified\.map\(row => row\.label\)\.join\(', '\)\} for transfer/);
   assert.match(panel, /const unverified = quizEvidenceRows\.filter/);
