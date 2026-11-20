@@ -77,6 +77,6 @@ test('RAP and TR Vmax are measured; RVSP and verified RV FAC are calculated', ()
   assert.match(review, /const calculatedQuizResults = quizResults\.filter/);
   assert.match(review, /\['TRVEL', 'RASP', 'RVSP'\]\.includes\(field\.toUpperCase\(\)\)/);
   assert.match(review, /preview\?\.reviewOnlyRVFACPercent/);
-  assert.match(viewerCommands, /calculateRVFACFromMeasurements\(rvReviewSources/);
+  assert.match(viewerCommands, /calculateRVFACFromMeasurements\(verifiedRVSources/);
   assert.match(viewerCommands, /rvReviewResult\?\.status === 'complete'/);
 });
