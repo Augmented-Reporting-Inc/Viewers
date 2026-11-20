@@ -46,3 +46,37 @@ test('source-backed hemodynamics transfer remains fail-closed', () => {
   assert.match(panel, /AR could not verify \$\{unverified\.map\(row => row\.label\)\.join\(', '\)\} for transfer/);
   assert.match(panel, /const unverified = quizEvidenceRows\.filter/);
 });
+
+const review = fs.readFileSync(
+  path.resolve(__dirname, '../../../extensions/extension-ar-measurements/src/panels/ARMeasurementsPanel.tsx'),
+  'utf8'
+);
+
+test('EF-style LA, RV FAC and IVC rows have source links, value boxes and inline deletion', () => {
+  assert.match(panel, /function renderCompositePhaseStatusAndDelete\(/);
+  assert.match(panel, /Jump to \$\{label\} saved source/);
+  assert.match(panel, /Jump to \$\{label\} source/);
+  assert.match(panel, /viewerTarget: navigationTarget/);
+  assert.match(panel, /readOnly aria-label=/);
+  assert.match(panel, /aria-label=\{`Delete \$\{slot\} measurement`\}/);
+  assert.match(panel, /renderCompositePhaseStatusAndDelete\(quiz, question, slot, disabled, label\)/);
+  assert.doesNotMatch(panel, />View saved<\/button>/);
+  assert.doesNotMatch(panel, /Review LA view selection and contour placement if possible/);
+});
+
+test('staged saves list only changed source annotations in learner confirmation', () => {
+  assert.match(viewerCommands, /reviewOnlyChangedAnnotationIds: Array\.from\(changedClinicalMeasurementIds\)/);
+  assert.match(review, /const changedIds = Array\.isArray\(preview\?\.reviewOnlyChangedAnnotationIds\)/);
+  assert.match(review, /\(changedIds && !changedIds\.has\(id\)\)/);
+  assert.match(review, /educationQuizHemodynamics\?\.trVmax\?\.sourceAnnotationId/);
+});
+
+test('RAP and TR Vmax are measured; RVSP and verified RV FAC are calculated', () => {
+  assert.match(review, /'quiz-tr': 'TR Vmax', 'quiz-rap': 'RAP', 'quiz-rvsp': 'RVSP'/);
+  assert.match(review, /const measuredQuizResults = quizResults\.filter/);
+  assert.match(review, /const calculatedQuizResults = quizResults\.filter/);
+  assert.match(review, /\['TRVEL', 'RASP', 'RVSP'\]\.includes\(field\.toUpperCase\(\)\)/);
+  assert.match(review, /preview\?\.reviewOnlyRVFACPercent/);
+  assert.match(viewerCommands, /calculateRVFACFromMeasurements\(rvReviewSources/);
+  assert.match(viewerCommands, /rvReviewResult\?\.status === 'complete'/);
+});
