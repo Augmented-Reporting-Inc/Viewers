@@ -89,3 +89,11 @@ test('learner TR preview deduplicates one annotation without dropping transfer e
   assert.match(panel, /educationQuizHemodynamics: quizMeasurementReview\.educationQuizHemodynamics/);
   assert.match(review, /quizTRSourceId && id === quizTRSourceId/);
 });
+
+test('first learner save cannot claim success when its annotation snapshot is empty', () => {
+  assert.match(viewerCommands, /\[AR Learner save trace\]/);
+  assert.match(viewerCommands, /reportAnnotations\.length === 0/);
+  assert.match(viewerCommands, /changedClinicalMeasurementIds\.size > 0/);
+  assert.match(viewerCommands, /No learner measurement annotations reached the AR save payload/);
+  assert.match(viewerCommands, /pending viewer measurements have been retained/);
+});
