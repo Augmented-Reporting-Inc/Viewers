@@ -445,6 +445,7 @@ test('report quiz review lists source-backed measurements without synthetic repo
     .replace('export function buildClinicalViewerAnnotationReviewRows(preview: any = {})',
       'function buildClinicalViewerAnnotationReviewRows(preview = {})')
     .replace('(measurement: any)', '(measurement)')
+    .replaceAll('(id: any)', '(id)')
     .replace('new Set<string>()', 'new Set()');
   const vm = require('node:vm');
   const build = vm.runInNewContext(
@@ -531,6 +532,7 @@ test('learner summary includes all server calculated values and verified EF bipl
     .replace('const calculated: Array<{ key: string; label: string; value: string }> = [];',
       'const calculated = [];')
     .replaceAll('new Set<string>()', 'new Set()')
+    .replaceAll('(id: any)', '(id)')
     .replace('const append = (field: string, label: string, value: any, uom: string = \u0027\u0027)',
       'const append = (field, label, value, uom = \u0027\u0027)')
     .replace('(name: string) =>', '(name) =>')
