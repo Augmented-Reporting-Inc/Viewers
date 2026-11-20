@@ -18692,6 +18692,36 @@ function commandsModule({
               const reportAnnotations = getRequestedWorkflowAnnotations(nextMeasurementAnnotations, [
                 VIEWER_MEASUREMENTS_WORKFLOW,
               ]);
+              if (isReportOwnedMeasurementSave) {
+                // The first learner save can contain live/created measurements
+                // yet serialize an empty annotation workflow. Do not accept a
+                // 200 response for a no-op save or clear pending session state.
+                // Aggregate diagnostics intentionally exclude PHI and source IDs.
+                console.info('[AR Learner save trace] ' + JSON.stringify({
+                  previewOnly,
+                  liveCount: measurementService?.getMeasurements?.()?.length || 0,
+                  snapshotCount: measurements.length,
+                  persistableCount: liveAnnotations.length,
+                  pendingChangeCount: changedClinicalMeasurementIds.size,
+                  pendingMergeCount: annotationsForMerge.length,
+                  outgoingAnnotationCount: reportAnnotations.length,
+                  persistedSourceCount: existingScorableAnnotations.length,
+                  hasTRTransfer: !!educationQuizHemodynamics?.trVmax,
+                  hasIVCTransfer: !!educationQuizHemodynamics?.ivc,
+                }));
+                if (
+                  reportAnnotations.length === 0 &&
+                  (changedClinicalMeasurementIds.size > 0 ||
+                    !!educationQuizHemodynamics?.trVmax ||
+                    !!educationQuizHemodynamics?.ivc)
+                ) {
+                  throw new Error(
+                    'No learner measurement annotations reached the AR save payload. ' +
+                    'Nothing was saved; pending viewer measurements have been retained. ' +
+                    'Retry the measurement review before submitting.'
+                  );
+                }
+              }
 
               // Verify the *serialized* TR source before asking FormAPI to
               // approve it. Log only tool, label, provenance matches and units,
