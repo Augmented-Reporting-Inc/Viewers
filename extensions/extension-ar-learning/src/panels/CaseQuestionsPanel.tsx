@@ -2990,7 +2990,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               event.preventDefault(); event.stopPropagation();
               void (async () => {
                 const jumped = await runViewerCommand(commandsManager, 'jumpToViewerQuizTarget', {
-                  viewerTarget: phaseSource.target, questionKey: question.questionKey,
+                  viewerTarget: navigationTarget, questionKey: question.questionKey,
                 });
                 if (jumped?.ok && cleanString(jumped.viewportId)) {
                   await runViewerCommand(commandsManager, 'setViewportActive', {
@@ -5911,6 +5911,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
             { slot: 'IVC_INSP', label: 'Measure inspiration (IVCinsp)' },
           ].map(phase => (
             <div key={phase.slot} className="flex flex-wrap items-center gap-2">
+            {renderCompositePhaseStatusAndDelete(quiz, question, phase.slot, disabled, phase.slot === 'IVC_EXP' ? 'IVCexp' : 'IVCinsp')}
             <button
               type="button"
               disabled={disabled}
@@ -5942,7 +5943,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
             >
               {phase.label}
             </button>
-            {renderCompositePhaseStatusAndDelete(quiz, question, phase.slot, disabled, phase.slot === 'IVC_EXP' ? 'IVCexp' : 'IVCinsp')}
+            
             </div>
           ))}
         </div>
@@ -5966,6 +5967,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         </p>
         {views.map(({ slot, label }) => (
           <div key={slot} className="mb-2 flex flex-wrap items-center gap-2">
+            {renderCompositePhaseStatusAndDelete(quiz, question, slot, disabled, label)}
             
             {[
               { text: 'Freehand', contourTechnique: 'freehand' },
@@ -5994,7 +5996,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                 {choice.text}
               </button>
             ))}
-            {renderCompositePhaseStatusAndDelete(quiz, question, slot, disabled, label)}
+            
           </div>
         ))}
       </div>
@@ -6016,6 +6018,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         </div>
         {slots.map(({ slot, label }) => (
           <div key={slot} className="mb-2 flex flex-wrap items-center gap-2">
+            {renderCompositePhaseStatusAndDelete(quiz, question, slot, disabled, label)}
             
             {[
               { text: 'Freehand', command: 'startEchoAreaContourWorkflow' },
@@ -6042,7 +6045,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                 {choice.text}
               </button>
             ))}
-            {renderCompositePhaseStatusAndDelete(quiz, question, slot, disabled, label)}
+            
           </div>
         ))}
       </div>
