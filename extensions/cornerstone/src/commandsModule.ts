@@ -131,6 +131,7 @@ import {
   calculateLVSimpson, calculateLVSimpsonContourVolumeForMeasurement,
   calculateLVSimpsonContourVolumeForAnnotationData, isVerifiedLVSimpsonSessionReplacement,
 } from '../../extension-ar-measurements/src/utils/lvSimpson';
+import { getVerifiedLAVolumeContourAreaCM2 } from '../../extension-ar-measurements/src/utils/laVolume';
 import { getEchoAreaSlot } from '../../extension-ar-measurements/src/utils/echoAreaMeasurements';
 import { resolveViewerQuizCompositeResult, resolveViewerQuizLVSimpsonForStudy, isViewerQuizCompositeReviewCurrent, getViewerQuizCompositeStatus, calibratedLVContourAreaCM2 } from '../../extension-ar-measurements/src/utils/viewerQuizCompositeResults';
 import { createGuidedMouseToolOwnership } from './utils/guidedMouseToolOwnership';
@@ -18215,6 +18216,9 @@ function commandsModule({
               ])
             : new Set<string>();
 
+          // Display-only review values are computed from calibrated live sources.
+          // Canonical MeasurementAnnotations remain compact and unchanged.
+          const reviewContourValuesById = new Map<string, { slot: string; kind: string; value: number }>();
           const liveAnnotations = measurements
             .filter(measurement => {
               const measurementId = getMeasurementAnnotationId(measurement);
@@ -18252,6 +18256,30 @@ function commandsModule({
                 displaySetService,
                 workflow: targetWorkflow,
               });
+              if (previewOnly && domain === 'echo' && measurementId) {
+                // Persisted preview intentionally deduplicates contour geometry.
+                // Calculate displayed values from the exact verified live source;
+                // never write review-only scalars into MeasurementAnnotations.
+                const efSlot = getLVSimpsonSlotFromMeasurement(sourceMeasurement);
+                if (efSlot && annotation?.lvSimpson?.slot === efSlot) {
+                  const volumeML = calculateLVSimpsonContourVolumeForMeasurement(sourceMeasurement);
+                  if (typeof volumeML === 'number' && Number.isFinite(volumeML) && volumeML > 0) {
+                    reviewContourValuesById.set(measurementId, {
+                      kind: 'lvSimpsonSlot', slot: efSlot, value: volumeML,
+                    });
+                  }
+                } else {
+                  const laSlot = getLAVolumeSlotFromMeasurement(sourceMeasurement);
+                  if (laSlot && annotation?.laVolume?.slot === laSlot) {
+                    const areaCM2 = getVerifiedLAVolumeContourAreaCM2(sourceMeasurement);
+                    if (typeof areaCM2 === 'number' && Number.isFinite(areaCM2) && areaCM2 > 0) {
+                      reviewContourValuesById.set(measurementId, {
+                        kind: 'laVolumeSlot', slot: laSlot, value: areaCM2,
+                      });
+                    }
+                  }
+                }
+              }
               if (domain === 'bowel' &&
                   quizSpatialEvidenceByAnnotationId &&
                   Object.prototype.hasOwnProperty.call(quizSpatialEvidenceByAnnotationId, measurementId)) {
@@ -18605,7 +18633,19 @@ function commandsModule({
                   seriesDoc,
                   saveTarget,
                   domain,
-                  annotations: reportAnnotations,
+                  annotations: reportAnnotations.map(annotation => {
+                    const source = reviewContourValuesById.get(String(annotation?.annotationId || annotation?.uid || '').trim());
+                    if (!source) return annotation;
+                    if (source.kind === 'lvSimpsonSlot' &&
+                        annotation?.lvSimpson?.slot === source.slot) {
+                      return { ...annotation, reviewOnlySingleViewVolumeML: source.value };
+                    }
+                    if (source.kind === 'laVolumeSlot' &&
+                        annotation?.laVolume?.slot === source.slot) {
+                      return { ...annotation, reviewOnlyLAContourAreaCM2: source.value };
+                    }
+                    return annotation;
+                  }),
                   reportFieldUpdates: clinicalReportFieldUpdates,
                   reviewItems: Array.isArray(serverPreview?.items) ? serverPreview.items : [],
                 };
