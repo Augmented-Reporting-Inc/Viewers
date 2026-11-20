@@ -4498,8 +4498,13 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       throw new Error(`AR could not verify ${unverified.map(row => row.label).join(', ')} for transfer. Review those source measurements and retry.`);
     }
     const rows = buildClinicalReportReviewRows(preview);
-    const annotationRows = buildClinicalViewerAnnotationReviewRows(preview);
-    const calculatedRows = buildLearnerCalculatedMeasurementReviewRows(preview);
+    // Retain quiz source identity when building learner-only display rows.
+    // The FormAPI preview need not echo the submitted education evidence.
+    // Without this context the same TR annotation is shown both as "TR peak
+    // velocity" and "TR Vmax (source-linked)" in the measured section.
+    const learnerReviewPreview = { ...preview, educationQuizHemodynamics };
+    const annotationRows = buildClinicalViewerAnnotationReviewRows(learnerReviewPreview);
+    const calculatedRows = buildLearnerCalculatedMeasurementReviewRows(learnerReviewPreview);
     const hasRecordedQuizEvidence = quizEvidenceRows.some(row => row.recorded);
     if (!rows.length && !hasRecordedQuizEvidence) {
       if (preview?.measurementAnnotationsChanged === false) return;
