@@ -8,10 +8,16 @@ const commands = fs.readFileSync(path.join(root, 'extensions', 'cornerstone', 's
 const panel = fs.readFileSync(path.join(root, 'extensions', 'extension-ar-measurements', 'src', 'panels', 'ARMeasurementsPanel.tsx'), 'utf8');
 
 test('learner EF review uses verified live single-view volumes, never a compacted preview recalculation as primary source', () => {
-  assert.match(commands, /calculateLVSimpsonContourVolumeForMeasurement\(sourceMeasurement\)/);
+  assert.match(commands, /calculateLVSimpsonContourVolumeForMeasurement\(candidate\)/);
+  // First save may precede MeasurementService's full calibrated geometry.
+  // Only an exact-ID, exact-image session/native contour may supply the
+  // display value; never manufacture a scalar from an uncalibrated preview.
+  assert.match(commands, /lvSimpsonSessionMeasurementsByUid\.get\(measurementId\)/);
+  assert.match(commands, /isSavedLVSimpsonImageMatch\(candidate/);
+  assert.match(commands, /calculateLVSimpsonContourVolumeForAnnotationData\(native\)/);
   assert.match(commands, /reviewContourValuesById\.set\(measurementId,[\s\S]*?kind: 'lvSimpsonSlot'/);
   assert.match(commands, /reviewOnlySingleViewVolumeML: source\.value/);
-  assert.match(panel, /Number\(measurement\?\.reviewOnlySingleViewVolumeML\)/);
+  assert.match(panel, /Number\(measurement\.reviewOnlySingleViewVolumeML\)/);
   assert.match(panel, /volumeML\.toFixed\(2\)\} mL/);
 });
 
@@ -29,7 +35,7 @@ test('review-only contour scalars never enter PUT MeasurementAnnotations or cano
 });
 
 test('learner review distinguishes single LA contour area from calculated biplane LA volume', () => {
-  assert.match(commands, /getVerifiedLAVolumeContourAreaCM2\(sourceMeasurement\)/);
+  assert.match(commands, /getVerifiedLAVolumeContourAreaCM2\(candidate\)/);
   assert.match(panel, /hasReviewedLAArea \? `\$\{reviewedLAAreaCM2\.toFixed\(2\)\} cm²`/);
   assert.match(panel, /hasReviewedLAArea \? `LA \$\{laSlot\.replace\('_', ' '\)\} area`/);
   assert.match(panel, /review\.calculatedRows/);
