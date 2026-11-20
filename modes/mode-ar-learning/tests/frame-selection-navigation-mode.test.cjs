@@ -479,7 +479,7 @@ test('report quiz review lists source-backed measurements without synthetic repo
   assert.doesNotMatch(ef[0].value, /cm²|mm²/,
     'never substitute contour area for EF contour volume');
   assert.match(measurementsPanel, /review\.educationWorkflow && annotationRows\.length > 0/);
-  assert.match(panelSource, /buildClinicalViewerAnnotationReviewRows\(preview\)/);
+  assert.match(panelSource, /const learnerReviewPreview = \{ \.\.\.preview, educationQuizHemodynamics \};\s*const annotationRows = buildClinicalViewerAnnotationReviewRows\(learnerReviewPreview\)/);
   assert.match(panelSource, /rows, annotationRows, calculatedRows,/);
   assert.match(panelSource, /if \(!annotationRows\.length\)\s*\{\s*throw new Error/,
     'a truly empty annotation preview must fail rather than display a blank review');
@@ -591,5 +591,5 @@ test('learner summary includes all server calculated values and verified EF bipl
   assert.equal(byField.LVESV.value, '41.67 mL');
   assert.ok(!byField.PWd, 'raw PWd is already shown in measured values');
   assert.match(measurementPanel, /calculatedRows\.map/);
-  assert.match(panelSource, /buildLearnerCalculatedMeasurementReviewRows\(preview\)/);
+  assert.match(panelSource, /const calculatedRows = buildLearnerCalculatedMeasurementReviewRows\(learnerReviewPreview\)/);
 });
