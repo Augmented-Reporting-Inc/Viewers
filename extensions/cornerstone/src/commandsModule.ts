@@ -11266,17 +11266,24 @@ function commandsModule({
           ? getSpectralVmaxTargetOptionsForUnit(rawUnit, { includeGeneric: true })
           : getUltrasoundDirectionalTargetOptionsForUnit(rawUnit, { includeGeneric: true });
         const mappedTargetOptions = targetOptions.filter(option => option.value !== 'generic');
+        // A restored quiz question may set its measurement context after the
+        // toolbar initially activated. Resolve TR context at completion too,
+        // before the generic target dialog can open (and fail with wrongfalse).
+        const isCurrentTrQuizCapture = spectralVmax &&
+          (quizCapture || activeQuizMeasurementKind === 'trVmax');
+        const completionTargetKey = isCurrentTrQuizCapture
+          ? 'echo.trPeakVelocity' : preferredTargetKey;
         // Education questions know the measurement target already. Restrict
         // automatic selection to a target supported by the actual calibrated
         // spectral units; leave clinical and generic target selection intact.
-        let selectedTarget = Number.isFinite(rawValue) && preferredTargetKey
-          ? normalizeUltrasoundDirectionalTargetSelection(preferredTargetKey, rawUnit)
+        let selectedTarget = Number.isFinite(rawValue) && completionTargetKey
+          ? normalizeUltrasoundDirectionalTargetSelection(completionTargetKey, rawUnit)
           : null;
         if (selectedTarget && !targetOptions.some(option => option.value === selectedTarget.key)) {
           selectedTarget = null;
         }
 
-        if (!preferredTargetKey && Number.isFinite(rawValue) && mappedTargetOptions.length > 0) {
+        if (!completionTargetKey && Number.isFinite(rawValue) && mappedTargetOptions.length > 0) {
           let selection = null;
 
           try {
@@ -11326,7 +11333,7 @@ function commandsModule({
         // write TRVel automatically: the existing report preview/selection
         // still decides which mapped fields are applied. Standalone learning
         // quizzes continue to have no clinical mapping.
-        const allowReportOwnedQuizTR = quizCapture && spectralVmax &&
+        const allowReportOwnedQuizTR = isCurrentTrQuizCapture && spectralVmax &&
           selectedTarget?.key === 'echo.trPeakVelocity' &&
           isReportOwnedLearnerMeasurementTarget(saveTarget) &&
           isClinicalReportMeasurementsSaveTarget(saveTarget);
@@ -11400,7 +11407,7 @@ function commandsModule({
         // annotation after its final label and physical m/s conversion exist.
         // Do not emit a gradeable quiz event for generic or unsupported
         // spectral measurements.
-        if (quizCapture && spectralVmax &&
+        if (isCurrentTrQuizCapture && spectralVmax &&
             selectedTarget?.key === 'echo.trPeakVelocity' &&
             convertedReportValue?.unit === 'm/s' &&
             Number.isFinite(Number(convertedReportValue?.value)) &&
