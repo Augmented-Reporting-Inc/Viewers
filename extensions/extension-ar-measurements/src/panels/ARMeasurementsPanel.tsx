@@ -1470,7 +1470,7 @@ function LearnerViewerMeasurementConfirmationModal({
   const quizLabel = (row: any) => {
     const kind = String(row?.key || '').split(':')[0];
     return ({ 'quiz-tr': 'TR Vmax', 'quiz-rap': 'RAP', 'quiz-rvsp': 'RVSP' } as any)[kind] ||
-      String(row?.label || '').replace(/^Learner\\s+/i, '');
+      String(row?.label || '').replace(/^Learner\s+/i, '');
   };
   // Quiz source TR Vmax and learner-selected RAP are measured/entered, not
   // calculated. RVSP is derived from the measured TR source and selected RAP.
