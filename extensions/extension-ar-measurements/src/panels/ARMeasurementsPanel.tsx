@@ -1277,11 +1277,24 @@ export function buildClinicalViewerAnnotationReviewRows(preview: any = {}) {
     // The generic SplineROI text contains AREA; never show it as the EF
     // contour's primary result. Use the same verified 20-disk single-view
     // volume calculation as the viewport/EF panel.
+    const reviewedVolumeML = Number(measurement?.reviewOnlySingleViewVolumeML);
     const volumeML = isEFContour
-      ? calculateLVSimpsonContourVolumeForMeasurement(measurement) : null;
+      ? (Number.isFinite(reviewedVolumeML) && reviewedVolumeML > 0
+        ? reviewedVolumeML : calculateLVSimpsonContourVolumeForMeasurement(measurement))
+      : null;
+    // LA A4C/A2C source contours are physical areas; their verified biplane
+    // combination is the LA volume in calculated results, not two volumes.
+    const laSlot = String(measurement?.laVolume?.slot || measurement?.slot || '').trim();
+    const isLAContour = (measurement?.measurementKind === 'laVolumeSlot' ||
+      measurement?.laVolume?.measurementKind === 'laVolumeSlot') &&
+      LA_VOLUME_SLOT_ORDER.includes(laSlot);
+    const reviewedLAAreaCM2 = Number(measurement?.reviewOnlyLAContourAreaCM2);
+    const hasReviewedLAArea = isLAContour &&
+      Number.isFinite(reviewedLAAreaCM2) && reviewedLAAreaCM2 > 0;
     const display = isEFContour
       ? (volumeML != null ? `${volumeML.toFixed(2)} mL` :
-        'Volume unavailable (recheck calibration)')
+        'Volume unavailable in review preview')
+      : hasReviewedLAArea ? `${reviewedLAAreaCM2.toFixed(2)} cm²`
       : getMeasurementValue(measurement);
     const rawValue = measurement?.measurements?.value;
     const unit = String(measurement?.measurements?.unit || measurement?.unit || '').trim();
@@ -1291,7 +1304,9 @@ export function buildClinicalViewerAnnotationReviewRows(preview: any = {}) {
       : '';
     return [{
       key: id,
-      label: isEFContour ? `LV ${efSlot.replace('_', ' ')} volume` : (label || 'Measurement'),
+      label: isEFContour ? `LV ${efSlot.replace('_', ' ')} volume`
+        : hasReviewedLAArea ? `LA ${laSlot.replace('_', ' ')} area`
+        : (label || 'Measurement'),
       value: display || fallback || 'Numeric value unavailable; annotation is present',
       reportField: isEFContour ? '' : label,
       frameNumber: Number.isInteger(Number(measurement?.frameNumber)) &&
