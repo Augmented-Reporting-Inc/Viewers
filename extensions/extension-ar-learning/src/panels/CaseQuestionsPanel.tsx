@@ -2551,7 +2551,10 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       : saved?.target || (config.compositeFrameGuidanceEnabled === true ? configured : null);
     const phaseSource = { annotationId: cleanString(saved?.annotationId), target: sourceTarget };
     const live = getActiveCompositePhaseMeasurement(kind, slot, phaseSource);
-    return { kind, saved, live, phaseSource };
+    // A just-drawn contour may be live before the quiz answer is saved.
+    // Its own image target still supports the clickable source label.
+    const navigationTarget = saved?.target || getNestedViewerTarget(live) || sourceTarget;
+    return { kind, saved, live, phaseSource, navigationTarget };
   }
 
   // Delete the learner-owned annotation first, then clear the exact quiz
@@ -2656,7 +2659,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     );
     if (!record && savedPhase && targetHasNavigationIdentity(phaseSource.target)) {
       const jumped = await runViewerCommand(commandsManager, 'jumpToViewerQuizTarget', {
-        viewerTarget: phaseSource.target, questionKey: question.questionKey,
+        viewerTarget: navigationTarget, questionKey: question.questionKey,
       });
       if (jumped?.ok) {
         if (cleanString(jumped.viewportId)) {
@@ -2904,7 +2907,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
   function renderCompositePhaseStatusAndDelete(
     quiz: QuizDefinition, question: QuizQuestion, slot: string, disabled: boolean, label = slot
   ) {
-    const { kind, saved, live, phaseSource } =
+    const { kind, saved, live, phaseSource, navigationTarget } =
       getCompositePhaseDisplayEvidence(quiz, question, slot);
     const hasSaved = !!cleanString(saved?.annotationId);
     const statusKey = authoringMode ? 'authoring:' + question.questionKey
@@ -2979,7 +2982,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
             }}
           >{label}</button>
         ) : null}
-        {!hasSaved && targetHasNavigationIdentity(phaseSource.target) ? (
+        {!hasSaved && targetHasNavigationIdentity(navigationTarget) ? (
           <button type="button" data-quiz-review-action="navigation"
             aria-label={`Jump to ${label} source`}
             className="min-w-0 text-left font-medium text-cyan-100 hover:underline"
@@ -2999,7 +3002,8 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               ));
             }}
           >{label}</button>
-        ) : !hasSaved ? <span className="text-gray-300">{label}</span> : null}
+        ) : (!hasSaved || !targetHasNavigationIdentity(saved?.target))
+          ? <span className="text-gray-300">{label}</span> : null}
         <div className="inline-flex max-w-full items-center rounded border border-gray-600 bg-black text-xs">
           <input type="text" readOnly aria-label={`${label} measured value`}
             value={displayValue}
