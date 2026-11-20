@@ -54,7 +54,8 @@ test('manual Vmax toolbar stays spectral and selects the quiz TR target only in 
 });
 
 test('completed calibrated, labelled TR Vmax emits exact measurement identity for quiz capture', () => {
-  assert.match(commands, /quizCapture && spectralVmax &&\s*selectedTarget\?\.key === 'echo\.trPeakVelocity'/);
+  assert.match(commands, /const isCurrentTrQuizCapture = spectralVmax &&\s*\(quizCapture \|\| activeQuizMeasurementKind === 'trVmax'\)/);
+  assert.match(commands, /isCurrentTrQuizCapture && spectralVmax &&\s*selectedTarget\?\.key === 'echo\.trPeakVelocity'/);
   assert.match(commands, /convertedReportValue\?\.unit === 'm\/s'/);
   assert.match(commands, /window\.dispatchEvent\(new CustomEvent\('ar-learning:quiz-measurement-added', \{\s*detail: \{ measurementId: annotationId \}/);
   assert.match(panel, /captureAuthoringMeasurement\(question, \{\s*measurementId,\s*silent: true/);
@@ -138,7 +139,7 @@ test('EF progress panel omits redundant active-question capture sentence', () =>
 });
 
 test('TR Vmax quiz clinical mapping is opt-in through existing report review only', () => {
-  assert.match(commands, /const allowReportOwnedQuizTR = quizCapture && spectralVmax &&/);
+  assert.match(commands, /const allowReportOwnedQuizTR = isCurrentTrQuizCapture && spectralVmax &&/);
   assert.match(commands, /selectedTarget\?\.key === 'echo\.trPeakVelocity'/);
   assert.match(commands, /isReportOwnedLearnerMeasurementTarget\(saveTarget\)/);
   assert.match(commands, /isClinicalReportMeasurementsSaveTarget\(saveTarget\)/);
