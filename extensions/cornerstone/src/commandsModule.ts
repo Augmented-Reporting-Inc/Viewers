@@ -34,6 +34,7 @@ import { vec3, mat4 } from 'gl-matrix';
 import toggleImageSliceSync from './utils/imageSliceSync/toggleImageSliceSync';
 import { getFirstAnnotationSelected } from './utils/measurementServiceMappings/utils/selection';
 import { getMeasurementSnapshotStudyInstanceId } from './utils/measurementSnapshotStudy';
+import { hasUnpersistedLearnerMeasurementChanges } from './utils/learnerMeasurementReviewChange';
 import { reconcileLearnerIvcSnapshotSources } from './utils/learnerIvcSourceSnapshot';
 import { isExactViewerQuizSopFrameImageId } from './utils/exactViewerQuizSopFrame';
 import { getViewportEnabledElement } from './utils/getViewportEnabledElement';
@@ -18848,11 +18849,30 @@ function commandsModule({
                   throw new Error('FormAPI did not return a clinical measurement review preview.');
                 }
 
+                // After Save Draft the viewer clears pending-change markers,
+                // while the exact learner-owned annotations remain persisted.
+                // Do not confuse an unchanged, verified learner Series with
+                // a missing source. New/edited/deleted evidence still requires
+                // the existing review and source-verification path.
+                const measurementAnnotationsChanged =
+                  hasUnpersistedLearnerMeasurementChanges({
+                    isLearnerCopy: isReportOwnedMeasurementSave &&
+                      seriesDoc?.isLearnerCopy === true,
+                    persistedAnnotations: existingScorableAnnotations,
+                    liveAnnotations,
+                    changedIds: Array.from(changedClinicalMeasurementIds),
+                    deletedIds: [
+                      ...viewerMeasurementsDeletedInSession,
+                      ...explicitDeleteIds,
+                    ],
+                  });
+
                 return {
                   ...serverPreview,
                   previewOnly: true,
                   isClinicalReportSave: true,
                   shouldSyncReportFields: true,
+                  measurementAnnotationsChanged,
                   // Presentation-only changed-ID list avoids redisplaying
                   // previously accepted dimensions on each staged save.
                   // No information is sent to scoring or persistence.
