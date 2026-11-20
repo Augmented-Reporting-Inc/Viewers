@@ -163,6 +163,16 @@ const AR_LV_SIMPSON_SESSION_EVENT = 'ar-measurements:lv-simpson-session-updated'
 const AR_LA_VOLUME_SESSION_EVENT = 'ar-measurements:la-volume-session-updated';
 const ULTRASOUND_DIRECTIONAL_TOOL_NAME = 'UltrasoundDirectionalTool';
 const ULTRASOUND_DIRECTIONAL_MEASUREMENT_KIND = 'ultrasound-directional';
+// Source-only browser diagnostics; opt in with sessionStorage arDebugTrVmax=1.
+function traceQuizTrVmax(stage: string, details: Record<string, unknown>) {
+  try {
+    if (window.sessionStorage.getItem('arDebugTrVmax') === '1') {
+      console.info('[AR TR Vmax trace]', stage, details);
+    }
+  } catch {
+    // Instrumentation must never interrupt a clinical or learning workflow.
+  }
+}
 const CINE_COMMENT_ANNOTATION_KIND = 'cineComment';
 const CINE_COMMENT_SCOPE = 'cine';
 
@@ -11203,6 +11213,14 @@ function commandsModule({
         toolName: ULTRASOUND_DIRECTIONAL_TOOL_NAME,
         stopCine: true,
       });
+      if (spectralVmax || activeQuizMeasurementKind === 'trVmax') {
+        traceQuizTrVmax('workflow.activated', {
+          spectralVmax, quizCapture, activeQuizMeasurementKind,
+          preferredTargetKey, measurementDomain, saveMode: saveTarget.mode,
+          reportOwnedLearner: isReportOwnedLearnerMeasurementTarget(saveTarget),
+          activationOk: activation?.ok !== false,
+        });
+      }
 
       if (!activation?.ok) {
         uiNotificationService.show({
@@ -11284,6 +11302,13 @@ function commandsModule({
         }
 
         if (!completionTargetKey && Number.isFinite(rawValue) && mappedTargetOptions.length > 0) {
+          if (spectralVmax || activeQuizMeasurementKind === 'trVmax') {
+            traceQuizTrVmax('workflow.target-dialog-opened', {
+              spectralVmax, quizCapture, activeQuizMeasurementKind,
+              rawUnit, isCurrentTrQuizCapture, completionTargetKey,
+              availableTargets: mappedTargetOptions.map(option => option.value),
+            });
+          }
           let selection = null;
 
           try {
@@ -11326,6 +11351,17 @@ function commandsModule({
         // write to the AR report.
         if (!selectedTarget) {
           selectedTarget = normalizeUltrasoundDirectionalTargetSelection('generic', rawUnit);
+        }
+
+        if (spectralVmax || activeQuizMeasurementKind === 'trVmax') {
+          traceQuizTrVmax('workflow.target-resolved', {
+            annotationId, sourceToolName, spectralVmax, quizCapture,
+            activeQuizMeasurementKind, isCurrentTrQuizCapture,
+            statsAvailable: !!stats,
+            rawUnit, rawValue: Number.isFinite(rawValue) ? rawValue : null,
+            completionTargetKey, selectedTargetKey: selectedTarget?.key || '',
+            sourceIsGeneric: selectedTarget?.key === 'generic',
+          });
         }
 
         // A learner measurement captured inside a report-owned assessment may
@@ -11407,12 +11443,22 @@ function commandsModule({
         // annotation after its final label and physical m/s conversion exist.
         // Do not emit a gradeable quiz event for generic or unsupported
         // spectral measurements.
-        if (isCurrentTrQuizCapture && spectralVmax &&
-            selectedTarget?.key === 'echo.trPeakVelocity' &&
-            convertedReportValue?.unit === 'm/s' &&
-            Number.isFinite(Number(convertedReportValue?.value)) &&
-            Number(convertedReportValue.value) > 0 &&
-            Number(convertedReportValue.value) <= 8) {
+        const emitTRQuizCapture = isCurrentTrQuizCapture && spectralVmax &&
+          selectedTarget?.key === 'echo.trPeakVelocity' &&
+          convertedReportValue?.unit === 'm/s' &&
+          Number.isFinite(Number(convertedReportValue?.value)) &&
+          Number(convertedReportValue.value) > 0 &&
+          Number(convertedReportValue.value) <= 8;
+        if (spectralVmax || activeQuizMeasurementKind === 'trVmax') {
+          traceQuizTrVmax('workflow.annotation-finalized', {
+            annotationId, sourceToolName, selectedTargetKey: selectedTarget?.key || '',
+            measurementLabel, acquisitionMode: directional.acquisitionMode || '',
+            reportUnit: directional.reportUnit || '',
+            reportValue: directional.reportValue ?? null,
+            hasReportMapping: !!reportMapping, emittedQuizCaptureEvent: emitTRQuizCapture,
+          });
+        }
+        if (emitTRQuizCapture) {
           window.dispatchEvent(new CustomEvent('ar-learning:quiz-measurement-added', {
             detail: { measurementId: annotationId },
           }));
@@ -18647,6 +18693,48 @@ function commandsModule({
                 VIEWER_MEASUREMENTS_WORKFLOW,
               ]);
 
+              // Verify the *serialized* TR source before asking FormAPI to
+              // approve it. Log only tool, label, provenance matches and units,
+              // never patient identifiers or DICOM frame IDs.
+              if (isReportOwnedMeasurementSave && educationQuizHemodynamics?.trVmax) {
+                const trAnswer = educationQuizHemodynamics.trVmax;
+                const trAnnotationId = String(trAnswer.sourceAnnotationId || '').trim();
+                const trCandidates = reportAnnotations.filter(annotation =>
+                  trAnnotationId && String(
+                    annotation?.uid || annotation?.annotationUID ||
+                    annotation?.annotationId || annotation?.id || ''
+                  ).trim() === trAnnotationId);
+                const trSource = trCandidates.length === 1 ? trCandidates[0] : null;
+                const directional = trSource?.ultrasoundDirectional ||
+                  trSource?.measurements?.ultrasoundDirectional || {};
+                const target = trAnswer?.viewerTarget || {};
+                const savedFrame = trSource?.frameNumber ||
+                  /\/frames\/(\d+)/.exec(String(trSource?.referencedImageId || ''))?.[1];
+                const savedTarget = {
+                  studyInstanceUID: trSource?.StudyInstanceUID,
+                  seriesInstanceUID: trSource?.SeriesInstanceUID || trSource?.referenceSeriesUID,
+                  sopInstanceUID: trSource?.SOPInstanceUID,
+                  frameNumber: savedFrame,
+                };
+                const targetMatches = ['studyInstanceUID', 'seriesInstanceUID',
+                  'sopInstanceUID', 'frameNumber'].every(key =>
+                  String(target[key] ?? '').trim() !== '' &&
+                  String(target[key]).trim() === String(savedTarget[key] ?? '').trim());
+                traceQuizTrVmax('transfer.serialized-source', {
+                  annotationId: trAnnotationId, sourceMatchCount: trCandidates.length,
+                  sourceToolName: trSource?.toolName || '',
+                  sourceLabel: trSource?.label || trSource?.measurementRole || '',
+                  pointCount: Array.isArray(trSource?.points) ? trSource.points.length : 0,
+                  targetMatches, acquisitionMode: directional.acquisitionMode || '',
+                  reportUnit: directional.reportUnit || '',
+                  reportValue: directional.reportValue ?? null,
+                  answerKind: trAnswer.measurementKind || '',
+                  answerUnit: trAnswer.unit || '',
+                  answerValue: trAnswer.value ?? null,
+                  hasLinkedRVSPReview: !!educationQuizHemodynamics?.ivc?.compositeResult?.rapRvsp,
+                });
+              }
+
               // RV FAC is a calculated answer, not an independently drawn
               // clinical annotation. The review can show it on FIRST save
               // only when both unique, calibrated ED/ES sources are present in
@@ -18717,6 +18805,14 @@ function commandsModule({
                 }
 
                 const serverPreview = await previewResponse.json().catch(() => null);
+                if (isReportOwnedMeasurementSave && educationQuizHemodynamics?.trVmax) {
+                  traceQuizTrVmax('transfer.formapi-preview', {
+                    reviewOnly: serverPreview?.reviewOnly === true,
+                    supported: serverPreview?.educationQuizHemodynamicsSupported === true,
+                    verifiedFields: serverPreview?.educationQuizHemodynamicFields || [],
+                    candidateFields: serverPreview?.candidateFields || [],
+                  });
+                }
 
                 if (!serverPreview?.reviewOnly) {
                   throw new Error('FormAPI did not return a clinical measurement review preview.');
