@@ -24,6 +24,7 @@ test('review-only contour scalars never enter PUT MeasurementAnnotations or cano
   assert.match(preview, /annotations: reportAnnotations\.map\(annotation =>/);
   assert.match(preview, /reviewOnlySingleViewVolumeML/);
   assert.match(preview, /reviewOnlyLAContourAreaCM2/);
+  assert.match(preview, /source\.referencedImageId !== String\(annotation\?\.referencedImageId \|\| ''\)/);
   assert.doesNotMatch(preview.slice(0, preview.indexOf('const previewResponse')), /reviewOnlySingleViewVolumeML|reviewOnlyLAContourAreaCM2/);
 });
 
