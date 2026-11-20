@@ -167,7 +167,7 @@ const ULTRASOUND_DIRECTIONAL_MEASUREMENT_KIND = 'ultrasound-directional';
 function traceQuizTrVmax(stage: string, details: Record<string, unknown>) {
   try {
     if (window.sessionStorage.getItem('arDebugTrVmax') === '1') {
-      console.info('[AR TR Vmax trace]', stage, details);
+      console.info(`[AR TR Vmax trace] ${stage} ${JSON.stringify(details)}`);
     }
   } catch {
     // Instrumentation must never interrupt a clinical or learning workflow.
