@@ -18311,6 +18311,15 @@ function commandsModule({
                       kind: 'lvSimpsonSlot', slot: efSlot, value: volumeML,
                       referencedImageId: String(annotation?.referencedImageId || ''),
                     });
+                  } else {
+                    // Aggregate-only diagnostic for first-preview failures:
+                    // never log identifiers, patient data or contour points.
+                    console.info('[Review preview] EF single-view volume unavailable', {
+                      slot: efSlot,
+                      sessionSourcePresent: !!lvSimpsonSessionMeasurementsByUid.get(measurementId),
+                      nativeSourceOnSameImage: !!nativeImageId &&
+                        nativeImageId === String(annotation?.referencedImageId || ''),
+                    });
                   }
                 } else {
                   const laSlot = getLAVolumeSlotFromMeasurement(sourceMeasurement);
