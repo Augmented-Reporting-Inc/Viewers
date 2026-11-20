@@ -10753,7 +10753,7 @@ function commandsModule({
       }
       renderLVSimpsonWorkflowPanel({
         measurements: currentLVSimpsonMeasurements,
-        instruction: 'Review the four contours and their long-axis measurements, then select Calculate EF.',
+        instruction: 'Review the four contours and their volume measurements, then select Calculate EF.',
         onCalculate: calculateEF,
         onCancel: hideLVSimpsonWorkflowPanel,
       });
