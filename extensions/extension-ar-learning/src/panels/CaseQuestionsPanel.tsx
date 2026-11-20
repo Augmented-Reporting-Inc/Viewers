@@ -2659,7 +2659,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     );
     if (!record && savedPhase && targetHasNavigationIdentity(phaseSource.target)) {
       const jumped = await runViewerCommand(commandsManager, 'jumpToViewerQuizTarget', {
-        viewerTarget: navigationTarget, questionKey: question.questionKey,
+        viewerTarget: phaseSource.target, questionKey: question.questionKey,
       });
       if (jumped?.ok) {
         if (cleanString(jumped.viewportId)) {
@@ -3025,8 +3025,6 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
             >×</button>
           ) : null}
         </div>
-
-
       </>
     );
   }
@@ -5943,7 +5941,6 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
             >
               {phase.label}
             </button>
-            
             </div>
           ))}
         </div>
@@ -5968,7 +5965,6 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         {views.map(({ slot, label }) => (
           <div key={slot} className="mb-2 flex flex-wrap items-center gap-2">
             {renderCompositePhaseStatusAndDelete(quiz, question, slot, disabled, label)}
-            
             {[
               { text: 'Freehand', contourTechnique: 'freehand' },
               { text: 'Axis + apex', contourTechnique: 'axisApex' },
@@ -5996,7 +5992,6 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                 {choice.text}
               </button>
             ))}
-            
           </div>
         ))}
       </div>
@@ -6019,7 +6014,6 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         {slots.map(({ slot, label }) => (
           <div key={slot} className="mb-2 flex flex-wrap items-center gap-2">
             {renderCompositePhaseStatusAndDelete(quiz, question, slot, disabled, label)}
-            
             {[
               { text: 'Freehand', command: 'startEchoAreaContourWorkflow' },
               { text: 'Axis + apex', command: 'startGuidedRVFACContourWorkflow' },
@@ -6045,7 +6039,6 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                 {choice.text}
               </button>
             ))}
-            
           </div>
         ))}
       </div>
