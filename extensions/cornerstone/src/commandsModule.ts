@@ -13388,10 +13388,13 @@ function commandsModule({
       }
     },
     setToolActiveToolbar: ({ value, itemId, toolName, toolGroupIds = [] }) => {
-      // The selected quiz question owns its measurement context. Clearing it
-      // when a toolbar tool is selected loses the TR Vmax target, causing the
-      // spectral toolbar to open the generic target dialog on completion.
-      // Question selection/release explicitly updates this context instead.
+      // Preserve the selected quiz TR target if the learner temporarily uses
+      // a generic toolbar tool before returning to Vmax. All other tool
+      // contexts retain their prior reset behavior; question change/release
+      // independently clears the TR binding.
+      if (activeQuizMeasurementKind !== 'trVmax') {
+        setQuizToolbarMeasurementKind('');
+      }
       // Sometimes it is passed as value (tools with options), sometimes as itemId (toolbar buttons)
       toolName = toolName || itemId || value;
       if (lvSimpsonMouseTools.isActive() && activeLVSimpsonWorkflowSessionId) {
@@ -17379,7 +17382,11 @@ function commandsModule({
               entry => getMeasurementAnnotationId(entry) === selectedMeasurementId
             )
           : null;
-      const measurement = restoredSpectralMeasurement || directMeasurement;
+      // TR quiz evidence must match the native annotation used by preview.
+      // A stale OHIF-only copy is not proof that FormAPI can verify this source.
+      const measurement = requestedKind === 'trVmax'
+        ? restoredSpectralMeasurement
+        : restoredSpectralMeasurement || directMeasurement;
 
       if (!isCompositeKind && !selectedMeasurementId) {
         return { ok: false, reason: 'no-selected-measurement' };
