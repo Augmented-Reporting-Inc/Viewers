@@ -81,3 +81,11 @@ test('RAP and TR Vmax are measured; RVSP and verified RV FAC are calculated', ()
   assert.match(viewerCommands, /calculateRVFACFromMeasurements\(verifiedRVSources/);
   assert.match(viewerCommands, /rvReviewResult\?\.status === 'complete'/);
 });
+
+test('learner TR preview deduplicates one annotation without dropping transfer evidence', () => {
+  assert.match(panel, /const learnerReviewPreview = \{ \.\.\.preview, educationQuizHemodynamics \};/);
+  assert.match(panel, /buildClinicalViewerAnnotationReviewRows\(learnerReviewPreview\)/);
+  assert.match(panel, /buildLearnerCalculatedMeasurementReviewRows\(learnerReviewPreview\)/);
+  assert.match(panel, /educationQuizHemodynamics: quizMeasurementReview\.educationQuizHemodynamics/);
+  assert.match(review, /quizTRSourceId && id === quizTRSourceId/);
+});
