@@ -59,6 +59,16 @@ import { getCompositePhaseSlot, getCompositePhaseMeasurementId, matchesComposite
 
 const AR_QUIZ_MEASUREMENT_ADDED_EVENT = 'ar-learning:quiz-measurement-added';
 const AR_QUIZ_MEASUREMENT_LABELLED_EVENT = 'ar-learning:quiz-measurement-labelled';
+// Opt-in, source-only diagnostics. Do not log patient or DICOM identifiers.
+function traceQuizTrVmax(stage: string, details: Record<string, unknown>) {
+  try {
+    if (window.sessionStorage.getItem('arDebugTrVmax') === '1') {
+      console.info('[AR TR Vmax trace]', stage, details);
+    }
+  } catch {
+    // Storage restrictions must never interrupt a measurement.
+  }
+}
 const AR_LV_SIMPSON_CAPTURE_REQUESTED_EVENT = 'ar-measurements:lv-simpson-capture-requested';
 const AR_LV_SIMPSON_GOLD_DELETE_REQUESTED_EVENT = 'ar-measurements:lv-simpson-gold-delete-requested';
 const AR_VIEWER_QUIZ_AUTHORING_SAVED_EVENT = 'ar:viewer-quiz-authoring-saved';
@@ -3885,6 +3895,19 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         quiz,
         measurementId: cleanString(options.measurementId),
       });
+      if (cleanString(plainObject(question.answerConfig).measurementKind) === 'trVmax') {
+        traceQuizTrVmax('quiz.capture.result', {
+          questionKey: question.questionKey,
+          requestedAnnotationId: cleanString(options.measurementId),
+          ok: result?.ok === true,
+          reason: cleanString(result?.reason),
+          answerAnnotationId: cleanString(result?.answer?.sourceAnnotationId),
+          answerKind: cleanString(result?.answer?.measurementKind),
+          answerUnit: cleanString(result?.answer?.unit),
+          answerValue: result?.answer?.value ?? null,
+          hasDICOMFrameTarget: targetHasNavigationIdentity(result?.answer?.viewerTarget),
+        });
+      }
 
       if (!result?.ok || !result?.answer) {
         const reason = cleanString(result?.reason || 'No selected measurement found.');
@@ -3983,6 +4006,12 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       if (isBowelMeasurementSetQuestion(question)) {
         bowelCaptureFailureReasonRef.current[captureKey] =
           cleanString(error?.message || error);
+      }
+      if (cleanString(plainObject(question.answerConfig).measurementKind) === 'trVmax') {
+        traceQuizTrVmax('quiz.capture.exception', {
+          questionKey: question.questionKey,
+          message: cleanString(error?.message || error),
+        });
       }
       if (!options.silent) uiNotificationService.show({
         title: 'Case Questions',
@@ -4183,6 +4212,14 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       // ID only, and never use the educator gold or a different selected ROI.
       const kind = cleanString(plainObject(question.answerConfig).measurementKind);
       if (kind === 'trVmax') {
+        traceQuizTrVmax('quiz.annotation-event', {
+          questionKey,
+          annotationId: measurementId,
+          eventType: event.type,
+          activeQuestionKey,
+          lastActivatedQuestionKey: lastActivatedQuestionRef.current,
+          labelCompleted,
+        });
         if (labelCompleted) return;
         const key = quizKey + ':' + questionKey;
         const captureId = key + ':' + measurementId;
