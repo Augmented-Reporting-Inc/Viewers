@@ -18225,7 +18225,7 @@ function commandsModule({
 
           // Display-only review values are computed from calibrated live sources.
           // Canonical MeasurementAnnotations remain compact and unchanged.
-          const reviewContourValuesById = new Map<string, { slot: string; kind: string; value: number }>();
+          const reviewContourValuesById = new Map<string, { slot: string; kind: string; value: number; referencedImageId: string }>();
           const liveAnnotations = measurements
             .filter(measurement => {
               const measurementId = getMeasurementAnnotationId(measurement);
@@ -18273,6 +18273,7 @@ function commandsModule({
                   if (typeof volumeML === 'number' && Number.isFinite(volumeML) && volumeML > 0) {
                     reviewContourValuesById.set(measurementId, {
                       kind: 'lvSimpsonSlot', slot: efSlot, value: volumeML,
+                      referencedImageId: String(annotation?.referencedImageId || ''),
                     });
                   }
                 } else {
@@ -18282,6 +18283,7 @@ function commandsModule({
                     if (typeof areaCM2 === 'number' && Number.isFinite(areaCM2) && areaCM2 > 0) {
                       reviewContourValuesById.set(measurementId, {
                         kind: 'laVolumeSlot', slot: laSlot, value: areaCM2,
+                        referencedImageId: String(annotation?.referencedImageId || ''),
                       });
                     }
                   }
@@ -18642,7 +18644,13 @@ function commandsModule({
                   domain,
                   annotations: reportAnnotations.map(annotation => {
                     const source = reviewContourValuesById.get(String(annotation?.annotationId || annotation?.uid || '').trim());
-                    if (!source) return annotation;
+                    // Only display the live result when the returned preview
+                    // is still on the exact source image; annotation ID/slot
+                    // alone are insufficient after a frame/contour replacement.
+                    if (!source || !source.referencedImageId ||
+                        source.referencedImageId !== String(annotation?.referencedImageId || '')) {
+                      return annotation;
+                    }
                     if (source.kind === 'lvSimpsonSlot' &&
                         annotation?.lvSimpson?.slot === source.slot) {
                       return { ...annotation, reviewOnlySingleViewVolumeML: source.value };
