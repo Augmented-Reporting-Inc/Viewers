@@ -18707,10 +18707,10 @@ function commandsModule({
                 const trSource = trCandidates.length === 1 ? trCandidates[0] : null;
                 const directional = trSource?.ultrasoundDirectional ||
                   trSource?.measurements?.ultrasoundDirectional || {};
-                const target = trAnswer?.viewerTarget || {};
+                const target: Record<string, any> = trAnswer?.viewerTarget || {};
                 const savedFrame = trSource?.frameNumber ||
                   /\/frames\/(\d+)/.exec(String(trSource?.referencedImageId || ''))?.[1];
-                const savedTarget = {
+                const savedTarget: Record<string, any> = {
                   studyInstanceUID: trSource?.StudyInstanceUID,
                   seriesInstanceUID: trSource?.SeriesInstanceUID || trSource?.referenceSeriesUID,
                   sopInstanceUID: trSource?.SOPInstanceUID,
