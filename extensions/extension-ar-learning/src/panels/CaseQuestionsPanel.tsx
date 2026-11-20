@@ -63,7 +63,7 @@ const AR_QUIZ_MEASUREMENT_LABELLED_EVENT = 'ar-learning:quiz-measurement-labelle
 function traceQuizTrVmax(stage: string, details: Record<string, unknown>) {
   try {
     if (window.sessionStorage.getItem('arDebugTrVmax') === '1') {
-      console.info('[AR TR Vmax trace]', stage, details);
+      console.info(`[AR TR Vmax trace] ${stage} ${JSON.stringify(details)}`);
     }
   } catch {
     // Storage restrictions must never interrupt a measurement.
