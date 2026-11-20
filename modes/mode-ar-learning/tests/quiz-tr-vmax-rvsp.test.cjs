@@ -34,7 +34,7 @@ test('toolbar selection preserves the active learner TR Vmax context for spectra
 test('learner TR answer uses the same Cornerstone-native source as the report preview', () => {
   const start = commands.indexOf('getSelectedViewerMeasurementQuizAnswer:');
   const source = commands.indexOf('const nativeTRAnnotation =', start);
-  const end = commands.indexOf('const measurement = restoredSpectralMeasurement || directMeasurement;', source);
+  const end = commands.indexOf("const measurement = requestedKind === 'trVmax'", source);
   assert.ok(start >= 0 && source > start && end > source, 'expected TR quiz capture source');
   const capture = commands.slice(source, end);
   assert.match(capture, /cornerstoneTools\.annotation\.state\.getAnnotation\?\.\(selectedMeasurementId\)/);
