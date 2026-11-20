@@ -168,7 +168,15 @@ test('multi-BWT opens its complete saved learner annotation set, never the gold 
   const end = source.indexOf('showViewerQuizLearnerMeasurement: async', start);
   assert.ok(start >= 0 && end > start, 'missing dedicated multi-BWT learner display command');
   const command = source.slice(start, end);
-  assert.match(command, /findViewerQuizBowelLearnerAnnotation\(reference, learnerSeriesDoc\)/);
+  assert.match(command, /findViewerQuizLearnerOwnedAnnotation\(reference, learnerSeriesDoc\)/);
+  const ownershipStart = source.indexOf('function findViewerQuizLearnerOwnedAnnotation(');
+  const ownershipEnd = source.indexOf('function getViewerQuizMeasurementReferenceTarget(', ownershipStart);
+  assert.ok(ownershipStart >= 0 && ownershipEnd > ownershipStart,
+    'learner source lookup must keep an exact, learner-copy-only authorization boundary');
+  const ownership = source.slice(ownershipStart, ownershipEnd);
+  assert.match(ownership, /learnerSeriesDoc\?\.isLearnerCopy !== true/);
+  assert.match(ownership, /getRequestedWorkflowAnnotations\(/);
+  assert.match(ownership, /getMeasurementAnnotationId\(item\) === sourceId/);
   assert.match(command, /viewerMeasurementsCreatedInSession\.has\(sourceId\)/);
   assert.doesNotMatch(command, /baseSeriesDoc/, 'never display source-study gold annotations');
   assert.match(command, /getFrameNumberForAnnotation\(saved\)/);
@@ -404,4 +412,184 @@ test('review buttons cannot re-trigger question-open navigation on focus', () =>
   assert.match(panelSource, /data-quiz-review-action="correct"/);
   assert.match(panelSource, /closest\?\.\('\[data-quiz-review-action\]'\)/);
   assert.match(panelSource, /revealExactFrame: question\.type === 'frameSelection'/);
+});
+
+
+test('single-slot EF redraw keeps the shared panel open for learners and educators', () => {
+  const commands = fs.readFileSync(path.join(
+    __dirname, '..', '..', '..', 'extensions', 'cornerstone', 'src', 'commandsModule.ts'
+  ), 'utf8');
+  const begin = commands.indexOf('if (nextSlot && singleSlot) {');
+  const end = commands.indexOf('// End interactive drawing', begin);
+  assert.ok(begin > 0 && end > begin, 'missing shared single-slot completion path');
+  const completed = commands.slice(begin, end);
+  assert.match(completed, /activeLVSimpsonWorkflowSessionId = ''/);
+  assert.match(completed, /renderLVSimpsonWorkflowPanel\(/);
+  assert.match(completed, /goldAuthoringEditable\s*\?/,
+    'educator and learner receive their respective next-contour instructions');
+  assert.doesNotMatch(completed, /clearLVSimpsonWorkflowIfCurrent\(/,
+    'contour completion must not close the overall EF panel');
+  assert.doesNotMatch(completed, /hideLVSimpsonWorkflowPanel\(\)/,
+    'the panel stays mounted until explicitly closed by the user');
+});
+
+test('report quiz review lists source-backed measurements without synthetic report changes', () => {
+  const measurementsPanel = fs.readFileSync(path.join(
+    __dirname, '..', '..', '..', 'extensions',
+    'extension-ar-measurements', 'src', 'panels', 'ARMeasurementsPanel.tsx'
+  ), 'utf8');
+  const start = measurementsPanel.indexOf('export function buildClinicalViewerAnnotationReviewRows(');
+  const end = measurementsPanel.indexOf('const LEARNER_REPORT_FIELD_LABELS:', start);
+  assert.ok(start > 0 && end > start, 'missing source-backed review builder');
+  const source = measurementsPanel.slice(start, end)
+    .replace('export function buildClinicalViewerAnnotationReviewRows(preview: any = {})',
+      'function buildClinicalViewerAnnotationReviewRows(preview = {})')
+    .replace('(measurement: any)', '(measurement)')
+    .replaceAll('(id: any)', '(id)')
+    .replace('new Set<string>()', 'new Set()');
+  const vm = require('node:vm');
+  const build = vm.runInNewContext(
+    [source, 'buildClinicalViewerAnnotationReviewRows'].join('\n'),
+    {
+      getMeasurementValue: measurement => measurement.displayText?.[0] || '',
+      calculateLVSimpsonContourVolumeForMeasurement: () => 46.2,
+      LV_SIMPSON_SLOT_ORDER: ['A4C_ED', 'A4C_ES', 'A2C_ED', 'A2C_ES'],
+      formatMeasurementValue: (value, unit) => [value, unit].filter(Boolean).join(' '),
+    }
+  );
+  const withId = (id, value) => ({
+    annotationId: id, toolName: 'Length', measurementRole: 'LV dimension',
+    workflow: 'viewerMeasurements', displayText: [value], frameNumber: 3,
+  });
+  const rows = build({ items: [], annotations: [
+    withId('learner-a', '22 mm'), withId('learner-a', '22 mm'),
+    { ...withId('gold', '25 mm'), workflow: 'viewerQuizGoldDisplay' },
+    withId('learner-b', '26 mm'), { annotationId: 'no-tool' },
+  ] });
+  assert.equal(rows.length, 2);
+  assert.deepEqual(Array.from(rows, row => row.key), ['learner-a', 'learner-b']);
+  assert.deepEqual(Array.from(rows, row => row.value), ['22 mm', '26 mm']);
+  const ef = build({ annotations: [
+    { ...withId('ef-ed', '6.31 cm²'), measurementKind: 'lvSimpsonSlot',
+      lvSimpson: { measurementKind: 'lvSimpsonSlot', slot: 'A4C_ED' } },
+  ] });
+  assert.equal(ef.length, 1);
+  assert.equal(ef[0].label, 'LV A4C ED volume');
+  assert.equal(ef[0].value, '46.20 mL');
+  assert.doesNotMatch(ef[0].value, /cm²|mm²/,
+    'never substitute contour area for EF contour volume');
+  assert.match(measurementsPanel, /review\.educationWorkflow && annotationRows\.length > 0/);
+  assert.match(panelSource, /const learnerReviewPreview = \{ \.\.\.preview, educationQuizHemodynamics \};\s*const annotationRows = buildClinicalViewerAnnotationReviewRows\(learnerReviewPreview\)/);
+  assert.match(panelSource, /rows, annotationRows, calculatedRows,/);
+  assert.match(panelSource, /if \(!annotationRows\.length\)\s*\{\s*throw new Error/,
+    'a truly empty annotation preview must fail rather than display a blank review');
+});
+
+test('learner quiz confirmation hides clinical review mechanics but keeps the same save path', () => {
+  const measurementPanel = fs.readFileSync(path.join(
+    __dirname, '..', '..', '..', 'extensions',
+    'extension-ar-measurements', 'src', 'panels', 'ARMeasurementsPanel.tsx'
+  ), 'utf8');
+  const confirmationStart = measurementPanel.indexOf('function LearnerViewerMeasurementConfirmationModal(');
+  const clinicalStart = measurementPanel.indexOf('export function ClinicalReportMeasurementReviewModal(', confirmationStart);
+  assert.ok(confirmationStart > 0 && clinicalStart > confirmationStart,
+    'learner confirmation and existing clinical report modal must both exist');
+  const confirmation = measurementPanel.slice(confirmationStart, clinicalStart);
+  assert.match(confirmation, /Review your measurements/);
+  assert.match(confirmation, /Measured values \(/);
+  assert.match(confirmation, /Calculated values \(/);
+  assert.doesNotMatch(confirmation, /<details|<summary/,
+    'measured and calculated results must always be visible');
+  assert.match(confirmation, /onClick=\{onApply\}/);
+  assert.doesNotMatch(confirmation, /selectedRowKeys|Select All|Apply Selected|Review AR report values/,
+    'learner should not see clinical field selection or review preferences');
+  const clinical = measurementPanel.slice(clinicalStart);
+  assert.match(clinical, /review\.educationWorkflow === true/);
+  assert.match(clinical, /<LearnerViewerMeasurementConfirmationModal/);
+  assert.match(clinical, /selected\.size\} of \{rows\.length\} report value/,
+    'original clinical report review must remain available for other workflows');
+  assert.match(panelSource, /confirmReportOwnedMeasurementSave\(quiz, quizAnswers, status\)/);
+  assert.match(panelSource, /educationWorkflow: true, saveAction/);
+  assert.match(panelSource, /reportFieldNames: fields/,
+    'learner confirmation must retain exactly the existing report-field save contract');
+});
+
+test('learner summary includes all server calculated values and verified EF biplane results', () => {
+  const measurementPanel = fs.readFileSync(path.join(
+    __dirname, '..', '..', '..', 'extensions',
+    'extension-ar-measurements', 'src', 'panels', 'ARMeasurementsPanel.tsx'
+  ), 'utf8');
+  const start = measurementPanel.indexOf('const LEARNER_REPORT_FIELD_LABELS:');
+  const end = measurementPanel.indexOf('function hasClinicalReportDerivedConsequences(', start);
+  assert.ok(start > 0 && end > start, 'missing calculated learner review mapping');
+  const source = measurementPanel.slice(start, end)
+    .replace('const LEARNER_REPORT_FIELD_LABELS: Record<string, string>',
+      'const LEARNER_REPORT_FIELD_LABELS')
+    .replace('function formatLearnerIndexedUnit(unit: any)',
+      'function formatLearnerIndexedUnit(unit)')
+    .replace('export function buildLearnerCalculatedMeasurementReviewRows(preview: any = {})',
+      'function buildLearnerCalculatedMeasurementReviewRows(preview = {})')
+    .replace('const calculated: Array<{ key: string; label: string; value: string }> = [];',
+      'const calculated = [];')
+    .replaceAll('new Set<string>()', 'new Set()')
+    .replaceAll('(id: any)', '(id)')
+    .replace('const append = (field: string, label: string, value: any, uom: string = \u0027\u0027)',
+      'const append = (field, label, value, uom = \u0027\u0027)')
+    .replace('(name: string) =>', '(name) =>')
+    .replace('const bySlot = new Map<string, any[]>();', 'const bySlot = new Map();')
+    .replace('bySlot.get(slot)![0]', 'bySlot.get(slot)[0]');
+  const vm = require('node:vm');
+  const build = vm.runInNewContext(
+    [source, 'buildLearnerCalculatedMeasurementReviewRows'].join('\n'),
+    {
+      buildClinicalViewerAnnotationReviewRows: () => [{ reportField: 'PWd' }],
+      buildClinicalReportReviewRows: preview => preview.items.map(item => ({
+        ...item, fieldNames: item.fields,
+      })),
+      formatClinicalReportFieldLabel: field => field,
+      LV_SIMPSON_SLOT_ORDER: ['A4C_ED', 'A4C_ES', 'A2C_ED', 'A2C_ES'],
+      calculateLVSimpson: () => ({
+        status: 'complete',
+        values: { edvML: 112.23, esvML: 41.67,
+          ejectionFraction: 62.87, strokeVolumeML: 70.56 },
+      }),
+    }
+  );
+  const preview = {
+    annotations: ['A4C_ED', 'A4C_ES', 'A2C_ED', 'A2C_ES'].map(slot => ({
+      annotationId: slot, toolName: 'SplineROI',
+      measurementKind: 'lvSimpsonSlot', lvSimpson: { slot },
+    })),
+    items: [
+      { key: 'PWd', fields: ['PWd'], label: 'PWd', incomingValue: '10.1 mm' },
+      { key: 'RWT', fields: ['RWT'], label: 'RWT', incomingValue: '0.29 ratio' },
+      { key: 'LVMass', fields: ['LVMass'], label: 'LVMass', incomingValue: '324 g' },
+      { key: 'lvSimpson', fields: ['EFSimpsons', 'LVEDV', 'LVESV'],
+        label: 'LV EF', incomingValue: '62.9 %' },
+    ],
+    derivedConsequences: [
+      { field: 'LVMassIndex', label: 'LV Mass Index', status: 'calculated',
+        calculatedValue: '163', uom: 'g/m2' },
+      { field: 'LVEDVx', label: 'Indexed LV EDV', status: 'calculated',
+        calculatedValue: '56.3', uom: 'ml/m2' },
+      { field: 'LVESVx', label: 'Indexed LV ESV', status: 'calculated',
+        calculatedValue: '20.8', uom: 'ml/m2' },
+    ],
+  };
+  const rows = build(preview);
+  const byField = Object.fromEntries(rows.map(row => [row.key, row]));
+  for (const field of ['RWT', 'LVMass', 'LVMassIndex',
+    'LVEDVx', 'LVESVx', 'LVEDV', 'LVESV', 'EFSimpsons', 'SV']) {
+    assert.ok(byField[field], `missing calculated result ${field}`);
+  }
+  assert.equal(byField.RWT.value, '0.29 ratio');
+  assert.equal(byField.LVMass.value, '324 g');
+  assert.equal(byField.LVMassIndex.value, '163 g/m²');
+  assert.equal(byField.LVEDVx.value, '56.3 mL/m²');
+  assert.equal(byField.LVESVx.value, '20.8 mL/m²');
+  assert.equal(byField.LVEDV.value, '112.23 mL');
+  assert.equal(byField.LVESV.value, '41.67 mL');
+  assert.ok(!byField.PWd, 'raw PWd is already shown in measured values');
+  assert.match(measurementPanel, /calculatedRows\.map/);
+  assert.match(panelSource, /const calculatedRows = buildLearnerCalculatedMeasurementReviewRows\(learnerReviewPreview\)/);
 });

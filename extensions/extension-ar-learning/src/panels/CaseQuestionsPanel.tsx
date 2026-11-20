@@ -13,6 +13,8 @@ import {
 } from '../utils/viewerQuizApi';
 import {
   buildClinicalReportReviewRows,
+  buildClinicalViewerAnnotationReviewRows,
+  buildLearnerCalculatedMeasurementReviewRows,
   ClinicalReportMeasurementReviewModal,
 } from '../../../extension-ar-measurements/src/panels/ARMeasurementsPanel';
 import {
@@ -57,7 +59,18 @@ import { getCompositePhaseSlot, getCompositePhaseMeasurementId, matchesComposite
 
 const AR_QUIZ_MEASUREMENT_ADDED_EVENT = 'ar-learning:quiz-measurement-added';
 const AR_QUIZ_MEASUREMENT_LABELLED_EVENT = 'ar-learning:quiz-measurement-labelled';
+// Opt-in, source-only diagnostics. Do not log patient or DICOM identifiers.
+function traceQuizTrVmax(stage: string, details: Record<string, unknown>) {
+  try {
+    if (window.sessionStorage.getItem('arDebugTrVmax') === '1') {
+      console.info(`[AR TR Vmax trace] ${stage} ${JSON.stringify(details)}`);
+    }
+  } catch {
+    // Storage restrictions must never interrupt a measurement.
+  }
+}
 const AR_LV_SIMPSON_CAPTURE_REQUESTED_EVENT = 'ar-measurements:lv-simpson-capture-requested';
+const AR_LV_SIMPSON_GOLD_DELETE_REQUESTED_EVENT = 'ar-measurements:lv-simpson-gold-delete-requested';
 const AR_VIEWER_QUIZ_AUTHORING_SAVED_EVENT = 'ar:viewer-quiz-authoring-saved';
 function reportEducationChange(source: string) {
   window.dispatchEvent(new CustomEvent('ar:education-work-changed', { detail: { source } }));
@@ -2092,6 +2105,11 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
   const efCaptureInFlightRef = useRef(false);
   // Only newly captured BWT calipers need an annotation save before quiz save.
   const pendingBowelQuizMeasurementIdsRef = useRef(new Set<string>());
+  // A deleted viewer annotation must be removed from the learner Series on
+  // quiz Save, not merely hidden or omitted from the quiz response JSON.
+  const pendingQuizMeasurementDeletionsRef = useRef<
+    Record<string, Array<{ annotationId: string; domain: 'echo' | 'bowel' }>>
+  >({});
   const autoBowelGoldCaptureInFlightRef = useRef(new Set<string>());
   const autoCompositeGoldCaptureInFlightRef = useRef(new Set<string>());
   const lastCompositeGoldCaptureErrorRef = useRef('');
@@ -2448,7 +2466,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       const selectedKind = cleanString(
         plainObject(selectedQuestion?.answerConfig).measurementKind
       );
-      if (['rvFAC', 'raArea', 'laVolumeBiplane', 'laVolumeBiplaneDisks',
+      if (['lvSimpsonEF', 'rvFAC', 'raArea', 'laVolumeBiplane', 'laVolumeBiplaneDisks',
         'ivcCollapsibility'].includes(selectedKind)) {
         const status = await runViewerCommand(
           commandsManager, 'getViewerQuizCompositeStatusForActiveStudy',
@@ -2543,7 +2561,90 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       : saved?.target || (config.compositeFrameGuidanceEnabled === true ? configured : null);
     const phaseSource = { annotationId: cleanString(saved?.annotationId), target: sourceTarget };
     const live = getActiveCompositePhaseMeasurement(kind, slot, phaseSource);
-    return { kind, saved, live, phaseSource };
+    // A just-drawn contour may be live before the quiz answer is saved.
+    // Its own image target still supports the clickable source label.
+    const navigationTarget = saved?.target || getNestedViewerTarget(live) || sourceTarget;
+    return { kind, saved, live, phaseSource, navigationTarget };
+  }
+
+  // Delete the learner-owned annotation first, then clear the exact quiz
+  // answer. Never clear a newer answer or remove educator gold by slot alone.
+  async function deleteLearnerQuizSourceMeasurement(
+    quiz: QuizDefinition, question: QuizQuestion, sourceAnswer: any,
+    { bowelSource = false }: { bowelSource?: boolean } = {}
+  ) {
+    if (authoringMode || getQuizScoreItem(viewerQuizScore, quiz)) return;
+    const sourceId = cleanString(sourceAnswer?.sourceAnnotationId ||
+      plainObject(sourceAnswer?.sourceRefs).annotationId);
+    if (!sourceId) {
+      uiNotificationService.show({
+        title: 'Delete measurement', type: 'warning', duration: 4000,
+        message: 'This answer has no identifiable viewer measurement.',
+      });
+      return;
+    }
+    if (!window.confirm('Delete this measurement and clear its quiz answer? ' +
+      'You can redraw it and save your correction.')) return;
+    try {
+      const result = await runViewerCommand(commandsManager,
+        'deleteViewerQuizLearnerMeasurement', { learnerMeasurement: sourceAnswer });
+      if (result?.ok !== true || cleanString(result.annotationId) !== sourceId) {
+        uiNotificationService.show({
+          title: 'Delete measurement', type: 'warning', duration: 6000,
+          message: 'Measurement was not deleted (' +
+            cleanString(result?.reason || 'source-not-found') +
+            '). Your answer has not been changed.',
+        });
+        return;
+      }
+      const latest = latestLearnerAnswersRef.current[quiz.quizKey]?.[question.questionKey];
+      let updated: any;
+      if (bowelSource) {
+        const previous = getBowelMeasurementSetEntries(plainObject(latest).measurements);
+        updated = { measurements: previous.filter(item =>
+          cleanString(item.sourceAnnotationId) !== sourceId) };
+        pendingBowelQuizMeasurementIdsRef.current.delete(sourceId);
+      } else if (cleanString(plainObject(latest).sourceAnnotationId) === sourceId) {
+        updated = null;
+      } else {
+        // A newly captured answer must survive deletion of an older source.
+        await refreshLiveCompositeMeasurements();
+        return;
+      }
+      latestLearnerAnswersRef.current = {
+        ...latestLearnerAnswersRef.current,
+        [quiz.quizKey]: {
+          ...(latestLearnerAnswersRef.current[quiz.quizKey] || {}),
+          [question.questionKey]: updated,
+        },
+      };
+      const domain: 'echo' | 'bowel' =
+        getQuizQuestionMeasurementDomain(quiz, question, payload) === 'bowel'
+          ? 'bowel' : 'echo';
+      const currentDeletes = pendingQuizMeasurementDeletionsRef.current[quiz.quizKey] || [];
+      if (!currentDeletes.some(item => item.annotationId === sourceId)) {
+        pendingQuizMeasurementDeletionsRef.current[quiz.quizKey] = [
+          ...currentDeletes, { annotationId: sourceId, domain },
+        ];
+      }
+      setAnswer(quiz.quizKey, question, updated);
+      setSpectralLearnerCaptureErrors(current => {
+        const key = quiz.quizKey + ':' + question.questionKey;
+        if (!current[key]) return current;
+        const next = { ...current }; delete next[key]; return next;
+      });
+      await refreshLiveCompositeMeasurements();
+      uiNotificationService.show({
+        title: 'Measurement deleted', type: 'info', duration: 5000,
+        message: 'Measurement removed. Draw the correction and Save to persist it.',
+      });
+    } catch (error) {
+      console.warn('[CaseQuestionsPanel] learner measurement deletion failed', error);
+      uiNotificationService.show({
+        title: 'Delete measurement', type: 'error', duration: 5000,
+        message: 'Could not delete this measurement. Your answer has not changed.',
+      });
+    }
   }
 
   async function deleteCompositePhaseMeasurement(
@@ -2786,7 +2887,6 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
             {qualityWarnings.map((warning: string, index: number) => (
               <div key={index} className="mt-1">{warning}</div>
             ))}
-            <div className="mt-1">Review LA view selection and contour placement if possible. This warning does not prevent capturing, saving or submitting the measurement.</div>
           </div>
         ) : null}
         {hasGold && hasLive && !sameGold ? (
@@ -2815,9 +2915,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
   }
 
   function renderCompositePhaseStatusAndDelete(
-    quiz: QuizDefinition, question: QuizQuestion, slot: string, disabled: boolean
+    quiz: QuizDefinition, question: QuizQuestion, slot: string, disabled: boolean, label = slot
   ) {
-    const { kind, saved, live, phaseSource } =
+    const { kind, saved, live, phaseSource, navigationTarget } =
       getCompositePhaseDisplayEvidence(quiz, question, slot);
     const hasSaved = !!cleanString(saved?.annotationId);
     const statusKey = authoringMode ? 'authoring:' + question.questionKey
@@ -2837,19 +2937,14 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       Number(liveArea) > 0 ? Number(liveArea) : null;
     const phaseValue = liveValue ?? savedValue;
     const units = kind === 'ivcCollapsibility' || kind === 'ivcRapRvsp' ? 'mm' : 'cm²';
-    const areaLabel = phaseValue != null && Number.isFinite(phaseValue)
-      ? ' · ' + phaseValue.toFixed(2) + ' ' + units : '';
+    const displayValue = phaseValue != null && Number.isFinite(Number(phaseValue)) && Number(phaseValue) > 0
+      ? Number(phaseValue).toFixed(2) + ' ' + units : 'Not measured';
     return (
       <>
-        <span className={live || hasSaved ? 'text-emerald-200 text-[11px]' : 'text-amber-200 text-[11px]'}>
-          {live ? 'Measured' : hasSaved ? (authoringMode ? 'Gold saved' : 'Learner saved') : 'Not measured'}
-          {areaLabel}
-          {hasSaved ? (authoringMode ? ' · Gold source saved' : '') : ''}
-        </span>
         {hasSaved && targetHasNavigationIdentity(saved?.target) ? (
           <button
             type="button"
-            className="rounded border border-emerald-600 px-2 py-1 text-emerald-100"
+            className="min-w-0 text-left font-medium text-cyan-100 hover:underline" data-quiz-review-action="navigation" aria-label={`Jump to ${label} saved source`}
             onClick={event => {
               event.preventDefault();
               event.stopPropagation();
@@ -2895,17 +2990,51 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                 '[CaseQuestionsPanel] composite gold phase navigation failed', error
               ));
             }}
-          >View saved</button>
+          >{label}</button>
         ) : null}
-        <button
-          type="button"
-          className="rounded border border-red-600 px-2 py-1 text-red-100 disabled:opacity-40"
-          disabled={disabled || (!getCompositePhaseMeasurementId(live) && !hasSaved)}
-          onClick={event => {
-            event.preventDefault(); event.stopPropagation();
-            void deleteCompositePhaseMeasurement(quiz, question, slot, phaseSource);
-          }}
-        >Delete</button>
+        {!hasSaved && targetHasNavigationIdentity(navigationTarget) ? (
+          <button type="button" data-quiz-review-action="navigation"
+            aria-label={`Jump to ${label} source`}
+            className="min-w-0 text-left font-medium text-cyan-100 hover:underline"
+            onClick={event => {
+              event.preventDefault(); event.stopPropagation();
+              void (async () => {
+                const jumped = await runViewerCommand(commandsManager, 'jumpToViewerQuizTarget', {
+                  viewerTarget: navigationTarget, questionKey: question.questionKey,
+                });
+                if (jumped?.ok && cleanString(jumped.viewportId)) {
+                  await runViewerCommand(commandsManager, 'setViewportActive', {
+                    viewportId: jumped.viewportId,
+                  });
+                }
+              })().catch(error => console.warn(
+                '[CaseQuestionsPanel] composite source jump failed', error
+              ));
+            }}
+          >{label}</button>
+        ) : (!hasSaved || !targetHasNavigationIdentity(saved?.target))
+          ? <span className="text-gray-300">{label}</span> : null}
+        <div className="inline-flex max-w-full items-center rounded border border-gray-600 bg-black text-xs">
+          <input type="text" readOnly aria-label={`${label} measured value`}
+            value={displayValue}
+            className="w-28 min-w-0 bg-transparent px-2 py-1 text-emerald-200"
+          />
+          {(getCompositePhaseMeasurementId(live) || hasSaved) ? (
+            <button
+              type="button"
+              data-quiz-review-action="delete"
+              aria-label={`Delete ${slot} measurement`}
+              title={`Delete ${slot} measurement`}
+              className="shrink-0 border-l border-gray-600 px-2 py-1 font-bold text-red-200 hover:bg-red-950 disabled:opacity-40"
+              disabled={disabled}
+              onClick={event => {
+                event.preventDefault();
+                event.stopPropagation();
+                void deleteCompositePhaseMeasurement(quiz, question, slot, phaseSource);
+              }}
+            >×</button>
+          ) : null}
+        </div>
       </>
     );
   }
@@ -3214,11 +3343,33 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       : [];
     const hasSavedGoldComposite = savedGoldComponents.length > 0 &&
       savedGoldComponents.every(component => component.complete);
+    const educatorEF = authoringMode && measurementKind === 'lvSimpsonEF';
     const deferGuidedActivation = isNewQuestion &&
       isGuidedQuizCompositeKind(measurementKind) &&
       !hasSavedGoldComposite;
     const activateGuidedAfterNavigation = async () => {
-      if (!deferGuidedActivation || lastActivatedQuestionRef.current !== nextActiveQuestionKey) return;
+      if (lastActivatedQuestionRef.current !== nextActiveQuestionKey) return;
+      if (educatorEF) {
+        // Open the same four-slot EF panel for saved and unsaved gold.
+        // Selection/review must never initiate a drawing gesture.
+        const config = plainObject(question.answerConfig);
+        const result = await runViewerCommand(commandsManager, 'startLVSimpsonEFWorkflow', {
+          panelOnly: true,
+          questionKey: question.questionKey,
+          efContourTargets: config.efContourFrameGuidanceEnabled === true
+            ? plainObject(config.efContourTargets) : null,
+          savedGoldMeasurement: plainObject(config.goldMeasurement),
+          goldAuthoringEditable: isDraftDefinition(authoringDefinition) && !authoringSaving,
+        });
+        if (!result || result.ok === false) {
+          uiNotificationService.show({
+            title: 'EF authoring', type: 'warning', duration: 5000,
+            message: 'Could not open the EF panel. Select this question to retry.',
+          });
+        }
+        return;
+      }
+      if (!deferGuidedActivation) return;
       const result = await runViewerCommand(commandsManager, 'activateViewerQuizMeasurementTool', {
         toolName: 'Length',
         measurementKind,
@@ -3744,6 +3895,19 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         quiz,
         measurementId: cleanString(options.measurementId),
       });
+      if (cleanString(plainObject(question.answerConfig).measurementKind) === 'trVmax') {
+        traceQuizTrVmax('quiz.capture.result', {
+          questionKey: question.questionKey,
+          requestedAnnotationId: cleanString(options.measurementId),
+          ok: result?.ok === true,
+          reason: cleanString(result?.reason),
+          answerAnnotationId: cleanString(result?.answer?.sourceAnnotationId),
+          answerKind: cleanString(result?.answer?.measurementKind),
+          answerUnit: cleanString(result?.answer?.unit),
+          answerValue: result?.answer?.value ?? null,
+          hasDICOMFrameTarget: targetHasNavigationIdentity(result?.answer?.viewerTarget),
+        });
+      }
 
       if (!result?.ok || !result?.answer) {
         const reason = cleanString(result?.reason || 'No selected measurement found.');
@@ -3842,6 +4006,12 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       if (isBowelMeasurementSetQuestion(question)) {
         bowelCaptureFailureReasonRef.current[captureKey] =
           cleanString(error?.message || error);
+      }
+      if (cleanString(plainObject(question.answerConfig).measurementKind) === 'trVmax') {
+        traceQuizTrVmax('quiz.capture.exception', {
+          questionKey: question.questionKey,
+          message: cleanString(error?.message || error),
+        });
       }
       if (!options.silent) uiNotificationService.show({
         title: 'Case Questions',
@@ -4042,6 +4212,14 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       // ID only, and never use the educator gold or a different selected ROI.
       const kind = cleanString(plainObject(question.answerConfig).measurementKind);
       if (kind === 'trVmax') {
+        traceQuizTrVmax('quiz.annotation-event', {
+          questionKey,
+          annotationId: measurementId,
+          eventType: event.type,
+          activeQuestionKey,
+          lastActivatedQuestionKey: lastActivatedQuestionRef.current,
+          labelCompleted,
+        });
         if (labelCompleted) return;
         const key = quizKey + ':' + questionKey;
         const captureId = key + ':' + measurementId;
@@ -4202,6 +4380,50 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     );
   }, [activeQuestionKey, authoringMode, payload, authoringDefinition, authoringSaving]);
 
+  // Synchronize saved educator gold in the shared EF panel without
+  // restarting a contour drawing session or selecting a different question.
+  useEffect(() => {
+    if (!authoringMode || !activeQuestionKey.startsWith('authoring:')) return;
+    const questionKey = activeQuestionKey.slice('authoring:'.length);
+    const selected = authoringQuestions.find(item => item.questionKey === questionKey);
+    if (cleanString(plainObject(selected?.answerConfig).measurementKind) !== 'lvSimpsonEF') return;
+    void runViewerCommand(commandsManager, 'updateLVSimpsonEFPanelGold', {
+      questionKey,
+      savedGoldMeasurement: plainObject(plainObject(selected?.answerConfig).goldMeasurement),
+      goldAuthoringEditable: isDraftDefinition(authoringDefinition) && !authoringSaving,
+      efContourTargets: plainObject(selected?.answerConfig).efContourFrameGuidanceEnabled === true
+        ? plainObject(plainObject(selected?.answerConfig).efContourTargets) : null,
+    });
+  }, [authoringMode, activeQuestionKey, authoringQuestions, authoringDefinition, authoringSaving]);
+
+  useEffect(() => {
+    if (!authoringMode) return;
+    const onClearGoldSlot = (event: Event) => {
+      const { questionKey, slot } = (event as CustomEvent)?.detail || {};
+      if (activeQuestionKey !== 'authoring:' + questionKey ||
+          !EF_CONTOUR_FRAME_SLOTS.some(item => item.slot === slot) ||
+          !isDraftDefinition(authoringDefinition) || authoringSaving) return;
+      const selected = authoringQuestionsRef.current.find(item =>
+        item.questionKey === questionKey);
+      if (!selected ||
+          cleanString(plainObject(selected.answerConfig).measurementKind) !== 'lvSimpsonEF') return;
+      const components = plainObject(plainObject(
+        plainObject(selected.answerConfig).goldMeasurement
+      ).compositeResult).components;
+      const saved = Array.isArray(components)
+        ? components.find(item => cleanString(item.slot) === slot) : null;
+      if (!saved?.annotationId) return;
+      void deleteCompositePhaseMeasurement(
+        { quizKey: 'authoring', quizVersion: 1 } as QuizDefinition,
+        selected, slot, { annotationId: cleanString(saved.annotationId), target: saved.target }
+      );
+    };
+    window.addEventListener(AR_LV_SIMPSON_GOLD_DELETE_REQUESTED_EVENT, onClearGoldSlot);
+    return () => window.removeEventListener(
+      AR_LV_SIMPSON_GOLD_DELETE_REQUESTED_EVENT, onClearGoldSlot
+    );
+  }, [authoringMode, activeQuestionKey, authoringDefinition, authoringSaving]);
+
   // Case Questions owns this review. It must not depend on AR Measurements being mounted.
   const finishQuizMeasurementReview = (ok: boolean) => {
     setQuizMeasurementReview(null);
@@ -4253,7 +4475,8 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
   };
 
   async function confirmReportOwnedMeasurementSave(
-    quiz: QuizDefinition, quizAnswers: Record<string, any>
+    quiz: QuizDefinition, quizAnswers: Record<string, any>,
+    saveAction: 'draft' | 'submitted'
   ): Promise<void> {
     const quizEvidenceRows = getLearnerHemodynamicQuizReviewRows(quiz, quizAnswers);
     const educationQuizHemodynamics = getLearnerHemodynamicTransferEvidence(quiz, quizAnswers);
@@ -4275,12 +4498,31 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       throw new Error(`AR could not verify ${unverified.map(row => row.label).join(', ')} for transfer. Review those source measurements and retry.`);
     }
     const rows = buildClinicalReportReviewRows(preview);
-    if (!rows.length && preview?.measurementAnnotationsChanged === false &&
-        !quizEvidenceRows.length) return;
+    // Retain quiz source identity when building learner-only display rows.
+    // The FormAPI preview need not echo the submitted education evidence.
+    // Without this context the same TR annotation is shown both as "TR peak
+    // velocity" and "TR Vmax (source-linked)" in the measured section.
+    const learnerReviewPreview = { ...preview, educationQuizHemodynamics };
+    const annotationRows = buildClinicalViewerAnnotationReviewRows(learnerReviewPreview);
+    const calculatedRows = buildLearnerCalculatedMeasurementReviewRows(learnerReviewPreview);
+    const hasRecordedQuizEvidence = quizEvidenceRows.some(row => row.recorded);
+    if (!rows.length && !hasRecordedQuizEvidence) {
+      if (preview?.measurementAnnotationsChanged === false) return;
+      // An empty report-field diff is expected for many quiz measurements,
+      // but an empty *annotation snapshot* is not evidence that anything
+      // will be persisted. Never present a blank, misleading review dialog.
+      if (!annotationRows.length) {
+        throw new Error(
+          'No source-backed viewer measurements were available for review. ' +
+          'Return to the measurement questions, verify your calipers/contours and retry.'
+        );
+      }
+    }
     setQuizMeasurementSelectedRows(rows.filter(row => row.changed).map(row => row.key));
     setQuizMeasurementReview({
-      rows, derivedConsequences: preview?.derivedConsequences, quizEvidenceRows,
-      educationQuizHemodynamics, educationWorkflow: true,
+      rows, annotationRows, calculatedRows,
+      derivedConsequences: preview?.derivedConsequences, quizEvidenceRows,
+      educationQuizHemodynamics, educationWorkflow: true, saveAction,
     });
     const approved = await new Promise<boolean>(resolve => {
       quizMeasurementResolveRef.current = resolve;
@@ -4316,6 +4558,37 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     }
 
     try {
+      // Persist and verify annotation removal on the isolated learner Series
+      // before saving a quiz response without that source. Deletion-only saves
+      // must not rewrite other, unrelated viewer measurements.
+      const deletions = pendingQuizMeasurementDeletionsRef.current[quiz.quizKey] || [];
+      if (deletions.length) {
+        await ensureViewerQuizSaveSeriesDoc();
+        for (const domain of ['echo', 'bowel'] as const) {
+          const ids = deletions.filter(item => item.domain === domain)
+            .map(item => item.annotationId);
+          if (!ids.length) continue;
+          const persisted = await runViewerCommand(
+            commandsManager, 'saveViewerMeasurementsForActiveStudy', {
+              domain,
+              measurementIds: [],
+              deleteAnnotationIds: ids,
+              scoringIntent: 'draft',
+              educationAttemptIntent: 'draft',
+              suppressSuccessNotification: true,
+            }
+          );
+          const persistedIds = new Set((Array.isArray(persisted?.annotations)
+            ? persisted.annotations : []).map(item =>
+            cleanString(item?.uid || item?.annotationId)));
+          if (!persisted?.seriesDoc?.isLearnerCopy ||
+              ids.some(id => persistedIds.has(id))) {
+            throw new Error(
+              'AR could not verify learner measurement deletion. Quiz answers were not saved.'
+            );
+          }
+        }
+      }
       // Bowel quiz answers require persisted canonical calipers. Save newly
       // captured measurements on the learner copy before saving quiz JSON.
       const pendingIds = Array.from(new Set((quiz.questions || [])
@@ -4351,7 +4624,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       // Combined report assessment: measurement review and persistence precede quiz answer save.
       // Ordinary imaging quizzes retain their existing independent save/score workflow.
       if (deferredReportScoring && quiz.questions.some(q => q.type === 'measurementNumeric')) {
-        await confirmReportOwnedMeasurementSave(quiz, quizAnswers);
+        await confirmReportOwnedMeasurementSave(quiz, quizAnswers, status);
       }
       // A quiz JSON answer is not proof its source annotations were
       // saved. Persist only the exact missing source annotations on the learner's
@@ -4436,6 +4709,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         );
         if (evidenceError) throw new Error(evidenceError);
         // Scoring is a separate operation from verified answer persistence.
+        delete pendingQuizMeasurementDeletionsRef.current[quiz.quizKey];
         reportEducationSaveResult(saveSource, saveRequestId, true);
       } catch (saveError) {
         reportEducationSaveResult(saveSource, saveRequestId, false);
@@ -5677,6 +5951,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
             { slot: 'IVC_INSP', label: 'Measure inspiration (IVCinsp)' },
           ].map(phase => (
             <div key={phase.slot} className="flex flex-wrap items-center gap-2">
+            {renderCompositePhaseStatusAndDelete(quiz, question, phase.slot, disabled, phase.slot === 'IVC_EXP' ? 'IVCexp' : 'IVCinsp')}
             <button
               type="button"
               disabled={disabled}
@@ -5708,7 +5983,6 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
             >
               {phase.label}
             </button>
-            {renderCompositePhaseStatusAndDelete(quiz, question, phase.slot, disabled)}
             </div>
           ))}
         </div>
@@ -5726,13 +6000,13 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       <div className="mt-2 rounded border border-cyan-700 bg-cyan-950/20 p-2 text-xs">
         <div className="mb-1 font-semibold text-cyan-100">LA volume contour technique</div>
         <p className="mb-2 text-gray-300">
-          For each apical view, navigate to its selected end-systolic DICOM frame.
+          For each apical view, click the desired measuring tool to navigate to its selected image.
           Freehand: click a mitral hinge, trace the LA cavity without holding the mouse,
           and finish at the opposite hinge. Axis + apex: draw the annular line and superior LA axis.
         </p>
         {views.map(({ slot, label }) => (
           <div key={slot} className="mb-2 flex flex-wrap items-center gap-2">
-            <span className="min-w-40 font-medium text-gray-100">{label}</span>
+            {renderCompositePhaseStatusAndDelete(quiz, question, slot, disabled, label)}
             {[
               { text: 'Freehand', contourTechnique: 'freehand' },
               { text: 'Axis + apex', contourTechnique: 'axisApex' },
@@ -5760,7 +6034,6 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                 {choice.text}
               </button>
             ))}
-            {renderCompositePhaseStatusAndDelete(quiz, question, slot, disabled)}
           </div>
         ))}
       </div>
@@ -5777,12 +6050,11 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       <div className="mt-2 rounded border border-cyan-700 bg-cyan-950/20 p-2 text-xs">
         <div className="mb-1 font-semibold text-cyan-100">RV FAC contour technique</div>
         <div className="mb-2 text-gray-300">
-          Choose either freehand tracing or annulus-axis + apex placement.
-          The measurement result, not the drawing technique, is scored.
+          For each area click the desired measuring tool to navigate to its image.
         </div>
         {slots.map(({ slot, label }) => (
           <div key={slot} className="mb-2 flex flex-wrap items-center gap-2">
-            <span className="min-w-44 font-medium text-gray-100">{label}</span>
+            {renderCompositePhaseStatusAndDelete(quiz, question, slot, disabled, label)}
             {[
               { text: 'Freehand', command: 'startEchoAreaContourWorkflow' },
               { text: 'Axis + apex', command: 'startGuidedRVFACContourWorkflow' },
@@ -5808,7 +6080,6 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                 {choice.text}
               </button>
             ))}
-            {renderCompositePhaseStatusAndDelete(quiz, question, slot, disabled)}
           </div>
         ))}
       </div>
@@ -6390,10 +6661,22 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                   <div className={captured
                     ? 'rounded border border-emerald-700 bg-emerald-950/20 p-2 text-xs text-emerald-100'
                     : 'rounded border border-amber-700 bg-amber-950/20 p-2 text-xs text-amber-100'}>
-                    {captured
-                      ? 'Saved learner TR Vmax: ' + Number(value.value).toFixed(2) +
-                        ' m/s · Available for IVC / RVSP calculation'
-                      : (issue || 'No source-linked learner TR Vmax is recorded yet. Complete the calibrated spectral Vmax measurement before proceeding to IVC.')}
+                    <div className="flex items-center justify-between gap-2">
+                      <span>{captured
+                        ? 'Saved learner TR Vmax: ' + Number(value.value).toFixed(2) +
+                          ' m/s · Available for IVC / RVSP calculation'
+                        : (issue || 'No source-linked learner TR Vmax is recorded yet. Complete the calibrated spectral Vmax measurement before proceeding to IVC.')}</span>
+                      {captured && !disabled ? (
+                        <button type="button" data-quiz-review-action="delete"
+                          className="shrink-0 rounded border border-red-700 px-2 py-1 text-sm font-bold text-red-200 hover:bg-red-950"
+                          title="Delete TR Vmax measurement" aria-label="Delete TR Vmax measurement"
+                          onClick={event => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            void deleteLearnerQuizSourceMeasurement(quiz, question, value);
+                          }}>×</button>
+                      ) : null}
+                    </div>
                   </div>
                 );
               })() : null}
@@ -6465,9 +6748,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                     disabled={disabled}
                     onClick={event => {
                       event.stopPropagation();
-                      setAnswer(quiz.quizKey, question, {
-                        measurements: bowelEntries.filter((_, i) => i !== index),
-                      });
+                      void deleteLearnerQuizSourceMeasurement(
+                         quiz, question, measurement, { bowelSource: true }
+                       );
                     }}>Remove</button>
                 </div>
               ))}
@@ -6480,32 +6763,46 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
             ) ? null : cleanString(plainObject(question.answerConfig).measurementKind) === 'trVmax'
               ? null : (
                         <div className="flex w-full min-w-0 max-w-full items-center gap-2 overflow-hidden">
-                          <input
-                            className="min-w-0 flex-1 rounded border border-gray-700 bg-black px-2 py-1 text-sm text-white"
-                            type="number"
-                            inputMode="decimal"
-                            step="0.01"
-                            value={numberOrEmpty(value?.value)}
-                            onChange={event =>
-                              setAnswer(
-                                quiz.quizKey,
-                                question,
-                                setObjectAnswerPart(value, {
-                                  value: event.target.value,
-                                  measurementType:
-                                    value?.measurementType || question?.answerConfig?.measurementType || '',
-                                  unit: value?.unit || question?.answerConfig?.unit || '',
-                                })
-                              )
-                            }
-                            disabled={disabled}
-                            placeholder="Measurement value"
-                          />
+                          <div className="flex min-w-0 flex-1 items-center rounded border border-gray-700 bg-black">
+                            <input
+                              className="min-w-0 flex-1 bg-transparent px-2 py-1 text-sm text-white"
+                              type="number"
+                              inputMode="decimal"
+                              step="0.01"
+                              value={numberOrEmpty(value?.value)}
+                              onChange={event =>
+                                setAnswer(
+                                  quiz.quizKey,
+                                  question,
+                                  setObjectAnswerPart(value, {
+                                    value: event.target.value,
+                                    measurementType:
+                                      value?.measurementType || question?.answerConfig?.measurementType || '',
+                                    unit: value?.unit || question?.answerConfig?.unit || '',
+                                  })
+                                )
+                              }
+                              disabled={disabled}
+                              placeholder="Measurement value"
+                            />
+                            {cleanString(value?.sourceAnnotationId) ? (
+                              <button type="button" data-quiz-review-action="delete"
+                                className="shrink-0 border-l border-gray-700 px-2 py-1 font-bold text-red-200 hover:bg-red-950 disabled:opacity-40"
+                                title="Delete measurement" aria-label="Delete measurement"
+                                disabled={disabled || captureInProgress}
+                                onClick={event => {
+                                  event.preventDefault();
+                                  event.stopPropagation();
+                                  void deleteLearnerQuizSourceMeasurement(quiz, question, value);
+                                }}>×</button>
+                            ) : null}
+                          </div>
                           <div className="w-14 shrink-0 truncate rounded border border-gray-700 px-2 py-1 text-center text-sm text-gray-300">
                             {value?.unit || question?.answerConfig?.unit || ''}
                           </div>
                         </div>
             )}
+
 
           {!bowelSet && (linkedRVSP || ['laVolumeBiplane',
             'laVolumeBiplaneDisks', 'lvSimpsonEF'].includes(
@@ -6534,6 +6831,44 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               : cleanString(plainObject(question.answerConfig).measurementKind) === 'lvSimpsonEF'
                 ? 'Open EF panel' : 'Recalculate from measured contours'}
           </button> : null}
+
+          {cleanString(plainObject(question.answerConfig).measurementKind) === 'lvSimpsonEF' ? (() => {
+            const key = quiz.quizKey + ':' + question.questionKey;
+            const live = liveCompositeStatus.questionKey === key
+              ? plainObject(liveCompositeStatus.phaseValues) : {};
+            const saved = plainObject(
+              plainObject(value?.compositeResult).derived
+            ).slotVolumeML;
+            const savedValues = plainObject(saved);
+            const hasLive = EF_CONTOUR_FRAME_SLOTS.some(({ slot }) =>
+              typeof live[slot] === 'number' && Number.isFinite(live[slot]) &&
+              live[slot] > 0
+            );
+            const hasSaved = Array.isArray(value?.compositeResult?.components);
+            if (!hasLive && !hasSaved) return null;
+            const volumes = hasLive ? live : savedValues;
+            return (
+              <div className="mt-2 rounded border border-cyan-800 p-2 text-xs text-gray-200">
+                <div className="mb-1 font-semibold text-cyan-100">
+                  {hasLive ? 'Current' : 'Saved'} single-view LV contour volumes (mL)
+                </div>
+                {EF_CONTOUR_FRAME_SLOTS.map(({ slot, label }) => {
+                  const raw = volumes[slot];
+                  const volume = raw == null || raw === '' ? NaN : Number(raw);
+                  return (
+                    <div key={slot} className="flex justify-between gap-2 py-0.5">
+                      <span>{label}</span>
+                      <span className={Number.isFinite(volume) && volume > 0
+                        ? 'font-semibold text-emerald-200' : 'text-amber-200'}>
+                        {Number.isFinite(volume) && volume > 0
+                          ? volume.toFixed(2) + ' mL' : 'Not available'}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })() : null}
 
           {cleanString(
             plainObject(value?.reviewPayload).label ||
@@ -7126,9 +7461,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
           <div className="mt-2 rounded border border-cyan-700 bg-cyan-950/20 p-2">
             <div className="text-xs font-semibold text-cyan-100">EF contour measurements</div>
             <p className="mt-1 text-xs text-gray-300">
-              Choose an individual A4C/A2C systolic or diastolic contour, then draw with
-              Freehand or Axis + apex. View saved opens that contour's original DICOM frame;
-              Delete clears only the selected draft contour and requires a new EF calculation.
+              Use the shared EF panel in the Viewer to draw, navigate, replace and delete individual
+              A4C/A2C contours. The panel also displays saved gold read-only. Capture
+              the calculated EF and Save Draft to persist the authoring changes.
             </p>
             <div className="mt-2 rounded border border-emerald-700 bg-emerald-950/30 p-2 text-sm font-semibold text-emerald-100">
               Gold EF: {savedEFGold !== undefined
@@ -7206,76 +7541,23 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                         const derived = plainObject(plainObject(
                           plainObject(answerConfig.goldMeasurement).compositeResult
                         ).derived);
-                        const raw = plainObject(derived.slotLongAxisMM)[row.slot];
-                        const measured = raw == null || raw === '' ? NaN : Number(raw);
-                        const areaRaw = plainObject(derived.slotAreaCM2)[row.slot];
-                        const area = areaRaw == null || areaRaw === '' ? NaN : Number(areaRaw);
+                        const volumeRaw = plainObject(derived.slotVolumeML)[row.slot];
+                        const volume = volumeRaw == null || volumeRaw === ''
+                          ? NaN : Number(volumeRaw);
                         return (
-                          <div className="mt-1 space-y-1">
-                            <div className={Number.isFinite(area) && area > 0
-                              ? 'font-semibold text-emerald-200' : 'text-amber-200'}>
-                              Calibrated LV contour area: {Number.isFinite(area) && area > 0
-                                ? area.toFixed(2) + ' cm²'
-                                : 'not stored; recapture or validate the gold contour'}
-                            </div>
-                            <div className={Number.isFinite(measured) && measured > 0
-                              ? 'text-emerald-200' : 'text-amber-200'}>
-                              LV long axis: {Number.isFinite(measured) && measured > 0
-                                ? measured.toFixed(2) + ' mm'
-                                : 'not stored'}
-                            </div>
+                          <div className={Number.isFinite(volume) && volume > 0
+                            ? 'mt-1 font-semibold text-emerald-200'
+                            : 'mt-1 text-amber-200'}>
+                            Single-view LV volume: {Number.isFinite(volume) && volume > 0
+                              ? volume.toFixed(2) + ' mL'
+                              : 'not stored; recalculate and capture the gold EF'}
                           </div>
                         );
                       })() : null}
                       <div className="mt-2 flex flex-wrap gap-2">
-                        {[
-                          { label: 'Freehand', method: 'freehand' },
-                          { label: 'Axis + apex', method: 'axisApex' },
-                        ].map(choice => (
-                          <button key={choice.method} type="button"
-                            className="rounded border border-cyan-600 px-2 py-1 text-cyan-100 disabled:opacity-40"
-                            disabled={isCapturing || authoringSaving || !isDraftDefinition(authoringDefinition) ||
-                              (guidanceEnabled && !row.configuredComplete)}
-                            onClick={event => {
-                              event.preventDefault();
-                              event.stopPropagation();
-                              void (async () => {
-                                await selectQuestion({ quizKey: 'authoring', quizVersion: 1 },
-                                  question, { force: true });
-                                if (guidanceEnabled) {
-                                  const opened = await runViewerCommand(commandsManager,
-                                    'jumpToViewerQuizTarget', {
-                                      viewerTarget: row.configuredTarget,
-                                      questionKey: question.questionKey,
-                                    });
-                                  if (opened?.ok !== true) throw new Error('The contour target frame is unavailable.');
-                                  if (cleanString(opened?.viewportId)) {
-                                    await runViewerCommand(commandsManager, 'setViewportActive', {
-                                      viewportId: opened.viewportId,
-                                    });
-                                  }
-                                  const frame = await runViewerCommand(commandsManager,
-                                    'getCurrentViewerQuizFrameAnswer', {});
-                                  if (frame?.ok !== true || !matchesConfiguredCompositeFrame(
-                                    plainObject(frame?.answer?.selectedTarget), row.configuredTarget
-                                  )) throw new Error('The selected contour frame does not match its saved target.');
-                                }
-                                await runViewerCommand(commandsManager, 'startLVSimpsonEFWorkflow', {
-                                  slot: row.slot,
-                                  singleSlot: true,
-                                  captureMethod: choice.method,
-                                  efContourTargets: guidanceEnabled
-                                    ? plainObject(answerConfig.efContourTargets) : null,
-                                  questionKey: question.questionKey,
-                                });
-                              })().catch(error => uiNotificationService.show({
-                                title: 'EF contour', type: 'warning', duration: 6000,
-                                message: String(error?.message || error),
-                              }));
-                            }}>
-                            {choice.label}
-                          </button>
-                        ))}
+                         <span className="text-[11px] text-cyan-200">
+                           Draw or replace this contour from the shared EF panel.
+                         </span>
                         {guidanceEnabled ? (
                           <button type="button"
                             className="rounded border border-blue-500 px-2 py-1 text-blue-100 disabled:opacity-50"
@@ -7286,82 +7568,6 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                               void captureAuthoringEFContourFrame(question, row.slot);
                             }}>
                             {targetCaptured ? 'Replace target' : 'Capture target'}
-                          </button>
-                        ) : null}
-                        {row.goldVerified ? (
-                          <button type="button"
-                            className="rounded border border-emerald-600 px-2 py-1 text-emerald-100 disabled:opacity-40"
-                            disabled={authoringSaving}
-                            onClick={event => {
-                              event.preventDefault();
-                              event.stopPropagation();
-                              setActiveQuestionKey(`authoring:${question.questionKey}`);
-                              // Use the same focused, source-backed overlay restoration as
-                              // LAV and RV FAC. Reopen the specific saved slot rather than
-                              // the composite answer's final (fourth) frame.
-                              void (async () => {
-                                const result = await runViewerCommand(
-                                  commandsManager, 'showViewerQuizMeasurementComparison', {
-                                    rubricMeasurement: plainObject(answerConfig.goldMeasurement),
-                                    viewerTarget: row.savedTarget,
-                                    focusedCompositeSlot: row.slot,
-                                    questionKey: question.questionKey,
-                                  }
-                                );
-                                const navigation = await runViewerCommand(
-                                  commandsManager, 'jumpToViewerQuizTarget', {
-                                    viewerTarget: row.savedTarget,
-                                    questionKey: question.questionKey,
-                                  }
-                                );
-                                if (cleanString(navigation?.viewportId)) {
-                                  await runViewerCommand(commandsManager, 'setViewportActive', {
-                                    viewportId: navigation.viewportId,
-                                  });
-                                }
-                                const currentFrame = await runViewerCommand(
-                                  commandsManager, 'getCurrentViewerQuizFrameAnswer', {}
-                                );
-                                const openedExpectedFrame = currentFrame?.ok === true &&
-                                  matchesConfiguredCompositeFrame(
-                                    plainObject(currentFrame?.answer?.selectedTarget), row.savedTarget
-                                  );
-                                if (navigation?.ok !== true || !openedExpectedFrame ||
-                                    result?.rubricRendered !== true) {
-                                  uiNotificationService.show({
-                                    title: 'Saved EF contour', type: 'warning', duration: 5000,
-                                    message: 'The saved contour or its exact source frame could not be displayed.',
-                                  });
-                                }
-                              })().catch(error => console.warn(
-                                '[CaseQuestionsPanel] EF saved contour navigation failed', error
-                              ));
-                            }}>
-                            View saved gold
-                          </button>
-                        ) : null}
-                        {row.goldVerified ? (
-                          <button type="button"
-                            className="rounded border border-red-600 px-2 py-1 text-red-100 disabled:opacity-40"
-                            disabled={isCapturing || authoringSaving || !isDraftDefinition(authoringDefinition)}
-                            onClick={event => {
-                              event.preventDefault();
-                              event.stopPropagation();
-                              const savedComponent = plainObject(
-                                plainObject(answerConfig.goldMeasurement).compositeResult
-                              ).components;
-                              const component = Array.isArray(savedComponent)
-                                ? savedComponent.find(item => cleanString(item?.slot) === row.slot)
-                                : null;
-                              void deleteCompositePhaseMeasurement(
-                                { quizKey: 'authoring', quizVersion: 1 } as QuizDefinition,
-                                question, row.slot, {
-                                  annotationId: cleanString(component?.annotationId),
-                                  target: row.savedTarget,
-                                }
-                              );
-                            }}>
-                            Delete contour
                           </button>
                         ) : null}
                         {guidanceEnabled && row.configuredComplete &&
@@ -8095,6 +8301,41 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     );
   }
 
+  function renderQuestionNavigation(
+    quiz: QuizDefinition,
+    question: QuizQuestion,
+    orderedQuestions: QuizQuestion[],
+    disabled = false
+  ) {
+    const index = orderedQuestions.findIndex(item => item.questionKey === question.questionKey);
+    if (index < 0) return null;
+    const navigatingDisabled = disabled || !!capturingMeasurementKey ||
+      !!capturingFrameKey || !!capturingPointKey || !!capturingAuthoringKey;
+    return (
+      <nav aria-label="Question navigation" className="mt-3 flex items-center justify-between gap-2 border-t border-gray-700 pt-3">
+        {([-1, 1] as const).map(direction => {
+          const target = orderedQuestions[index + direction];
+          const label = direction === -1 ? 'Previous' : 'Next';
+          return (
+            <button
+              key={direction}
+              type="button"
+              data-quiz-review-action="navigation"
+              aria-label={`${label} question`}
+              className="rounded border border-blue-600 px-3 py-2 text-xs font-semibold text-blue-100 hover:bg-blue-950 disabled:cursor-not-allowed disabled:opacity-40"
+              disabled={navigatingDisabled || !target}
+              onClick={event => {
+                event.preventDefault();
+                event.stopPropagation();
+                if (target) void selectQuestion(quiz, target);
+              }}
+            >{label}</button>
+          );
+        })}
+      </nav>
+    );
+  }
+
   if (authoringMode) {
     const canEditDraft = !!authoringDefinition && isDraftDefinition(authoringDefinition);
 
@@ -8137,6 +8378,14 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                 </option>
               ) : null)}
           </select>
+          {(() => {
+            const ordered = authoringQuestions.filter(isViewerNativeQuestion);
+            const current = ordered.find(item => activeQuestionKey === `authoring:${item.questionKey}`);
+            return current ? renderQuestionNavigation(
+              { quizKey: 'authoring', quizVersion: 1 }, current, ordered,
+              loading || authoringSaving || !!capturingAuthoringKey
+            ) : null;
+          })()}
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto p-3 pb-20">
@@ -8404,6 +8653,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
 
                           {renderQuestion(quiz, question, submitted)}
                           {renderQuestionReview(quiz, question, quizScore)}
+                          {renderQuestionNavigation(quiz, question, questions, submitted || quizSaving)}
                         </div>
                       );
                     })}

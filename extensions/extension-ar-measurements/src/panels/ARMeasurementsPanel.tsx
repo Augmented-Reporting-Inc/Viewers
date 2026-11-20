@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom';
 import {
   calculateLVSimpson,
+  calculateLVSimpsonContourVolumeForMeasurement,
   LV_SIMPSON_SLOT_ORDER,
 } from '../utils/lvSimpson';
 import {
@@ -679,6 +680,18 @@ function getLVSimpsonSlotStatusText(slotResult) {
   return ['incomplete', axisText, coverageText].filter(Boolean).join(' • ') || 'missing';
 }
 
+// LV-only presentation: LA volume summaries intentionally retain their
+// existing long-axis and coverage information.
+function getLVContourVolumeStatusText(slotResult) {
+  if (!slotResult) return 'missing';
+  const volume = slotResult.singleViewVolumeML;
+  if (slotResult.complete && typeof volume === 'number' &&
+      Number.isFinite(volume) && volume > 0) {
+    return `Single-view volume: ${formatSimpsonValue(volume)} mL`;
+  }
+  return slotResult.complete ? 'Single-view volume unavailable' : 'incomplete';
+}
+
 function LAVolumeSummary({ result, disksResult = null }) {
   if (!result) {
     return null;
@@ -910,7 +923,7 @@ function LVSimpsonSummary({ result }) {
             <div key={slot} className="flex justify-between gap-2 text-xs">
               <span className="text-gray-300">{slot.replace('_', ' ')}</span>
               <span className={slotResult?.complete ? 'text-green-300' : 'text-yellow-300'}>
-                {getLVSimpsonSlotStatusText(slotResult)}
+                {getLVContourVolumeStatusText(slotResult)}
               </span>
             </div>
           );
@@ -1240,6 +1253,197 @@ export function buildClinicalReportReviewRows(preview: any = {}) {
   return rows;
 }
 
+/**
+ * A report assessment may have genuine learner measurement annotations even
+ * when FormAPI reports zero AR field replacements. Show source-backed rows
+ * separately from selectable report values; never manufacture report changes.
+ */
+export function buildClinicalViewerAnnotationReviewRows(preview: any = {}) {
+  const annotations = Array.isArray(preview?.annotations) ? preview.annotations : [];
+  const changedIds = Array.isArray(preview?.reviewOnlyChangedAnnotationIds)
+    ? new Set(preview.reviewOnlyChangedAnnotationIds.map((id: any) => String(id || '').trim()))
+    : null;
+  const quizTRSourceId = String(preview?.educationQuizHemodynamics?.trVmax?.sourceAnnotationId || '').trim();
+  const seen = new Set<string>();
+  return annotations.flatMap((measurement: any) => {
+    const id = String(measurement?.annotationId || measurement?.uid || '').trim();
+    if (!id || seen.has(id) || !String(measurement?.toolName || '').trim() ||
+        measurement?.workflow === 'viewerQuizGoldDisplay' ||
+        (changedIds && !changedIds.has(id)) ||
+        (quizTRSourceId && id === quizTRSourceId)) return [];
+    seen.add(id);
+    const label = String(
+      measurement?.measurementRole || measurement?.label ||
+      measurement?.role || measurement?.toolName || 'Measurement'
+    ).trim();
+    const efSlot = String(measurement?.lvSimpson?.slot || measurement?.slot || '').trim();
+    const isEFContour = (measurement?.measurementKind === 'lvSimpsonSlot' ||
+      measurement?.lvSimpson?.measurementKind === 'lvSimpsonSlot') &&
+      LV_SIMPSON_SLOT_ORDER.includes(efSlot);
+    // The generic SplineROI text contains AREA; never show it as the EF
+    // contour's primary result. Use the same verified 20-disk single-view
+    // volume calculation as the viewport/EF panel.
+    const reviewedVolumeML = measurement?.reviewOnlySingleViewVolumeML == null
+      ? NaN : Number(measurement.reviewOnlySingleViewVolumeML);
+    const volumeML = isEFContour
+      ? (Number.isFinite(reviewedVolumeML) && reviewedVolumeML > 0
+        ? reviewedVolumeML : calculateLVSimpsonContourVolumeForMeasurement(measurement))
+      : null;
+    // LA A4C/A2C source contours are physical areas; their verified biplane
+    // combination is the LA volume in calculated results, not two volumes.
+    const laSlot = String(measurement?.laVolume?.slot || measurement?.slot || '').trim();
+    const isLAContour = (measurement?.measurementKind === 'laVolumeSlot' ||
+      measurement?.laVolume?.measurementKind === 'laVolumeSlot') &&
+      LA_VOLUME_SLOT_ORDER.includes(laSlot);
+    const reviewedLAAreaCM2 = measurement?.reviewOnlyLAContourAreaCM2 == null
+      ? NaN : Number(measurement.reviewOnlyLAContourAreaCM2);
+    const hasReviewedLAArea = isLAContour &&
+      Number.isFinite(reviewedLAAreaCM2) && reviewedLAAreaCM2 > 0;
+    const display = isEFContour
+      ? (volumeML != null ? `${volumeML.toFixed(2)} mL` :
+        'Volume unavailable in review preview')
+      : hasReviewedLAArea ? `${reviewedLAAreaCM2.toFixed(2)} cm²`
+      : getMeasurementValue(measurement);
+    const rawValue = measurement?.measurements?.value;
+    const unit = String(measurement?.measurements?.unit || measurement?.unit || '').trim();
+    const fallback = rawValue !== null && rawValue !== undefined &&
+      rawValue !== '' && Number.isFinite(Number(rawValue))
+      ? formatMeasurementValue(rawValue, unit)
+      : '';
+    return [{
+      key: id,
+      label: isEFContour ? `LV ${efSlot.replace('_', ' ')} volume`
+        : hasReviewedLAArea ? `LA ${laSlot.replace('_', ' ')} area`
+        : (label || 'Measurement'),
+      value: display || fallback || 'Numeric value unavailable; annotation is present',
+      reportField: isEFContour ? '' : label,
+      frameNumber: Number.isInteger(Number(measurement?.frameNumber)) &&
+        Number(measurement.frameNumber) >= 1 ? Number(measurement.frameNumber) : null,
+    }];
+  });
+}
+
+const LEARNER_REPORT_FIELD_LABELS: Record<string, string> = {
+  RWT: 'Relative wall thickness (RWT)',
+  LVMass: 'LV mass',
+  LVMassIndex: 'LV mass index',
+  LVEDV: 'LV EDV (biplane)',
+  LVESV: 'LV ESV (biplane)',
+  LVEDVx: 'LV EDV index',
+  LVESVx: 'LV ESV index',
+  EFSimpsons: 'LV ejection fraction (biplane)',
+  SV: 'LV stroke volume (biplane)',
+  BSA: 'Body surface area (BSA)',
+};
+
+function formatLearnerIndexedUnit(unit: any) {
+  return String(unit || '').trim()
+    .replace(/ml\/m2/gi, 'mL/m²')
+    .replace(/g\/m2/gi, 'g/m²')
+    .replace(/L\/min\/m2/gi, 'L/min/m²')
+    .replace(/\bm2\b/gi, 'm²');
+}
+
+/**
+ * Read-only calculated results for the learner preview. The server's review
+ * items and derivedConsequences are the authoritative report/index results.
+ * The validated LV Simpson calculator supplies biplane EDV/ESV when the
+ * server condenses multiple LV fields into one EF review group. These rows
+ * MUST NOT influence which AR fields the existing save command applies.
+ */
+export function buildLearnerCalculatedMeasurementReviewRows(preview: any = {}) {
+  const measured = buildClinicalViewerAnnotationReviewRows(preview);
+  const measuredFields = new Set(measured.map(row =>
+    String(row.reportField || '').trim().toUpperCase()).filter(Boolean)
+  );
+  // The server's report-update items contain both source measurements and
+  // calculated consequences. Raw diameter/wall thickness fields and the
+  // quiz's source TR/entered RAP must never appear under Calculated values.
+  const directSourceFields = new Set([
+    'LVIDD', 'LVIDS', 'IVSD', 'PWD', 'IVSS', 'PWS',
+    'TRVEL', 'RASP', 'RVEDA', 'RVESA', 'RAA',
+  ]);
+  const calculated: Array<{ key: string; label: string; value: string }> = [];
+  const seen = new Set<string>();
+  const append = (field: string, label: string, value: any, uom: string = '') => {
+    const key = String(field || '').trim();
+    const v = String(value == null ? '' : value).trim();
+    if (!key || !v || seen.has(key)) return;
+    seen.add(key);
+    calculated.push({
+      key, label: LEARNER_REPORT_FIELD_LABELS[key] || label || formatClinicalReportFieldLabel(key),
+      value: [v, formatLearnerIndexedUnit(uom)].filter(Boolean).join(' '),
+    });
+  };
+
+  // Server preview items represent report updates (including RWT and LV
+  // mass); exclude duplicate PWd/LVIDs/etc already listed as measured.
+  const reviewRows = buildClinicalReportReviewRows(preview);
+  for (const row of reviewRows) {
+    const field = String(row.fieldNames?.[0] || row.key || '').trim();
+    const isDirectMeasurement = row.fieldNames?.some((name: string) => {
+      const normalized = String(name || '').trim().toUpperCase();
+      return measuredFields.has(normalized) || directSourceFields.has(normalized);
+    });
+    if (!isDirectMeasurement && !['TRVEL', 'RASP', 'RVSP'].includes(field.toUpperCase())) {
+      append(field, row.label, row.incomingValue);
+    }
+  }
+
+  // The server explicitly previews ALL indexed consequences, including
+  // calculated or unavailable results. Do not independently infer BSA.
+  for (const consequence of Array.isArray(preview?.derivedConsequences)
+    ? preview.derivedConsequences : []) {
+    const field = String(consequence?.field || '').trim();
+    if (!field) continue;
+    const value = String(consequence?.calculatedValue ?? '').trim();
+    const result = consequence?.status === 'calculated' && value
+      ? value : 'Unavailable (BSA or source value required)';
+    append(field, String(consequence?.label || ''), result,
+      consequence?.status === 'calculated' ? consequence?.uom : '');
+  }
+
+  // The server's EF review item has multiple fields but a single displayed
+  // EF percentage. Derive additional biplane values from exactly four unique,
+  // verified saved learner contours; never compute them from pixel areas.
+  const annotations = Array.isArray(preview?.annotations) ? preview.annotations : [];
+  const efContours = annotations.filter(item =>
+    (item?.measurementKind === 'lvSimpsonSlot' ||
+      item?.lvSimpson?.measurementKind === 'lvSimpsonSlot') &&
+    LV_SIMPSON_SLOT_ORDER.includes(String(item?.lvSimpson?.slot || item?.slot || ''))
+  );
+  const bySlot = new Map<string, any[]>();
+  for (const contour of efContours) {
+    const slot = String(contour.lvSimpson?.slot || contour.slot);
+    bySlot.set(slot, [...(bySlot.get(slot) || []), contour]);
+  }
+  const changedIds = Array.isArray(preview?.reviewOnlyChangedAnnotationIds)
+    ? new Set(preview.reviewOnlyChangedAnnotationIds.map((id: any) => String(id || '').trim()))
+    : null;
+  const efChangedInCurrentSave = !changedIds || efContours.some(contour =>
+    changedIds.has(String(contour?.annotationId || contour?.uid || '').trim())
+  );
+  if (efChangedInCurrentSave &&
+      LV_SIMPSON_SLOT_ORDER.every(slot => bySlot.get(slot)?.length === 1)) {
+    const validated = calculateLVSimpson(LV_SIMPSON_SLOT_ORDER.map(slot => bySlot.get(slot)![0]));
+    if (validated?.status === 'complete' && validated.values) {
+      const { edvML, esvML, ejectionFraction, strokeVolumeML } = validated.values;
+      append('LVEDV', '', edvML.toFixed(2), 'mL');
+      append('LVESV', '', esvML.toFixed(2), 'mL');
+      append('EFSimpsons', '', ejectionFraction.toFixed(2), '%');
+      append('SV', '', strokeVolumeML.toFixed(2), 'mL');
+    }
+  }
+
+  const facPercent = preview?.reviewOnlyRVFACPercent == null
+    ? NaN : Number(preview.reviewOnlyRVFACPercent);
+  if (Number.isFinite(facPercent) && facPercent > 0 && facPercent <= 100) {
+    append('RVFAC', 'RV fractional area change (FAC)', facPercent.toFixed(2), '%');
+  }
+
+  return calculated;
+}
+
 function hasClinicalReportDerivedConsequences(review: any = {}) {
   const consequences = review?.derivedConsequences;
 
@@ -1251,6 +1455,132 @@ function hasClinicalReportDerivedConsequences(review: any = {}) {
     consequences &&
     typeof consequences === 'object' &&
     Object.keys(consequences).length > 0
+  );
+}
+
+/**
+ * The reporting exam learner is confirming an answer save, not reconciling
+ * clinical report fields. The calling flow still applies its already-selected
+ * report updates and verifies persistence; only the presentation differs.
+ * Clinical report users continue to receive the full review below.
+ */
+function LearnerViewerMeasurementConfirmationModal({
+  review,
+  isSaving,
+  onCancel,
+  onApply,
+}) {
+  const annotationRows = Array.isArray(review?.annotationRows) ? review.annotationRows : [];
+  const calculatedRows = Array.isArray(review?.calculatedRows) ? review.calculatedRows : [];
+  const quizResults = Array.isArray(review?.quizEvidenceRows)
+    ? review.quizEvidenceRows.filter(row => row?.recorded) : [];
+  const quizLabel = (row: any) => {
+    const kind = String(row?.key || '').split(':')[0];
+    return ({ 'quiz-tr': 'TR Vmax', 'quiz-rap': 'RAP', 'quiz-rvsp': 'RVSP' } as any)[kind] ||
+      String(row?.label || '').replace(/^Learner\s+/i, '');
+  };
+  // Quiz source TR Vmax and learner-selected RAP are measured/entered, not
+  // calculated. RVSP is derived from the measured TR source and selected RAP.
+  const measuredQuizResults = quizResults.filter(row =>
+    ['quiz-tr', 'quiz-rap'].includes(String(row?.key || '').split(':')[0])
+  );
+  const calculatedQuizResults = quizResults.filter(row =>
+    String(row?.key || '').split(':')[0] === 'quiz-rvsp'
+  );
+  const calculatedFields = new Set(calculatedRows.map(row =>
+    String(row.key || '').trim().toUpperCase()
+  ));
+  const measuredRows = [
+    ...annotationRows.map(row => ({
+      key: 'annotation:' + row.key, label: row.label, value: row.value,
+    })),
+    ...measuredQuizResults.map(row => ({
+      key: 'quiz:' + row.key, label: quizLabel(row), value: row.display,
+    })),
+  ];
+  const additionalQuizResults = calculatedQuizResults
+    .filter(row => !calculatedFields.has('RVSP'))
+    .map(row => ({ key: 'quiz:' + row.key, label: quizLabel(row), value: row.display }));
+  const isSubmitting = review?.saveAction === 'submitted';
+  const actionLabel = isSubmitting ? 'Save & Submit Answers' : 'Save Draft';
+
+  return createPortal(
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      style={{ backgroundColor: 'rgba(0, 0, 0, 0.82)' }}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="ar-learner-measurement-confirmation-title"
+    >
+      <div className="flex max-h-[90vh] w-full max-w-2xl flex-col overflow-hidden rounded-lg border border-gray-600 bg-gray-900 text-white shadow-2xl">
+        <div className="shrink-0 border-b border-gray-700 px-5 py-4">
+          <h2 id="ar-learner-measurement-confirmation-title" className="text-lg font-semibold">
+            Review your measurements
+          </h2>
+          <p className="mt-1 text-sm text-gray-300">
+            Review your measured and calculated results before
+            {isSubmitting ? ' submitting your answers.' : ' saving your draft.'}
+            They will be saved with your answers and used in your practice report where applicable.
+          </p>
+        </div>
+        <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-5 py-4">
+          <section aria-label="Measured values">
+            <h3 className="mb-2 text-sm font-semibold text-white">
+              Measured values ({measuredRows.length})
+            </h3>
+            {measuredRows.length > 0 ? (
+              <div className="rounded border border-gray-700">
+                {measuredRows.map((row, index) => (
+                  <div key={row.key}
+                    className={`flex items-baseline justify-between gap-3 px-3 py-2 text-sm ${index > 0 ? 'border-t border-gray-700' : ''}`}>
+                    <span className="min-w-0 text-gray-200">{row.label}</span>
+                    <span className="shrink-0 font-medium tabular-nums text-white">{row.value}</span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="text-sm text-amber-200">
+                No source-backed viewer measurements are available for review.
+              </div>
+            )}
+          </section>
+          <section aria-label="Calculated values">
+            <h3 className="mb-2 text-sm font-semibold text-white">
+              Calculated values ({calculatedRows.length + additionalQuizResults.length})
+            </h3>
+            {calculatedRows.length + additionalQuizResults.length > 0 ? (
+              <div className="rounded border border-gray-700">
+                {[
+                  ...calculatedRows.map(row => ({
+                    key: 'calculated:' + row.key, label: row.label, value: row.value,
+                  })),
+                  ...additionalQuizResults,
+                ].map((row, index) => (
+                  <div key={row.key}
+                    className={`flex items-baseline justify-between gap-3 px-3 py-2 text-sm ${index > 0 ? 'border-t border-gray-700' : ''}`}>
+                    <span className="min-w-0 text-gray-200">{row.label}</span>
+                    <span className="shrink-0 font-medium tabular-nums text-white">{row.value}</span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="text-sm text-gray-400">No calculated results were available.</div>
+            )}
+          </section>
+        </div>
+        <div className="flex shrink-0 justify-end gap-2 border-t border-gray-700 p-4">
+          <button type="button"
+            className="rounded border border-gray-600 px-4 py-2 text-sm font-semibold hover:bg-gray-800 disabled:opacity-50"
+            disabled={isSaving}
+            onClick={onCancel}>Cancel</button>
+          <button type="button"
+            className="rounded bg-blue-600 px-4 py-2 text-sm font-semibold hover:bg-blue-500 disabled:opacity-50"
+            disabled={isSaving}
+            onClick={onApply}>{isSaving ? 'Saving…' : actionLabel}</button>
+        </div>
+      </div>
+    </div>,
+    document.body
   );
 }
 
@@ -1269,7 +1599,21 @@ export function ClinicalReportMeasurementReviewModal({
     return null;
   }
 
+  // Explicitly opt in from the learning Case Questions workflow. Do not
+  // simplify the shared clinical review for other roles or viewer modes.
+  if (review.educationWorkflow === true) {
+    return (
+      <LearnerViewerMeasurementConfirmationModal
+        review={review}
+        isSaving={isSaving}
+        onCancel={onCancel}
+        onApply={onApply}
+      />
+    );
+  }
+
   const rows = Array.isArray(review.rows) ? review.rows : [];
+  const annotationRows = Array.isArray(review.annotationRows) ? review.annotationRows : [];
   const selected = new Set(selectedRowKeys);
   const allSelected = rows.length > 0 && rows.every(row => selected.has(row.key));
   const hasDerivedConsequences = hasClinicalReportDerivedConsequences(review);
@@ -1317,6 +1661,33 @@ export function ClinicalReportMeasurementReviewModal({
               </div>
             </div>
           ) : null}
+          {review.educationWorkflow && annotationRows.length > 0 ? (
+            <div className="mt-3 rounded border border-slate-600 bg-slate-900/40 p-3">
+              <div className="text-sm font-semibold text-slate-100">
+                Viewer measurements in the learner report — {annotationRows.length}
+              </div>
+              <div className="mt-1 text-xs text-gray-300">
+                These viewer annotations are included in the pending save. Updating AR
+                report fields below is a separate choice.
+              </div>
+              <div className="mt-2 max-h-44 space-y-1 overflow-y-auto text-sm">
+                {annotationRows.map((row: any) => (
+                  <div key={row.key} className="flex flex-wrap justify-between gap-x-3 border-b border-gray-800 py-1">
+                    <span className="font-medium text-gray-100">{row.label}</span>
+                    <span className="text-emerald-200">
+                      {row.value}{row.frameNumber != null ? ` · frame ${row.frameNumber}` : ''}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+          {review.educationWorkflow && rows.length === 0 ? (
+            <div className="mt-3 text-xs text-gray-300" role="status">
+              No AR report values need replacing. The learner measurements above and
+              verified quiz evidence can be saved without replacing report values.
+            </div>
+          ) : null}
           {hasDerivedConsequences ? (
             <div className="mt-2 text-xs text-gray-400">
               AR will also recalculate dependent indexed values from any selected source
@@ -1325,6 +1696,7 @@ export function ClinicalReportMeasurementReviewModal({
           ) : null}
         </div>
 
+        {rows.length > 0 ? (
         <div className="flex items-center justify-between gap-3 border-b border-gray-800 px-4 py-3">
           <div className="text-sm text-gray-300">
             {selected.size} of {rows.length} report value{rows.length === 1 ? '' : 's'} selected
@@ -1339,6 +1711,8 @@ export function ClinicalReportMeasurementReviewModal({
           </button>
         </div>
 
+        ) : null}
+        {rows.length > 0 ? (
         <div className="min-h-0 flex-1 overflow-auto">
           <table className="w-full table-fixed border-collapse text-sm">
             <thead
@@ -1379,6 +1753,7 @@ export function ClinicalReportMeasurementReviewModal({
             </tbody>
           </table>
         </div>
+        ) : null}
 
         <div className="border-t border-gray-700 p-4">
           <label className="mb-4 flex cursor-pointer items-center gap-2 text-sm text-gray-300">

@@ -21,6 +21,32 @@ test('TR Vmax quiz activation highlights the Vmax toolbar and starts spectral ca
   assert.match(panel, /'activateViewerQuizMeasurementTool'/);
 });
 
+test('toolbar selection preserves the active learner TR Vmax context for spectral acquisition', () => {
+  const start = commands.indexOf('setToolActiveToolbar: (');
+  const end = commands.indexOf('setViewerLengthLabelMode:', start);
+  assert.ok(start >= 0 && end > start, 'expected toolbar action');
+  const toolbarAction = commands.slice(start, end);
+  assert.match(toolbarAction, /if \(activeQuizMeasurementKind !== 'trVmax'\) \{\s*setQuizToolbarMeasurementKind\(''\);/,
+    'only the TR quiz keeps its selected target; other workflows must still clear toolbar context');
+  assert.match(commands, /spectralVmax && activeQuizMeasurementKind === 'trVmax'/);
+});
+
+test('learner TR answer uses the same Cornerstone-native source as the report preview', () => {
+  const start = commands.indexOf('getSelectedViewerMeasurementQuizAnswer:');
+  const source = commands.indexOf('const nativeTRAnnotation =', start);
+  const end = commands.indexOf("const measurement = requestedKind === 'trVmax'", source);
+  assert.ok(start >= 0 && source > start && end > source, 'expected TR quiz capture source');
+  const capture = commands.slice(source, end);
+  assert.match(capture, /cornerstoneTools\.annotation\.state\.getAnnotation\?\.\(selectedMeasurementId\)/);
+  assert.match(capture,
+    /requestedKind === 'trVmax'[\s\S]*?getCornerstoneUltrasoundDirectionalMeasurementFallback\(nativeTRAnnotation\)/);
+  assert.match(commands,
+    /getCornerstoneUltrasoundDirectionalMeasurementFallbacks\(\{[\s\S]*?studyInstanceUID: snapshotStudyInstanceId/);
+  assert.match(commands,
+    /const measurement = requestedKind === 'trVmax'\s*\? restoredSpectralMeasurement\s*: restoredSpectralMeasurement \|\| directMeasurement/,
+    'never silently accept an OHIF-only TR source that the native report preview cannot verify');
+});
+
 test('manual Vmax toolbar stays spectral and selects the quiz TR target only in TR Vmax context', () => {
   assert.match(commands, /spectralVmax && activeQuizMeasurementKind === 'trVmax'/);
   assert.match(commands, /preferredTargetKey = 'echo\.trPeakVelocity';\s*quizCapture = true/);
@@ -28,7 +54,8 @@ test('manual Vmax toolbar stays spectral and selects the quiz TR target only in 
 });
 
 test('completed calibrated, labelled TR Vmax emits exact measurement identity for quiz capture', () => {
-  assert.match(commands, /quizCapture && spectralVmax &&\s*selectedTarget\?\.key === 'echo\.trPeakVelocity'/);
+  assert.match(commands, /const isCurrentTrQuizCapture = spectralVmax &&\s*\(quizCapture \|\| activeQuizMeasurementKind === 'trVmax'\)/);
+  assert.match(commands, /isCurrentTrQuizCapture && spectralVmax &&\s*selectedTarget\?\.key === 'echo\.trPeakVelocity'/);
   assert.match(commands, /convertedReportValue\?\.unit === 'm\/s'/);
   assert.match(commands, /window\.dispatchEvent\(new CustomEvent\('ar-learning:quiz-measurement-added', \{\s*detail: \{ measurementId: annotationId \}/);
   assert.match(panel, /captureAuthoringMeasurement\(question, \{\s*measurementId,\s*silent: true/);
@@ -84,14 +111,19 @@ test('learner TR Vmax uses only a calibrated annotation, never a typed scalar or
   assert.match(commands, /directional\?\.reportUnit === 'm\/s'/);
 });
 
-test('learner review offers TR/RAP/RVSP transfer to the AR learner report', () => {
+test('learner TR/RAP/RVSP transfer survives simplified submission confirmation', () => {
   assert.match(panel, /function getLearnerHemodynamicQuizReviewRows\(/);
-  assert.match(panel, /confirmReportOwnedMeasurementSave\(quiz, quizAnswers\)/);
+  assert.match(panel, /confirmReportOwnedMeasurementSave\(quiz, quizAnswers, status\)/);
   assert.match(panel, /quizEvidenceRows,\s*educationQuizHemodynamics/);
-  assert.match(reviewModal, /Quiz measurements — saved with the learner's AR quiz response/);
-  assert.match(reviewModal, /Select the applicable TR Vmax, RAP and RVSP rows below/);
-  assert.match(reviewModal, /review\.quizEvidenceRows\.map/);
-  assert.match(reviewModal, /apply them to your AR learner report/);
+  assert.match(panel, /educationQuizHemodynamics, educationWorkflow: true, saveAction/);
+  assert.match(panel, /educationQuizHemodynamics: quizMeasurementReview\.educationQuizHemodynamics/);
+  assert.match(panel, /reportFieldNames: fields/,
+    'the prior AR learner-report transfer selection remains the save contract');
+  assert.match(reviewModal, /function LearnerViewerMeasurementConfirmationModal/);
+  assert.match(reviewModal, /review\.educationWorkflow === true/);
+  assert.match(reviewModal, /used in your practice report where applicable/);
+  assert.match(reviewModal, /review\.quizEvidenceRows\.map/,
+    'the detailed hemodynamic review is preserved for clinical workflows');
 });
 
 test('quiz save refuses incomplete TR and verifies AR server readback before success', () => {
@@ -107,7 +139,7 @@ test('EF progress panel omits redundant active-question capture sentence', () =>
 });
 
 test('TR Vmax quiz clinical mapping is opt-in through existing report review only', () => {
-  assert.match(commands, /const allowReportOwnedQuizTR = quizCapture && spectralVmax &&/);
+  assert.match(commands, /const allowReportOwnedQuizTR = isCurrentTrQuizCapture && spectralVmax &&/);
   assert.match(commands, /selectedTarget\?\.key === 'echo\.trPeakVelocity'/);
   assert.match(commands, /isReportOwnedLearnerMeasurementTarget\(saveTarget\)/);
   assert.match(commands, /isClinicalReportMeasurementsSaveTarget\(saveTarget\)/);

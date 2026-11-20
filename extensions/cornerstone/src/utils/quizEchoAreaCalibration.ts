@@ -130,24 +130,23 @@ export function getQuizEchoAreaSourceMetadata(data: any = {}): Record<string, an
  * Viewer-only gold comparison overlay. Values come exclusively from the
  * verified educator composite result, not native ROI cachedStats.
  */
+/** Saved gold text requires a separately persisted, verified single-view volume. */
 export function getVerifiedEFGoldContourViewportLines(evidence: any): string[] | null {
   if (evidence?.origin !== 'quiz-gold') return null;
   const slot = String(evidence?.slot || '').trim().toUpperCase();
   if (!['A4C_ED', 'A4C_ES', 'A2C_ED', 'A2C_ES'].includes(slot)) return null;
-  if (evidence.areaCM2 == null || evidence.areaCM2 === '') return null;
-  const area = Number(evidence.areaCM2);
-  if (!Number.isFinite(area) || area <= 0) return null;
-  const axis = evidence.axisMM == null || evidence.axisMM === ''
-    ? null : Number(evidence.axisMM);
+  const area = evidence.areaCM2 == null || evidence.areaCM2 === ''
+    ? NaN : Number(evidence.areaCM2);
   const sourceArea = evidence.sourceAreaCM2 == null || evidence.sourceAreaCM2 === ''
-    ? null : Number(evidence.sourceAreaCM2);
-  return [
-    'Gold ' + slot.replace('_', ' ') + ' LV contour area: ' + area.toFixed(2) + ' cm²',
-    ...(sourceArea != null && Number.isFinite(sourceArea) && sourceArea > 0 &&
-      Math.abs(sourceArea - area) > 0.02
-      ? ['Source contour area: ' + sourceArea.toFixed(2) +
-          ' cm² (differs from saved gold; verify)'] : []),
-    ...(axis != null && Number.isFinite(axis) && axis > 0
-      ? ['Gold LV long axis: ' + axis.toFixed(2) + ' mm'] : []),
-  ];
+    ? NaN : Number(evidence.sourceAreaCM2);
+  const volume = evidence.volumeML == null || evidence.volumeML === ''
+    ? NaN : Number(evidence.volumeML);
+  const label = 'Gold ' + slot.replace('_', ' ') + ' single-view LV volume: ';
+  if (Number.isFinite(sourceArea) && sourceArea > 0 &&
+      Number.isFinite(area) && area > 0 && Math.abs(sourceArea - area) > 0.02) {
+    return [label + 'unavailable (source calibration differs from saved gold; verify)'];
+  }
+  return [label + (Number.isFinite(area) && area > 0 &&
+    Number.isFinite(volume) && volume > 0
+      ? volume.toFixed(2) + ' mL' : 'unavailable')];
 }

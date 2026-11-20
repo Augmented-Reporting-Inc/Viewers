@@ -34,9 +34,11 @@ import { vec3, mat4 } from 'gl-matrix';
 import toggleImageSliceSync from './utils/imageSliceSync/toggleImageSliceSync';
 import { getFirstAnnotationSelected } from './utils/measurementServiceMappings/utils/selection';
 import { getMeasurementSnapshotStudyInstanceId } from './utils/measurementSnapshotStudy';
+import { hasUnpersistedLearnerMeasurementChanges } from './utils/learnerMeasurementReviewChange';
 import { reconcileLearnerIvcSnapshotSources } from './utils/learnerIvcSourceSnapshot';
 import { isExactViewerQuizSopFrameImageId } from './utils/exactViewerQuizSopFrame';
 import { getViewportEnabledElement } from './utils/getViewportEnabledElement';
+import { getLearnerQuizMeasurementDeleteDenial } from './utils/quizLearnerMeasurementDeletion';
 import getActiveViewportEnabledElement from './utils/getActiveViewportEnabledElement';
 import toggleVOISliceSync from './utils/toggleVOISliceSync';
 import { usePositionPresentationStore, useSegmentationPresentationStore } from './stores';
@@ -126,8 +128,12 @@ import {
   getBowelCurvedLengthTargetOptions,
   normalizeBowelMeasurementTargetSelection,
 } from '../../extension-ar-measurements/src/utils/bowelMeasurementTargets';
-import { calculateLVSimpson } from '../../extension-ar-measurements/src/utils/lvSimpson';
-import { getEchoAreaSlot } from '../../extension-ar-measurements/src/utils/echoAreaMeasurements';
+import {
+  calculateLVSimpson, calculateLVSimpsonContourVolumeForMeasurement,
+  calculateLVSimpsonContourVolumeForAnnotationData, isVerifiedLVSimpsonSessionReplacement,
+} from '../../extension-ar-measurements/src/utils/lvSimpson';
+import { getVerifiedLAVolumeContourAreaCM2 } from '../../extension-ar-measurements/src/utils/laVolume';
+import { getEchoAreaSlot, calculateRVFACFromMeasurements } from '../../extension-ar-measurements/src/utils/echoAreaMeasurements';
 import { resolveViewerQuizCompositeResult, resolveViewerQuizLVSimpsonForStudy, isViewerQuizCompositeReviewCurrent, getViewerQuizCompositeStatus, calibratedLVContourAreaCM2 } from '../../extension-ar-measurements/src/utils/viewerQuizCompositeResults';
 import { createGuidedMouseToolOwnership } from './utils/guidedMouseToolOwnership';
 import { calibrateUSContourPoints, worldToImageIndex } from './utils/usRegionLengthCalibration';
@@ -158,6 +164,16 @@ const AR_LV_SIMPSON_SESSION_EVENT = 'ar-measurements:lv-simpson-session-updated'
 const AR_LA_VOLUME_SESSION_EVENT = 'ar-measurements:la-volume-session-updated';
 const ULTRASOUND_DIRECTIONAL_TOOL_NAME = 'UltrasoundDirectionalTool';
 const ULTRASOUND_DIRECTIONAL_MEASUREMENT_KIND = 'ultrasound-directional';
+// Source-only browser diagnostics; opt in with sessionStorage arDebugTrVmax=1.
+function traceQuizTrVmax(stage: string, details: Record<string, unknown>) {
+  try {
+    if (window.sessionStorage.getItem('arDebugTrVmax') === '1') {
+      console.info(`[AR TR Vmax trace] ${stage} ${JSON.stringify(details)}`);
+    }
+  } catch {
+    // Instrumentation must never interrupt a clinical or learning workflow.
+  }
+}
 const CINE_COMMENT_ANNOTATION_KIND = 'cineComment';
 const CINE_COMMENT_SCOPE = 'cine';
 
@@ -446,19 +462,10 @@ function isViewerMeasurementSessionFallbackReplacementReady(
       return false;
     }
 
-    const liveGeometry =
-      liveMeasurement?.lvSimpson || liveMeasurement?.measurements?.lvSimpson || {};
-    const liveSlot = getLVSimpsonSlotFromMeasurement(liveMeasurement);
-    const sessionSlot = getLVSimpsonSlotFromMeasurement(sessionMeasurement);
-    const livePoints = getViewerMeasurementSnapshotPoints(liveMeasurement, liveGeometry);
-
-    return !!(
-      liveMeasurement?.toolName &&
-      liveSlot &&
-      (!sessionSlot || liveSlot === sessionSlot) &&
-      livePoints.length >= 6 &&
-      (liveMeasurement?.referencedImageId || liveMeasurement?.referenceSeriesUID)
-    );
+    // A normalized SplineROI often retains its label/points but loses physical
+    // calibration. Preserve the authoritative source until a replacement has
+    // independently verified geometry and the exact original DICOM image.
+    return isVerifiedLVSimpsonSessionReplacement(liveMeasurement, sessionMeasurement);
   }
 
   if (isLAVolumeMeasurement(sessionMeasurement)) {
@@ -668,6 +675,8 @@ function getCurrentViewerMeasurementSnapshot(
             ...measurement,
             lvSimpson: annotation.data.lvSimpson,
             points: annotation?.data?.contour?.polyline || measurement.points,
+            ...(Array.isArray(annotation?.data?.handles?.points)
+              ? { lvSimpsonControlPoints: annotation.data.handles.points } : {}),
           };
         }
       }
@@ -5865,15 +5874,15 @@ function installLVSimpsonContourTextCleanupForViewport({ viewport, viewportId = 
       );
       if (goldEFText) return goldEFText;
       const lv = data?.lvSimpson || {};
-      // Cornerstone's native ROI statistics can be expressed in image pixels.
-      // EF's physical contour coordinates were independently calibrated in mm.
-      // Display a physical area only when those exact coordinates exist.
-      if (['A4C_ED', 'A4C_ES', 'A2C_ED', 'A2C_ES'].includes(String(lv.slot || '')) &&
-          !lv.calibrationError) {
-        const area = calibratedLVContourAreaCM2(lv.calibratedContourPoints);
-        return area !== null
-          ? [`LV contour area: ${area.toFixed(2)} cm²`]
-          : ['Calibrated LV contour area unavailable'];
+      const slot = String(lv.slot || '');
+      if (['A4C_ED', 'A4C_ES', 'A2C_ED', 'A2C_ES'].includes(slot)) {
+        // Cornerstone invokes getTextLines with annotation data, not a stable
+        // MeasurementService record. Match the volume to THIS annotation's
+        // calibrated geometry and editable handles, independent of active frame
+        // and any subsequent EF contour creation or deletion.
+        const volume = calculateLVSimpsonContourVolumeForAnnotationData(raw);
+        return [slot.replace('_', ' ') + ' single-view LV volume: ' +
+          (volume !== null ? volume.toFixed(2) + ' mL' : 'unavailable')];
       }
       return sanitizeContourTextLines(lines);
     },
@@ -6545,20 +6554,23 @@ function renderLVSimpsonWorkflowPanel({
   for (const slot of LV_TRACE_REQUIRED_SLOTS) {
     const matching = slots.get(slot) || [];
     const measurement = matching[0];
-    const geometry = measurement?.lvSimpson || measurement?.measurements?.lvSimpson || {};
-    const axis = Number(geometry.longAxisLengthMM);
-    // Use the same physically calibrated contour geometry as EF calculation
-    // and the viewport's LV contour label. Never treat pixel-space ROI area
-    // as cm², or substitute an area from a different physiological slot.
-    const areaCM2 = measurement && !geometry.calibrationError
-      ? calibratedLVContourAreaCM2(geometry.calibratedContourPoints)
-      : null;
-    const axisDetail = measurement && Number.isFinite(axis) && axis > 0
-      ? `long axis ${axis.toFixed(1)} mm` : '';
-    const areaDetail = areaCM2 !== null
-      ? `contour area ${areaCM2.toFixed(2)} cm²`
-      : measurement ? 'calibrated contour area unavailable' : '';
-    const detail = [axisDetail, areaDetail].filter(Boolean).join(' · ');
+    // Reuse the same calibrated, validated single-contour calculator as
+    // the viewport. Area and long axis remain preserved as source evidence.
+    const volumeML = matching.length === 1
+      ? calculateLVSimpsonContourVolumeForMeasurement(measurement) : null;
+    const gold = lvSimpsonPanelController?.savedGoldMeasurement;
+    const goldComponent = Array.isArray(gold?.compositeResult?.components)
+      ? gold.compositeResult.components.find(item => item?.slot === slot) : null;
+    const rawGoldVolume = gold?.compositeResult?.derived?.slotVolumeML?.[slot];
+    const goldVolume = rawGoldVolume == null || rawGoldVolume === ''
+      ? null : Number(rawGoldVolume);
+    const goldDetail = goldComponent
+      ? `saved gold: ${Number.isFinite(goldVolume) && goldVolume > 0
+          ? goldVolume.toFixed(2) + ' mL' : 'volume unavailable'}`
+      : '';
+    const detail = !measurement ? goldDetail : volumeML !== null
+      ? `single-view volume ${volumeML.toFixed(2)} mL`
+      : 'single-view volume unavailable';
     const displayName = getLVSimpsonSlotDisplayName(slot);
     const row = document.createElement('div');
     Object.assign(row.style, {
@@ -6567,7 +6579,7 @@ function renderLVSimpsonWorkflowPanel({
     });
     const canNavigateSlot = !!lvSimpsonPanelController?.canNavigateSlot?.(slot);
     const rowLabel = document.createElement(canNavigateSlot ? 'button' : 'span');
-    rowLabel.textContent = `${measurement ? '✓' : '○'}  ${displayName}${detail ? ' — ' + detail : ''}`;
+    rowLabel.textContent = `${measurement ? '✓' : goldComponent ? '◇' : '○'}  ${displayName}${detail ? ' — ' + detail : ''}`;
     rowLabel.dataset.lvSimpsonSlot = slot;
     rowLabel.dataset.lvSimpsonLabel = rowLabel.textContent;
     rowLabel.style.flex = '1 1 100%';
@@ -6595,29 +6607,43 @@ function renderLVSimpsonWorkflowPanel({
       const source = id && cornerstoneTools.annotation.state.getAnnotation?.(id);
       return item?.isLocked || source?.isLocked || source?.data?.arMeasurementReadOnly;
     });
-    const rowButton = (label: string, title: string, action: () => void) => {
+    const rowButton = (label: string, title: string, action: () => void,
+      allowLocked = false, requiresTarget = false) => {
       const control = document.createElement('button');
       control.type = 'button';
       control.textContent = label;
       control.setAttribute('aria-label', title);
-      control.disabled = !!readOnly;
+      const disabled = (!!readOnly && !allowLocked) || requiresTarget;
+      control.disabled = disabled;
       Object.assign(control.style, {
         border: '1px solid #94a3b8', borderRadius: '6px', padding: '4px 8px',
         background: '#334155', color: '#ffffff',
-        cursor: readOnly ? 'not-allowed' : 'pointer', opacity: readOnly ? '0.5' : '1',
+        cursor: disabled ? 'not-allowed' : 'pointer', opacity: disabled ? '0.5' : '1',
       });
       control.addEventListener('click', action);
       row.appendChild(control);
     };
-    if (lvSimpsonPanelController?.onDrawSlot) {
+    if (lvSimpsonPanelController?.onDrawSlot && lvSimpsonPanelController?.canEdit !== false) {
+      const targetMissing = lvSimpsonPanelController?.needsConfiguredTarget?.(slot) === true;
       rowButton('Freehand', `Trace ${displayName} freehand`,
-        () => lvSimpsonPanelController?.onDrawSlot?.(slot, 'freehand'));
+        () => lvSimpsonPanelController?.onDrawSlot?.(slot, 'freehand'), false, targetMissing);
       rowButton('Axis + Apex', `Draw ${displayName} with axis and apex`,
-        () => lvSimpsonPanelController?.onDrawSlot?.(slot, 'axisApex'));
+        () => lvSimpsonPanelController?.onDrawSlot?.(slot, 'axisApex'), false, targetMissing);
+      if (targetMissing) {
+        const hint = document.createElement('span');
+        hint.textContent = 'Capture this slot’s target frame in Case Questions first.';
+        Object.assign(hint.style, { color: '#fcd34d', fontSize: '12px' });
+        row.appendChild(hint);
+      }
     }
-    if (ids.length && lvSimpsonPanelController?.onDeleteSlot) {
+    if (ids.length && lvSimpsonPanelController?.onDeleteSlot &&
+        lvSimpsonPanelController?.canEdit !== false) {
       rowButton('Delete', `Delete ${displayName} contour`,
         () => lvSimpsonPanelController?.onDeleteSlot?.(slot, ids));
+    }
+    if (goldComponent && lvSimpsonPanelController?.onClearSavedGoldSlot) {
+      rowButton('Clear gold', `Clear saved gold for ${displayName}`,
+        () => lvSimpsonPanelController?.onClearSavedGoldSlot?.(slot), true);
     }
     panel.appendChild(row);
   }
@@ -7726,7 +7752,7 @@ function buildViewerQuizGoldBwtDisplaySource(reference: any = {}) {
  * Multi-BWT review must read verified learner evidence from the learner copy,
  * not from a client-supplied annotation snapshot or the source teaching case.
  */
-function findViewerQuizBowelLearnerAnnotation(reference: any, learnerSeriesDoc: any) {
+function findViewerQuizLearnerOwnedAnnotation(reference: any, learnerSeriesDoc: any) {
   if (learnerSeriesDoc?.isLearnerCopy !== true) return null;
   const sourceId = getViewerQuizMeasurementSourceAnnotationId(reference);
   if (!sourceId) return null;
@@ -8700,6 +8726,8 @@ function commandsModule({
         !['A4C_ED', 'A4C_ES', 'A2C_ED', 'A2C_ES'].includes(slot)) return;
     const source = annotation.state.getAnnotation?.(annotationId) || hydrated;
     if (!source) return;
+    const rawVolume = gold?.compositeResult?.derived?.slotVolumeML?.[slot];
+    const volume = rawVolume == null || rawVolume === '' ? null : Number(rawVolume);
     const rawAxis = gold?.compositeResult?.derived?.slotLongAxisMM?.[slot];
     const axis = rawAxis == null || rawAxis === '' ? null : Number(rawAxis);
     const lv = source.data?.lvSimpson;
@@ -8715,6 +8743,7 @@ function commandsModule({
       ...(source.data || {}),
       arVerifiedQuizEFGoldContour: {
         origin: 'quiz-gold', slot, areaCM2: area,
+        volumeML: Number.isFinite(volume) && volume > 0 ? volume : null,
         sourceAreaCM2: sourceArea,
         axisMM: Number.isFinite(axis) && axis > 0 ? axis : null,
       },
@@ -9531,15 +9560,21 @@ function commandsModule({
       questionKey = '',
       viewportId: requestedViewportId = '',
       captureMethod = 'axisApex',
+      panelOnly = false,
+      savedGoldMeasurement = null,
+      goldAuthoringEditable = false,
     } = {}) => {
       clearUltrasoundDirectionalWorkflowListeners();
       const isClinicalReportWorkflow = isClinicalReportMeasurementsSaveTarget(getArViewerSaveTargetFromUrl());
       const workflowSessionId = requestedSessionId || `${csUtils.uuidv4()}`;
 
       if (!requestedSessionId) {
-        // A new contour workflow invalidates any previous explicit EF.
-        explicitLVSimpsonResult = null;
-        reviewedLVSimpsonEF = null;
+        // Opening the educator authoring panel is not a new contour/EF
+        // calculation: do not invalidate a previously reviewed value.
+        if (!panelOnly) {
+          explicitLVSimpsonResult = null;
+          reviewedLVSimpsonEF = null;
+        }
         cancelActiveLVSimpsonCapture();
         lvSimpsonMouseTools.restore();
         activeLVSimpsonWorkflowSessionId = workflowSessionId;
@@ -9570,7 +9605,7 @@ function commandsModule({
       // EF-specific, read-only persistence diagnostic. On reopen the normal
       // initial hydrate is panel-only, so restoredCount=0 says nothing about
       // whether source contours were saved. Query the learner Series itself.
-      if (!requestedSessionId) {
+      if (!requestedSessionId && !panelOnly) {
         try {
           const stored = await actions.getViewerMeasurementAnnotationsForActiveStudy({
             workflows: ['viewerMeasurements'],
@@ -9708,7 +9743,7 @@ function commandsModule({
 
       // Selecting a guided EF question opens its first authored frame. A later
       // Continue performs its own jump before invoking this next slot.
-      const initialTarget = !requestedSessionId && !reviewExistingContours
+      const initialTarget = !panelOnly && !requestedSessionId && !reviewExistingContours
         ? getEFContourFrameTarget(efContourTargets, slotSelection.slotInfo.slot, { allowCanonical: allowCanonicalFrameTargets })
         : null;
       if (initialTarget && !isWorkflowCancelled()) {
@@ -9737,14 +9772,14 @@ function commandsModule({
 
       // Suspend the previously active mouse tool once for the full four-slot
       // workflow. A later Continue may switch to a different viewport/group.
-      if (!lvSimpsonMouseTools.isActive()) {
+      if (!panelOnly && !lvSimpsonMouseTools.isActive()) {
         lvSimpsonMouseTools.start();
       }
       const efToolGroupReference = toolGroupService.getToolGroupForViewport(activeViewportId);
       const efToolGroup = typeof efToolGroupReference === 'string'
         ? toolGroupService.getToolGroup(efToolGroupReference)
         : efToolGroupReference;
-      lvSimpsonMouseTools.suspend(efToolGroup);
+      if (!panelOnly) lvSimpsonMouseTools.suspend(efToolGroup);
       refreshLVSimpsonToolbarState();
 
       const { label, slotInfo } = slotSelection;
@@ -9774,22 +9809,20 @@ function commandsModule({
           return !!efStudyInstanceId && activeStudy === efStudyInstanceId;
         };
         const getStudyMeasurements = () => {
-          // Read existing sources without running a synchronization/recalculation
-          // pass during every UI render. In particular, panel refresh must not
-          // substitute live geometry into EF session records.
-          const byId = new Set<string>();
-          return [
-            ...(measurementService.getMeasurements?.() || []),
-            ...getLVSimpsonSessionMeasurements(),
-          ].filter(entry => {
-            if (!getLVSimpsonSlotFromMeasurement(entry)) return false;
-            const entryStudy = String(entry?.referenceStudyUID || entry?.StudyInstanceUID || '').trim();
-            if (efStudyInstanceId && entryStudy && entryStudy !== efStudyInstanceId) return false;
-            const id = getMeasurementAnnotationId(entry);
-            if (id && byId.has(id)) return false;
-            if (id) byId.add(id);
-            return true;
-          });
+          // The deduplicated snapshot preserves each calibrated EF session
+          // contour when OHIF later supplies a partial normalized SplineROI.
+          // It also checks the current annotation handles so edits to this
+          // contour (but not other slots) invalidate its own displayed volume.
+          return getCurrentViewerMeasurementSnapshot(measurementService)
+            .filter(entry => {
+              if (!getLVSimpsonSlotFromMeasurement(entry)) return false;
+              if (entry?.workflow === 'viewerQuizGoldDisplay') return false;
+              const id = getMeasurementAnnotationId(entry);
+              const source = id ? cornerstoneTools.annotation.state.getAnnotation?.(id) : null;
+              if (source?.data?.arVerifiedQuizEFGoldContour?.origin === 'quiz-gold') return false;
+              const entryStudy = String(entry?.referenceStudyUID || entry?.StudyInstanceUID || '').trim();
+              return !efStudyInstanceId || !entryStudy || entryStudy === efStudyInstanceId;
+            });
         };
         const cancelDrawingWithoutClosingPanel = () => {
           if (!activeLVSimpsonWorkflowSessionId) return;
@@ -9815,7 +9848,21 @@ function commandsModule({
           });
         };
         lvSimpsonPanelController = {
-          activeSlot: reviewExistingContours ? '' : slotInfo.slot,
+          activeSlot: (reviewExistingContours || panelOnly) ? '' : slotInfo.slot,
+          canEdit: !panelOnly || goldAuthoringEditable,
+          questionKey,
+          savedGoldMeasurement,
+          efContourTargets,
+          needsConfiguredTarget(slot: string) {
+            return !!(goldAuthoringEditable && this.efContourTargets &&
+              !getEFContourFrameTarget(this.efContourTargets, slot));
+          },
+          onClearSavedGoldSlot: goldAuthoringEditable && questionKey
+            ? (slot: string) => {
+                window.dispatchEvent(new CustomEvent('ar-measurements:lv-simpson-gold-delete-requested', {
+                  detail: { questionKey, slot },
+                }));
+              } : null,
           onCalculate: null,
           getMeasurements: getStudyMeasurements,
           setObservedIds(ids: string[]) {
@@ -9842,9 +9889,18 @@ function commandsModule({
               const verified = getEFContourFrameTarget({ [slot]: sourceTarget }, slot);
               if (verified) return verified;
             }
+            // Saved educator gold is read-only reference evidence, not an
+            // editable live contour. Still offer its exact source frame.
+            if (saved.length === 0 && this.savedGoldMeasurement) {
+              const part = this.savedGoldMeasurement?.compositeResult?.components
+                ?.find(item => item?.slot === slot);
+              const goldTarget = part?.target &&
+                getEFContourFrameTarget({ [slot]: part.target }, slot);
+              if (goldTarget) return goldTarget;
+            }
             // No unique saved source: an explicitly authored target is still
             // valid, but an ambiguous contour must not be guessed.
-            return saved.length > 1 ? null : getEFContourFrameTarget(efContourTargets, slot, { allowCanonical: allowCanonicalFrameTargets });
+            return saved.length > 1 ? null : getEFContourFrameTarget(this.efContourTargets, slot, { allowCanonical: allowCanonicalFrameTargets });
           },
           canNavigateSlot(slot: string) {
             return isActiveStudy() && !!this.getNavigationTarget(slot);
@@ -9854,6 +9910,17 @@ function commandsModule({
             const target = this.getNavigationTarget(slot);
             if (!target) return;
             cancelDrawingWithoutClosingPanel();
+            const hasLive = getStudyMeasurements().some(item =>
+              getLVSimpsonSlotFromMeasurement(item) === slot);
+            if (!hasLive && this.savedGoldMeasurement?.compositeResult?.components
+              ?.some(item => item?.slot === slot)) {
+              // Reuse the verified, read-only gold overlay presenter. The
+              // EF panel never converts saved gold into editable geometry.
+              await actions.showViewerQuizMeasurementComparison({
+                rubricMeasurement: this.savedGoldMeasurement,
+                viewerTarget: target, focusedCompositeSlot: slot, questionKey,
+              });
+            }
             let navigation: any = null;
             try {
               navigation = await actions.jumpToViewerQuizTarget({
@@ -9877,17 +9944,30 @@ function commandsModule({
             this.activeSlot = slot;
             updateLVSimpsonCurrentSlotLabel(slot);
           },
-          onDrawSlot(slot: string, method: string = 'freehand') {
-            if (!LV_TRACE_REQUIRED_SLOTS.includes(slot) || !isActiveStudy()) return;
-            // Starting a new session preserves authored frame targets from the
-            // current EF question and reuses exact-frame navigation.
+          async onDrawSlot(slot: string, method: string = 'freehand') {
+            if (!LV_TRACE_REQUIRED_SLOTS.includes(slot) || !isActiveStudy() ||
+                this.canEdit === false) return;
+            if (this.needsConfiguredTarget(slot)) {
+              uiNotificationService.show({
+                title: 'EF authoring', type: 'warning', duration: 5000,
+                message: 'Capture this contour’s required DICOM target frame before drawing.',
+              });
+              return;
+            }
+            // Do not draw over a read-only educator gold comparison overlay.
+            if (goldAuthoringEditable) {
+              await actions.clearViewerQuizMeasurementComparison();
+            }
             if (activeLVSimpsonWorkflowSessionId) {
               clearLVSimpsonWorkflowIfCurrent(activeLVSimpsonWorkflowSessionId);
             } else {
               hideLVSimpsonWorkflowPanel();
             }
             void actions.startLVSimpsonEFWorkflow({
-              slot, efContourTargets, allowCanonicalFrameTargets, questionKey, captureMethod: method,
+              slot, singleSlot: true, efContourTargets: this.efContourTargets,
+              allowCanonicalFrameTargets, questionKey, captureMethod: method,
+              savedGoldMeasurement: this.savedGoldMeasurement,
+              goldAuthoringEditable,
               viewportId: viewportGridService.getActiveViewportId(),
             }).catch(error => console.warn('[LV EF] selected contour redraw failed:', error));
           },
@@ -10098,6 +10178,27 @@ function commandsModule({
           onCancel: hideLVSimpsonWorkflowPanel,
         });
       };
+      if (panelOnly) {
+        // Educator authoring uses the same four-slot panel without starting a
+        // drawing session. Choosing Freehand/Axis+Apex explicitly starts one.
+        activeLVSimpsonWorkflowSessionId = '';
+        cancelActiveLVSimpsonCapture();
+        lvSimpsonMouseTools.restore();
+        refreshLVSimpsonToolbarState();
+        const liveSlots = getLVSimpsonSlotCandidates(lvSimpsonPanelController?.getMeasurements?.() || []);
+        const allEditable = goldAuthoringEditable &&
+          LV_TRACE_REQUIRED_SLOTS.every(slot => liveSlots.get(slot)?.length === 1);
+        if (lvSimpsonPanelController) {
+          lvSimpsonPanelController.onCalculate = allEditable ? calculateEF : null;
+        }
+        renderLVSimpsonWorkflowPanel({
+          instruction: 'Educator EF authoring: draw or review each contour here. ' +
+            'Capture the calculated gold EF after all four are ready, then Save Draft in Case Questions.',
+          onCalculate: allEditable ? calculateEF : null,
+          onCancel: hideLVSimpsonWorkflowPanel,
+        });
+        return { ok: true, panelOpened: true };
+      }
       if (reviewExistingContours) {
         // There is nothing left to draw. Do not hold the mouse-capture
         // workflow open or show Step 1/4 on a completed saved assessment.
@@ -10616,19 +10717,34 @@ function commandsModule({
       }
 
       if (nextSlot && singleSlot) {
-        clearLVSimpsonWorkflowIfCurrent(workflowSessionId);
-
-        showLVSimpsonNotification(uiNotificationService, {
-          title: 'LV EF',
-          message: `${slotDisplayName} recorded. Simpson LVEF still requires all four A4C/A2C end-diastolic and end-systolic contours. Next missing: ${getLVSimpsonSlotDisplayName(
-            nextSlot
-          )}.`,
-          type: axisWarning ? 'warning' : 'info',
-          duration: axisWarning
-            ? LV_SIMPSON_WARNING_DURATION_MS
-            : LV_SIMPSON_GUIDANCE_DURATION_MS,
+        // A single-slot drawing action is launched from the persistent four-row
+        // EF panel for both learners and educators. Finishing that annotation
+        // ends only mouse capture; it must never tear down the panel/controller.
+        // The next contour is selected explicitly from the same panel.
+        activeLVSimpsonWorkflowSessionId = '';
+        cancelActiveLVSimpsonCapture();
+        lvSimpsonMouseTools.restore();
+        refreshLVSimpsonToolbarState();
+        const currentSlots = getLVSimpsonSlotCandidates(
+          lvSimpsonPanelController?.getMeasurements?.() || []
+        );
+        const allPresent = LV_TRACE_REQUIRED_SLOTS.every(
+          slot => currentSlots.get(slot)?.length === 1
+        );
+        if (lvSimpsonPanelController) {
+          lvSimpsonPanelController.onCalculate = allPresent ? calculateEF : null;
+          lvSimpsonPanelController.activeSlot = '';
+        }
+        renderLVSimpsonWorkflowPanel({
+          instruction: goldAuthoringEditable
+            ? `${slotDisplayName} recorded. Continue authoring in this EF panel; ` +
+              'capture the calculated gold EF and Save Draft when complete.'
+            : `${slotDisplayName} recorded. Choose ${getLVSimpsonSlotDisplayName(nextSlot)} ` +
+              'or another contour in this panel to continue.',
+          warnings: axisWarning ? [axisWarning] : [],
+          onCalculate: allPresent ? calculateEF : null,
+          onCancel: hideLVSimpsonWorkflowPanel,
         });
-
         return measurement;
       }
 
@@ -10648,7 +10764,7 @@ function commandsModule({
       }
       renderLVSimpsonWorkflowPanel({
         measurements: currentLVSimpsonMeasurements,
-        instruction: 'Review the four contours and their long-axis measurements, then select Calculate EF.',
+        instruction: 'Review the four contours and their volume measurements, then select Calculate EF.',
         onCalculate: calculateEF,
         onCancel: hideLVSimpsonWorkflowPanel,
       });
@@ -11098,6 +11214,14 @@ function commandsModule({
         toolName: ULTRASOUND_DIRECTIONAL_TOOL_NAME,
         stopCine: true,
       });
+      if (spectralVmax || activeQuizMeasurementKind === 'trVmax') {
+        traceQuizTrVmax('workflow.activated', {
+          spectralVmax, quizCapture, activeQuizMeasurementKind,
+          preferredTargetKey, measurementDomain, saveMode: saveTarget.mode,
+          reportOwnedLearner: isReportOwnedLearnerMeasurementTarget(saveTarget),
+          activationOk: activation?.ok !== false,
+        });
+      }
 
       if (!activation?.ok) {
         uiNotificationService.show({
@@ -11161,17 +11285,31 @@ function commandsModule({
           ? getSpectralVmaxTargetOptionsForUnit(rawUnit, { includeGeneric: true })
           : getUltrasoundDirectionalTargetOptionsForUnit(rawUnit, { includeGeneric: true });
         const mappedTargetOptions = targetOptions.filter(option => option.value !== 'generic');
+        // A restored quiz question may set its measurement context after the
+        // toolbar initially activated. Resolve TR context at completion too,
+        // before the generic target dialog can open (and fail with wrongfalse).
+        const isCurrentTrQuizCapture = spectralVmax &&
+          (quizCapture || activeQuizMeasurementKind === 'trVmax');
+        const completionTargetKey = isCurrentTrQuizCapture
+          ? 'echo.trPeakVelocity' : preferredTargetKey;
         // Education questions know the measurement target already. Restrict
         // automatic selection to a target supported by the actual calibrated
         // spectral units; leave clinical and generic target selection intact.
-        let selectedTarget = Number.isFinite(rawValue) && preferredTargetKey
-          ? normalizeUltrasoundDirectionalTargetSelection(preferredTargetKey, rawUnit)
+        let selectedTarget = Number.isFinite(rawValue) && completionTargetKey
+          ? normalizeUltrasoundDirectionalTargetSelection(completionTargetKey, rawUnit)
           : null;
         if (selectedTarget && !targetOptions.some(option => option.value === selectedTarget.key)) {
           selectedTarget = null;
         }
 
-        if (!preferredTargetKey && Number.isFinite(rawValue) && mappedTargetOptions.length > 0) {
+        if (!completionTargetKey && Number.isFinite(rawValue) && mappedTargetOptions.length > 0) {
+          if (spectralVmax || activeQuizMeasurementKind === 'trVmax') {
+            traceQuizTrVmax('workflow.target-dialog-opened', {
+              spectralVmax, quizCapture, activeQuizMeasurementKind,
+              rawUnit, isCurrentTrQuizCapture, completionTargetKey,
+              availableTargets: mappedTargetOptions.map(option => option.value),
+            });
+          }
           let selection = null;
 
           try {
@@ -11216,12 +11354,23 @@ function commandsModule({
           selectedTarget = normalizeUltrasoundDirectionalTargetSelection('generic', rawUnit);
         }
 
+        if (spectralVmax || activeQuizMeasurementKind === 'trVmax') {
+          traceQuizTrVmax('workflow.target-resolved', {
+            annotationId, sourceToolName, spectralVmax, quizCapture,
+            activeQuizMeasurementKind, isCurrentTrQuizCapture,
+            statsAvailable: !!stats,
+            rawUnit, rawValue: Number.isFinite(rawValue) ? rawValue : null,
+            completionTargetKey, selectedTargetKey: selectedTarget?.key || '',
+            sourceIsGeneric: selectedTarget?.key === 'generic',
+          });
+        }
+
         // A learner measurement captured inside a report-owned assessment may
         // be offered as a *reviewable* clinical report value. This does not
         // write TRVel automatically: the existing report preview/selection
         // still decides which mapped fields are applied. Standalone learning
         // quizzes continue to have no clinical mapping.
-        const allowReportOwnedQuizTR = quizCapture && spectralVmax &&
+        const allowReportOwnedQuizTR = isCurrentTrQuizCapture && spectralVmax &&
           selectedTarget?.key === 'echo.trPeakVelocity' &&
           isReportOwnedLearnerMeasurementTarget(saveTarget) &&
           isClinicalReportMeasurementsSaveTarget(saveTarget);
@@ -11295,12 +11444,22 @@ function commandsModule({
         // annotation after its final label and physical m/s conversion exist.
         // Do not emit a gradeable quiz event for generic or unsupported
         // spectral measurements.
-        if (quizCapture && spectralVmax &&
-            selectedTarget?.key === 'echo.trPeakVelocity' &&
-            convertedReportValue?.unit === 'm/s' &&
-            Number.isFinite(Number(convertedReportValue?.value)) &&
-            Number(convertedReportValue.value) > 0 &&
-            Number(convertedReportValue.value) <= 8) {
+        const emitTRQuizCapture = isCurrentTrQuizCapture && spectralVmax &&
+          selectedTarget?.key === 'echo.trPeakVelocity' &&
+          convertedReportValue?.unit === 'm/s' &&
+          Number.isFinite(Number(convertedReportValue?.value)) &&
+          Number(convertedReportValue.value) > 0 &&
+          Number(convertedReportValue.value) <= 8;
+        if (spectralVmax || activeQuizMeasurementKind === 'trVmax') {
+          traceQuizTrVmax('workflow.annotation-finalized', {
+            annotationId, sourceToolName, selectedTargetKey: selectedTarget?.key || '',
+            measurementLabel, acquisitionMode: directional.acquisitionMode || '',
+            reportUnit: directional.reportUnit || '',
+            reportValue: directional.reportValue ?? null,
+            hasReportMapping: !!reportMapping, emittedQuizCaptureEvent: emitTRQuizCapture,
+          });
+        }
+        if (emitTRQuizCapture) {
           window.dispatchEvent(new CustomEvent('ar-learning:quiz-measurement-added', {
             detail: { measurementId: annotationId },
           }));
@@ -13284,7 +13443,13 @@ function commandsModule({
       }
     },
     setToolActiveToolbar: ({ value, itemId, toolName, toolGroupIds = [] }) => {
-      setQuizToolbarMeasurementKind('');
+      // Preserve the selected quiz TR target if the learner temporarily uses
+      // a generic toolbar tool before returning to Vmax. All other tool
+      // contexts retain their prior reset behavior; question change/release
+      // independently clears the TR binding.
+      if (activeQuizMeasurementKind !== 'trVmax') {
+        setQuizToolbarMeasurementKind('');
+      }
       // Sometimes it is passed as value (tools with options), sometimes as itemId (toolbar buttons)
       toolName = toolName || itemId || value;
       if (lvSimpsonMouseTools.isActive() && activeLVSimpsonWorkflowSessionId) {
@@ -13294,9 +13459,19 @@ function commandsModule({
       if (
         toolName === ULTRASOUND_DIRECTIONAL_TOOL_NAME &&
         inferDomainWithoutSeriesDoc('') === 'echo' &&
-        isClinicalReportMeasurementsSaveTarget(getArViewerSaveTargetFromUrl())
+        (isClinicalReportMeasurementsSaveTarget(getArViewerSaveTargetFromUrl()) ||
+          isReportOwnedLearnerMeasurementTarget(getArViewerSaveTargetFromUrl()))
       ) {
-        return actions.startUltrasoundDirectionalWorkflow();
+        // A toolbar click can replace the quiz's already-armed Vmax command.
+        // Preserve its spectral acquisition mode and exact TR target; otherwise
+        // the generic annotation handler prompts for a target and may save a
+        // source without spectralVmax metadata, which FormAPI must reject.
+        const quizTrVmax = activeQuizMeasurementKind === 'trVmax';
+        return actions.startUltrasoundDirectionalWorkflow({
+          spectralVmax: quizTrVmax,
+          preferredTargetKey: quizTrVmax ? 'echo.trPeakVelocity' : '',
+          quizCapture: quizTrVmax,
+        });
       }
 
       clearUltrasoundDirectionalWorkflowListeners();
@@ -13526,6 +13701,9 @@ function commandsModule({
         clearUltrasoundDirectionalWorkflowListeners();
         if (activeLVSimpsonWorkflowSessionId) {
           clearLVSimpsonWorkflowIfCurrent(activeLVSimpsonWorkflowSessionId);
+        } else if (lvSimpsonPanelController) {
+          // Panel-only educator authoring has no active drag session.
+          hideLVSimpsonWorkflowPanel();
         }
         if (activeLAVolumeWorkflowSessionId) {
           clearLAVolumeWorkflowIfCurrent(activeLAVolumeWorkflowSessionId);
@@ -15013,6 +15191,75 @@ function commandsModule({
 
       return { domain, workflow, annotations };
     },
+    // Learner quiz correction must only remove an annotation proven to belong
+    // to this learner's Series (or created in this viewer session). The ordinary
+    // quiz comparison presenter may load base-study sources as locked overlays;
+    // those are never eligible for deletion.
+    deleteViewerQuizLearnerMeasurement: async ({ learnerMeasurement = {} } = {}) => {
+      const saveTarget = getArViewerSaveTargetFromUrl();
+      const isAuthoring = ['1', 'true', 'yes', 'y'].includes(String(
+        getViewerUrlSearchParams().get('arQuizAuthoring') || ''
+      ).toLowerCase());
+      if (isAuthoring || !isLearnerCopyOnSaveTarget(saveTarget) ||
+          String(saveTarget.measurementWorkflowRole || '').toLowerCase() !== 'learner') {
+        return { ok: false, reason: 'learner-measurements-not-editable' };
+      }
+      const sourceId = getViewerQuizMeasurementSourceAnnotationId(learnerMeasurement);
+      if (!sourceId || viewerMeasurementsDeletedInSession.has(sourceId)) {
+        return { ok: false, reason: 'source-id-missing-or-already-deleted' };
+      }
+      const { learnerSeriesDoc } = await getViewerQuizMeasurementSeriesDocs({
+        includeBaseSeries: false,
+      });
+      if (learnerSeriesDoc?.isLearnerCopy !== true) {
+        return { ok: false, reason: 'learner-series-not-verified' };
+      }
+      const persisted = findViewerQuizLearnerOwnedAnnotation(
+        learnerMeasurement, learnerSeriesDoc
+      );
+      const createdHere = viewerMeasurementsCreatedInSession.has(sourceId);
+      if (!persisted && !createdHere) {
+        return { ok: false, reason: 'measurement-not-owned-by-learner' };
+      }
+      const source = persisted || getViewerQuizMeasurementAnnotationFromService(
+        learnerMeasurement
+      );
+      if (!source || getMeasurementAnnotationId(source) !== sourceId) {
+        return { ok: false, reason: 'exact-learner-source-unavailable' };
+      }
+      const expected = getViewerQuizMeasurementReferenceTarget(learnerMeasurement) || {};
+      const actual = getViewerQuizMeasurementReferenceTarget({}, source) || {};
+      const live = measurementService.getMeasurement?.(sourceId);
+      const state = annotation.state.getAnnotation?.(sourceId);
+      // The persisted learner copy is authoritative. Reopened learner-source
+      // overlays may have only a temporary presentation lock; gold and
+      // genuinely read-only measurements still fail closed.
+      const denial = getLearnerQuizMeasurementDeleteDenial({
+        canEdit: true,
+        isLearnerCopy: learnerSeriesDoc.isLearnerCopy === true,
+        sourceId,
+        persistedOwned: !!persisted,
+        createdInSession: createdHere,
+        source,
+        expectedTarget: expected,
+        actualTarget: actual,
+        liveReadOnly: !!live?.arMeasurementReadOnly,
+        stateReadOnly: !!state?.data?.arMeasurementReadOnly ||
+          state?.data?.arVerifiedQuizEFGoldContour?.origin === 'quiz-gold',
+        normalizeImageId: normalizeImageIdForCompare,
+      });
+      if (denial) return { ok: false, reason: denial };
+      if (live?.isLocked) live.isLocked = false;
+      if (state?.isLocked) state.isLocked = false;
+      actions.removeMeasurement({ uid: sourceId });
+      if (!viewerMeasurementsDeletedInSession.has(sourceId)) {
+        return { ok: false, reason: 'measurement-deletion-failed' };
+      }
+      dispatchLiveMeasurementsRefresh({
+        reason: 'learner-quiz-measurement-deleted', annotationUID: sourceId,
+      });
+      return { ok: true, annotationId: sourceId, requiresSave: true };
+    },
     getViewerQuizLVSimpsonForActiveStudy: () => {
       const activeViewportId = viewportGridService.getActiveViewportId();
       const activeDisplaySet = getActiveViewportDisplaySet({
@@ -15024,6 +15271,29 @@ function commandsModule({
         activeDisplaySet?.StudyInstanceUID || activeDisplaySet?.studyInstanceUID || ''
       ).trim();
       return getExplicitLVSimpsonResult(studyInstanceId);
+    },
+    updateLVSimpsonEFPanelGold: ({ questionKey = '', savedGoldMeasurement = null, goldAuthoringEditable = false,
+      efContourTargets = null } = {}) => {
+      if (!lvSimpsonPanelController || lvSimpsonPanelController.questionKey !== questionKey) {
+        return { ok: false, reason: 'other-question-or-panel-closed' };
+      }
+      lvSimpsonPanelController.savedGoldMeasurement = savedGoldMeasurement;
+      lvSimpsonPanelController.canEdit = goldAuthoringEditable;
+      lvSimpsonPanelController.efContourTargets = efContourTargets;
+      lvSimpsonPanelController.onClearSavedGoldSlot = goldAuthoringEditable && questionKey
+        ? (slot: string) => window.dispatchEvent(new CustomEvent(
+            'ar-measurements:lv-simpson-gold-delete-requested',
+            { detail: { questionKey, slot } }
+          )) : null;
+      // Keep the active contour instructions intact while the tool is drawing.
+      if (!activeLVSimpsonWorkflowSessionId) {
+        renderLVSimpsonWorkflowPanel({
+          instruction: 'Educator EF authoring: use this panel for contours; Save Draft in Case Questions.',
+          onCalculate: lvSimpsonPanelController.onCalculate,
+          onCancel: hideLVSimpsonWorkflowPanel,
+        });
+      }
+      return { ok: true };
     },
     getViewerMeasurementSnapshotForPanel: () => {
       const saveTarget = getArViewerSaveTargetFromUrl();
@@ -15378,6 +15648,17 @@ function commandsModule({
         });
       }
 
+      if (isLVSimpsonMeasurement(savedAnnotation)) {
+        for (const toolName of [toolNames.SplineROI || 'SplineROI',
+          toolNames.PlanarFreehandROI || 'PlanarFreehandROI']) {
+          installLVSimpsonContourTextCleanupForViewport({
+            viewport: hydratedViewport,
+            viewportId: hydratedViewport.id || targetViewportId,
+            toolName,
+          });
+        }
+      }
+
       // Cornerstone-owned AR annotations (VTI traces and directional US measurements)
       // must not round-trip through MeasurementService here. Their persisted AR payload
       // and Cornerstone annotation state are the source of truth for viewport display.
@@ -15716,6 +15997,15 @@ function commandsModule({
           viewportId: targetViewportId,
           measurementService, viewportGridService, displaySetService, toolGroupService,
         });
+        // The destination tool group can differ from the one that rendered the
+        // original EF contour. Install volume labels on target navigation too.
+        for (const toolName of [toolNames.SplineROI || 'SplineROI',
+          toolNames.PlanarFreehandROI || 'PlanarFreehandROI']) {
+          installLVSimpsonContourTextCleanupForViewport({
+            viewport: resolveTargetViewport(), viewportId: targetViewportId,
+            toolName,
+          });
+        }
         if (pauseCineOnTarget) {
           stopSourceCineForViewport(targetViewportId);
           // Cine may advance while the target image is asynchronously loaded.
@@ -15794,7 +16084,7 @@ function commandsModule({
       // Newly captured, not-yet-saved calipers can come from the live service.
       const { learnerSeriesDoc } = await getViewerQuizMeasurementSeriesDocs({ includeBaseSeries: false });
       const annotations = references.map(reference => {
-        const saved = findViewerQuizBowelLearnerAnnotation(reference, learnerSeriesDoc);
+        const saved = findViewerQuizLearnerOwnedAnnotation(reference, learnerSeriesDoc);
         if (saved) return saved;
         const sourceId = getViewerQuizMeasurementSourceAnnotationId(reference);
         // Only this viewer session's newly drawn calipers may use a live
@@ -17142,12 +17432,26 @@ function commandsModule({
       // Spectral ROI data can survive on its Cornerstone source annotation
       // after MeasurementService remaps the same ROI. Prefer the calibrated
       // source snapshot over a generic area/length representation.
-      const restoredSpectralMeasurement = ['trVmax', 'trVTI'].includes(requestedKind)
-        ? getCurrentViewerMeasurementSnapshot(measurementService).find(
-            entry => getMeasurementAnnotationId(entry) === selectedMeasurementId
-          )
+      // The report preview serializes the Cornerstone-native directional
+      // annotation, not the OHIF MeasurementService adapter. Capture quiz TR
+      // evidence from that SAME annotated source (ID, DICOM frame and calibrated
+      // reportValue), so preview verification cannot see a different copy.
+      // Wait/retry while annotation stats are pending; never substitute gold.
+      const nativeTRAnnotation = requestedKind === 'trVmax' && selectedMeasurementId
+        ? cornerstoneTools.annotation.state.getAnnotation?.(selectedMeasurementId)
         : null;
-      const measurement = restoredSpectralMeasurement || directMeasurement;
+      const restoredSpectralMeasurement = requestedKind === 'trVmax'
+        ? getCornerstoneUltrasoundDirectionalMeasurementFallback(nativeTRAnnotation)
+        : requestedKind === 'trVTI'
+          ? getCurrentViewerMeasurementSnapshot(measurementService).find(
+              entry => getMeasurementAnnotationId(entry) === selectedMeasurementId
+            )
+          : null;
+      // TR quiz evidence must match the native annotation used by preview.
+      // A stale OHIF-only copy is not proof that FormAPI can verify this source.
+      const measurement = requestedKind === 'trVmax'
+        ? restoredSpectralMeasurement
+        : restoredSpectralMeasurement || directMeasurement;
 
       if (!isCompositeKind && !selectedMeasurementId) {
         return { ok: false, reason: 'no-selected-measurement' };
@@ -17380,6 +17684,9 @@ function commandsModule({
     },
     startLVSimpsonEFWorkflow: {
       commandFn: actions.startLVSimpsonEFWorkflow,
+    },
+    updateLVSimpsonEFPanelGold: {
+      commandFn: actions.updateLVSimpsonEFPanelGold,
     },
     startLAVolumeWorkflow: {
       commandFn: actions.startLAVolumeWorkflow,
@@ -17728,6 +18035,9 @@ function commandsModule({
     getViewerMeasurementSnapshotForPanel: {
       commandFn: actions.getViewerMeasurementSnapshotForPanel,
     },
+    deleteViewerQuizLearnerMeasurement: {
+      commandFn: actions.deleteViewerQuizLearnerMeasurement,
+    },
     getViewerQuizCompositeStatusForActiveStudy: {
       commandFn: actions.getViewerQuizCompositeStatusForActiveStudy,
     },
@@ -17970,6 +18280,9 @@ function commandsModule({
               ])
             : new Set<string>();
 
+          // Display-only review values are computed from calibrated live sources.
+          // Canonical MeasurementAnnotations remain compact and unchanged.
+          const reviewContourValuesById = new Map<string, { slot: string; kind: string; value: number; referencedImageId: string }>();
           const liveAnnotations = measurements
             .filter(measurement => {
               const measurementId = getMeasurementAnnotationId(measurement);
@@ -18007,6 +18320,81 @@ function commandsModule({
                 displaySetService,
                 workflow: targetWorkflow,
               });
+              if (previewOnly && domain === 'echo' && measurementId) {
+                // Persisted preview intentionally deduplicates contour geometry.
+                // Calculate displayed values from the exact verified live source;
+                // never write review-only scalars into MeasurementAnnotations.
+                const efSlot = getLVSimpsonSlotFromMeasurement(sourceMeasurement);
+                if (efSlot && annotation?.lvSimpson?.slot === efSlot) {
+                  // The first preview can arrive before MeasurementService
+                  // has merged the completed EF contour's calibrated geometry.
+                  // Resolve the same annotation ID from the live EF session and
+                  // Cornerstone native state, verifying the exact DICOM image
+                  // before accepting any display-only single-view volume.
+                  const native = cornerstoneTools.annotation.state.getAnnotation?.(measurementId);
+                  const nativeImageId = String(native?.metadata?.referencedImageId || '');
+                  const contourCandidates = [
+                    sourceMeasurement,
+                    lvSimpsonSessionMeasurementsByUid.get(measurementId),
+                    cornerstoneFallbackMeasurements.find(item =>
+                      getMeasurementAnnotationId(item) === measurementId
+                    ),
+                  ].filter(Boolean);
+                  const volumeML = contourCandidates
+                    .filter(candidate =>
+                      getLVSimpsonSlotFromMeasurement(candidate) === efSlot &&
+                      isSavedLVSimpsonImageMatch(candidate, String(annotation?.referencedImageId || ''))
+                    )
+                    .map(candidate => calculateLVSimpsonContourVolumeForMeasurement(candidate))
+                    .find(value => typeof value === 'number' && Number.isFinite(value) && value > 0)
+                    ?? (native && nativeImageId === String(annotation?.referencedImageId || '') &&
+                        native?.data?.lvSimpson?.slot === efSlot &&
+                        native?.metadata?.arMeasurementReadOnly !== true &&
+                        native?.data?.arMeasurementReadOnly !== true
+                      ? calculateLVSimpsonContourVolumeForAnnotationData(native)
+                      : null);
+                  if (typeof volumeML === 'number' && Number.isFinite(volumeML) && volumeML > 0) {
+                    reviewContourValuesById.set(measurementId, {
+                      kind: 'lvSimpsonSlot', slot: efSlot, value: volumeML,
+                      referencedImageId: String(annotation?.referencedImageId || ''),
+                    });
+                  } else {
+                    // Aggregate-only diagnostic for first-preview failures:
+                    // never log identifiers, patient data or contour points.
+                    console.info('[Review preview] EF single-view volume unavailable', {
+                      slot: efSlot,
+                      sessionSourcePresent: !!lvSimpsonSessionMeasurementsByUid.get(measurementId),
+                      nativeSourceOnSameImage: !!nativeImageId &&
+                        nativeImageId === String(annotation?.referencedImageId || ''),
+                    });
+                  }
+                } else {
+                  const laSlot = getLAVolumeSlotFromMeasurement(sourceMeasurement);
+                  if (laSlot && annotation?.laVolume?.slot === laSlot) {
+                    // Same first-preview availability rule for LA: use
+                    // only the matching live/session contour, never a saved
+                    // display scalar from a different DICOM frame.
+                    const laCandidates = [
+                      sourceMeasurement,
+                      laVolumeSessionMeasurementsByUid.get(measurementId),
+                    ].filter(Boolean);
+                    const areaCM2 = laCandidates
+                      .filter(candidate =>
+                        getLAVolumeSlotFromMeasurement(candidate) === laSlot &&
+                        String(candidate?.referencedImageId || '') ===
+                          String(annotation?.referencedImageId || '')
+                      )
+                      .map(candidate => getVerifiedLAVolumeContourAreaCM2(candidate))
+                      .find(value => typeof value === 'number' && Number.isFinite(value) && value > 0);
+                    if (typeof areaCM2 === 'number' && Number.isFinite(areaCM2) && areaCM2 > 0) {
+                      reviewContourValuesById.set(measurementId, {
+                        kind: 'laVolumeSlot', slot: laSlot, value: areaCM2,
+                        referencedImageId: String(annotation?.referencedImageId || ''),
+                      });
+                    }
+                  }
+                }
+              }
               if (domain === 'bowel' &&
                   quizSpatialEvidenceByAnnotationId &&
                   Object.prototype.hasOwnProperty.call(quizSpatialEvidenceByAnnotationId, measurementId)) {
@@ -18305,6 +18693,107 @@ function commandsModule({
               const reportAnnotations = getRequestedWorkflowAnnotations(nextMeasurementAnnotations, [
                 VIEWER_MEASUREMENTS_WORKFLOW,
               ]);
+              if (isReportOwnedMeasurementSave) {
+                // The first learner save can contain live/created measurements
+                // yet serialize an empty annotation workflow. Do not accept a
+                // 200 response for a no-op save or clear pending session state.
+                // Aggregate diagnostics intentionally exclude PHI and source IDs.
+                console.info('[AR Learner save trace] ' + JSON.stringify({
+                  previewOnly,
+                  liveCount: measurementService?.getMeasurements?.()?.length || 0,
+                  snapshotCount: measurements.length,
+                  persistableCount: liveAnnotations.length,
+                  pendingChangeCount: changedClinicalMeasurementIds.size,
+                  pendingMergeCount: annotationsForMerge.length,
+                  outgoingAnnotationCount: reportAnnotations.length,
+                  persistedSourceCount: existingScorableAnnotations.length,
+                  hasTRTransfer: !!educationQuizHemodynamics?.trVmax,
+                  hasIVCTransfer: !!educationQuizHemodynamics?.ivc,
+                }));
+                if (
+                  reportAnnotations.length === 0 &&
+                  (changedClinicalMeasurementIds.size > 0 ||
+                    !!educationQuizHemodynamics?.trVmax ||
+                    !!educationQuizHemodynamics?.ivc)
+                ) {
+                  throw new Error(
+                    'No learner measurement annotations reached the AR save payload. ' +
+                    'Nothing was saved; pending viewer measurements have been retained. ' +
+                    'Retry the measurement review before submitting.'
+                  );
+                }
+              }
+
+              // Verify the *serialized* TR source before asking FormAPI to
+              // approve it. Log only tool, label, provenance matches and units,
+              // never patient identifiers or DICOM frame IDs.
+              if (isReportOwnedMeasurementSave && educationQuizHemodynamics?.trVmax) {
+                const trAnswer = educationQuizHemodynamics.trVmax;
+                const trAnnotationId = String(trAnswer.sourceAnnotationId || '').trim();
+                const trCandidates = reportAnnotations.filter(annotation =>
+                  trAnnotationId && String(
+                    annotation?.uid || annotation?.annotationUID ||
+                    annotation?.annotationId || annotation?.id || ''
+                  ).trim() === trAnnotationId);
+                const trSource = trCandidates.length === 1 ? trCandidates[0] : null;
+                const directional = trSource?.ultrasoundDirectional ||
+                  trSource?.measurements?.ultrasoundDirectional || {};
+                const target: Record<string, any> = trAnswer?.viewerTarget || {};
+                const savedFrame = trSource?.frameNumber ||
+                  /\/frames\/(\d+)/.exec(String(trSource?.referencedImageId || ''))?.[1];
+                const savedTarget: Record<string, any> = {
+                  studyInstanceUID: trSource?.StudyInstanceUID,
+                  seriesInstanceUID: trSource?.SeriesInstanceUID || trSource?.referenceSeriesUID,
+                  sopInstanceUID: trSource?.SOPInstanceUID,
+                  frameNumber: savedFrame,
+                };
+                const targetMatches = ['studyInstanceUID', 'seriesInstanceUID',
+                  'sopInstanceUID', 'frameNumber'].every(key =>
+                  String(target[key] ?? '').trim() !== '' &&
+                  String(target[key]).trim() === String(savedTarget[key] ?? '').trim());
+                traceQuizTrVmax('transfer.serialized-source', {
+                  annotationId: trAnnotationId, sourceMatchCount: trCandidates.length,
+                  sourceToolName: trSource?.toolName || '',
+                  sourceLabel: trSource?.label || trSource?.measurementRole || '',
+                  pointCount: Array.isArray(trSource?.points) ? trSource.points.length : 0,
+                  targetMatches, acquisitionMode: directional.acquisitionMode || '',
+                  reportUnit: directional.reportUnit || '',
+                  reportValue: directional.reportValue ?? null,
+                  answerKind: trAnswer.measurementKind || '',
+                  answerUnit: trAnswer.unit || '',
+                  answerValue: trAnswer.value ?? null,
+                  hasLinkedRVSPReview: !!educationQuizHemodynamics?.ivc?.compositeResult?.rapRvsp,
+                });
+              }
+
+              // RV FAC is a calculated answer, not an independently drawn
+              // clinical annotation. The review can show it on FIRST save
+              // only when both unique, calibrated ED/ES sources are present in
+              // the actual pending annotation snapshot on their exact images.
+              // It is display-only; FormAPI's existing source validation and
+              // report persistence policy are unchanged.
+              const rvReviewSources = ['RV_ED', 'RV_ES'].map(slot => {
+                const candidates = measurements.filter(measurement => {
+                  if (getEchoAreaSlot(measurement) !== slot) return false;
+                  const id = getMeasurementAnnotationId(measurement);
+                  const saved = reportAnnotations.find(annotation =>
+                    id && getMeasurementAnnotationId(annotation) === id &&
+                    getEchoAreaSlot(annotation) === slot);
+                  return !!saved && !!String(measurement?.referencedImageId || '') &&
+                    String(measurement.referencedImageId) ===
+                      String(saved?.referencedImageId || '');
+                });
+                return candidates.length === 1 ? candidates[0] : null;
+              });
+              const verifiedRVSources = rvReviewSources.filter(Boolean) as Record<string, any>[];
+              const rvReviewResult = verifiedRVSources.length === 2 &&
+                new Set(verifiedRVSources.map(source =>
+                  getMeasurementAnnotationId(source))).size === 2 &&
+                verifiedRVSources.some(source =>
+                  changedClinicalMeasurementIds.has(getMeasurementAnnotationId(source)))
+                ? calculateRVFACFromMeasurements(verifiedRVSources) : null;
+              const reviewOnlyRVFACPercent = rvReviewResult?.status === 'complete'
+                ? Number(rvReviewResult.values?.facPercent) : null;
 
               // FormAPI independently derives chamber measurements from the
               // canonical incoming MeasurementAnnotations; do not copy UI
@@ -18347,20 +18836,72 @@ function commandsModule({
                 }
 
                 const serverPreview = await previewResponse.json().catch(() => null);
+                if (isReportOwnedMeasurementSave && educationQuizHemodynamics?.trVmax) {
+                  traceQuizTrVmax('transfer.formapi-preview', {
+                    reviewOnly: serverPreview?.reviewOnly === true,
+                    supported: serverPreview?.educationQuizHemodynamicsSupported === true,
+                    verifiedFields: serverPreview?.educationQuizHemodynamicFields || [],
+                    candidateFields: serverPreview?.candidateFields || [],
+                  });
+                }
 
                 if (!serverPreview?.reviewOnly) {
                   throw new Error('FormAPI did not return a clinical measurement review preview.');
                 }
+
+                // After Save Draft the viewer clears pending-change markers,
+                // while the exact learner-owned annotations remain persisted.
+                // Do not confuse an unchanged, verified learner Series with
+                // a missing source. New/edited/deleted evidence still requires
+                // the existing review and source-verification path.
+                const measurementAnnotationsChanged =
+                  hasUnpersistedLearnerMeasurementChanges({
+                    isLearnerCopy: isReportOwnedMeasurementSave &&
+                      seriesDoc?.isLearnerCopy === true,
+                    persistedAnnotations: existingScorableAnnotations,
+                    liveAnnotations,
+                    changedIds: Array.from(changedClinicalMeasurementIds),
+                    deletedIds: [
+                      ...viewerMeasurementsDeletedInSession,
+                      ...explicitDeleteIds,
+                    ],
+                  });
 
                 return {
                   ...serverPreview,
                   previewOnly: true,
                   isClinicalReportSave: true,
                   shouldSyncReportFields: true,
+                  measurementAnnotationsChanged,
+                  // Presentation-only changed-ID list avoids redisplaying
+                  // previously accepted dimensions on each staged save.
+                  // No information is sent to scoring or persistence.
+                  reviewOnlyChangedAnnotationIds: Array.from(changedClinicalMeasurementIds),
+                  ...(Number.isFinite(reviewOnlyRVFACPercent) &&
+                    reviewOnlyRVFACPercent > 0 && reviewOnlyRVFACPercent <= 100
+                    ? { reviewOnlyRVFACPercent } : {}),
                   seriesDoc,
                   saveTarget,
                   domain,
-                  annotations: reportAnnotations,
+                  annotations: reportAnnotations.map(annotation => {
+                    const source = reviewContourValuesById.get(String(annotation?.annotationId || annotation?.uid || '').trim());
+                    // Only display the live result when the returned preview
+                    // is still on the exact source image; annotation ID/slot
+                    // alone are insufficient after a frame/contour replacement.
+                    if (!source || !source.referencedImageId ||
+                        source.referencedImageId !== String(annotation?.referencedImageId || '')) {
+                      return annotation;
+                    }
+                    if (source.kind === 'lvSimpsonSlot' &&
+                        annotation?.lvSimpson?.slot === source.slot) {
+                      return { ...annotation, reviewOnlySingleViewVolumeML: source.value };
+                    }
+                    if (source.kind === 'laVolumeSlot' &&
+                        annotation?.laVolume?.slot === source.slot) {
+                      return { ...annotation, reviewOnlyLAContourAreaCM2: source.value };
+                    }
+                    return annotation;
+                  }),
                   reportFieldUpdates: clinicalReportFieldUpdates,
                   reviewItems: Array.isArray(serverPreview?.items) ? serverPreview.items : [],
                 };
