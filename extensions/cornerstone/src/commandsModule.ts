@@ -35,6 +35,7 @@ import toggleImageSliceSync from './utils/imageSliceSync/toggleImageSliceSync';
 import { getFirstAnnotationSelected } from './utils/measurementServiceMappings/utils/selection';
 import { getMeasurementSnapshotStudyInstanceId } from './utils/measurementSnapshotStudy';
 import { hasUnpersistedLearnerMeasurementChanges } from './utils/learnerMeasurementReviewChange';
+import { resolveViewerMeasurementSaveScope, settleViewerMeasurementSaveMarkers } from './utils/viewerMeasurementSaveScope';
 import { reconcileLearnerIvcSnapshotSources } from './utils/learnerIvcSourceSnapshot';
 import { isExactViewerQuizSopFrameImageId } from './utils/exactViewerQuizSopFrame';
 import { getViewportEnabledElement } from './utils/getViewportEnabledElement';
@@ -18064,23 +18065,22 @@ function commandsModule({
 
         try {
           const saveTarget = getArViewerSaveTargetFromUrl();
-          const explicitDeleteIds = new Set(
-            (Array.isArray(deleteAnnotationIds) ? deleteAnnotationIds : [])
-              .map(value => String(value || '').trim())
-              .filter(Boolean)
-          );
-          const restrictMeasurementIds = Array.isArray(measurementIds);
-          const requestedMeasurementIds = new Set(
-            (restrictMeasurementIds ? measurementIds : [])
-              .map(value => String(value || '').trim())
-              .filter(Boolean)
-          );
+          const {
+            explicitDeleteIds, restrictMeasurementIds, requestedMeasurementIds,
+            deletionIdsToApply, isExplicitDeletionOnlySave,
+          } = resolveViewerMeasurementSaveScope({
+            measurementIds, deleteAnnotationIds,
+            pendingDeletedMeasurementIds: viewerMeasurementsDeletedInSession,
+          });
 
           const isReviewWorkflowSave = isReviewWorkflowMeasurementsSaveTarget(saveTarget);
           // In a report-owned learning attempt, FormAPI derives report fields
           // from the persisted annotations on the same learner-copy Series.
           const isReportOwnedMeasurementSave =
             isReportOwnedLearnerMeasurementTarget(saveTarget);
+          const isReportOwnedDeletionOnlySave =
+            isReportOwnedMeasurementSave && isExplicitDeletionOnlySave &&
+            !educationQuizHemodynamics?.trVmax && !educationQuizHemodynamics?.ivc;
           const isClinicalReportSave =
             isClinicalReportMeasurementsSaveTarget(saveTarget) ||
             isReportOwnedMeasurementSave;
@@ -18505,10 +18505,9 @@ function commandsModule({
           const deletedClinicalSemanticKeys = new Set<string>();
 
           if (shouldSyncReportFields) {
-            for (const measurementId of [
-              ...viewerMeasurementsDeletedInSession,
-              ...explicitDeleteIds,
-            ]) {
+            // A restricted learner source/deletion save cannot apply unrelated
+            // pending deletions from other questions or measurement domains.
+            for (const measurementId of deletionIdsToApply) {
               const existingAnnotation = existingById.get(String(measurementId));
               const semanticKey = getClinicalViewerMeasurementSemanticKey(existingAnnotation);
 
@@ -18609,8 +18608,7 @@ function commandsModule({
 
                 if (
                   existingId &&
-                  (viewerMeasurementsDeletedInSession.has(existingId) ||
-                    explicitDeleteIds.has(String(existingId)))
+                  deletionIdsToApply.has(String(existingId))
                 ) {
                   return true;
                 }
@@ -18712,6 +18710,7 @@ function commandsModule({
                 }));
                 if (
                   reportAnnotations.length === 0 &&
+                  !isReportOwnedDeletionOnlySave &&
                   (changedClinicalMeasurementIds.size > 0 ||
                     !!educationQuizHemodynamics?.trVmax ||
                     !!educationQuizHemodynamics?.ivc)
@@ -19039,9 +19038,16 @@ function commandsModule({
             }
           }
 
-          viewerMeasurementsCreatedInSession.clear();
-          viewerMeasurementsModifiedInSession.clear();
-          viewerMeasurementsDeletedInSession.clear();
+          // Restricted saves acknowledge only server-confirmed selected IDs and
+          // explicit removals. Unrelated unsaved learner sources remain pending
+          // for the following reviewed Save Draft / Submit.
+          settleViewerMeasurementSaveMarkers({
+            createdMeasurementIds: viewerMeasurementsCreatedInSession,
+            modifiedMeasurementIds: viewerMeasurementsModifiedInSession,
+            deletedMeasurementIds: viewerMeasurementsDeletedInSession,
+            restrictMeasurementIds, requestedMeasurementIds, deletionIdsToApply,
+            persistedMeasurementIds,
+          });
 
           dispatchSavedAnnotationsRefresh({
             seriesDoc: savedSeriesDoc,
