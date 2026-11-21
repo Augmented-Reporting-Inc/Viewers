@@ -83,7 +83,11 @@ test('RAP and TR Vmax are measured; RVSP and verified RV FAC are calculated', ()
 });
 
 test('learner TR preview deduplicates one annotation without dropping transfer evidence', () => {
-  assert.match(panel, /const learnerReviewPreview = \{ \.\.\.preview, educationQuizHemodynamics \};/);
+  assert.match(panel, /const learnerReviewPreview = \\{\\s*\\.\\.\\.preview,\\s*educationQuizHemodynamics,/);
+  assert.match(panel, /saveAction === 'draft' \\|\\| !hasSavedQuizDraft[\\s\\S]*?reviewOnlyChangedAnnotationIds: undefined/,
+    'first Save Draft must include full learner measurement source review');
+  assert.match(panel, /const unverified = quizEvidenceRows.filter\\(row => row.recorded &&/,
+    'learner TR transfer must reject hemodynamics not confirmed by AR preview');
   assert.match(panel, /buildClinicalViewerAnnotationReviewRows\(learnerReviewPreview\)/);
   assert.match(panel, /buildLearnerCalculatedMeasurementReviewRows\(learnerReviewPreview\)/);
   assert.match(panel, /educationQuizHemodynamics: quizMeasurementReview\.educationQuizHemodynamics/);
