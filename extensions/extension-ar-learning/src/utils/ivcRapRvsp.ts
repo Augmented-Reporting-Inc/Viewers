@@ -64,6 +64,24 @@ export function isIVCReviewCurrent(reviewed: any, latest: any): boolean {
   });
 }
 
+/**
+ * Learner IVC quiz completion requires an explicit RAP interpretation tied to
+ * the current, source-backed expiration/inspiration calipers. Capturing just
+ * the percentage is not a completed learner answer. A valid RAP selection
+ * remains complete even if an earlier linked TR Vmax is not yet available;
+ * calculating RVSP is a separate dependency.
+ */
+export function isLearnerIVCRapSelectionComplete(answer: any): boolean {
+  const review = answer?.compositeResult?.rapRvsp;
+  const rap = finite(answer?.compositeResult?.rapMMHG);
+  return answer?.measurementKind === 'ivcCollapsibility' &&
+    answer?.unit === '%' &&
+    review?.methodId === IVC_RAP_RVSP_METHOD &&
+    RAP_CHOICES_MMHG.includes(rap as 3 | 8 | 15) &&
+    finite(review?.rapMMHG) === rap &&
+    !!review?.ivc && isIVCReviewCurrent(review.ivc, answer);
+}
+
 export function composeIVCRapRVSP({
   ivcAnswer,
   rapMMHG,
