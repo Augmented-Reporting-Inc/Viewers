@@ -26,7 +26,7 @@ import {
   isMatchingQuizEFCompletion,
   getInitialGuidedEFQuestionTarget,
 } from '../utils/quizCompositeCaptureIntent';
-import { composeIVCRapRVSP, attachRapRvspEvidenceToIVCAnswer, attachLearnerRapRvspToIVCAnswer, attachLearnerRapSelectionToIVCAnswer, isIVCReviewCurrent, RAP_CHOICES_MMHG } from '../utils/ivcRapRvsp';
+import { composeIVCRapRVSP, attachRapRvspEvidenceToIVCAnswer, attachLearnerRapRvspToIVCAnswer, attachLearnerRapSelectionToIVCAnswer, isIVCReviewCurrent, reconcileLearnerIVCRecapture, RAP_CHOICES_MMHG } from '../utils/ivcRapRvsp';
 import {
   getLearnerCompositeAutoCaptureSignature,
   getLearnerCompositeSourceComponents,
@@ -3041,13 +3041,19 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
 
   function setAnswer(quizKey: string, question: QuizQuestion, value: any) {
     reportEducationChange(`quiz:${quizKey}`);
-    setAnswersByQuizKey(current => ({
-      ...current,
-      [quizKey]: {
-        ...(current[quizKey] || {}),
-        [question.questionKey]: value,
-      },
-    }));
+    setAnswersByQuizKey(current => {
+      const quizAnswers = current[quizKey] || {};
+      // Async IVC recapture must reconcile with the newest RAP selection.
+      const nextValue = typeof value === 'function'
+        ? value(quizAnswers[question.questionKey], quizAnswers) : value;
+      return {
+        ...current,
+        [quizKey]: {
+          ...quizAnswers,
+          [question.questionKey]: nextValue,
+        },
+      };
+    });
   }
 
   function toggleMultiSelectAnswer(quizKey: string, question: QuizQuestion, value: string) {
@@ -3991,7 +3997,23 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
           }));
         }
       }
-      setAnswer(quiz.quizKey, question, setObjectAnswerPart(currentAnswer, result.answer));
+      const isIVC = cleanString(plainObject(question.answerConfig).measurementKind) === 'ivcCollapsibility';
+      const index = (quiz.questions || []).findIndex(entry =>
+        entry.questionKey === question.questionKey);
+      const priorTRQuestion = isIVC && index > 0
+        ? (quiz.questions || []).slice(0, index).reverse().find(entry =>
+          entry.type === 'measurementNumeric' &&
+          cleanString(plainObject(entry.answerConfig).measurementKind) === 'trVmax')
+        : null;
+      setAnswer(quiz.quizKey, question, (previousAnswer: any, currentAnswers: any) =>
+        setObjectAnswerPart(previousAnswer, isIVC
+          ? reconcileLearnerIVCRecapture({
+              previousAnswer, capturedAnswer: result.answer,
+              trVmaxAnswer: priorTRQuestion
+                ? currentAnswers[priorTRQuestion.questionKey] : null,
+              trVmaxQuestionKey: priorTRQuestion?.questionKey || '',
+            })
+          : result.answer));
 
       if (!options.silent) {
         uiNotificationService.show({
