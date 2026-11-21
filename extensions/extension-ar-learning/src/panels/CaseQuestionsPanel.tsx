@@ -6137,8 +6137,8 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     const reviewedRAP = saved.rapRvsp?.ivc &&
       isIVCReviewCurrent(saved.rapRvsp.ivc, answer)
       ? saved.rapMMHG : null;
-    const selection = rapSelectionsByQuestionKey[key] ??
-      (reviewedRAP != null ? String(reviewedRAP) : '');
+    // Reflect persisted learner evidence, never a stale local select state.
+    const selection = reviewedRAP != null ? String(reviewedRAP) : '';
 
     return (
       <div className="mt-2 rounded border border-cyan-700 bg-cyan-950/20 p-2 text-xs text-cyan-100">
@@ -6202,11 +6202,14 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
             Recorded TR Vmax: {trValue.toFixed(2)} m/s
           </div>
         )}
-        {reviewedRAP != null && Number.isFinite(Number(saved.rvspMMHG)) ? (
+        {reviewedRAP != null ? (
           <div className="mt-2 rounded border border-emerald-700 p-2 text-emerald-100">
             Saved learner RAP: {reviewedRAP} mmHg
-            <div>Calculated RVSP: {Number(saved.rvspMMHG).toFixed(2)} mmHg</div>
-
+            {saved.rvspMMHG != null && Number.isFinite(Number(saved.rvspMMHG)) ? (
+              <div>Calculated RVSP: {Number(saved.rvspMMHG).toFixed(2)} mmHg</div>
+            ) : (
+              <div>RVSP unavailable: review a recorded TR Vmax before calculating RVSP.</div>
+            )}
           </div>
         ) : null}
       </div>
