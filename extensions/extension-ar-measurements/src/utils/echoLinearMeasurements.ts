@@ -60,15 +60,19 @@ export function getCalibratedEchoLinearLengthMM(measurement: any = {}): number |
 
   const measurements = measurement?.measurements || {};
   const native = getCurrentFrameNativeLengthSource(measurement);
-  // Prefer a serialized exact source when present; for live OHIF Length
-  // records, use the calibrated native target stats on the same frame.
-  const rawValue = measurements.length ?? measurements.value ??
-    measurement?.value ?? native?.value;
+  // Persisted annotations have a canonical measurements payload.
+  // Unsaved OHIF records may have an object-valued top-level value/display
+  // adapter: the exact native image data is authoritative in that case.
+  // Never use a normalized UI unit to validate raw native pixel statistics.
+  const hasSavedScalar = measurements.length != null || measurements.value != null;
+  const rawValue = hasSavedScalar
+    ? measurements.length ?? measurements.value
+    : native ? native.value : measurement?.value;
+  const rawUnit = hasSavedScalar
+    ? (measurements.lengthUnit || measurements.unit || measurement?.unit)
+    : native ? native.unit : measurement?.unit;
   const value = finitePositiveNumber(rawValue);
-  const unit = String(
-    measurements.lengthUnit || measurements.unit || measurement?.unit ||
-    native?.unit || ''
-  ).trim().toLowerCase();
+  const unit = String(rawUnit || '').trim().toLowerCase();
 
   if (value === null) return null;
   if (unit === 'mm') return value;
