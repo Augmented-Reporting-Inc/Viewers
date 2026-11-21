@@ -479,7 +479,14 @@ test('report quiz review lists source-backed measurements without synthetic repo
   assert.doesNotMatch(ef[0].value, /cm²|mm²/,
     'never substitute contour area for EF contour volume');
   assert.match(measurementsPanel, /review\.educationWorkflow && annotationRows\.length > 0/);
-  assert.match(panelSource, /const learnerReviewPreview = \{ \.\.\.preview, educationQuizHemodynamics \};\s*const annotationRows = buildClinicalViewerAnnotationReviewRows\(learnerReviewPreview\)/);
+  assert.match(panelSource, /const learnerReviewPreview = \\{\\s*\\.\\.\\.preview,\\s*educationQuizHemodynamics,[\\s\\S]*?const annotationRows = buildClinicalViewerAnnotationReviewRows\\(learnerReviewPreview\\)/,
+    'learner review keeps source-linked hemodynamics across the conditional full-vs-changed preview');
+  assert.match(panelSource, /saveAction === 'draft' \\|\\| !hasSavedQuizDraft[\\s\\S]*?reviewOnlyChangedAnnotationIds: undefined/,
+    'first Save Draft must include all source measurements, not just changed annotations');
+  assert.match(panelSource, /if \\(quizEvidenceRows.some\\(row => row.recorded\\) && preview.educationQuizHemodynamicsSupported !== true\\)/,
+    'the AR hemodynamics capability gate must precede review presentation');
+  assert.match(panelSource, /const unverified = quizEvidenceRows.filter\\(row => row.recorded &&/,
+    'unverified source evidence must fail closed before review display');
   assert.match(panelSource, /rows, annotationRows, calculatedRows,/);
   assert.match(panelSource, /if \(!annotationRows\.length\)\s*\{\s*throw new Error/,
     'a truly empty annotation preview must fail rather than display a blank review');
