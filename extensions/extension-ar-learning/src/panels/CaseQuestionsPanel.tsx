@@ -18,6 +18,12 @@ import {
   ClinicalReportMeasurementReviewModal,
 } from '../../../extension-ar-measurements/src/panels/ARMeasurementsPanel';
 import {
+  getLearnerQuizSaveButtonLabels,
+  getUpdatedLearnerHemodynamicReviewRows,
+  shouldSkipUnchangedLearnerSubmitMeasurementReview,
+  type LearnerQuizSaveAction,
+} from '../utils/learnerQuizSaveReview';
+import {
   readViewerQuizSessionState,
   writeViewerQuizSessionState,
 } from '../utils/viewerQuizSessionState';
@@ -2084,6 +2090,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
 
   const [loading, setLoading] = useState(true);
   const [savingQuizKey, setSavingQuizKey] = useState('');
+  const [savingQuizAction, setSavingQuizAction] = useState<LearnerQuizSaveAction | null>(null);
   const [quizMeasurementReview, setQuizMeasurementReview] = useState<any>(null);
   const [quizMeasurementSelectedRows, setQuizMeasurementSelectedRows] = useState<string[]>([]);
   const [quizMeasurementApplying, setQuizMeasurementApplying] = useState(false);
@@ -4520,6 +4527,20 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       throw new Error(`AR could not verify ${unverified.map(row => row.label).join(', ')} for transfer. Review those source measurements and retry.`);
     }
     const rows = buildClinicalReportReviewRows(preview);
+    // A previous Save Draft already persisted these exact learner-owned
+    // annotations and TR/RAP/RVSP report values. The source-validation
+    // preview above still runs; omit only the redundant second dialog.
+    // Missing or changed report evidence always follows the normal review.
+    if (shouldSkipUnchangedLearnerSubmitMeasurementReview({
+      saveAction, preview, reportRows: rows, quizEvidenceRows,
+    })) {
+      return;
+    }
+
+    const quizEvidenceRowsForReview = getUpdatedLearnerHemodynamicReviewRows({
+      saveAction, preview, quizEvidenceRows,
+      evidence: educationQuizHemodynamics,
+    });
     // Retain quiz source identity when building learner-only display rows.
     // The FormAPI preview need not echo the submitted education evidence.
     // Without this context the same TR annotation is shown both as "TR peak
@@ -4543,8 +4564,11 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     setQuizMeasurementSelectedRows(rows.filter(row => row.changed).map(row => row.key));
     setQuizMeasurementReview({
       rows, annotationRows, calculatedRows,
-      derivedConsequences: preview?.derivedConsequences, quizEvidenceRows,
+      derivedConsequences: preview?.derivedConsequences,
+      quizEvidenceRows: quizEvidenceRowsForReview,
       educationQuizHemodynamics, educationWorkflow: true, saveAction,
+      showUpdatedResultsOnly: saveAction === 'submitted' &&
+        cleanString(getResponseForQuiz(responses, quiz)?.status).toLowerCase() === 'draft',
     });
     const approved = await new Promise<boolean>(resolve => {
       quizMeasurementResolveRef.current = resolve;
@@ -4575,6 +4599,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       return null;
     }
     setSavingQuizKey(quiz.quizKey);
+    setSavingQuizAction(status);
     if (status === 'submitted') {
       setSubmitting(true);
     }
@@ -4785,6 +4810,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       throw error;
     } finally {
       setSavingQuizKey('');
+      setSavingQuizAction(null);
       if (status === 'submitted') {
         setSubmitting(false);
       }
@@ -8711,6 +8737,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
             {learnerFooterQuizzes.map(quiz => {
               const quizSaving = savingQuizKey === quiz.quizKey;
               const quizScoring = scoringQuizKey === quiz.quizKey;
+              const saveButtonLabels = getLearnerQuizSaveButtonLabels({
+                quizSaving, savingAction: savingQuizAction, deferredReportScoring,
+              });
               const response = getResponseForQuiz(responses, quiz);
               const submitted = cleanString(response?.status).toLowerCase() === 'submitted';
               const quizScore = viewerQuizScore ? getQuizScoreItem(viewerQuizScore, quiz) : null;
@@ -8749,7 +8778,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                         disabled={quizSaving || submitting}
                         onClick={() => saveQuiz(quiz, 'draft')}
                       >
-                        {quizSaving ? 'Saving…' : 'Save Draft'}
+                        {saveButtonLabels.draft}
                       </button>
 
                       <button
@@ -8758,7 +8787,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                         disabled={quizSaving || submitting}
                         onClick={() => saveQuiz(quiz, 'submitted')}
                       >
-                        {quizSaving ? 'Submitting…' : deferredReportScoring ? 'Submit answers' : 'Submit Quiz'}
+                        {saveButtonLabels.submit}
                       </button>
                     </div>
                   )}
