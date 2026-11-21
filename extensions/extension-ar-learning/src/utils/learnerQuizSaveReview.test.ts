@@ -23,9 +23,9 @@ const preview = {
 
 describe('learner reporting Save Draft / Submit confirmation', () => {
   const shouldSkip = (p: any = preview, r: any[] = rows, action: 'draft' | 'submitted' = 'submitted',
-    reportRows: any[] = []) =>
+    reportRows: any[] = [], hasSavedQuizDraft = true) =>
     shouldSkipUnchangedLearnerSubmitMeasurementReview({
-      saveAction: action, preview: p, reportRows, quizEvidenceRows: r,
+      saveAction: action, hasSavedQuizDraft, preview: p, reportRows, quizEvidenceRows: r,
     });
 
   it('shows the full initial Save Draft review, even when a source was previously saved', () => {
@@ -39,6 +39,9 @@ describe('learner reporting Save Draft / Submit confirmation', () => {
   it('skips only redundant Submit after a verified unchanged learner-copy draft', () => {
     expect(rows.every(row => isLearnerHemodynamicReviewRowPersisted(row, series))).toBe(true);
     expect(shouldSkip()).toBe(true);
+    // A learner who goes straight to Submit without first saving the quiz
+    // must still review all measurements, even when Series values happen to match.
+    expect(shouldSkip(preview, rows, 'submitted', [], false)).toBe(false);
   });
 
   it('reopens review for new or edited source annotations or a pending report update', () => {
