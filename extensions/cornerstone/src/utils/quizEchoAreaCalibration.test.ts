@@ -1,4 +1,4 @@
-import { calculateCalibratedEchoAreaCM2, getSavedQuizEchoAreaDisplayInfo, getQuizCompositeContourViewportLines, getQuizCompositeGoldContourSlotMetadata, getVerifiedEFGoldContourViewportLines } from './quizEchoAreaCalibration';
+import { calculateCalibratedEchoAreaCM2, getSavedQuizEchoAreaDisplayInfo, getQuizCompositeContourViewportLines, getQuizCompositeGoldContourSlotMetadata, getVerifiedEFGoldContourViewportLines, getQuizEchoAreaSourceMetadata, registerQuizEchoAreaMeasurementSchema } from './quizEchoAreaCalibration';
 
 describe('DICOM-calibrated quiz echo area', () => {
   it('calculates physical area in cm² from already calibrated millimetres', () => {
@@ -161,5 +161,28 @@ describe('EF educator gold contour viewport text', () => {
     expect(getVerifiedEFGoldContourViewportLines({
       origin: 'quiz-gold', slot: 'RV_ED', areaCM2: 27.5, volumeML: 100,
     })).toBeNull();
+  });
+});
+
+describe('native guided Echo area MeasurementService schema contract', () => {
+  it('registers the exact top-level fields emitted by RV/RA SplineROI mapping', () => {
+    const schemaKeys: string[] = [];
+    registerQuizEchoAreaMeasurementSchema({
+      addMeasurementSchemaKeys: keys => schemaKeys.push(...keys),
+    });
+    for (const slot of ['RV_ED', 'RV_ES', 'RA_ES']) {
+      const mapped = getQuizEchoAreaSourceMetadata({
+        echoArea: { slot, phase: slot === 'RV_ED' ? 'ED' : 'ES' },
+      });
+      expect(mapped.measurementKind).toBe('echoAreaSlot');
+      expect(Object.keys(mapped).sort()).toEqual([...schemaKeys].sort());
+      expect(mapped.echoArea.slot).toBe(slot);
+    }
+  });
+
+  it('does not invent schema-dependent source identity for unrelated splines', () => {
+    for (const data of [{}, { echoArea: { slot: 'A4C_ED' } }, { echoArea: { slot: '' } }]) {
+      expect(getQuizEchoAreaSourceMetadata(data)).toEqual({});
+    }
   });
 });

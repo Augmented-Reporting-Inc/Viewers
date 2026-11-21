@@ -92,3 +92,78 @@ describe('Echo linear LV measurements', () => {
     expect(calculateEchoLinearLVMeasurements(updated)?.lvMassG).toBe('194');
   });
 });
+
+describe('Live OHIF Length adapter preview (exact-frame native stats)', () => {
+  const image = (frame: number) =>
+    `wadors:example/studies/1/series/2/instances/3/frames/${frame}`;
+  const live = (label: string, value: number, unit = 'mm', frame = 1, overrides: any = {}) => {
+    const referencedImageId = image(frame);
+    return {
+      toolName: 'Length',
+      label,
+      referencedImageId,
+      displayText: { primary: [`${value} ${unit}`] },
+      data: { [`imageId:${referencedImageId}`]: { length: value, unit } },
+      ...overrides,
+    };
+  };
+
+  it('computes LV Mass and RWT from physically calibrated native Length data before Save', () => {
+    expect(calculateEchoLinearLVMeasurements([
+      live('LVIDd', 50), live('IVSd', 10), live('PWd', 10),
+    ])).toEqual({ relativeWallThickness: '0.40', lvMassG: '182' });
+    expect(calculateEchoLinearLVMeasurements([
+      live('LVIDd', 5, 'cm'), live('IVSd', 1, 'cm'), live('PWd', 10),
+    ])?.lvMassG).toBe('182');
+  });
+
+  it('uses current-frame physical stats when the display adapter has object-valued data', () => {
+    const current = live('IVSd', 10, 'mm', 1, {
+      value: { primary: ['10 mm'] },
+      unit: 'px', // should not override exact-frame native calibration
+    });
+    expect(getCalibratedEchoLinearLengthMM(current)).toBe(10);
+    expect(calculateEchoLinearLVMeasurements([
+      live('LVIDd', 50), current, live('PWd', 10),
+    ])?.lvMassG).toBe('182');
+  });
+
+  it('updates after a same-frame live native caliper change', () => {
+    const before = [live('LVIDd', 50), live('IVSd', 10), live('PWd', 10)];
+    expect(calculateEchoLinearLVMeasurements(before)?.lvMassG).toBe('182');
+    const after = [before[0], live('IVSd', 11), before[2]];
+    expect(calculateEchoLinearLVMeasurements(after)?.lvMassG).toBe('194');
+  });
+
+  it('requires the exact referenced frame, not cached stats from another frame', () => {
+    const wrong = live('IVSd', 10, 'mm', 1, {
+      data: { [`imageId:${image(2)}`]: { length: 10, unit: 'mm' } },
+    });
+    expect(getCalibratedEchoLinearLengthMM(wrong)).toBeNull();
+    expect(calculateEchoLinearLVMeasurements([
+      live('LVIDd', 50), wrong, live('PWd', 10),
+    ])?.lvMassG).toBeFalsy();
+  });
+
+  it('ignores a stale cached target when the current frame target also exists', () => {
+    const current = live('IVSd', 11, 'mm', 2, {
+      data: {
+        [`imageId:${image(1)}`]: { length: 30, unit: 'mm' },
+        [`imageId:${image(2)}`]: { length: 11, unit: 'mm' },
+      },
+    });
+    expect(getCalibratedEchoLinearLengthMM(current)).toBe(11);
+  });
+
+  it('never uses normalized display text or uncalibrated native units as physical evidence', () => {
+    for (const unit of ['px', 'cm US Region', '', 'pixel']) {
+      const uncalibrated = live('IVSd', 10, unit, 1, {
+        displayText: { primary: ['10 mm'] },
+      });
+      expect(getCalibratedEchoLinearLengthMM(uncalibrated)).toBeNull();
+      expect(calculateEchoLinearLVMeasurements([
+        live('LVIDd', 50), uncalibrated, live('PWd', 10),
+      ])?.lvMassG).toBeFalsy();
+    }
+  });
+});

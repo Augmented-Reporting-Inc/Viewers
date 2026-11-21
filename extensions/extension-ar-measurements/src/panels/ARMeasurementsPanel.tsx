@@ -505,11 +505,20 @@ function mergeLiveMeasurementIntoSavedAnnotation(savedAnnotation, liveMeasuremen
   const normalizedLive = normalizeMeasurementForDisplay(liveMeasurement);
   const livePoints = Array.isArray(liveMeasurement?.points) ? liveMeasurement.points : [];
   const liveLengthSource = liveMeasurement?.measurements || {};
+  // OHIF's native Length adapter reports its physical stats in data[targetId].
+  // An edited live caliper must take precedence even when calibration is
+  // unavailable: otherwise an old saved mm value remains misleadingly visible.
+  const liveNativeLengthStats = liveMeasurement?.data || liveMeasurement?.cachedStats || {};
+  const hasLiveNativeLength = Object.values(liveNativeLengthStats).some(
+    (stats: any) => stats && typeof stats === 'object' &&
+      (stats.length != null || stats.value != null)
+  );
   const hasLiveLengthValue =
     String(liveMeasurement?.toolName || '') === 'Length' &&
     (liveLengthSource.length != null ||
       liveLengthSource.value != null ||
-      liveMeasurement?.value != null);
+      liveMeasurement?.value != null ||
+      hasLiveNativeLength);
 
   return {
     ...normalizedLive,
@@ -1574,12 +1583,16 @@ function LearnerViewerMeasurementConfirmationModal({
       <div className="flex max-h-[90vh] w-full max-w-2xl flex-col overflow-hidden rounded-lg border border-gray-600 bg-gray-900 text-white shadow-2xl">
         <div className="shrink-0 border-b border-gray-700 px-5 py-4">
           <h2 id="ar-learner-measurement-confirmation-title" className="text-lg font-semibold">
-            Review your measurements
+            {review?.showUpdatedResultsOnly ? 'Review updated measurements' : 'Review your measurements'}
           </h2>
           <p className="mt-1 text-sm text-gray-300">
-            Review your measured and calculated results before
-            {isSubmitting ? ' submitting your answers.' : ' saving your draft.'}
-            They will be saved with your answers and used in your practice report where applicable.
+            {review?.showUpdatedResultsOnly
+              ? 'Review the new or changed measurements and calculated consequences before submitting. Previously saved measurements remain in your learner report.'
+              : <>
+                  Review your measured and calculated results before
+                  {isSubmitting ? ' submitting your answers.' : ' saving your draft.'}
+                  They will be saved with your answers and used in your practice report where applicable.
+                </>}
           </p>
         </div>
         <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-5 py-4">

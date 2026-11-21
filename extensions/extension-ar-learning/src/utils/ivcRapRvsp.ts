@@ -64,6 +64,24 @@ export function isIVCReviewCurrent(reviewed: any, latest: any): boolean {
   });
 }
 
+/**
+ * Learner IVC quiz completion requires an explicit RAP interpretation tied to
+ * the current, source-backed expiration/inspiration calipers. Capturing just
+ * the percentage is not a completed learner answer. A valid RAP selection
+ * remains complete even if an earlier linked TR Vmax is not yet available;
+ * calculating RVSP is a separate dependency.
+ */
+export function isLearnerIVCRapSelectionComplete(answer: any): boolean {
+  const review = answer?.compositeResult?.rapRvsp;
+  const rap = finite(answer?.compositeResult?.rapMMHG);
+  return answer?.measurementKind === 'ivcCollapsibility' &&
+    answer?.unit === '%' &&
+    review?.methodId === IVC_RAP_RVSP_METHOD &&
+    RAP_CHOICES_MMHG.includes(rap as 3 | 8 | 15) &&
+    finite(review?.rapMMHG) === rap &&
+    !!review?.ivc && isIVCReviewCurrent(review.ivc, answer);
+}
+
 export function composeIVCRapRVSP({
   ivcAnswer,
   rapMMHG,
@@ -190,6 +208,61 @@ export function attachRapRvspEvidenceToIVCAnswer({
       },
     },
   };
+}
+
+
+/**
+ * Recapture of an unchanged IVC pair must not erase an explicitly reviewed
+ * learner RAP/RVSP interpretation. Edited calipers or a changed TR source may
+ * retain only a separately reviewed RAP; RVSP must be re-reviewed.
+ * This does not authorize report persistence: FormAPI verifies source evidence.
+ */
+export function reconcileLearnerIVCRecapture({
+  previousAnswer, capturedAnswer, trVmaxAnswer, trVmaxQuestionKey,
+}: {
+  previousAnswer?: any; capturedAnswer?: any;
+  trVmaxAnswer?: any; trVmaxQuestionKey?: string;
+} = {}) {
+  const oldComposite = previousAnswer?.compositeResult;
+  const review = oldComposite?.rapRvsp;
+  const rap = finite(oldComposite?.rapMMHG);
+  if (review?.methodId !== IVC_RAP_RVSP_METHOD ||
+      !review.ivc || !isIVCReviewCurrent(review.ivc, capturedAnswer) ||
+      !RAP_CHOICES_MMHG.includes(rap as 3 | 8 | 15) ||
+      finite(review.rapMMHG) !== rap) return capturedAnswer;
+
+  const linkedTR = review.trVmax?.answer;
+  const sameTarget = (left: any, right: any) =>
+    ['studyInstanceUID', 'seriesInstanceUID', 'sopInstanceUID', 'frameNumber']
+      .every(key => clean(left?.[key]) && clean(left[key]) === clean(right?.[key]));
+  const sameTR = linkedTR?.measurementKind === 'trVmax' &&
+    trVmaxAnswer?.measurementKind === 'trVmax' &&
+    clean(review.trVmax?.questionKey) &&
+    clean(review.trVmax.questionKey) === clean(trVmaxQuestionKey) &&
+    clean(linkedTR.sourceAnnotationId) &&
+    clean(linkedTR.sourceAnnotationId) === clean(trVmaxAnswer.sourceAnnotationId) &&
+    linkedTR.unit === 'm/s' && trVmaxAnswer.unit === 'm/s' &&
+    finite(linkedTR.value) === finite(trVmaxAnswer.value) &&
+    sameTarget(linkedTR.viewerTarget, trVmaxAnswer.viewerTarget);
+
+  if (sameTR) {
+    const recalculated = attachRapRvspEvidenceToIVCAnswer({
+      ivcAnswer: capturedAnswer, rapMMHG: rap,
+      trVmaxAnswer, trVmaxQuestionKey,
+    });
+    if (recalculated.status === 'complete' &&
+        finite(oldComposite.rvspMMHG) !== null &&
+        Math.abs(Number(oldComposite.rvspMMHG) -
+          Number(recalculated.answer.compositeResult.rvspMMHG)) <= 0.01) {
+      return recalculated.answer;
+    }
+  }
+
+  // Preserve the explicit RAP without reusing stale TR/RVSP evidence.
+  const rapOnly = attachLearnerRapSelectionToIVCAnswer({
+    ivcAnswer: capturedAnswer, rapMMHG: rap,
+  });
+  return rapOnly.status === 'rap-only' ? rapOnly.answer : capturedAnswer;
 }
 
 /** Legacy learner call site uses the same verified, role-neutral composition.

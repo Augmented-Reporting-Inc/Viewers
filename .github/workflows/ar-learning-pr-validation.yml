@@ -73,6 +73,8 @@ jobs:
         run: npx jest --config extensions/extension-ar-learning/jest.config.js --runInBand --runTestsByPath extensions/extension-ar-learning/src/utils/quizCompositeCaptureIntent.test.ts extensions/extension-ar-learning/src/utils/efGoldContourAuthoring.test.ts extensions/extension-ar-learning/src/utils/quizCompositePhaseEvidence.test.ts
       - name: Validate learner bowel measurement-set auto capture
         run: npx jest --config extensions/extension-ar-learning/jest.config.js --runInBand --runTestsByPath extensions/extension-ar-learning/src/utils/bowelQuizMeasurementSet.test.ts
+      - name: Verify learner Save Draft to Submit review and per-button activity
+        run: npx jest --config extensions/extension-ar-learning/jest.config.js --runInBand --coverage=false --runTestsByPath extensions/extension-ar-learning/src/utils/learnerQuizSaveReview.test.ts extensions/extension-ar-learning/src/utils/ivcRapRvsp.test.ts
       - name: Compile AR learning extension
         # Standalone workspace bundles lack react-dom peer resolution on this
         # EF candidate path; the complete production Docker build below

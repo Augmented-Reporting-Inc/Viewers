@@ -1,4 +1,4 @@
-import { composeIVCRapRVSP, attachRapRvspEvidenceToIVCAnswer, attachLearnerRapRvspToIVCAnswer, attachLearnerRapSelectionToIVCAnswer, isIVCReviewCurrent } from './ivcRapRvsp';
+import { composeIVCRapRVSP, attachRapRvspEvidenceToIVCAnswer, attachLearnerRapRvspToIVCAnswer, attachLearnerRapSelectionToIVCAnswer, isIVCReviewCurrent, isLearnerIVCRapSelectionComplete, reconcileLearnerIVCRecapture } from './ivcRapRvsp';
 
 function target(instance: string, frame: number) {
   return {
@@ -145,5 +145,126 @@ describe('existing IVC collapsibility quiz with additional reviewed RAP and RVSP
     expect(attachLearnerRapRvspToIVCAnswer({
       ...args, trVmaxAnswer: { ...tr, sourceAnnotationId: '' },
     }).status).toBe('unavailable');
+  });
+});
+
+describe('learner recapture of reviewed IVC calipers', () => {
+  const reviewed = attachLearnerRapRvspToIVCAnswer({ ...args, rapMMHG: 8 });
+  const previous = reviewed.status === 'complete' ? reviewed.answer : null;
+  const capture = () => JSON.parse(JSON.stringify(ivc));
+  const reconcile = (capturedAnswer: any, trVmaxAnswer: any = tr, trVmaxQuestionKey = 'q-tr') =>
+    reconcileLearnerIVCRecapture({
+      previousAnswer: previous, capturedAnswer, trVmaxAnswer, trVmaxQuestionKey,
+    });
+
+  it('preserves an explicit RAP and RVSP on an identical source recapture', () => {
+    const current = reconcile(capture());
+    expect(current.measurementKind).toBe('ivcCollapsibility');
+    expect(current.value).toBe(60);
+    expect(current.compositeResult.rapMMHG).toBe(8);
+    expect(current.compositeResult.rvspMMHG).toBe(39.36);
+    expect(current.compositeResult.rapRvsp.trVmax.answer.sourceAnnotationId).toBe('tr-source');
+    expect(isIVCReviewCurrent(current.compositeResult.rapRvsp.ivc, current)).toBe(true);
+  });
+
+  it('invalidates RAP/RVSP after changed IVC geometry or frame', () => {
+    for (const change of ['geometry', 'frame']) {
+      const edited = capture();
+      if (change === 'geometry') edited.compositeResult.components[1].points[1][0] = 9;
+      else edited.compositeResult.components[0].target.frameNumber = 2;
+      const current = reconcile(edited);
+      expect(current.compositeResult).not.toHaveProperty('rapMMHG');
+      expect(current.compositeResult).not.toHaveProperty('rvspMMHG');
+      expect(current.compositeResult).not.toHaveProperty('rapRvsp');
+    }
+  });
+
+  it('retains explicitly reviewed RAP but never stale RVSP after TR changes', () => {
+    const current = reconcile(capture(), { ...tr, sourceAnnotationId: 'another-tr' });
+    expect(current.compositeResult.rapMMHG).toBe(8);
+    expect(current.compositeResult.rvspMMHG).toBeNull();
+    expect(current.compositeResult.rapRvsp).not.toHaveProperty('trVmax');
+  });
+
+  it('retains a RAP-only review without calculating RVSP from a later TR', () => {
+    const rapOnly = attachLearnerRapSelectionToIVCAnswer({ ivcAnswer: ivc, rapMMHG: 15 });
+    expect(rapOnly.status).toBe('rap-only');
+    if (rapOnly.status !== 'rap-only') return;
+    const current = reconcileLearnerIVCRecapture({
+      previousAnswer: rapOnly.answer, capturedAnswer: capture(),
+      trVmaxAnswer: tr, trVmaxQuestionKey: 'q-tr',
+    });
+    expect(current.compositeResult.rapMMHG).toBe(15);
+    expect(current.compositeResult.rvspMMHG).toBeNull();
+  });
+
+  it('does not restore unreviewed RAP or accept another TR question', () => {
+    const noRAP = reconcileLearnerIVCRecapture({
+      previousAnswer: ivc, capturedAnswer: capture(),
+      trVmaxAnswer: tr, trVmaxQuestionKey: 'q-tr',
+    });
+    expect(noRAP.compositeResult).not.toHaveProperty('rapMMHG');
+    const wrongQuestion = reconcile(capture(), tr, 'wrong-tr');
+    expect(wrongQuestion.compositeResult.rapMMHG).toBe(8);
+    expect(wrongQuestion.compositeResult.rvspMMHG).toBeNull();
+  });
+});
+
+describe('learner IVC question completion requires selected RAP', () => {
+  const rawCalipers = JSON.parse(JSON.stringify(ivc));
+  const withRAP = attachLearnerRapSelectionToIVCAnswer({ ivcAnswer: ivc, rapMMHG: 8 });
+  const withRVSP = attachLearnerRapRvspToIVCAnswer({ ...args, rapMMHG: 15 });
+
+  it('does not consider two valid calipers and calculated collapse complete without RAP', () => {
+    expect(isLearnerIVCRapSelectionComplete(rawCalipers)).toBe(false);
+    expect(isLearnerIVCRapSelectionComplete({ ...rawCalipers, compositeResult: {
+      ...rawCalipers.compositeResult, rapMMHG: 8,
+    } })).toBe(false); // an unreviewed scalar is never a selection
+  });
+
+  it('accepts an explicitly selected RAP even while RVSP awaits a TR answer', () => {
+    expect(withRAP.status).toBe('rap-only');
+    if (withRAP.status !== 'rap-only') return;
+    expect(isLearnerIVCRapSelectionComplete(withRAP.answer)).toBe(true);
+    expect(withRAP.answer.compositeResult.rvspMMHG).toBeNull();
+    expect(withRVSP.status).toBe('complete');
+    if (withRVSP.status !== 'complete') return;
+    expect(isLearnerIVCRapSelectionComplete(withRVSP.answer)).toBe(true);
+  });
+
+  it('requires one of 3, 8 or 15 mmHg and matching reviewed value', () => {
+    if (withRAP.status !== 'rap-only') return;
+    const edited = JSON.parse(JSON.stringify(withRAP.answer));
+    for (const invalid of [0, 5, 99, null]) {
+      edited.compositeResult.rapMMHG = invalid;
+      expect(isLearnerIVCRapSelectionComplete(edited)).toBe(false);
+    }
+    edited.compositeResult.rapMMHG = 15; // review still says 8
+    expect(isLearnerIVCRapSelectionComplete(edited)).toBe(false);
+  });
+
+  it('invalidates RAP completion after IVC source geometry, frame or collapse changes', () => {
+    if (withRAP.status !== 'rap-only') return;
+    for (const type of ['geometry', 'frame', 'collapse']) {
+      const changed = JSON.parse(JSON.stringify(withRAP.answer));
+      if (type === 'geometry') changed.compositeResult.components[0].points[1][0] += 1;
+      if (type === 'frame') changed.compositeResult.components[1].target.frameNumber += 1;
+      if (type === 'collapse') changed.value += 1;
+      expect(isLearnerIVCRapSelectionComplete(changed)).toBe(false);
+    }
+  });
+
+  it('preserves completion after identical IVC re-capture but not changed source', () => {
+    if (withRAP.status !== 'rap-only') return;
+    const recaptured = reconcileLearnerIVCRecapture({
+      previousAnswer: withRAP.answer, capturedAnswer: JSON.parse(JSON.stringify(ivc)),
+    });
+    expect(isLearnerIVCRapSelectionComplete(recaptured)).toBe(true);
+    const changed = JSON.parse(JSON.stringify(ivc));
+    changed.compositeResult.components[0].annotationId = 'new-exp-source';
+    const stale = reconcileLearnerIVCRecapture({
+      previousAnswer: withRAP.answer, capturedAnswer: changed,
+    });
+    expect(isLearnerIVCRapSelectionComplete(stale)).toBe(false);
   });
 });

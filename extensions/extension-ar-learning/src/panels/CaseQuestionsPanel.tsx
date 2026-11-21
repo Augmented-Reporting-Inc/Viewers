@@ -18,6 +18,12 @@ import {
   ClinicalReportMeasurementReviewModal,
 } from '../../../extension-ar-measurements/src/panels/ARMeasurementsPanel';
 import {
+  getLearnerQuizSaveButtonLabels,
+  getUpdatedLearnerHemodynamicReviewRows,
+  shouldSkipUnchangedLearnerSubmitMeasurementReview,
+  type LearnerQuizSaveAction,
+} from '../utils/learnerQuizSaveReview';
+import {
   readViewerQuizSessionState,
   writeViewerQuizSessionState,
 } from '../utils/viewerQuizSessionState';
@@ -26,7 +32,7 @@ import {
   isMatchingQuizEFCompletion,
   getInitialGuidedEFQuestionTarget,
 } from '../utils/quizCompositeCaptureIntent';
-import { composeIVCRapRVSP, attachRapRvspEvidenceToIVCAnswer, attachLearnerRapRvspToIVCAnswer, attachLearnerRapSelectionToIVCAnswer, isIVCReviewCurrent, RAP_CHOICES_MMHG } from '../utils/ivcRapRvsp';
+import { composeIVCRapRVSP, attachRapRvspEvidenceToIVCAnswer, attachLearnerRapRvspToIVCAnswer, attachLearnerRapSelectionToIVCAnswer, isIVCReviewCurrent, isLearnerIVCRapSelectionComplete, reconcileLearnerIVCRecapture, RAP_CHOICES_MMHG } from '../utils/ivcRapRvsp';
 import {
   getLearnerCompositeAutoCaptureSignature,
   getLearnerCompositeSourceComponents,
@@ -1051,6 +1057,9 @@ function buildAnswerPayload(quiz: QuizDefinition, quizAnswers = {}) {
 function isLearnerQuestionAnswered(question: QuizQuestion, value: any): boolean {
   if (isAnswerEmpty(value)) return false;
   const kind = cleanString(plainObject(question.answerConfig).measurementKind);
+  if (question.type === 'measurementNumeric' && kind === 'ivcCollapsibility') {
+    return isLearnerIVCRapSelectionComplete(value);
+  }
   if (question.type === 'measurementNumeric' && kind === 'trVmax') {
     return value?.measurementKind === 'trVmax' && value?.unit === 'm/s' &&
       Number.isFinite(Number(value?.value)) && Number(value.value) > 0 &&
@@ -2084,6 +2093,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
 
   const [loading, setLoading] = useState(true);
   const [savingQuizKey, setSavingQuizKey] = useState('');
+  const [savingQuizAction, setSavingQuizAction] = useState<LearnerQuizSaveAction | null>(null);
   const [quizMeasurementReview, setQuizMeasurementReview] = useState<any>(null);
   const [quizMeasurementSelectedRows, setQuizMeasurementSelectedRows] = useState<string[]>([]);
   const [quizMeasurementApplying, setQuizMeasurementApplying] = useState(false);
@@ -2852,6 +2862,8 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       : plainObject(answersByQuizKey?.[quiz.quizKey]?.[question.questionKey]);
     const hasGold = gold.value != null && cleanString(gold.value) !== '' &&
       Number.isFinite(Number(gold.value));
+    const needsLearnerRAP = !authoringMode && kind === 'ivcCollapsibility' &&
+      hasGold && !isLearnerIVCRapSelectionComplete(gold);
     const hasLive = status.complete === true && status.value != null &&
       Number.isFinite(Number(status.value));
     const sameGold = hasLive && hasGold &&
@@ -2863,7 +2875,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     const qualityWarnings = Array.isArray(rawWarnings)
       ? rawWarnings.map(cleanString).filter(Boolean) : [];
     return (
-      <div className="mt-2 rounded border border-emerald-700/60 bg-emerald-950/10 px-2 py-2 text-xs">
+      <div className={needsLearnerRAP
+        ? "mt-2 rounded border border-amber-700/70 bg-amber-950/10 px-2 py-2 text-xs"
+        : "mt-2 rounded border border-emerald-700/60 bg-emerald-950/10 px-2 py-2 text-xs"}>
         {hasLive ? (
           <div className="font-semibold text-emerald-200">
             {sameGold ? (authoringMode ? 'Calculated and saved gold: ' : 'Calculated: ')
@@ -2881,6 +2895,12 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               'Complete both calibrated measurements and their source references.'}
           </div>
         )}
+        {needsLearnerRAP ? (
+          <div className="mt-1 text-amber-200" role="status">
+            IVC collapsibility is recorded, but this question is not complete until
+            you select RAP (3, 8, or 15 mmHg) using the current IVC measurements.
+          </div>
+        ) : null}
         {qualityWarnings.length > 0 && (hasLive || hasGold) ? (
           <div className="mt-1 text-amber-200" role="status">
             <div className="font-semibold">LA view-quality advisory — calculation remains available</div>
@@ -3041,13 +3061,19 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
 
   function setAnswer(quizKey: string, question: QuizQuestion, value: any) {
     reportEducationChange(`quiz:${quizKey}`);
-    setAnswersByQuizKey(current => ({
-      ...current,
-      [quizKey]: {
-        ...(current[quizKey] || {}),
-        [question.questionKey]: value,
-      },
-    }));
+    setAnswersByQuizKey(current => {
+      const quizAnswers = current[quizKey] || {};
+      // Async IVC recapture must reconcile with the newest RAP selection.
+      const nextValue = typeof value === 'function'
+        ? value(quizAnswers[question.questionKey], quizAnswers) : value;
+      return {
+        ...current,
+        [quizKey]: {
+          ...quizAnswers,
+          [question.questionKey]: nextValue,
+        },
+      };
+    });
   }
 
   function toggleMultiSelectAnswer(quizKey: string, question: QuizQuestion, value: string) {
@@ -3991,7 +4017,23 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
           }));
         }
       }
-      setAnswer(quiz.quizKey, question, setObjectAnswerPart(currentAnswer, result.answer));
+      const isIVC = cleanString(plainObject(question.answerConfig).measurementKind) === 'ivcCollapsibility';
+      const index = (quiz.questions || []).findIndex(entry =>
+        entry.questionKey === question.questionKey);
+      const priorTRQuestion = isIVC && index > 0
+        ? (quiz.questions || []).slice(0, index).reverse().find(entry =>
+          entry.type === 'measurementNumeric' &&
+          cleanString(plainObject(entry.answerConfig).measurementKind) === 'trVmax')
+        : null;
+      setAnswer(quiz.quizKey, question, (previousAnswer: any, currentAnswers: any) =>
+        setObjectAnswerPart(previousAnswer, isIVC
+          ? reconcileLearnerIVCRecapture({
+              previousAnswer, capturedAnswer: result.answer,
+              trVmaxAnswer: priorTRQuestion
+                ? currentAnswers[priorTRQuestion.questionKey] : null,
+              trVmaxQuestionKey: priorTRQuestion?.questionKey || '',
+            })
+          : result.answer));
 
       if (!options.silent) {
         uiNotificationService.show({
@@ -4498,11 +4540,37 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       throw new Error(`AR could not verify ${unverified.map(row => row.label).join(', ')} for transfer. Review those source measurements and retry.`);
     }
     const rows = buildClinicalReportReviewRows(preview);
+    const hasSavedQuizDraft =
+      cleanString(getResponseForQuiz(responses, quiz)?.status).toLowerCase() === 'draft';
+    // A previous Save Draft already persisted these exact learner-owned
+    // annotations and TR/RAP/RVSP report values. The source-validation
+    // preview above still runs; omit only the redundant second dialog.
+    // Missing or changed report evidence always follows the normal review.
+    if (shouldSkipUnchangedLearnerSubmitMeasurementReview({
+      saveAction, hasSavedQuizDraft, preview, reportRows: rows, quizEvidenceRows,
+    })) {
+      return;
+    }
+
+    const quizEvidenceRowsForReview = hasSavedQuizDraft
+      ? getUpdatedLearnerHemodynamicReviewRows({
+          saveAction, preview, quizEvidenceRows,
+          evidence: educationQuizHemodynamics,
+        })
+      : quizEvidenceRows;
     // Retain quiz source identity when building learner-only display rows.
     // The FormAPI preview need not echo the submitted education evidence.
     // Without this context the same TR annotation is shown both as "TR peak
     // velocity" and "TR Vmax (source-linked)" in the measured section.
-    const learnerReviewPreview = { ...preview, educationQuizHemodynamics };
+    const learnerReviewPreview = {
+      ...preview,
+      educationQuizHemodynamics,
+      // The initial Save Draft is a complete learner result review, not a
+      // change-only report-field reconciliation. Source IDs still come from
+      // the exact verified preview, never educator gold or answer JSON.
+      ...(saveAction === 'draft' || !hasSavedQuizDraft
+        ? { reviewOnlyChangedAnnotationIds: undefined } : {}),
+    };
     const annotationRows = buildClinicalViewerAnnotationReviewRows(learnerReviewPreview);
     const calculatedRows = buildLearnerCalculatedMeasurementReviewRows(learnerReviewPreview);
     const hasRecordedQuizEvidence = quizEvidenceRows.some(row => row.recorded);
@@ -4521,8 +4589,10 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     setQuizMeasurementSelectedRows(rows.filter(row => row.changed).map(row => row.key));
     setQuizMeasurementReview({
       rows, annotationRows, calculatedRows,
-      derivedConsequences: preview?.derivedConsequences, quizEvidenceRows,
+      derivedConsequences: preview?.derivedConsequences,
+      quizEvidenceRows: quizEvidenceRowsForReview,
       educationQuizHemodynamics, educationWorkflow: true, saveAction,
+      showUpdatedResultsOnly: saveAction === 'submitted' && hasSavedQuizDraft,
     });
     const approved = await new Promise<boolean>(resolve => {
       quizMeasurementResolveRef.current = resolve;
@@ -4553,6 +4623,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       return null;
     }
     setSavingQuizKey(quiz.quizKey);
+    setSavingQuizAction(status);
     if (status === 'submitted') {
       setSubmitting(true);
     }
@@ -4763,6 +4834,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       throw error;
     } finally {
       setSavingQuizKey('');
+      setSavingQuizAction(null);
       if (status === 'submitted') {
         setSubmitting(false);
       }
@@ -6115,8 +6187,8 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     const reviewedRAP = saved.rapRvsp?.ivc &&
       isIVCReviewCurrent(saved.rapRvsp.ivc, answer)
       ? saved.rapMMHG : null;
-    const selection = rapSelectionsByQuestionKey[key] ??
-      (reviewedRAP != null ? String(reviewedRAP) : '');
+    // Reflect persisted learner evidence, never a stale local select state.
+    const selection = reviewedRAP != null ? String(reviewedRAP) : '';
 
     return (
       <div className="mt-2 rounded border border-cyan-700 bg-cyan-950/20 p-2 text-xs text-cyan-100">
@@ -6161,7 +6233,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               }
             }}
           >
-            <option value="">Select RAP</option>
+            <option value="" disabled={reviewedRAP != null}>Select RAP</option>
             {RAP_CHOICES_MMHG.map(rap => (
               <option key={rap} value={String(rap)}>{rap} mmHg</option>
             ))}
@@ -6171,20 +6243,27 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
           <div className="mt-1 text-amber-200">
             Complete both calibrated IVC phase measurements first.
           </div>
+        ) : !isLearnerIVCRapSelectionComplete(answer) ? (
+          <div className="mt-1 text-amber-200" role="status">
+            Select RAP (3, 8, or 15 mmHg) to complete this IVC question.
+          </div>
         ) : !trIsRecorded ? (
           <div className="mt-1 text-amber-200">
-            RVSP unavailable: a source-linked TR Vmax answer must be recorded earlier in this quiz.
+            RAP recorded; RVSP unavailable until a source-linked TR Vmax is recorded earlier in this quiz.
           </div>
         ) : (
           <div className="mt-1 text-green-200">
             Recorded TR Vmax: {trValue.toFixed(2)} m/s
           </div>
         )}
-        {reviewedRAP != null && Number.isFinite(Number(saved.rvspMMHG)) ? (
+        {reviewedRAP != null ? (
           <div className="mt-2 rounded border border-emerald-700 p-2 text-emerald-100">
             Saved learner RAP: {reviewedRAP} mmHg
-            <div>Calculated RVSP: {Number(saved.rvspMMHG).toFixed(2)} mmHg</div>
-
+            {saved.rvspMMHG != null && Number.isFinite(Number(saved.rvspMMHG)) ? (
+              <div>Calculated RVSP: {Number(saved.rvspMMHG).toFixed(2)} mmHg</div>
+            ) : (
+              <div>RVSP unavailable: review a recorded TR Vmax before calculating RVSP.</div>
+            )}
           </div>
         ) : null}
       </div>
@@ -8686,6 +8765,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
             {learnerFooterQuizzes.map(quiz => {
               const quizSaving = savingQuizKey === quiz.quizKey;
               const quizScoring = scoringQuizKey === quiz.quizKey;
+              const saveButtonLabels = getLearnerQuizSaveButtonLabels({
+                quizSaving, savingAction: savingQuizAction, deferredReportScoring,
+              });
               const response = getResponseForQuiz(responses, quiz);
               const submitted = cleanString(response?.status).toLowerCase() === 'submitted';
               const quizScore = viewerQuizScore ? getQuizScoreItem(viewerQuizScore, quiz) : null;
@@ -8724,7 +8806,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                         disabled={quizSaving || submitting}
                         onClick={() => saveQuiz(quiz, 'draft')}
                       >
-                        {quizSaving ? 'Saving…' : 'Save Draft'}
+                        {saveButtonLabels.draft}
                       </button>
 
                       <button
@@ -8733,7 +8815,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                         disabled={quizSaving || submitting}
                         onClick={() => saveQuiz(quiz, 'submitted')}
                       >
-                        {quizSaving ? 'Submitting…' : deferredReportScoring ? 'Submit answers' : 'Submit Quiz'}
+                        {saveButtonLabels.submit}
                       </button>
                     </div>
                   )}
