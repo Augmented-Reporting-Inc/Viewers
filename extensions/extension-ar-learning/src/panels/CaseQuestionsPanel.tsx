@@ -2862,6 +2862,8 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       : plainObject(answersByQuizKey?.[quiz.quizKey]?.[question.questionKey]);
     const hasGold = gold.value != null && cleanString(gold.value) !== '' &&
       Number.isFinite(Number(gold.value));
+    const needsLearnerRAP = !authoringMode && kind === 'ivcCollapsibility' &&
+      hasGold && !isLearnerIVCRapSelectionComplete(gold);
     const hasLive = status.complete === true && status.value != null &&
       Number.isFinite(Number(status.value));
     const sameGold = hasLive && hasGold &&
@@ -2873,7 +2875,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     const qualityWarnings = Array.isArray(rawWarnings)
       ? rawWarnings.map(cleanString).filter(Boolean) : [];
     return (
-      <div className="mt-2 rounded border border-emerald-700/60 bg-emerald-950/10 px-2 py-2 text-xs">
+      <div className={needsLearnerRAP
+        ? "mt-2 rounded border border-amber-700/70 bg-amber-950/10 px-2 py-2 text-xs"
+        : "mt-2 rounded border border-emerald-700/60 bg-emerald-950/10 px-2 py-2 text-xs"}>
         {hasLive ? (
           <div className="font-semibold text-emerald-200">
             {sameGold ? (authoringMode ? 'Calculated and saved gold: ' : 'Calculated: ')
@@ -2891,6 +2895,12 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               'Complete both calibrated measurements and their source references.'}
           </div>
         )}
+        {needsLearnerRAP ? (
+          <div className="mt-1 text-amber-200" role="status">
+            IVC collapsibility is recorded, but this question is not complete until
+            you select RAP (3, 8, or 15 mmHg) using the current IVC measurements.
+          </div>
+        ) : null}
         {qualityWarnings.length > 0 && (hasLive || hasGold) ? (
           <div className="mt-1 text-amber-200" role="status">
             <div className="font-semibold">LA view-quality advisory — calculation remains available</div>
