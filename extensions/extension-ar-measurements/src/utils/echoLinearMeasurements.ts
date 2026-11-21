@@ -23,6 +23,31 @@ function hasEchoMeasurementDomain(measurement: any = {}): boolean {
   return !sourceDomain || sourceDomain === 'echo';
 }
 
+/**
+ * Completed native Cornerstone Length measurements are held by OHIF
+ * MeasurementService under data["imageId:<referencedImageId>"] rather than
+ * the serialized measurements.length field used by FormAPI.
+ *
+ * Accept only the exact current image target. A stale or another-frame cached
+ * stat must never contribute to LV mass/RWT, nor may displayText's normalized
+ * "mm" be used as evidence of physical calibration.
+ */
+function getCurrentFrameNativeLengthSource(measurement: any = {}) {
+  const imageId = String(
+    measurement?.referencedImageId || measurement?.metadata?.referencedImageId || ''
+  ).trim();
+  if (!imageId) return null;
+  const statsByTarget = measurement?.data || measurement?.cachedStats || {};
+  if (!statsByTarget || typeof statsByTarget !== 'object' ||
+      Array.isArray(statsByTarget)) return null;
+  const exact = statsByTarget[`imageId:${imageId}`] || statsByTarget[imageId];
+  if (!exact || typeof exact !== 'object' || Array.isArray(exact)) return null;
+  return {
+    value: exact.length ?? exact.value,
+    unit: exact.lengthUnit || exact.unit || '',
+  };
+}
+
 export function getCalibratedEchoLinearLengthMM(measurement: any = {}): number | null {
   if (
     !hasEchoMeasurementDomain(measurement) ||
@@ -34,10 +59,15 @@ export function getCalibratedEchoLinearLengthMM(measurement: any = {}): number |
   }
 
   const measurements = measurement?.measurements || {};
-  const rawValue = measurements.length ?? measurements.value ?? measurement?.value;
+  const native = getCurrentFrameNativeLengthSource(measurement);
+  // Prefer a serialized exact source when present; for live OHIF Length
+  // records, use the calibrated native target stats on the same frame.
+  const rawValue = measurements.length ?? measurements.value ??
+    measurement?.value ?? native?.value;
   const value = finitePositiveNumber(rawValue);
   const unit = String(
-    measurements.lengthUnit || measurements.unit || measurement?.unit || ''
+    measurements.lengthUnit || measurements.unit || measurement?.unit ||
+    native?.unit || ''
   ).trim().toLowerCase();
 
   if (value === null) return null;
