@@ -18700,6 +18700,13 @@ function commandsModule({
                   previewOnly,
                   liveCount: measurementService?.getMeasurements?.()?.length || 0,
                   snapshotCount: measurements.length,
+                  // Aggregate-only call-scope evidence. Never log patient,
+                  // source annotation or DICOM identifiers.
+                  selectionRestricted: restrictMeasurementIds,
+                  requestedMeasurementCount: requestedMeasurementIds.size,
+                  explicitDeletionCount: explicitDeleteIds.size,
+                  pendingDeletionCount: viewerMeasurementsDeletedInSession.size,
+                  deletionOnlySave: isReportOwnedDeletionOnlySave,
                   persistableCount: liveAnnotations.length,
                   pendingChangeCount: changedClinicalMeasurementIds.size,
                   pendingMergeCount: annotationsForMerge.length,
