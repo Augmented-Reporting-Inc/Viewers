@@ -52,11 +52,13 @@ export function isLearnerHemodynamicReviewRowPersisted(
 
 export function shouldSkipUnchangedLearnerSubmitMeasurementReview({
   saveAction,
+  hasSavedQuizDraft,
   preview,
   reportRows,
   quizEvidenceRows,
 }: {
   saveAction: LearnerQuizSaveAction;
+  hasSavedQuizDraft: boolean;
   preview: any;
   reportRows: any[];
   quizEvidenceRows: LearnerHemodynamicReviewRow[];
@@ -65,6 +67,7 @@ export function shouldSkipUnchangedLearnerSubmitMeasurementReview({
   // or fail-closed FormAPI verification. Never skip an initial unsaved attempt.
   if (
     saveAction !== 'submitted' ||
+    hasSavedQuizDraft !== true ||
     preview?.measurementAnnotationsChanged !== false ||
     preview?.seriesDoc?.isLearnerCopy !== true ||
     !Array.isArray(preview?.annotations) ||
