@@ -51,3 +51,38 @@ test('TR Vmax rechecks active quiz target at completion to avoid a restoration r
   assert.match(completion, /if \(!completionTargetKey && Number\.isFinite\(rawValue\)/);
   assert.match(commands, /startSpectralVmaxWorkflow:\s*\{\s*commandFn: \(\) => actions\.startUltrasoundDirectionalWorkflow\(\{ spectralVmax: true \}\)/);
 });
+
+test('learner Submit skips only after server preview and persisted learner report verification', () => {
+  const questions = fs.readFileSync(path.join(root, 'extensions', 'extension-ar-learning', 'src', 'panels', 'CaseQuestionsPanel.tsx'), 'utf8');
+  const handler = questions.slice(
+    questions.indexOf('async function confirmReportOwnedMeasurementSave('),
+    questions.indexOf('async function saveQuiz(', questions.indexOf('async function confirmReportOwnedMeasurementSave('))
+  );
+  assert.match(handler, /previewOnly: true, educationQuizHemodynamics/);
+  assert.match(handler, /preview\.educationQuizHemodynamicFields\?\.includes/);
+  assert.match(handler, /shouldSkipUnchangedLearnerSubmitMeasurementReview\(/);
+  assert.match(handler, /getUpdatedLearnerHemodynamicReviewRows\(/);
+  const previewOffset = handler.indexOf('previewOnly: true, educationQuizHemodynamics');
+  const verifyOffset = handler.indexOf('preview.educationQuizHemodynamicFields?.includes');
+  const skipOffset = handler.indexOf('shouldSkipUnchangedLearnerSubmitMeasurementReview(');
+  assert.ok(previewOffset >= 0 && previewOffset < verifyOffset && verifyOffset < skipOffset);
+  // The independent learner quiz source verification must still run after review
+  // (or after the safe no-dialog path) and before saving quiz answers.
+  const saveQuiz = questions.slice(questions.indexOf('async function saveQuiz('), questions.indexOf('async function retryScoreQuiz('));
+  assert.match(saveQuiz, /getLearnerCompositePersistenceSources\(/);
+  assert.match(saveQuiz, /isPersistedLearnerCompositeSource\(/);
+  assert.match(saveQuiz, /saveViewerQuizResponseForActiveStudy\(/);
+  assert.ok(saveQuiz.indexOf('isPersistedLearnerCompositeSource(') < saveQuiz.indexOf('saveViewerQuizResponseForActiveStudy('));
+});
+
+test('learner footer uses per-action labels while retaining shared disabled state', () => {
+  const questions = fs.readFileSync(path.join(root, 'extensions', 'extension-ar-learning', 'src', 'panels', 'CaseQuestionsPanel.tsx'), 'utf8');
+  const footer = questions.slice(questions.indexOf('{learnerFooterQuizzes.map(quiz => {'));
+  assert.match(footer, /getLearnerQuizSaveButtonLabels\(\{/);
+  assert.match(footer, /savingAction: savingQuizAction/);
+  assert.match(footer, /\{saveButtonLabels\.draft\}/);
+  assert.match(footer, /\{saveButtonLabels\.submit\}/);
+  assert.match(footer, /disabled=\{quizSaving \|\| submitting\}/);
+  assert.doesNotMatch(footer, /quizSaving \? 'Saving…'/);
+  assert.doesNotMatch(footer, /quizSaving \? 'Submitting…'/);
+});
