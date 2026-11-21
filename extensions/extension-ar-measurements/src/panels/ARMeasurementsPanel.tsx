@@ -505,11 +505,20 @@ function mergeLiveMeasurementIntoSavedAnnotation(savedAnnotation, liveMeasuremen
   const normalizedLive = normalizeMeasurementForDisplay(liveMeasurement);
   const livePoints = Array.isArray(liveMeasurement?.points) ? liveMeasurement.points : [];
   const liveLengthSource = liveMeasurement?.measurements || {};
+  // OHIF's native Length adapter reports its physical stats in data[targetId].
+  // An edited live caliper must take precedence even when calibration is
+  // unavailable: otherwise an old saved mm value remains misleadingly visible.
+  const liveNativeLengthStats = liveMeasurement?.data || liveMeasurement?.cachedStats || {};
+  const hasLiveNativeLength = Object.values(liveNativeLengthStats).some(
+    (stats: any) => stats && typeof stats === 'object' &&
+      (stats.length != null || stats.value != null)
+  );
   const hasLiveLengthValue =
     String(liveMeasurement?.toolName || '') === 'Length' &&
     (liveLengthSource.length != null ||
       liveLengthSource.value != null ||
-      liveMeasurement?.value != null);
+      liveMeasurement?.value != null ||
+      hasLiveNativeLength);
 
   return {
     ...normalizedLive,
