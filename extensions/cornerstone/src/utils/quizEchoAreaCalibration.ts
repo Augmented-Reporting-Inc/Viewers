@@ -117,6 +117,18 @@ export function getQuizCompositeContourViewportLines(
 }
 
 
+/**
+ * The native SplineROI adapter carries two structured Echo-area source fields.
+ * Both must be registered with the OHIF MeasurementService schema; otherwise
+ * it rejects annotation updates with "Invalid measurement key: measurementKind".
+ * Do not weaken core validation or infer a contour from free-text labels.
+ */
+export function registerQuizEchoAreaMeasurementSchema(measurementService: {
+  addMeasurementSchemaKeys: (keys: string[]) => void;
+}): void {
+  measurementService.addMeasurementSchemaKeys(['measurementKind', 'echoArea']);
+}
+
 /** Carry explicit guided RV/RA identity through native ROI remapping.
  * A similar free-text label alone never establishes an Echo Area source. */
 export function getQuizEchoAreaSourceMetadata(data: any = {}): Record<string, any> {
