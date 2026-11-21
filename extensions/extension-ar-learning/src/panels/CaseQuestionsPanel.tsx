@@ -4527,25 +4527,37 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       throw new Error(`AR could not verify ${unverified.map(row => row.label).join(', ')} for transfer. Review those source measurements and retry.`);
     }
     const rows = buildClinicalReportReviewRows(preview);
+    const hasSavedQuizDraft =
+      cleanString(getResponseForQuiz(responses, quiz)?.status).toLowerCase() === 'draft';
     // A previous Save Draft already persisted these exact learner-owned
     // annotations and TR/RAP/RVSP report values. The source-validation
     // preview above still runs; omit only the redundant second dialog.
     // Missing or changed report evidence always follows the normal review.
     if (shouldSkipUnchangedLearnerSubmitMeasurementReview({
-      saveAction, preview, reportRows: rows, quizEvidenceRows,
+      saveAction, hasSavedQuizDraft, preview, reportRows: rows, quizEvidenceRows,
     })) {
       return;
     }
 
-    const quizEvidenceRowsForReview = getUpdatedLearnerHemodynamicReviewRows({
-      saveAction, preview, quizEvidenceRows,
-      evidence: educationQuizHemodynamics,
-    });
+    const quizEvidenceRowsForReview = hasSavedQuizDraft
+      ? getUpdatedLearnerHemodynamicReviewRows({
+          saveAction, preview, quizEvidenceRows,
+          evidence: educationQuizHemodynamics,
+        })
+      : quizEvidenceRows;
     // Retain quiz source identity when building learner-only display rows.
     // The FormAPI preview need not echo the submitted education evidence.
     // Without this context the same TR annotation is shown both as "TR peak
     // velocity" and "TR Vmax (source-linked)" in the measured section.
-    const learnerReviewPreview = { ...preview, educationQuizHemodynamics };
+    const learnerReviewPreview = {
+      ...preview,
+      educationQuizHemodynamics,
+      // The initial Save Draft is a complete learner result review, not a
+      // change-only report-field reconciliation. Source IDs still come from
+      // the exact verified preview, never educator gold or answer JSON.
+      ...(saveAction === 'draft' || !hasSavedQuizDraft
+        ? { reviewOnlyChangedAnnotationIds: undefined } : {}),
+    };
     const annotationRows = buildClinicalViewerAnnotationReviewRows(learnerReviewPreview);
     const calculatedRows = buildLearnerCalculatedMeasurementReviewRows(learnerReviewPreview);
     const hasRecordedQuizEvidence = quizEvidenceRows.some(row => row.recorded);
@@ -4567,8 +4579,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       derivedConsequences: preview?.derivedConsequences,
       quizEvidenceRows: quizEvidenceRowsForReview,
       educationQuizHemodynamics, educationWorkflow: true, saveAction,
-      showUpdatedResultsOnly: saveAction === 'submitted' &&
-        cleanString(getResponseForQuiz(responses, quiz)?.status).toLowerCase() === 'draft',
+      showUpdatedResultsOnly: saveAction === 'submitted' && hasSavedQuizDraft,
     });
     const approved = await new Promise<boolean>(resolve => {
       quizMeasurementResolveRef.current = resolve;
