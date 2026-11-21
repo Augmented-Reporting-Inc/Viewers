@@ -32,7 +32,7 @@ import {
   isMatchingQuizEFCompletion,
   getInitialGuidedEFQuestionTarget,
 } from '../utils/quizCompositeCaptureIntent';
-import { composeIVCRapRVSP, attachRapRvspEvidenceToIVCAnswer, attachLearnerRapRvspToIVCAnswer, attachLearnerRapSelectionToIVCAnswer, isIVCReviewCurrent, reconcileLearnerIVCRecapture, RAP_CHOICES_MMHG } from '../utils/ivcRapRvsp';
+import { composeIVCRapRVSP, attachRapRvspEvidenceToIVCAnswer, attachLearnerRapRvspToIVCAnswer, attachLearnerRapSelectionToIVCAnswer, isIVCReviewCurrent, isLearnerIVCRapSelectionComplete, reconcileLearnerIVCRecapture, RAP_CHOICES_MMHG } from '../utils/ivcRapRvsp';
 import {
   getLearnerCompositeAutoCaptureSignature,
   getLearnerCompositeSourceComponents,
@@ -1057,6 +1057,9 @@ function buildAnswerPayload(quiz: QuizDefinition, quizAnswers = {}) {
 function isLearnerQuestionAnswered(question: QuizQuestion, value: any): boolean {
   if (isAnswerEmpty(value)) return false;
   const kind = cleanString(plainObject(question.answerConfig).measurementKind);
+  if (question.type === 'measurementNumeric' && kind === 'ivcCollapsibility') {
+    return isLearnerIVCRapSelectionComplete(value);
+  }
   if (question.type === 'measurementNumeric' && kind === 'trVmax') {
     return value?.measurementKind === 'trVmax' && value?.unit === 'm/s' &&
       Number.isFinite(Number(value?.value)) && Number(value.value) > 0 &&
@@ -6230,9 +6233,13 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
           <div className="mt-1 text-amber-200">
             Complete both calibrated IVC phase measurements first.
           </div>
+        ) : !isLearnerIVCRapSelectionComplete(answer) ? (
+          <div className="mt-1 text-amber-200" role="status">
+            Select RAP (3, 8, or 15 mmHg) to complete this IVC question.
+          </div>
         ) : !trIsRecorded ? (
           <div className="mt-1 text-amber-200">
-            RVSP unavailable: a source-linked TR Vmax answer must be recorded earlier in this quiz.
+            RAP recorded; RVSP unavailable until a source-linked TR Vmax is recorded earlier in this quiz.
           </div>
         ) : (
           <div className="mt-1 text-green-200">
