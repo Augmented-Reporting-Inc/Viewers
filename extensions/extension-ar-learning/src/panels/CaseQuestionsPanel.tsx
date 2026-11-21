@@ -6183,7 +6183,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               }
             }}
           >
-            <option value="">Select RAP</option>
+            <option value="" disabled={reviewedRAP != null}>Select RAP</option>
             {RAP_CHOICES_MMHG.map(rap => (
               <option key={rap} value={String(rap)}>{rap} mmHg</option>
             ))}
