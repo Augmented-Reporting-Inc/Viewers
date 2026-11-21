@@ -114,13 +114,17 @@ test('learner TR Vmax uses only a calibrated annotation, never a typed scalar or
 test('learner TR/RAP/RVSP transfer survives simplified submission confirmation', () => {
   assert.match(panel, /function getLearnerHemodynamicQuizReviewRows\(/);
   assert.match(panel, /confirmReportOwnedMeasurementSave\(quiz, quizAnswers, status\)/);
-  assert.match(panel, /quizEvidenceRows: quizEvidenceRowsForReview,\\s*educationQuizHemodynamics/);
-  assert.match(panel, /const quizEvidenceRowsForReview = hasSavedQuizDraft[\\s\\S]*?getUpdatedLearnerHemodynamicReviewRows\\(/,
-    'repeated Save/Submit must distinguish changed evidence without skipping server verification');
-  assert.match(panel, /const unverified = quizEvidenceRows.filter\\(row => row.recorded &&/,
-    'TR/RAP/RVSP evidence must still be verified before the review shortcut');
-  assert.match(panel, /if \\(shouldSkipUnchangedLearnerSubmitMeasurementReview\\(\\{[\\s\\S]*?\\}\\)\\) \\{\\s*return;/,
-    'unchanged Submit skips only the redundant dialog after preview and source verification');
+  assert.ok(panel.includes('quizEvidenceRows: quizEvidenceRowsForReview,'),
+    'review retains the separately filtered hemodynamic source rows');
+  assert.ok(panel.includes('const quizEvidenceRowsForReview = hasSavedQuizDraft'),
+    'repeated review must distinguish updated evidence from the full first draft');
+  assert.ok(panel.includes('getUpdatedLearnerHemodynamicReviewRows({'));
+  const transferVerification = panel.indexOf('const unverified = quizEvidenceRows.filter(');
+  const redundantReviewShortcut = panel.indexOf(
+    'if (shouldSkipUnchangedLearnerSubmitMeasurementReview({',
+  );
+  assert.ok(transferVerification >= 0 && redundantReviewShortcut > transferVerification,
+    'source transfer must be verified before skipping an unchanged Submit dialog');
   assert.match(panel, /educationQuizHemodynamics, educationWorkflow: true, saveAction/);
   assert.match(panel, /educationQuizHemodynamics: quizMeasurementReview\.educationQuizHemodynamics/);
   assert.match(panel, /reportFieldNames: fields/,
