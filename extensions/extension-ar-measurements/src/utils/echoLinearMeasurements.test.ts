@@ -117,6 +117,17 @@ describe('Live OHIF Length adapter preview (exact-frame native stats)', () => {
     ])?.lvMassG).toBe('182');
   });
 
+  it('uses current-frame physical stats when the display adapter has object-valued data', () => {
+    const current = live('IVSd', 10, 'mm', 1, {
+      value: { primary: ['10 mm'] },
+      unit: 'px', // should not override exact-frame native calibration
+    });
+    expect(getCalibratedEchoLinearLengthMM(current)).toBe(10);
+    expect(calculateEchoLinearLVMeasurements([
+      live('LVIDd', 50), current, live('PWd', 10),
+    ])?.lvMassG).toBe('182');
+  });
+
   it('updates after a same-frame live native caliper change', () => {
     const before = [live('LVIDd', 50), live('IVSd', 10), live('PWd', 10)];
     expect(calculateEchoLinearLVMeasurements(before)?.lvMassG).toBe('182');
