@@ -26,7 +26,7 @@ import {
   isMatchingQuizEFCompletion,
   getInitialGuidedEFQuestionTarget,
 } from '../utils/quizCompositeCaptureIntent';
-import { composeIVCRapRVSP, attachRapRvspEvidenceToIVCAnswer, attachLearnerRapRvspToIVCAnswer, attachLearnerRapSelectionToIVCAnswer, isIVCReviewCurrent, RAP_CHOICES_MMHG } from '../utils/ivcRapRvsp';
+import { composeIVCRapRVSP, attachRapRvspEvidenceToIVCAnswer, attachLearnerRapRvspToIVCAnswer, attachLearnerRapSelectionToIVCAnswer, isIVCReviewCurrent, reconcileLearnerIVCRecapture, RAP_CHOICES_MMHG } from '../utils/ivcRapRvsp';
 import {
   getLearnerCompositeAutoCaptureSignature,
   getLearnerCompositeSourceComponents,
@@ -3041,13 +3041,19 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
 
   function setAnswer(quizKey: string, question: QuizQuestion, value: any) {
     reportEducationChange(`quiz:${quizKey}`);
-    setAnswersByQuizKey(current => ({
-      ...current,
-      [quizKey]: {
-        ...(current[quizKey] || {}),
-        [question.questionKey]: value,
-      },
-    }));
+    setAnswersByQuizKey(current => {
+      const quizAnswers = current[quizKey] || {};
+      // Async IVC recapture must reconcile with the newest RAP selection.
+      const nextValue = typeof value === 'function'
+        ? value(quizAnswers[question.questionKey], quizAnswers) : value;
+      return {
+        ...current,
+        [quizKey]: {
+          ...quizAnswers,
+          [question.questionKey]: nextValue,
+        },
+      };
+    });
   }
 
   function toggleMultiSelectAnswer(quizKey: string, question: QuizQuestion, value: string) {
@@ -3991,7 +3997,23 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
           }));
         }
       }
-      setAnswer(quiz.quizKey, question, setObjectAnswerPart(currentAnswer, result.answer));
+      const isIVC = cleanString(plainObject(question.answerConfig).measurementKind) === 'ivcCollapsibility';
+      const index = (quiz.questions || []).findIndex(entry =>
+        entry.questionKey === question.questionKey);
+      const priorTRQuestion = isIVC && index > 0
+        ? (quiz.questions || []).slice(0, index).reverse().find(entry =>
+          entry.type === 'measurementNumeric' &&
+          cleanString(plainObject(entry.answerConfig).measurementKind) === 'trVmax')
+        : null;
+      setAnswer(quiz.quizKey, question, (previousAnswer: any, currentAnswers: any) =>
+        setObjectAnswerPart(previousAnswer, isIVC
+          ? reconcileLearnerIVCRecapture({
+              previousAnswer, capturedAnswer: result.answer,
+              trVmaxAnswer: priorTRQuestion
+                ? currentAnswers[priorTRQuestion.questionKey] : null,
+              trVmaxQuestionKey: priorTRQuestion?.questionKey || '',
+            })
+          : result.answer));
 
       if (!options.silent) {
         uiNotificationService.show({
@@ -6115,8 +6137,8 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     const reviewedRAP = saved.rapRvsp?.ivc &&
       isIVCReviewCurrent(saved.rapRvsp.ivc, answer)
       ? saved.rapMMHG : null;
-    const selection = rapSelectionsByQuestionKey[key] ??
-      (reviewedRAP != null ? String(reviewedRAP) : '');
+    // Reflect persisted learner evidence, never a stale local select state.
+    const selection = reviewedRAP != null ? String(reviewedRAP) : '';
 
     return (
       <div className="mt-2 rounded border border-cyan-700 bg-cyan-950/20 p-2 text-xs text-cyan-100">
@@ -6161,7 +6183,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               }
             }}
           >
-            <option value="">Select RAP</option>
+            <option value="" disabled={reviewedRAP != null}>Select RAP</option>
             {RAP_CHOICES_MMHG.map(rap => (
               <option key={rap} value={String(rap)}>{rap} mmHg</option>
             ))}
@@ -6180,11 +6202,14 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
             Recorded TR Vmax: {trValue.toFixed(2)} m/s
           </div>
         )}
-        {reviewedRAP != null && Number.isFinite(Number(saved.rvspMMHG)) ? (
+        {reviewedRAP != null ? (
           <div className="mt-2 rounded border border-emerald-700 p-2 text-emerald-100">
             Saved learner RAP: {reviewedRAP} mmHg
-            <div>Calculated RVSP: {Number(saved.rvspMMHG).toFixed(2)} mmHg</div>
-
+            {saved.rvspMMHG != null && Number.isFinite(Number(saved.rvspMMHG)) ? (
+              <div>Calculated RVSP: {Number(saved.rvspMMHG).toFixed(2)} mmHg</div>
+            ) : (
+              <div>RVSP unavailable: review a recorded TR Vmax before calculating RVSP.</div>
+            )}
           </div>
         ) : null}
       </div>
