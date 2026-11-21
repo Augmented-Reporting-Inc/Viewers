@@ -7,6 +7,7 @@ import { toolNames } from './initCornerstoneTools';
 import { onCompletedCalibrationLine } from './tools/CalibrationLineTool';
 import measurementServiceMappingsFactory from './utils/measurementServiceMappings/measurementServiceMappingsFactory';
 import getSOPInstanceAttributes from './utils/measurementServiceMappings/utils/getSOPInstanceAttributes';
+import { registerQuizEchoAreaMeasurementSchema } from './utils/quizEchoAreaCalibration';
 import {
   setAnnotationLabel,
   triggerAnnotationRenderForViewportIds,
@@ -28,6 +29,10 @@ const initMeasurementService = (
   customizationService
 ) => {
   /* Initialization */
+  // Guided RV/RA SplineROI emits two explicit AR Echo area source fields.
+  // Register them with OHIF's supported schema before the first annotation
+  // completion/update, otherwise MeasurementService drops the entire contour.
+  registerQuizEchoAreaMeasurementSchema(measurementService);
   const {
     Length,
     Bidirectional,
