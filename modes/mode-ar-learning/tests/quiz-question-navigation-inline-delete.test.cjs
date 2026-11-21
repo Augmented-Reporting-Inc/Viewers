@@ -83,11 +83,17 @@ test('RAP and TR Vmax are measured; RVSP and verified RV FAC are calculated', ()
 });
 
 test('learner TR preview deduplicates one annotation without dropping transfer evidence', () => {
-  assert.match(panel, /const learnerReviewPreview = \\{\\s*\\.\\.\\.preview,\\s*educationQuizHemodynamics,/);
-  assert.match(panel, /saveAction === 'draft' \\|\\| !hasSavedQuizDraft[\\s\\S]*?reviewOnlyChangedAnnotationIds: undefined/,
-    'first Save Draft must include full learner measurement source review');
-  assert.match(panel, /const unverified = quizEvidenceRows.filter\\(row => row.recorded &&/,
-    'learner TR transfer must reject hemodynamics not confirmed by AR preview');
+  const reviewPreviewStart = panel.indexOf('const learnerReviewPreview = {');
+  const sourceRowsStart = panel.indexOf(
+    'buildClinicalViewerAnnotationReviewRows(learnerReviewPreview)', reviewPreviewStart
+  );
+  assert.ok(reviewPreviewStart >= 0 && sourceRowsStart > reviewPreviewStart);
+  const previewSource = panel.slice(reviewPreviewStart, sourceRowsStart);
+  assert.ok(previewSource.includes('educationQuizHemodynamics,'));
+  assert.ok(previewSource.includes("saveAction === 'draft' || !hasSavedQuizDraft"));
+  assert.ok(previewSource.includes('reviewOnlyChangedAnnotationIds: undefined'));
+  assert.ok(panel.indexOf('const unverified = quizEvidenceRows.filter(') < reviewPreviewStart,
+    'learner hemodynamics must pass source verification before source review');
   assert.match(panel, /buildClinicalViewerAnnotationReviewRows\(learnerReviewPreview\)/);
   assert.match(panel, /buildLearnerCalculatedMeasurementReviewRows\(learnerReviewPreview\)/);
   assert.match(panel, /educationQuizHemodynamics: quizMeasurementReview\.educationQuizHemodynamics/);
