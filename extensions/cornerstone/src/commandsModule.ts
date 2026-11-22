@@ -18254,6 +18254,21 @@ function commandsModule({
             measurementService,
             cornerstoneFallbackMeasurements
           );
+          // Diagnose first-save BWT failures without logging identifiers or PHI.
+          if (quizSpatialEvidenceByAnnotationId !== null && restrictMeasurementIds) {
+            const availableIds = new Set(
+              measurements.map(getMeasurementAnnotationId).filter(Boolean)
+            );
+            const missingCount = Array.from(requestedMeasurementIds)
+              .filter(id => !availableIds.has(id)).length;
+            console.info('[ViewerQuiz BWT save preflight]', {
+              requestedCount: requestedMeasurementIds.size,
+              snapshotCount: measurements.length,
+              missingFromSnapshotCount: missingCount,
+              nativeStateCount: getAllCornerstoneViewerAnnotations().length,
+            });
+          }
+
 
           if (shouldSyncReportFields) {
             console.info('[MeasurementAnnotations] clinical save snapshot', {
@@ -19064,6 +19079,17 @@ function commandsModule({
           const persistedMeasurementIds = new Set(
             refreshedAnnotations.map(getMeasurementAnnotationId).filter(Boolean)
           );
+          if (quizSpatialEvidenceByAnnotationId !== null && restrictMeasurementIds) {
+            const missingPersistedCount = Array.from(requestedMeasurementIds)
+              .filter(id => !persistedMeasurementIds.has(id)).length;
+            console.info('[ViewerQuiz BWT save confirmation]', {
+              requestedCount: requestedMeasurementIds.size,
+              returnedAnnotationCount: refreshedAnnotations.length,
+              missingPersistedCount,
+              persistedLearnerCopy: savedSeriesDoc?.isLearnerCopy === true,
+            });
+          }
+
 
           for (const cineComment of getCineCommentSessionMeasurements()) {
             const measurementId = getMeasurementAnnotationId(cineComment);
