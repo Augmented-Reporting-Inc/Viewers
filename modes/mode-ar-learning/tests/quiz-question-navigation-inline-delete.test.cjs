@@ -13,7 +13,8 @@ const panel = fs.readFileSync(
 test('question stepping uses the existing selectQuestion workflow for both roles', () => {
   assert.match(panel, /function renderQuestionNavigation\(/);
   assert.match(panel, /void selectQuestion\(quiz, target\)/);
-  assert.match(panel, /renderQuestionNavigation\(quiz, question, questions, submitted \|\| quizSaving\)/);
+  assert.match(panel, /renderQuestionNavigation\(quiz, question, questions, quizSaving\)/);
+  assert.doesNotMatch(panel, /renderQuestionNavigation\(quiz, question, questions, submitted \|\| quizSaving\)/);
   assert.match(panel, /authoringQuestions\.filter\(isViewerNativeQuestion\)/);
   assert.match(panel, /const navigatingDisabled = disabled \|\| !!capturingMeasurementKey/);
   assert.match(panel, /disabled=\{navigatingDisabled \|\| !target\}/);
