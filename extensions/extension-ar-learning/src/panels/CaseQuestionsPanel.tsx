@@ -3,6 +3,7 @@ import {
   getViewerQuizAuthoringContent,
   getViewerQuizzesForActiveStudy,
   getViewerQuizScoreForActiveStudy,
+  getReleasedBowelGoldCalipersForActiveStudy,
   getViewerQuizAuthoringContextFromUrl,
   getViewerQuizSessionKeyFromUrl,
   isViewerQuizAuthoringMode,
@@ -2105,6 +2106,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     () => initialSessionState?.answersByQuizKey || {}
   );
   const [scoringPayload, setScoringPayload] = useState<any>(null);
+  const [shownBowelGoldQuestionKey, setShownBowelGoldQuestionKey] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
   const [activeQuestionKey, setActiveQuestionKey] = useState(
     () => initialSessionState?.activeQuestionKey || ''
@@ -7085,6 +7087,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       (isMarkerChoiceQuestionType(question) || isPlaceMarkerQuestionType(question)) &&
       comparisonMarkers.length > 0;
 
+    const canShowBowelGoldComparison = question.type === 'measurementNumeric' &&
+      reviewDetails.mode === 'bowelMeasurementSet' && correctAnswerVisible &&
+      bowelGoldLengths.length > 0;
     const canShowFrameComparison = question.type === 'frameSelection' && !!correctTarget;
     const canShowMeasurementComparison =
       question.type === 'measurementNumeric' &&
@@ -7092,7 +7097,8 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       hasMeasurementComparisonReference(learnerMeasurement) &&
       hasMeasurementComparisonReference(rubricMeasurement);
     const canShowComparison =
-      canShowMarkerComparison || canShowFrameComparison || canShowMeasurementComparison;
+      canShowMarkerComparison || canShowFrameComparison || canShowMeasurementComparison ||
+      canShowBowelGoldComparison;
     const canShowLearnerAnswerButton =
       !!learnerTarget &&
       question.type !== 'measurementNumeric' &&
@@ -7309,6 +7315,40 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                   event.preventDefault();
                   event.stopPropagation();
 
+                  if (canShowBowelGoldComparison) {
+                    const reviewKey = `${quiz.quizKey}:${question.questionKey}`;
+                    try {
+                      if (shownBowelGoldQuestionKey === reviewKey) {
+                        await runViewerCommand(commandsManager, 'clearViewerQuizMeasurementComparison');
+                        setShownBowelGoldQuestionKey('');
+                        return;
+                      }
+                      const released = await getReleasedBowelGoldCalipersForActiveStudy({
+                        quizKey: quiz.quizKey, questionKey: question.questionKey,
+                      });
+                      if (released?.ok !== true || !Array.isArray(released.goldMeasurements)) {
+                        throw new Error('Authorized gold BWT calipers are not available for this attempt.');
+                      }
+                      const result = await runViewerCommand(commandsManager,
+                        'showViewerQuizAuthoringGoldCaliper', {
+                          goldMeasurements: released.goldMeasurements,
+                          endpointToleranceMM: released.endpointToleranceMM,
+                          referenceRadiusMm: released.referenceRadiusMm,
+                          questionKey: question.questionKey,
+                          releasedReview: true,
+                        });
+                      if (result?.rubricRendered !== true ||
+                          Number(result.renderedCount) !== released.goldMeasurements.length) {
+                        throw new Error(cleanString(result?.reason) || 'Gold annotations could not be displayed.');
+                      }
+                      setShownBowelGoldQuestionKey(reviewKey);
+                    } catch (error) {
+                      uiNotificationService.show({ title: 'Case Questions',
+                        message: `Could not show correct BWT calipers: ${String(error?.message || error)}`,
+                        type: 'warning', duration: 5000 });
+                    }
+                    return;
+                  }
                   if (canShowMeasurementComparison) {
                     try {
                       const result = await runViewerCommand(
@@ -7354,7 +7394,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                   });
                 }}
               >
-                Show correct answer
+                {canShowBowelGoldComparison && shownBowelGoldQuestionKey ===
+                  `${quiz.quizKey}:${question.questionKey}`
+                  ? 'Hide correct answer' : 'Show correct answer'}
               </button>
             ) : null}
           </div>
