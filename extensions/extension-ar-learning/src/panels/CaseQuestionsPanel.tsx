@@ -4,6 +4,7 @@ import {
   getViewerQuizzesForActiveStudy,
   getViewerQuizScoreForActiveStudy,
   getReleasedBowelGoldCalipersForActiveStudy,
+  getReleasedCompositeGoldForActiveStudy,
   getViewerQuizAuthoringContextFromUrl,
   getViewerQuizSessionKeyFromUrl,
   isViewerQuizAuthoringMode,
@@ -7112,6 +7113,19 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     const canShowBowelGoldComparison = question.type === 'measurementNumeric' &&
       reviewDetails.mode === 'bowelMeasurementSet' && correctAnswerVisible &&
       bowelGoldLengths.length > 0;
+    const compositeReviewKind = cleanString(plainObject(question.answerConfig).measurementKind);
+    const compositeSlotLabels: Record<string, string[]> = {
+      lvSimpsonEF: ['A4C_ED', 'A4C_ES', 'A2C_ED', 'A2C_ES'],
+      laVolumeBiplane: ['A4C', 'A2C'],
+      laVolumeBiplaneDisks: ['A4C', 'A2C'],
+      rvFAC: ['RV_ED', 'RV_ES'],
+      ivcCollapsibility: ['IVC_EXP', 'IVC_INSP'],
+    };
+    // A quiz score never grants geometry access on its own. The endpoint
+    // revalidates each released question and exact pinned scored attempt.
+    const compositeReviewSlots = scoredReviewReadOnly && correctAnswerVisible
+      ? compositeSlotLabels[compositeReviewKind] || [] : [];
+    const canShowCompositeGoldComparison = compositeReviewSlots.length > 0;
     const canShowFrameComparison = question.type === 'frameSelection' && !!correctTarget;
     const canShowMeasurementComparison =
       question.type === 'measurementNumeric' &&
@@ -7120,7 +7134,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       hasMeasurementComparisonReference(rubricMeasurement);
     const canShowComparison =
       canShowMarkerComparison || canShowFrameComparison || canShowMeasurementComparison ||
-      canShowBowelGoldComparison;
+      canShowBowelGoldComparison || canShowCompositeGoldComparison;
     const canShowLearnerAnswerButton =
       !!learnerTarget &&
       question.type !== 'measurementNumeric' &&
@@ -7136,6 +7150,53 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       cleanString(reviewDetails.radiusUnit) ||
       cleanString(plainObject(question.scoringConfig).radiusUnit) ||
       'mm';
+
+    async function showReleasedCompositeFrame(slot: string) {
+      if (!canShowCompositeGoldComparison || !compositeReviewSlots.includes(slot)) return;
+      try {
+        const released = await getReleasedCompositeGoldForActiveStudy({
+          quizKey: quiz.quizKey, questionKey: question.questionKey,
+        });
+        const components = Array.isArray(released?.components) ? released.components : [];
+        const goldFrame = components.find((item: any) => item?.slot === slot);
+        if (released?.ok !== true || released?.measurementKind !== compositeReviewKind ||
+            components.length !== compositeReviewSlots.length ||
+            !compositeReviewSlots.every(expected =>
+              components.filter((item: any) => item?.slot === expected).length === 1) ||
+            !goldFrame?.target?.referencedImageId) {
+          throw new Error('The released gold contour set is incomplete or has changed.');
+        }
+        const result = await runViewerCommand(commandsManager,
+          'showViewerQuizMeasurementComparison', {
+            learnerMeasurement,
+            rubricMeasurement: {
+              measurementKind: released.measurementKind,
+              value: released.value,
+              unit: released.unit,
+              viewerTarget: goldFrame.target,
+              compositeResult: { components },
+            },
+            viewerTarget: goldFrame.target,
+            focusedCompositeSlot: slot,
+            questionKey: question.questionKey,
+            endpointToleranceMM: released.endpointToleranceMM ?? null,
+            ivcEndpointToleranceEnabled:
+              released.measurementKind === 'ivcCollapsibility' &&
+              released.ivcEndpointToleranceEnabled === true,
+          });
+        if (result?.rubricRendered !== true ||
+            Number(result?.compositeContoursResolved) !== components.length) {
+          throw new Error(cleanString(result?.reason) ||
+            'Not all released gold contours could be displayed on their source frames.');
+        }
+      } catch (error) {
+        uiNotificationService.show({
+          title: 'Correct answer',
+          message: `Unable to display ${slot}: ${String(error?.message || error)}`,
+          type: 'warning', duration: 6000,
+        });
+      }
+    }
 
     return (
       <div
@@ -7351,6 +7412,23 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               </button>
             ) : null}
 
+            {canShowCompositeGoldComparison ? compositeReviewSlots.map(slot => (
+              <button
+                key={slot}
+                type="button"
+                data-quiz-review-action="correct"
+                className="rounded border border-blue-600 px-2 py-1 font-semibold text-blue-100 hover:bg-blue-950"
+                title={`Show the released gold contour on its exact ${slot} DICOM frame`}
+                onClick={event => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  void showReleasedCompositeFrame(slot);
+                }}
+              >
+                Show {slot.replaceAll('_', ' ')}
+              </button>
+            )) : null}
+
             {canShowComparison ? (
               <button
                 type="button"
@@ -7392,6 +7470,10 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                         message: `Could not show correct BWT calipers: ${String(error?.message || error)}`,
                         type: 'warning', duration: 5000 });
                     }
+                    return;
+                  }
+                  if (canShowCompositeGoldComparison) {
+                    await showReleasedCompositeFrame(compositeReviewSlots[0]);
                     return;
                   }
                   if (canShowMeasurementComparison) {
