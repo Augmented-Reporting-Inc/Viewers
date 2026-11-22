@@ -7,6 +7,7 @@ import {
   getViewerQuizAuthoringContextFromUrl,
   getViewerQuizSessionKeyFromUrl,
   isViewerQuizAuthoringMode,
+  isViewerQuizReadOnlyReportReview,
   saveViewerQuizAuthoringDraft,
   saveViewerQuizResponseForActiveStudy,
   ensureViewerQuizSaveSeriesDoc,
@@ -2084,6 +2085,7 @@ function getOverlayMarkerOptionsForQuestion(
 function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsPanelProps) {
   const { uiNotificationService, measurementService } = servicesManager.services;
   const authoringMode = isViewerQuizAuthoringMode();
+  const scoredReviewReadOnly = isViewerQuizReadOnlyReportReview();
   // The backend authorizes the launch and supplies this scoring mode. Combined
   // report assessments collect answers here but release scores in the report.
   const deferredReportScoring = !authoringMode &&
@@ -2291,8 +2293,11 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       const nextScoringPayload = await getViewerQuizScoreForActiveStudy();
       setScoringPayload(nextScoringPayload);
       return nextScoringPayload;
-    } catch {
+    } catch (error) {
       setScoringPayload(null);
+      // Do not render an editable/answerless panel if scored review
+      // authorization fails, including a transient API or release failure.
+      if (scoredReviewReadOnly) throw error;
       return null;
     }
   }
@@ -2392,6 +2397,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       const persistedAnswers = buildInitialAnswers(nextQuizzes, nextPayload.responses || []);
       const sessionState = readViewerQuizSessionState(sessionStateKey);
       const answersToUse =
+        !scoredReviewReadOnly &&
         learnerQuizIdentity && sessionState?.learnerQuizIdentity === learnerQuizIdentity
           ? mergeQuizAnswers(persistedAnswers, sessionState.answersByQuizKey || {})
           : persistedAnswers;
@@ -3062,6 +3068,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
   }
 
   function setAnswer(quizKey: string, question: QuizQuestion, value: any) {
+    if (scoredReviewReadOnly) return;
     reportEducationChange(`quiz:${quizKey}`);
     setAnswersByQuizKey(current => {
       const quizAnswers = current[quizKey] || {};
@@ -3916,6 +3923,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     question: QuizQuestion,
     options: { measurementId?: string; silent?: boolean; verifyCompositeStatus?: boolean } = {}
   ) {
+    if (scoredReviewReadOnly) return false;
     const captureKey = `${quiz.quizKey}:${question.questionKey}`;
 
     setCapturingMeasurementKey(captureKey);
@@ -4116,6 +4124,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
 
   useEffect(() => {
     function handleQuizMeasurementAdded(event: Event) {
+      if (scoredReviewReadOnly) return;
       const detail = (event as CustomEvent)?.detail || {};
       const measurementId = cleanString(detail.measurementId);
       const labelCompleted = event.type === AR_QUIZ_MEASUREMENT_LABELLED_EVENT;
@@ -4605,6 +4614,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
   }
 
   async function saveQuiz(quiz: QuizDefinition, status: 'draft' | 'submitted') {
+    if (scoredReviewReadOnly) return null;
     const quizAnswers = answersByQuizKey[quiz.quizKey] || {};
 
     if (status === 'submitted' && hasRequiredMissing(quiz, quizAnswers)) {
@@ -8612,7 +8622,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
 
   const hasLearnerQuizContent = !loading && !errorMessage && payload?.enabled && quizzes.length > 0;
 
-  const learnerFooterQuizzes = hasLearnerQuizContent
+  const learnerFooterQuizzes = hasLearnerQuizContent && !scoredReviewReadOnly
     ? quizzes.filter(quiz => {
         const response = getResponseForQuiz(responses, quiz);
         const submitted = cleanString(response?.status).toLowerCase() === 'submitted';
@@ -8688,6 +8698,11 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
           <div className="text-sm text-gray-400">No case questions for this study.</div>
         ) : (
           <div className="space-y-4">
+            {scoredReviewReadOnly ? (
+              <div role="status" className="rounded border border-blue-700 bg-blue-950/30 p-2 text-sm font-semibold text-blue-100">
+                Review — Read Only. Your submitted answers and official score cannot be changed.
+              </div>
+            ) : null}
             {viewerQuizScore ? (
               <div className="bg-green-950/30 rounded border border-green-700 p-2 text-sm">
                 <div className="font-semibold">Viewer Quiz Score</div>
@@ -8794,7 +8809,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                             </div>
                           ) : null}
 
-                          {renderQuestion(quiz, question, submitted)}
+                          {renderQuestion(quiz, question, submitted || scoredReviewReadOnly)}
                           {renderQuestionReview(quiz, question, quizScore)}
                           {renderQuestionNavigation(quiz, question, questions, quizSaving)}
                         </div>
