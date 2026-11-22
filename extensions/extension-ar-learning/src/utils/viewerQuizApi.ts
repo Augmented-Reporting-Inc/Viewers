@@ -601,6 +601,22 @@ export async function getViewerQuizScoreForActiveStudy() {
   };
 }
 
+/** Gold BWT geometry is never part of the normal learner score payload.
+ * FormAPI releases a display-only set only after the exact question's
+ * submitted attempt is scored and correct-answer access is authorized. */
+export async function getReleasedBowelGoldCalipersForActiveStudy({
+  quizKey, questionKey,
+}: { quizKey: string; questionKey: string }) {
+  const seriesDoc = await resolveViewerQuizScoreSeriesDoc();
+  const seriesId = getSeriesId(seriesDoc);
+  if (!seriesId || !quizKey || !questionKey) {
+    throw new Error('The submitted quiz and question are required for correct-answer review.');
+  }
+  return fetchJson(buildFormApiUrl(
+    `series/${encodeURIComponent(seriesId)}/viewer-quiz-gold-calipers?quizKey=${encodeURIComponent(quizKey)}&questionKey=${encodeURIComponent(questionKey)}`
+  ));
+}
+
 export async function submitAndRefreshViewerQuizScoreForActiveStudy() {
   const submittedPayload = await submitViewerQuizScoreForActiveStudy();
 
