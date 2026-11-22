@@ -1411,6 +1411,17 @@ function formatMeasurementReviewMidpoint(value: any): string {
   )}, ${formatReviewNumber(midpoint.z, 2)}) mm`;
 }
 
+function formatMeasurementReviewEndpoints(value: any): string {
+  // Only two-point length/caliper geometry has meaningful endpoints.
+  // Do not substitute contour centroids or a midpoint when source geometry
+  // was stripped from the learner-safe score projection.
+  const points = getMeasurementReviewPoints(value);
+  if (points.length !== 2) return 'Unavailable';
+  return points.map((point, index) =>
+    `End ${index + 1}: (${formatReviewNumber(Number(point[0]), 2)}, ${formatReviewNumber(Number(point[1]), 2)}, ${formatReviewNumber(Number(point[2] || 0), 2)}) mm`
+  ).join(' · ');
+}
+
 function getMeasurementReviewLength(...values: any[]): number | null {
   for (const value of values) {
     const source = plainObject(value);
@@ -7115,6 +7126,12 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       question.type !== 'measurementNumeric' &&
       !isPlaceMarkerQuestionType(question);
     const measurementRadius = reviewDetails.radius ?? plainObject(question.scoringConfig).radius;
+    const configuredEndpointToleranceMM =
+      plainObject(question.scoringConfig).endpointToleranceMM ??
+      (cleanString(plainObject(question.answerConfig).measurementKind) === 'ivcCollapsibility' &&
+       plainObject(question.scoringConfig).caliperEndpointToleranceEnabled !== false
+        ? plainObject(question.scoringConfig).caliperEndpointToleranceMM ?? 5
+        : null);
     const measurementRadiusUnit =
       cleanString(reviewDetails.radiusUnit) ||
       cleanString(plainObject(question.scoringConfig).radiusUnit) ||
@@ -7199,7 +7216,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                 Length: {formatMeasurementReviewLength(learnerMeasurementLength, measurementUnit)}
               </div>
               <div className="text-gray-300">
-                Midpoint: {formatMeasurementReviewMidpoint(learnerMeasurementMidpoint)}
+                Endpoints: {formatMeasurementReviewEndpoints(learnerMeasurement)}
               </div>
             </div>
 
@@ -7210,7 +7227,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                   Length: {formatMeasurementReviewLength(correctMeasurementLength, measurementUnit)}
                 </div>
                 <div className="text-gray-300">
-                  Midpoint: {formatMeasurementReviewMidpoint(correctMeasurementMidpoint)}
+                  Endpoints: {formatMeasurementReviewEndpoints(rubricMeasurement)}
                 </div>
               </div>
             ) : null}
@@ -7270,21 +7287,24 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               {reviewDetails.lengthMatched === true ? 'within tolerance' : 'outside tolerance'}.
             </div>
 
-            {measurementRadius !== null && typeof measurementRadius !== 'undefined' ? (
+            {configuredEndpointToleranceMM != null ? (
+              <div>
+                Configured endpoint tolerance: {formatReviewNumber(configuredEndpointToleranceMM, 2)} mm
+                at each gold caliper endpoint.
+              </div>
+            ) : measurementRadius !== null && typeof measurementRadius !== 'undefined' ? (
               <>
                 <div>
-                  Midpoint distance: {formatReviewNumber(measurementMidpointDistance, 2)}{' '}
-                  {normalizeReviewDistanceUnit(measurementRadiusUnit)}; accepted location radius:{' '}
+                  Legacy centre distance: {formatReviewNumber(measurementMidpointDistance, 2)}{' '}
+                  {normalizeReviewDistanceUnit(measurementRadiusUnit)}; accepted legacy centre radius:{' '}
                   {formatReviewNumber(measurementRadius, 2)}{' '}
                   {normalizeReviewDistanceUnit(measurementRadiusUnit)}.
                 </div>
-
                 <div>
-                  Location:{' '}
+                  Legacy location result:{' '}
                   {reviewDetails.positionMatched === true
                     ? 'within tolerance'
-                    : 'outside tolerance'}
-                  .
+                    : 'outside tolerance'}.
                 </div>
               </>
             ) : null}
