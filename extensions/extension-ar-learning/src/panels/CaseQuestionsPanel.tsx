@@ -1398,19 +1398,6 @@ function getMeasurementMidpointDistance(leftValue: any, rightValue: any): number
   return Math.hypot(left.x - right.x, left.y - right.y, left.z - right.z);
 }
 
-function formatMeasurementReviewMidpoint(value: any): string {
-  const midpoint = getMeasurementReviewMidpoint(value);
-
-  if (!midpoint) {
-    return 'Unavailable';
-  }
-
-  return `(${formatReviewNumber(midpoint.x, 2)}, ${formatReviewNumber(
-    midpoint.y,
-    2
-  )}, ${formatReviewNumber(midpoint.z, 2)}) mm`;
-}
-
 function formatMeasurementReviewEndpoints(value: any): string {
   // Only two-point length/caliper geometry has meaningful endpoints.
   // Do not substitute contour centroids or a midpoint when source geometry
