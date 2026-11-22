@@ -7764,7 +7764,7 @@ function findViewerQuizLearnerOwnedAnnotation(reference: any, learnerSeriesDoc: 
   const sourceId = getViewerQuizMeasurementSourceAnnotationId(reference);
   if (!sourceId) return null;
   const matches = getRequestedWorkflowAnnotations(
-    learnerSeriesDoc.MeasurementAnnotations
+    learnerSeriesDoc.MeasurementAnnotations, [VIEWER_MEASUREMENTS_WORKFLOW]
   ).filter(item => getMeasurementAnnotationId(item) === sourceId);
   return matches.length === 1 ? matches[0] : null;
 }
