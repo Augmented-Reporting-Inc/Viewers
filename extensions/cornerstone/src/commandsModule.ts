@@ -16457,11 +16457,15 @@ function commandsModule({
       highlightedSourceAnnotationId = '',
       referenceRadiusMm = null,
       endpointToleranceMM = null,
+      releasedReview = false,
       questionKey = '',
     } = {}) => {
       const quizAuthoringFlag = String(getViewerUrlSearchParams().get('arQuizAuthoring') || '').toLowerCase();
-      if (!['1', 'true', 'yes', 'y'].includes(quizAuthoringFlag)) {
-        return { ok: false, rubricRendered: false, reason: 'gold-authoring-only' };
+      // Released learner review supplies display-only geometry through the
+      // permission-gated FormAPI endpoint; this command does not fetch gold.
+      // Direct calls can draw caller-provided points but cannot read gold data.
+      if (!['1', 'true', 'yes', 'y'].includes(quizAuthoringFlag) && releasedReview !== true) {
+        return { ok: false, rubricRendered: false, reason: 'gold-authoring-or-released-review-only' };
       }
       clearViewerQuizMeasurementComparisonAnnotations();
       clearAllViewerQuizMarkerOverlays();
