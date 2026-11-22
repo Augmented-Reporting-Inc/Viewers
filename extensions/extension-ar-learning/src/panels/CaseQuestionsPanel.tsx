@@ -6791,7 +6791,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               ) : null}
               {midpointSpacingMm !== null ? (
                 <div className="mt-1 text-blue-200">
-                  Caliper midpoint spacing: {midpointSpacingMm.toFixed(1)} mm (informational; not scored)
+                  Caliper spacing (centre-to-centre): {midpointSpacingMm.toFixed(1)} mm (informational; not an endpoint scoring tolerance)
                 </div>
               ) : null}
               {estimatedRadialAngle !== null ? (
