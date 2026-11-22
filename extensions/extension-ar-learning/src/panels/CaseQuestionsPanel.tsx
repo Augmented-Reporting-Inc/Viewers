@@ -7123,7 +7123,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     };
     // A quiz score never grants geometry access on its own. The endpoint
     // revalidates each released question and exact pinned scored attempt.
-    const compositeReviewSlots = scoredReviewReadOnly && correctAnswerVisible
+    const compositeReviewSlots = scoredReviewReadOnly && question.type === 'measurementNumeric' && correctAnswerVisible
       ? compositeSlotLabels[compositeReviewKind] || [] : [];
     const canShowCompositeGoldComparison = compositeReviewSlots.length > 0;
     const canShowFrameComparison = question.type === 'frameSelection' && !!correctTarget;
@@ -7425,7 +7425,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                   void showReleasedCompositeFrame(slot);
                 }}
               >
-                Show {slot.replaceAll('_', ' ')}
+                Show {slot.replace(/_/g, ' ')}
               </button>
             )) : null}
 
