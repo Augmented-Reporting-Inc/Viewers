@@ -3328,6 +3328,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     }
     lastActivatedQuestionRef.current = nextActiveQuestionKey;
     if (isNewQuestion) {
+      setShownBowelGoldQuestionKey('');
       // The IVC measure-only setting must never leak into ordinary learner
       // Length questions, including when the phase binding already finished.
       try {
@@ -7130,6 +7131,10 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               <div className="font-semibold">Bowel measurement set</div>
               <div>Captured: {reviewDetails.submittedCount ?? 0} / {reviewDetails.requiredCount ?? '—'}</div>
               <div>Within numeric tolerance: {reviewDetails.numericMatches ?? 0} / {reviewDetails.requiredCount ?? '—'}</div>
+              {reviewDetails.endpointToleranceMM != null ? (
+                <div>Within endpoint tolerance: {reviewDetails.endpointMatches ?? 0} / {reviewDetails.requiredCount ?? '—'}
+                  {' '} (radius {reviewDetails.endpointToleranceMM} mm at each end)</div>
+              ) : null}
               {learnerBowelLengths.length > 0 ? (
                 <div className="mt-1">
                   Your BWT lengths: {learnerBowelLengths.map((entry, i) =>
@@ -7160,14 +7165,24 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                   {formatReviewNumber(bowelReference.numericTolerance, 2)} mm, then meet the
                   minimum {bowelReference.orientation === 'crossSection'
                     ? 'angular separation around the educator-defined lumen centre'
-                    : 'axial separation along the bowel'}. The current rubric does not require
-                  each learner caliper to be within a location radius of a gold caliper.
+                    : 'axial separation along the bowel'}.
+                  {reviewDetails.endpointToleranceMM != null
+                    ? ` Each learner caliper must also match both endpoints of one gold caliper within ${reviewDetails.endpointToleranceMM} mm.`
+                    : ' This rubric does not require endpoint location matching.'}
                 </div>
               ) : null}
               {reviewDetails.reason ? <div className="text-amber-200">{reviewDetails.reason.replace(/_/g, ' ')}</div> : null}
             </div>
           ) : (
           <>
+            {correctAnswerVisible && reviewDetails.labelMatched === false ? (
+              <div className="mt-2 text-amber-200">
+                Measurement label mismatch: your label is{' '}
+                <strong>{cleanString(reviewDetails.learnerLabel) || 'missing'}</strong>; the educator reference is{' '}
+                <strong>{cleanString(reviewDetails.goldLabel) || 'unspecified'}</strong>.
+                Correct length alone does not override a different measurement label.
+              </div>
+            ) : null}
             <div className="mt-2">
               <div className="font-semibold">Your answer</div>
               <div className="mt-1 text-gray-300">
