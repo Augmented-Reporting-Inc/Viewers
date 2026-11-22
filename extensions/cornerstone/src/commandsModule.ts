@@ -7242,12 +7242,13 @@ function appendViewerQuizToleranceCircle({ viewport, point, radius, radiusUnit =
  * This visual guide does NOT participate in multi-BWT scoring.
  */
 function appendViewerQuizBowelGoldRadiusOutline({
-  viewport, quizSpatialEvidence, radiusMm, focused = false,
+  viewport, quizSpatialEvidence, radiusMm, focused = false, endpointIndex = null,
 }: {
   viewport: any;
   quizSpatialEvidence: any;
   radiusMm: number;
   focused?: boolean;
+  endpointIndex?: number | null;
 }) {
   const element = viewport?.element;
   const evidence = quizSpatialEvidence;
@@ -7282,6 +7283,8 @@ function appendViewerQuizBowelGoldRadiusOutline({
   if (!Number.isFinite(determinant) || determinant <= 1e-12) return false;
   const midpoint = worldPoints[0].map((value: number, i: number) =>
     (value + worldPoints[1][i]) / 2);
+  const circleCenter = endpointIndex === 0 || endpointIndex === 1
+    ? worldPoints[endpointIndex] : midpoint;
   const canvasPoints: Array<[number, number]> = [];
   for (let step = 0; step < 64; step++) {
     const theta = 2 * Math.PI * step / 64;
@@ -7289,7 +7292,7 @@ function appendViewerQuizBowelGoldRadiusOutline({
     const dy = radius * Math.sin(theta) / rowMm;
     const a = (bb * dx - ab * dy) / determinant;
     const b = (aa * dy - ab * dx) / determinant;
-    const world = midpoint.map((value: number, i: number) =>
+    const world = circleCenter.map((value: number, i: number) =>
       value + a * axisI[i] + b * axisJ[i]);
     let canvas: number[];
     try { canvas = viewport.worldToCanvas(world); } catch { return false; }
@@ -7306,11 +7309,14 @@ function appendViewerQuizBowelGoldRadiusOutline({
   const ns = 'http://www.w3.org/2000/svg';
   const svg = document.createElementNS(ns, 'svg');
   svg.classList.add(VIEWER_QUIZ_MARKER_OVERLAY_CLASS);
-  svg.dataset.reviewState = 'bowel-gold-reference-radius';
+  svg.dataset.reviewState = endpointIndex === null
+    ? 'bowel-gold-reference-radius' : 'bowel-gold-endpoint-tolerance';
   svg.setAttribute('width', String(element.clientWidth));
   svg.setAttribute('height', String(element.clientHeight));
   svg.setAttribute('viewBox', `0 0 ${element.clientWidth} ${element.clientHeight}`);
-  svg.setAttribute('aria-label', `Gold BWT reference radius ${radius} mm, visual guide only`);
+  svg.setAttribute('aria-label', endpointIndex === null
+    ? `Gold BWT legacy centre radius ${radius} mm, visual guide only`
+    : `Gold BWT endpoint ${endpointIndex + 1} tolerance ${radius} mm`);
   svg.style.position = 'absolute';
   svg.style.left = '0';
   svg.style.top = '0';
@@ -16450,6 +16456,7 @@ function commandsModule({
       goldMeasurement = null,
       highlightedSourceAnnotationId = '',
       referenceRadiusMm = null,
+      endpointToleranceMM = null,
       questionKey = '',
     } = {}) => {
       const quizAuthoringFlag = String(getViewerUrlSearchParams().get('arQuizAuthoring') || '').toLowerCase();
@@ -16591,25 +16598,33 @@ function commandsModule({
         );
         cornerstoneTools.annotation.selection.setAnnotationSelected?.(overlayId, focused);
       }
+      const endpointRadius = endpointToleranceMM === null || endpointToleranceMM === ''
+        ? null : Number(endpointToleranceMM);
+      const endpointEnabled = endpointRadius !== null && Number.isFinite(endpointRadius);
       const radius = Number(referenceRadiusMm);
       let referenceRadiusCount = 0;
-      if (referenceRadiusMm !== null && referenceRadiusMm !== '' &&
-          Number.isFinite(radius) && radius > 0) {
+      if ((endpointEnabled && endpointRadius > 0) ||
+          (!endpointEnabled && referenceRadiusMm !== null && referenceRadiusMm !== '' &&
+            Number.isFinite(radius) && radius > 0)) {
         for (let i = 0; i < saved.length; i++) {
-          // Show the focused reference radius on Highlight. "Show all"
-          // displays the guide around every captured gold caliper.
           const isFocused = !!selectedSource && sources[i].annotationId === selectedSource;
           if (selectedSource && !isFocused) continue;
-          const rendered = appendViewerQuizBowelGoldRadiusOutline({
-            viewport,
-            quizSpatialEvidence: saved[i].quizSpatialEvidence,
-            radiusMm: radius,
-            focused: isFocused,
-          });
-          if (rendered) referenceRadiusCount++;
-          else console.warn('[ViewerQuiz] calibrated BWT reference radius unavailable', {
-            questionKey, caliperIndex: i + 1, radiusMm: radius,
-          });
+          // A newly configured endpoint tolerance belongs at BOTH ends of
+          // each Length caliper. Older midpoint-radius guides are retained
+          // only for published questions without the endpoint setting.
+          for (const endpointIndex of endpointEnabled ? [0, 1] : [null]) {
+            const rendered = appendViewerQuizBowelGoldRadiusOutline({
+              viewport,
+              quizSpatialEvidence: saved[i].quizSpatialEvidence,
+              radiusMm: endpointEnabled ? endpointRadius : radius,
+              focused: isFocused,
+              endpointIndex,
+            });
+            if (rendered) referenceRadiusCount++;
+            else console.warn('[ViewerQuiz] calibrated BWT tolerance unavailable', {
+              questionKey, caliperIndex: i + 1, endpointIndex,
+            });
+          }
         }
       }
       try {
