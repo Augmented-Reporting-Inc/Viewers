@@ -647,6 +647,24 @@ export async function getReleasedBowelGoldCalipersForActiveStudy({
   ));
 }
 
+/** Fetch released, display-only gold contours for a scored combined quiz.
+ * FormAPI enforces tenant, learner, frozen quiz version and correct-answer
+ * release; this client must never infer or fetch private educator geometry. */
+export async function getReleasedCompositeGoldForActiveStudy({
+  quizKey, questionKey,
+}: { quizKey: string; questionKey: string }) {
+  if (!isViewerQuizReadOnlyReportReview()) {
+    throw new Error('Composite gold review requires the read-only scored report viewer.');
+  }
+  const target = getArViewerSaveTargetFromUrl();
+  if (!target.learnerSeriesId || !quizKey || !questionKey) {
+    throw new Error('The submitted quiz and question are required for composite review.');
+  }
+  return fetchJson(buildFormApiUrl(
+    `series/${encodeURIComponent(target.learnerSeriesId)}/viewer-quiz-gold-composite?quizKey=${encodeURIComponent(quizKey)}&questionKey=${encodeURIComponent(questionKey)}`
+  ));
+}
+
 export async function submitAndRefreshViewerQuizScoreForActiveStudy() {
   const submittedPayload = await submitViewerQuizScoreForActiveStudy();
 
