@@ -16139,7 +16139,7 @@ function commandsModule({
       // JSON or educator/base study snapshots). The panel uses this for
       // informational spacing and angle, not for scoring or quiz persistence.
       const trustedSpatialEvidence = verified.map((source, index) => {
-        const evidence = findViewerQuizBowelLearnerAnnotation(
+        const evidence = findViewerQuizLearnerOwnedAnnotation(
           references[index], learnerSeriesDoc
         )?.quizSpatialEvidence;
         return {
@@ -16649,7 +16649,7 @@ function commandsModule({
         /BWT/i.test(String(rubricMeasurement?.measurementType || '')) &&
         !!rubricMeasurement?.quizSpatialEvidence;
       const learnerAnnotation = isBowelGoldReference
-        ? findViewerQuizBowelLearnerAnnotation(learnerMeasurement, learnerSeriesDoc)
+        ? findViewerQuizLearnerOwnedAnnotation(learnerMeasurement, learnerSeriesDoc)
         : findViewerQuizMeasurementAnnotationInSeriesDocs(learnerMeasurement, [
             learnerSeriesDoc, baseSeriesDoc,
           ]) || getViewerQuizMeasurementAnnotationFromService(learnerMeasurement);
