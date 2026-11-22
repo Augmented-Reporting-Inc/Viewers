@@ -8773,6 +8773,15 @@ function commandsModule({
     }
 
     viewerQuizMeasurementComparisonAnnotationIds.clear();
+    // BWT tolerance circles are DOM SVG overlays rather than Cornerstone
+    // annotations. Clear only those review overlays when hiding answers or
+    // navigating to another question; preserve unrelated marker overlays.
+    try {
+      document.querySelectorAll?.(
+        '[data-review-state="bowel-gold-endpoint-tolerance"], ' +
+        '[data-review-state="bowel-gold-reference-radius"]'
+      ).forEach(node => node.remove());
+    } catch {}
 
     try {
       const activeViewportId = viewportGridService.getActiveViewportId();
