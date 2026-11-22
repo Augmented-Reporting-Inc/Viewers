@@ -122,6 +122,18 @@ function isTruthyUrlFlag(value: unknown): boolean {
   return ['1', 'true', 'yes', 'y'].includes(cleanString(value).toLowerCase());
 }
 
+/** Report-owned scored reviews are opt-in at launch, but the URL is not
+ * an authorization token. The exact learner attempt and released score must
+ * still pass FormAPI's scoped review-launch endpoint. */
+export function isViewerQuizReadOnlyReportReview(): boolean {
+  const target = getArViewerSaveTargetFromUrl();
+  const qs = getViewerUrlSearchParams();
+  return target.attemptOwner === 'report' &&
+    target.mode === 'learnerCopyOnSave' &&
+    !!target.learnerSeriesId &&
+    cleanString(qs.get('arMeasurementAccess')).toLowerCase() === 'readonly';
+}
+
 export function isViewerQuizAuthoringMode(): boolean {
   const qs = getViewerUrlSearchParams();
 
@@ -579,6 +591,24 @@ export async function submitViewerQuizScoreForActiveStudy() {
 }
 
 export async function getViewerQuizScoreForActiveStudy() {
+  if (isViewerQuizReadOnlyReportReview()) {
+    const target = getArViewerSaveTargetFromUrl();
+    const reviewed = await fetchJson(buildFormApiUrl(
+      `series/${encodeURIComponent(target.learnerSeriesId)}/viewer-quiz-review-launch`
+    ));
+    if (reviewed?.reviewOnly !== true ||
+        reviewed?.measurementAccess !== 'readOnly' ||
+        cleanString(reviewed?.seriesId) !== target.learnerSeriesId ||
+        cleanString(reviewed?.baseSeriesId) !== target.baseSeriesId ||
+        !reviewed?.reviewScore?.viewerQuizzes) {
+      throw new Error('The scored review is not authorized or its released quiz results are unavailable.');
+    }
+    return {
+      ...reviewed.reviewScore,
+      seriesId: reviewed.seriesId,
+      learnerSeriesId: reviewed.seriesId,
+    };
+  }
   const seriesDoc = await resolveViewerQuizScoreSeriesDoc();
   const seriesId = getSeriesId(seriesDoc);
 
