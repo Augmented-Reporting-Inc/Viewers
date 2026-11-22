@@ -3225,6 +3225,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       ? await runViewerCommand(commandsManager, 'showViewerQuizAuthoringGoldCaliper', {
           goldMeasurements: getBowelMeasurementSetEntries(answerConfig.goldMeasurements),
           referenceRadiusMm: scoringConfig.radius,
+          endpointToleranceMM: scoringConfig.endpointToleranceMM,
           questionKey: question.questionKey,
         })
       : await runViewerCommand(commandsManager, 'showViewerQuizMeasurementComparison', {
@@ -7850,6 +7851,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                       void runViewerCommand(commandsManager, 'showViewerQuizAuthoringGoldCaliper', {
                         goldMeasurements: goldBowelMeasurements,
                         referenceRadiusMm: plainObject(question.scoringConfig).radius,
+                        endpointToleranceMM: plainObject(question.scoringConfig).endpointToleranceMM,
                         questionKey: question.questionKey,
                       }).then(result => {
                         if (result?.rubricRendered !== true) uiNotificationService.show({
@@ -7880,6 +7882,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                         goldMeasurements: goldBowelMeasurements,
                         highlightedSourceAnnotationId: entry.sourceAnnotationId,
                         referenceRadiusMm: plainObject(question.scoringConfig).radius,
+                        endpointToleranceMM: plainObject(question.scoringConfig).endpointToleranceMM,
                         questionKey: question.questionKey,
                       }).then(result => {
                         if (result?.rubricRendered !== true) uiNotificationService.show({
@@ -8117,10 +8120,10 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               </div>
             ) : null}
 
-            {cleanString(answerConfig.measurementKind) === 'length' && !bowelSet ? (
+            {cleanString(answerConfig.measurementKind) === 'length' ? (
               <div className="mt-3 text-xs text-gray-200">
                 <label className="block" htmlFor={`length-endpoint-tolerance-${question.questionKey}`}>
-                  Optional endpoint tolerance (mm; both ends)
+                  {bowelSet ? 'Optional endpoint tolerance (mm; both ends of every gold BWT caliper)' : 'Optional endpoint tolerance (mm; both ends)'}
                 </label>
                 <input
                   id={`length-endpoint-tolerance-${question.questionKey}`}
@@ -8140,8 +8143,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                   }}
                 />
                 <p className="mt-1 text-gray-400">
-                  When set, view both gold endpoint circles; leave empty for numeric-only
-                  grading unless a legacy centre radius is configured.
+                  {bowelSet
+                    ? 'When set, both endpoints of each learner caliper must match one distinct gold caliper within the configured radius, in addition to numeric accuracy and axial/angular separation. Leave blank for legacy scoring.'
+                    : 'When set, view both gold endpoint circles; leave empty for numeric-only grading unless a legacy centre radius is configured.'}
                 </p>
                 {numberOrEmpty(plainObject(question.scoringConfig).radius) !== '' ? (
                   <button type="button"
@@ -8194,7 +8198,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               </div>
             ) : null}
 
-            {!['lvSimpsonEF', 'laVolumeBiplane', 'laVolumeBiplaneDisks', 'rvFAC', 'raArea', 'ivcCollapsibility', 'length'].includes(cleanString(answerConfig.measurementKind)) || bowelSet ? (
+            {!['lvSimpsonEF', 'laVolumeBiplane', 'laVolumeBiplaneDisks', 'rvFAC', 'raArea', 'ivcCollapsibility', 'length'].includes(cleanString(answerConfig.measurementKind)) ? (
               <>
             <label className="mt-3 block text-xs font-semibold text-gray-200">
               {bowelSet ? 'Reference location radius (mm; visual guide)' : 'Position radius tolerance'}
