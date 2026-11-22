@@ -7321,6 +7321,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                           questionKey: question.questionKey,
                           radius: measurementRadius,
                           radiusUnit: measurementRadiusUnit,
+                          endpointToleranceMM: cleanString(plainObject(question.answerConfig).measurementKind) === 'length'
+                            ? plainObject(question.scoringConfig).endpointToleranceMM ?? null
+                            : null,
                         }
                       );
 
@@ -8732,7 +8735,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
 
                           {renderQuestion(quiz, question, submitted)}
                           {renderQuestionReview(quiz, question, quizScore)}
-                          {renderQuestionNavigation(quiz, question, questions, submitted || quizSaving)}
+                          {renderQuestionNavigation(quiz, question, questions, quizSaving)}
                         </div>
                       );
                     })}
