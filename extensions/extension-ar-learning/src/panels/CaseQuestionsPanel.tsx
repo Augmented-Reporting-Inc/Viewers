@@ -3,6 +3,7 @@ import {
   getViewerQuizAuthoringContent,
   getViewerQuizzesForActiveStudy,
   getViewerQuizScoreForActiveStudy,
+  getReleasedBowelGoldCalipersForActiveStudy,
   getViewerQuizAuthoringContextFromUrl,
   getViewerQuizSessionKeyFromUrl,
   isViewerQuizAuthoringMode,
@@ -2105,6 +2106,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     () => initialSessionState?.answersByQuizKey || {}
   );
   const [scoringPayload, setScoringPayload] = useState<any>(null);
+  const [shownBowelGoldQuestionKey, setShownBowelGoldQuestionKey] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
   const [activeQuestionKey, setActiveQuestionKey] = useState(
     () => initialSessionState?.activeQuestionKey || ''
@@ -3225,6 +3227,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       ? await runViewerCommand(commandsManager, 'showViewerQuizAuthoringGoldCaliper', {
           goldMeasurements: getBowelMeasurementSetEntries(answerConfig.goldMeasurements),
           referenceRadiusMm: scoringConfig.radius,
+          endpointToleranceMM: scoringConfig.endpointToleranceMM,
           questionKey: question.questionKey,
         })
       : await runViewerCommand(commandsManager, 'showViewerQuizMeasurementComparison', {
@@ -3325,6 +3328,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     }
     lastActivatedQuestionRef.current = nextActiveQuestionKey;
     if (isNewQuestion) {
+      setShownBowelGoldQuestionKey('');
       // The IVC measure-only setting must never leak into ordinary learner
       // Length questions, including when the phase binding already finished.
       try {
@@ -7084,6 +7088,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       (isMarkerChoiceQuestionType(question) || isPlaceMarkerQuestionType(question)) &&
       comparisonMarkers.length > 0;
 
+    const canShowBowelGoldComparison = question.type === 'measurementNumeric' &&
+      reviewDetails.mode === 'bowelMeasurementSet' && correctAnswerVisible &&
+      bowelGoldLengths.length > 0;
     const canShowFrameComparison = question.type === 'frameSelection' && !!correctTarget;
     const canShowMeasurementComparison =
       question.type === 'measurementNumeric' &&
@@ -7091,7 +7098,8 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       hasMeasurementComparisonReference(learnerMeasurement) &&
       hasMeasurementComparisonReference(rubricMeasurement);
     const canShowComparison =
-      canShowMarkerComparison || canShowFrameComparison || canShowMeasurementComparison;
+      canShowMarkerComparison || canShowFrameComparison || canShowMeasurementComparison ||
+      canShowBowelGoldComparison;
     const canShowLearnerAnswerButton =
       !!learnerTarget &&
       question.type !== 'measurementNumeric' &&
@@ -7123,6 +7131,10 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               <div className="font-semibold">Bowel measurement set</div>
               <div>Captured: {reviewDetails.submittedCount ?? 0} / {reviewDetails.requiredCount ?? '—'}</div>
               <div>Within numeric tolerance: {reviewDetails.numericMatches ?? 0} / {reviewDetails.requiredCount ?? '—'}</div>
+              {reviewDetails.endpointToleranceMM != null ? (
+                <div>Within endpoint tolerance: {reviewDetails.endpointMatches ?? 0} / {reviewDetails.requiredCount ?? '—'}
+                  {' '} (radius {reviewDetails.endpointToleranceMM} mm at each end)</div>
+              ) : null}
               {learnerBowelLengths.length > 0 ? (
                 <div className="mt-1">
                   Your BWT lengths: {learnerBowelLengths.map((entry, i) =>
@@ -7153,14 +7165,24 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                   {formatReviewNumber(bowelReference.numericTolerance, 2)} mm, then meet the
                   minimum {bowelReference.orientation === 'crossSection'
                     ? 'angular separation around the educator-defined lumen centre'
-                    : 'axial separation along the bowel'}. The current rubric does not require
-                  each learner caliper to be within a location radius of a gold caliper.
+                    : 'axial separation along the bowel'}.
+                  {reviewDetails.endpointToleranceMM != null
+                    ? ` Each learner caliper must also match both endpoints of one gold caliper within ${reviewDetails.endpointToleranceMM} mm.`
+                    : ' This rubric does not require endpoint location matching.'}
                 </div>
               ) : null}
               {reviewDetails.reason ? <div className="text-amber-200">{reviewDetails.reason.replace(/_/g, ' ')}</div> : null}
             </div>
           ) : (
           <>
+            {correctAnswerVisible && reviewDetails.labelMatched === false ? (
+              <div className="mt-2 text-amber-200">
+                Measurement label mismatch: your label is{' '}
+                <strong>{cleanString(reviewDetails.learnerLabel) || 'missing'}</strong>; the educator reference is{' '}
+                <strong>{cleanString(reviewDetails.goldLabel) || 'unspecified'}</strong>.
+                Correct length alone does not override a different measurement label.
+              </div>
+            ) : null}
             <div className="mt-2">
               <div className="font-semibold">Your answer</div>
               <div className="mt-1 text-gray-300">
@@ -7308,6 +7330,40 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                   event.preventDefault();
                   event.stopPropagation();
 
+                  if (canShowBowelGoldComparison) {
+                    const reviewKey = `${quiz.quizKey}:${question.questionKey}`;
+                    try {
+                      if (shownBowelGoldQuestionKey === reviewKey) {
+                        await runViewerCommand(commandsManager, 'clearViewerQuizMeasurementComparison');
+                        setShownBowelGoldQuestionKey('');
+                        return;
+                      }
+                      const released = await getReleasedBowelGoldCalipersForActiveStudy({
+                        quizKey: quiz.quizKey, questionKey: question.questionKey,
+                      });
+                      if (released?.ok !== true || !Array.isArray(released.goldMeasurements)) {
+                        throw new Error('Authorized gold BWT calipers are not available for this attempt.');
+                      }
+                      const result = await runViewerCommand(commandsManager,
+                        'showViewerQuizAuthoringGoldCaliper', {
+                          goldMeasurements: released.goldMeasurements,
+                          endpointToleranceMM: released.endpointToleranceMM,
+                          referenceRadiusMm: released.referenceRadiusMm,
+                          questionKey: question.questionKey,
+                          releasedReview: true,
+                        });
+                      if (result?.rubricRendered !== true ||
+                          Number(result.renderedCount) !== released.goldMeasurements.length) {
+                        throw new Error(cleanString(result?.reason) || 'Gold annotations could not be displayed.');
+                      }
+                      setShownBowelGoldQuestionKey(reviewKey);
+                    } catch (error) {
+                      uiNotificationService.show({ title: 'Case Questions',
+                        message: `Could not show correct BWT calipers: ${String(error?.message || error)}`,
+                        type: 'warning', duration: 5000 });
+                    }
+                    return;
+                  }
                   if (canShowMeasurementComparison) {
                     try {
                       const result = await runViewerCommand(
@@ -7353,7 +7409,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                   });
                 }}
               >
-                Show correct answer
+                {canShowBowelGoldComparison && shownBowelGoldQuestionKey ===
+                  `${quiz.quizKey}:${question.questionKey}`
+                  ? 'Hide correct answer' : 'Show correct answer'}
               </button>
             ) : null}
           </div>
@@ -7850,6 +7908,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                       void runViewerCommand(commandsManager, 'showViewerQuizAuthoringGoldCaliper', {
                         goldMeasurements: goldBowelMeasurements,
                         referenceRadiusMm: plainObject(question.scoringConfig).radius,
+                        endpointToleranceMM: plainObject(question.scoringConfig).endpointToleranceMM,
                         questionKey: question.questionKey,
                       }).then(result => {
                         if (result?.rubricRendered !== true) uiNotificationService.show({
@@ -7880,6 +7939,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                         goldMeasurements: goldBowelMeasurements,
                         highlightedSourceAnnotationId: entry.sourceAnnotationId,
                         referenceRadiusMm: plainObject(question.scoringConfig).radius,
+                        endpointToleranceMM: plainObject(question.scoringConfig).endpointToleranceMM,
                         questionKey: question.questionKey,
                       }).then(result => {
                         if (result?.rubricRendered !== true) uiNotificationService.show({
@@ -8117,10 +8177,10 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               </div>
             ) : null}
 
-            {cleanString(answerConfig.measurementKind) === 'length' && !bowelSet ? (
+            {cleanString(answerConfig.measurementKind) === 'length' ? (
               <div className="mt-3 text-xs text-gray-200">
                 <label className="block" htmlFor={`length-endpoint-tolerance-${question.questionKey}`}>
-                  Optional endpoint tolerance (mm; both ends)
+                  {bowelSet ? 'Optional endpoint tolerance (mm; both ends of every gold BWT caliper)' : 'Optional endpoint tolerance (mm; both ends)'}
                 </label>
                 <input
                   id={`length-endpoint-tolerance-${question.questionKey}`}
@@ -8140,8 +8200,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                   }}
                 />
                 <p className="mt-1 text-gray-400">
-                  When set, view both gold endpoint circles; leave empty for numeric-only
-                  grading unless a legacy centre radius is configured.
+                  {bowelSet
+                    ? 'When set, both endpoints of each learner caliper must match one distinct gold caliper within the configured radius, in addition to numeric accuracy and axial/angular separation. Leave blank for legacy scoring.'
+                    : 'When set, view both gold endpoint circles; leave empty for numeric-only grading unless a legacy centre radius is configured.'}
                 </p>
                 {numberOrEmpty(plainObject(question.scoringConfig).radius) !== '' ? (
                   <button type="button"
@@ -8194,7 +8255,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               </div>
             ) : null}
 
-            {!['lvSimpsonEF', 'laVolumeBiplane', 'laVolumeBiplaneDisks', 'rvFAC', 'raArea', 'ivcCollapsibility', 'length'].includes(cleanString(answerConfig.measurementKind)) || bowelSet ? (
+            {!['lvSimpsonEF', 'laVolumeBiplane', 'laVolumeBiplaneDisks', 'rvFAC', 'raArea', 'ivcCollapsibility', 'length'].includes(cleanString(answerConfig.measurementKind)) ? (
               <>
             <label className="mt-3 block text-xs font-semibold text-gray-200">
               {bowelSet ? 'Reference location radius (mm; visual guide)' : 'Position radius tolerance'}
