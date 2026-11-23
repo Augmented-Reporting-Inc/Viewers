@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState, useRef } from 'react';
 import { EchoEFContourVolumes } from '../../../extension-ar-measurements/src/components/EchoEFContourVolumes';
 import { EchoCompositeResultStatus } from '../../../extension-ar-measurements/src/components/EchoCompositeResultStatus';
+import { getEchoCompositeAcquisitionSteps } from '../../../extension-ar-measurements/src/utils/echoCompositeAcquisition';
 import {
   getViewerQuizAuthoringContent,
   getViewerQuizzesForActiveStudy,
@@ -6051,12 +6052,15 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                   // Learners explicitly choose IVCexp / IVCinsp in the
                   // ordinary Length dialog. Avoid a global measure-only flag:
                   // it could suppress labels in other quiz questions.
-                  await runViewerCommand(commandsManager, 'resetViewerLengthLabelMode', {});
-                  const activation = await runViewerCommand(
-                    commandsManager, 'activateViewerMeasurementTool', {
-                      toolName: 'Length', stopCine: true,
-                    }
-                  );
+                  let activation = null;
+                  for (const step of getEchoCompositeAcquisitionSteps(
+                    'ivcCollapsibility', phase.slot
+                  )) {
+                    activation = await runViewerCommand(
+                      commandsManager, step.name, step.payload
+                    );
+                    if (activation?.ok === false) break;
+                  }
                   if (activation?.ok === false) {
                     uiNotificationService.show({
                       title: 'IVC measurement',
@@ -6109,11 +6113,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                   void (async () => {
                     await activateQuestionForPhaseCapture(quiz, question);
                     if (!(await ensureConfiguredCompositePhaseFrame(question, slot))) return;
-                    await runViewerCommand(commandsManager, 'startLAVolumeWorkflow', {
-                      slot,
-                      contourTechnique: choice.contourTechnique,
-                      autoContinue: false,
-                    });
+                    for (const step of getEchoCompositeAcquisitionSteps(
+                      'laVolumeDisks', slot, choice.contourTechnique
+                    )) await runViewerCommand(commandsManager, step.name, step.payload);
                   })();
                 }}
               >
@@ -6157,9 +6159,10 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                   void (async () => {
                     await activateQuestionForPhaseCapture(quiz, question);
                     if (!(await ensureConfiguredCompositePhaseFrame(question, slot))) return;
-                    await runViewerCommand(commandsManager, choice.command, {
-                      slot, clickTrace: choice.command === 'startEchoAreaContourWorkflow',
-                    });
+                    for (const step of getEchoCompositeAcquisitionSteps(
+                      'rvFac', slot, choice.command === 'startEchoAreaContourWorkflow'
+                        ? 'freehand' : 'axisApex'
+                    )) await runViewerCommand(commandsManager, step.name, step.payload);
                   })();
                 }}
               >
