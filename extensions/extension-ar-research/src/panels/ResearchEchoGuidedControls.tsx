@@ -201,7 +201,7 @@ export default function ResearchEchoGuidedControls({
                         onChoose={technique => void run(
                           phase.slot + ':' + technique, async () => {
                             await openPhase(phase.slot);
-                            await runCompositeSteps(kind, phase.slot, technique);
+                            await runCompositeSteps(kind === 'laVolumeDisks' ? 'laVolumeDisks' : 'rvFac', phase.slot, technique);
                           }
                         )}
                       />
