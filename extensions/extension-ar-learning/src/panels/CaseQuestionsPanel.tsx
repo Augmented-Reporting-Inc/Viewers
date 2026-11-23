@@ -6110,7 +6110,8 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                   )) await runViewerCommand(commandsManager, step.name, step.payload);
                 })();
               }}
-            />         </div>
+            />
+          </div>
         ))}
       </div>
     );
@@ -6143,7 +6144,8 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                   )) await runViewerCommand(commandsManager, step.name, step.payload);
                 })();
               }}
-            />         </div>
+            />
+          </div>
         ))}
       </div>
     );
