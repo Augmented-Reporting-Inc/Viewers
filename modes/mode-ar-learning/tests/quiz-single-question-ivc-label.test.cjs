@@ -7,6 +7,10 @@ const panel = fs.readFileSync(path.join(
   __dirname, '..', '..', '..', 'extensions', 'extension-ar-learning',
   'src', 'panels', 'CaseQuestionsPanel.tsx'
 ), 'utf8');
+const acquisition = fs.readFileSync(path.join(
+  __dirname, '..', '..', '..', 'extensions', 'extension-ar-measurements',
+  'src', 'utils', 'echoCompositeAcquisition.ts'
+), 'utf8');
 const commands = fs.readFileSync(path.join(
   __dirname, '..', '..', '..', 'extensions', 'cornerstone',
   'src', 'commandsModule.ts'
@@ -42,9 +46,13 @@ test('explicit learner IVC phase navigates exactly and retains the normal calibr
   assert.ok(start >= 0, 'IVC phase control exists');
   const ivcControls = panel.slice(start, end > start ? end : undefined);
   assert.match(ivcControls, /ensureConfiguredCompositePhaseFrame\(question, phase\.slot\)/);
-  assert.match(ivcControls, /resetViewerLengthLabelMode'/);
-  assert.match(ivcControls, /'activateViewerMeasurementTool'/);
-  assert.match(ivcControls, /toolName: 'Length', stopCine: true/);
+  assert.match(ivcControls, /getEchoCompositeAcquisitionSteps\(\s*'ivcCollapsibility', phase\.slot/);
+  assert.match(acquisition, /name: 'resetViewerLengthLabelMode'/);
+  assert.match(acquisition, /name: 'activateViewerMeasurementTool'/);
+  assert.match(acquisition, /toolName: 'Length', stopCine: true/);
+  assert.ok(acquisition.indexOf("name: 'resetViewerLengthLabelMode'") <
+    acquisition.indexOf("name: 'activateViewerMeasurementTool'"),
+    'the shared IVC contract must reset labeling before activating Length');
   assert.match(ivcControls, /label it IVCexp or IVCinsp respectively/);
   assert.doesNotMatch(ivcControls, /labelMode: 'measure-only'/,
     'a global measure-only override would suppress labels on other quiz questions');
