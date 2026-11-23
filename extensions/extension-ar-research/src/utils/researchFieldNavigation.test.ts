@@ -95,6 +95,30 @@ describe('Research protocol frame enforcement', () => {
       },
     }, composite, sources)).toBe(false);
   });
+  it('rejects composite candidates with missing, surplus or duplicate sources', () => {
+    const field = { componentKey: 'lvEjectionFraction', config: {
+      compositeFrameGuidanceEnabled: true,
+      compositeFrameTargets: {
+        A4C_ED: { sopInstanceUID: 'sop1', frameNumber: 2 },
+        A4C_ES: { sopInstanceUID: 'sop2', frameNumber: 3 },
+        A2C_ED: { sopInstanceUID: 'sop3', frameNumber: 4 },
+        A2C_ES: { sopInstanceUID: 'sop4', frameNumber: 5 },
+      },
+    } };
+    const annotations = [1,2,3,4,5].map((n) => ({
+      annotationId: 'source' + n, SOPInstanceUID: 'sop' + n,
+      frameNumber: n + 1,
+    }));
+    const candidate = (ids: string) => ({ sourceMeasurementKey: 'lv-simpson:' + ids });
+    expect(isResearchCandidateOnProtocolFrames(field,
+      candidate('source1,source2,source3,source4'), annotations)).toBe(true);
+    expect(isResearchCandidateOnProtocolFrames(field,
+      candidate('source1,source2,source3'), annotations)).toBe(false);
+    expect(isResearchCandidateOnProtocolFrames(field,
+      candidate('source1,source2,source3,source4,source5'), annotations)).toBe(false);
+    expect(isResearchCandidateOnProtocolFrames(field,
+      candidate('source1,source2,source3,source3'), annotations)).toBe(false);
+  });
   it('leaves protocols with no configured target untouched', () => {
     expect(isResearchCandidateOnProtocolFrames({
       componentKey: 'trVmax', config: {},
