@@ -178,9 +178,16 @@ export function isResearchCandidateOnProtocolFrames(
   const sourceKeys = getResearchSourceAnnotationIds(candidate?.sourceMeasurementKey);
   // The composite derived result must contain exactly one source per
   // configured protocol phase, not a convenient subset plus unrelated ROI.
-  if (['lvEjectionFraction', 'laVolumeDisks', 'rvFac', 'ivcCollapsibility']
-      .includes(cleanString(field?.componentKey)) &&
-      sourceKeys.length !== fixedTargets.length) return false;
+  const completePhaseCounts: Record<string, number> = {
+    lvEjectionFraction: 4, laVolumeDisks: 2,
+    rvFac: 2, ivcCollapsibility: 2,
+  };
+  const completeCount = completePhaseCounts[cleanString(field?.componentKey)];
+  // Cardinality equality only applies when the protocol pins *every* phase.
+  // A legacy partially pinned protocol may legitimately have more distinct
+  // annotation sources than its configured target subset.
+  if (completeCount && fixedTargets.length === completeCount &&
+      sourceKeys.length !== completeCount) return false;
   if (new Set(sourceKeys).size !== sourceKeys.length) return false;
   const matchedAnnotations = sourceKeys
     .map(key => annotations.find(item => cleanString(
