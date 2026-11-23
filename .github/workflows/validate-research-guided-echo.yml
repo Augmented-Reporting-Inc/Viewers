@@ -14,6 +14,7 @@ on:
       - feature/research-quiz-style-read-20261116
       - port/3.11-custom
       - AR-1106-shared-echo-ef-question-volume
+      - fix/research-ef-contour-capture-and-length-20261123
     paths:
       - 'extensions/extension-ar-research/src/**'
       - 'extensions/extension-ar-measurements/src/**'
