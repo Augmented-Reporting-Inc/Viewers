@@ -122,6 +122,18 @@ function isTruthyUrlFlag(value: unknown): boolean {
   return ['1', 'true', 'yes', 'y'].includes(cleanString(value).toLowerCase());
 }
 
+/** Report-owned scored reviews are opt-in at launch, but the URL is not
+ * an authorization token. The exact learner attempt and released score must
+ * still pass FormAPI's scoped review-launch endpoint. */
+export function isViewerQuizReadOnlyReportReview(): boolean {
+  const target = getArViewerSaveTargetFromUrl();
+  const qs = getViewerUrlSearchParams();
+  return target.attemptOwner === 'report' &&
+    target.mode === 'learnerCopyOnSave' &&
+    !!target.learnerSeriesId &&
+    cleanString(qs.get('arMeasurementAccess')).toLowerCase() === 'readonly';
+}
+
 export function isViewerQuizAuthoringMode(): boolean {
   const qs = getViewerUrlSearchParams();
 
@@ -234,7 +246,20 @@ async function fetchJson(url: string, options: RequestInit = {}) {
 
   if (!response.ok) {
     const message = body?.message || body?.error || `${response.status}`;
-    throw new Error(message);
+    // This particular 409 follows full learner/tenant and answer-release
+    // authorization. Expose only non-sensitive slot/reason diagnostics, never
+    // patient/DICOM IDs, educator annotation IDs or coordinates.
+    const compositeReasons =
+      body?.error === 'pinned_composite_gold_invalid' &&
+      Array.isArray(body?.invalidGoldSlots)
+        ? body.invalidGoldSlots
+          .filter((entry: any) => typeof entry?.slot === 'string' &&
+            typeof entry?.reason === 'string')
+          .map((entry: any) => `${entry.slot}: ${entry.reason}`)
+          .slice(0, 4)
+        : [];
+    throw new Error(compositeReasons.length
+      ? `${message} (${compositeReasons.join(', ')})` : message);
   }
 
   return body;
@@ -579,6 +604,24 @@ export async function submitViewerQuizScoreForActiveStudy() {
 }
 
 export async function getViewerQuizScoreForActiveStudy() {
+  if (isViewerQuizReadOnlyReportReview()) {
+    const target = getArViewerSaveTargetFromUrl();
+    const reviewed = await fetchJson(buildFormApiUrl(
+      `series/${encodeURIComponent(target.learnerSeriesId)}/viewer-quiz-review-launch`
+    ));
+    if (reviewed?.reviewOnly !== true ||
+        reviewed?.measurementAccess !== 'readOnly' ||
+        cleanString(reviewed?.seriesId) !== target.learnerSeriesId ||
+        cleanString(reviewed?.baseSeriesId) !== target.baseSeriesId ||
+        !reviewed?.reviewScore?.viewerQuizzes) {
+      throw new Error('The scored review is not authorized or its released quiz results are unavailable.');
+    }
+    return {
+      ...reviewed.reviewScore,
+      seriesId: reviewed.seriesId,
+      learnerSeriesId: reviewed.seriesId,
+    };
+  }
   const seriesDoc = await resolveViewerQuizScoreSeriesDoc();
   const seriesId = getSeriesId(seriesDoc);
 
@@ -614,6 +657,24 @@ export async function getReleasedBowelGoldCalipersForActiveStudy({
   }
   return fetchJson(buildFormApiUrl(
     `series/${encodeURIComponent(seriesId)}/viewer-quiz-gold-calipers?quizKey=${encodeURIComponent(quizKey)}&questionKey=${encodeURIComponent(questionKey)}`
+  ));
+}
+
+/** Fetch released, display-only gold contours for a scored combined quiz.
+ * FormAPI enforces tenant, learner, frozen quiz version and correct-answer
+ * release; this client must never infer or fetch private educator geometry. */
+export async function getReleasedCompositeGoldForActiveStudy({
+  quizKey, questionKey,
+}: { quizKey: string; questionKey: string }) {
+  if (!isViewerQuizReadOnlyReportReview()) {
+    throw new Error('Composite gold review requires the read-only scored report viewer.');
+  }
+  const target = getArViewerSaveTargetFromUrl();
+  if (!target.learnerSeriesId || !quizKey || !questionKey) {
+    throw new Error('The submitted quiz and question are required for composite review.');
+  }
+  return fetchJson(buildFormApiUrl(
+    `series/${encodeURIComponent(target.learnerSeriesId)}/viewer-quiz-gold-composite?quizKey=${encodeURIComponent(quizKey)}&questionKey=${encodeURIComponent(questionKey)}`
   ));
 }
 

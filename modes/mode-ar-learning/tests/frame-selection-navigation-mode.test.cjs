@@ -282,7 +282,8 @@ test('frame-only navigation re-resolves the display-set viewport and reports fai
 
 test('measurement label wraps and longitudinal caliper spacing uses learner calibration', () => {
   assert.match(panelSource, /getBowelMeasurementSetMidpointSpacingMm\(bowelGeometryEntries\)/);
-  assert.match(panelSource, /Caliper midpoint spacing:/);
+  assert.match(panelSource, /Caliper spacing \(centre-to-centre\):/);
+  assert.match(panelSource, /informational; not an endpoint scoring tolerance/);
   assert.match(panelSource, /whitespace-normal break-words text-xs text-gray-300/);
   assert.match(panelSource, /getLearnerBwtCaptureFailureMessage\(reason\)/);
 });

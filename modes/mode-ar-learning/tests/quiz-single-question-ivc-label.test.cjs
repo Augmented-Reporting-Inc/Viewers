@@ -25,7 +25,7 @@ test('learner question dropdown uses saved selection and only renders its questi
   assert.match(panel, /value=\{quizzes\.some\(quiz/);
   assert.match(panel, /if \(question\) \{\s*void selectQuestion\(quiz, question\);/);
   assert.match(panel, /if \(activeQuestionKey !== questionSelectionKey\) return null;/);
-  assert.match(panel, /\{renderQuestion\(quiz, question, submitted\)\}/);
+  assert.match(panel, /\{renderQuestion\(quiz, question, submitted \|\| scoredReviewReadOnly\)\}/);
   assert.match(panel, /\{renderQuestionReview\(quiz, question, quizScore\)\}/);
 });
 
