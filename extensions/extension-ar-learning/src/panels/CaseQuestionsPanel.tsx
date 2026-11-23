@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState, useRef } from 'react';
+import { EchoEFContourVolumes } from 'extension-ar-measurements';
 import {
   getViewerQuizAuthoringContent,
   getViewerQuizzesForActiveStudy,
@@ -6944,27 +6945,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
             const hasSaved = Array.isArray(value?.compositeResult?.components);
             if (!hasLive && !hasSaved) return null;
             const volumes = hasLive ? live : savedValues;
-            return (
-              <div className="mt-2 rounded border border-cyan-800 p-2 text-xs text-gray-200">
-                <div className="mb-1 font-semibold text-cyan-100">
-                  {hasLive ? 'Current' : 'Saved'} single-view LV contour volumes (mL)
-                </div>
-                {EF_CONTOUR_FRAME_SLOTS.map(({ slot, label }) => {
-                  const raw = volumes[slot];
-                  const volume = raw == null || raw === '' ? NaN : Number(raw);
-                  return (
-                    <div key={slot} className="flex justify-between gap-2 py-0.5">
-                      <span>{label}</span>
-                      <span className={Number.isFinite(volume) && volume > 0
-                        ? 'font-semibold text-emerald-200' : 'text-amber-200'}>
-                        {Number.isFinite(volume) && volume > 0
-                          ? volume.toFixed(2) + ' mL' : 'Not available'}
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
-            );
+            return <EchoEFContourVolumes volumes={volumes} status={hasLive ? 'Current' : 'Saved'} />;
           })() : null}
 
           {cleanString(
