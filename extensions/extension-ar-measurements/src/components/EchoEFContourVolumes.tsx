@@ -1,8 +1,5 @@
 import React from 'react';
-import {
-  calculateLVSimpsonContourVolumeForMeasurement,
-  LV_SIMPSON_SLOT_ORDER,
-} from '../utils/lvSimpson';
+export { getLVSimpsonSourceVolumes } from '../utils/echoEFSourceVolumes';
 
 export const ECHO_EF_CONTOUR_SLOTS = [
   { slot: 'A4C_ED', label: 'A4C end-diastole' },
@@ -10,33 +7,6 @@ export const ECHO_EF_CONTOUR_SLOTS = [
   { slot: 'A2C_ED', label: 'A2C end-diastole' },
   { slot: 'A2C_ES', label: 'A2C end-systole' },
 ] as const;
-
-/**
- * Research and Education both use the verified LV Simpson contour calculator.
- * Accept only explicitly identified contour slots. Ambiguous duplicates do not
- * produce a plausible but arbitrary value; they must be resolved by the owner.
- */
-export function getLVSimpsonSourceVolumes(annotations: any[] = []) {
-  const bySlot: Record<string, number | null> = {};
-  const counts: Record<string, number> = {};
-  for (const annotation of annotations) {
-    const slot = String(annotation?.lvSimpson?.slot ||
-      annotation?.measurements?.lvSimpson?.slot ||
-      annotation?.slot || '').trim();
-    const kind = String(annotation?.measurementKind ||
-      annotation?.lvSimpson?.measurementKind ||
-      annotation?.measurements?.measurementKind || '').trim();
-    if (kind !== 'lvSimpsonSlot' || !LV_SIMPSON_SLOT_ORDER.includes(slot)) continue;
-    counts[slot] = (counts[slot] || 0) + 1;
-    const volume = calculateLVSimpsonContourVolumeForMeasurement(annotation);
-    bySlot[slot] = volume != null && Number.isFinite(volume) && volume > 0
-      ? volume : null;
-  }
-  for (const slot of LV_SIMPSON_SLOT_ORDER) {
-    if (counts[slot] > 1) bySlot[slot] = null;
-  }
-  return bySlot;
-}
 
 /** Presentation only. Does not read or mutate answers, scoring or persistence. */
 export function EchoEFContourVolumes({
