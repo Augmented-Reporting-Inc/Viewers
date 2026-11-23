@@ -46,16 +46,12 @@ export function reconcileResearchEchoCompositeAnswers(
       };
     } else {
       // Even an unpinned research protocol must not retain an old derived
-      // value after its source annotation was deleted or superseded. Do not
+      // value without a valid compatible candidate and calculation. Do not
       // replace it with another candidate unless the frame-pinned workflow
       // or the reader's explicit source selection authorizes that binding.
-      const previousKey = String(current.sourceMeasurementKey || '').trim();
-      const previousStillValid = compatible.some(candidate =>
-        candidate.sourceMeasurementKey === previousKey
-      );
       const fixedProtocol = getResearchProtocolViewerTargets(field).length > 0 ||
         field?.config?.compositeFrameGuidanceEnabled === true;
-      if ((current.source === 'viewer-derived' && !previousStillValid) ||
+      if (current.source === 'viewer-derived' ||
           (fixedProtocol && String(field.componentKey) === 'ivcCollapsibility' &&
             !compatible.length)) {
         delete nextValues[field.key];
