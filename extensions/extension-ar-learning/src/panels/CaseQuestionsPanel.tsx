@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState, useRef } from 'react';
 import { EchoEFContourVolumes } from '../../../extension-ar-measurements/src/components/EchoEFContourVolumes';
 import { EchoCompositeResultStatus } from '../../../extension-ar-measurements/src/components/EchoCompositeResultStatus';
+import { SharedQuestionSelector, SharedQuestionStepNavigation } from '../../../extension-ar-measurements/src/components/SharedQuestionNavigation';
 import { getEchoCompositeAcquisitionSteps } from '../../../extension-ar-measurements/src/utils/echoCompositeAcquisition';
 import { EchoContourTechniqueButtons } from '../../../extension-ar-measurements/src/components/EchoContourTechniqueButtons';
 import {
@@ -8594,28 +8595,15 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     const navigatingDisabled = disabled || !!capturingMeasurementKey ||
       !!capturingFrameKey || !!capturingPointKey || !!capturingAuthoringKey;
     return (
-      <nav aria-label="Question navigation" className="mt-3 flex items-center justify-between gap-2 border-t border-gray-700 pt-3">
-        {([-1, 1] as const).map(direction => {
-          const target = orderedQuestions[index + direction];
-          const label = direction === -1 ? 'Previous' : 'Next';
-          return (
-            <button
-              key={direction}
-              type="button"
-              data-quiz-review-action="navigation"
-              aria-label={`${label} question`}
-              className="rounded border border-blue-600 px-3 py-2 text-xs font-semibold text-blue-100 hover:bg-blue-950 disabled:cursor-not-allowed disabled:opacity-40"
-              disabled={navigatingDisabled || !target}
-              onClick={event => {
-                event.preventDefault();
-                event.stopPropagation();
-                if (target) void selectQuestion(quiz, target);
-              }}
-            >{label}</button>
-          );
-        })}
-      </nav>
-    );
+      <SharedQuestionStepNavigation
+        previousKey={orderedQuestions[index - 1]?.questionKey || ''}
+        nextKey={orderedQuestions[index + 1]?.questionKey || ''}
+        disabled={navigatingDisabled}
+        onNavigate={questionKey => {
+          const target = orderedQuestions.find(item => item.questionKey === questionKey);
+          if (target) void selectQuestion(quiz, target);
+        }}
+      />
   }
 
   if (authoringMode) {
@@ -8775,43 +8763,37 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         </div>
         {hasLearnerQuizContent ? (
           <>
-            <label className="mt-3 block text-xs font-semibold text-gray-200" htmlFor="quiz-learner-question-select">
-              Question
-            </label>
-            <select
+            <SharedQuestionSelector
               id="quiz-learner-question-select"
-              className="mt-1 w-full min-w-0 rounded border border-gray-600 bg-gray-900 px-2 py-2 text-sm text-white"
-              value={quizzes.some(quiz => (quiz.questions || []).some(question =>
+              title="Question"
+              selectedKey={quizzes.some(quiz => (quiz.questions || []).some(question =>
                 activeQuestionKey === `${quiz.quizKey}:${question.questionKey}`))
                 ? activeQuestionKey : ''}
               disabled={!!capturingMeasurementKey || !!capturingFrameKey || !!capturingPointKey}
-              onChange={event => {
+              groups={quizzes.map(quiz => ({
+                key: `${quiz.quizKey}:${quiz.quizVersion}`,
+                label: quiz.title || 'Case Questions',
+                questions: [...(quiz.questions || [])]
+                  .sort((a, b) => Number(a.sortOrder || 0) - Number(b.sortOrder || 0))
+                  .map(question => ({
+                    key: `${quiz.quizKey}:${question.questionKey}`,
+                    label: question.title || question.prompt || question.questionKey,
+                    answered: isLearnerQuestionAnswered(
+                      question, answersByQuizKey?.[quiz.quizKey]?.[question.questionKey]
+                    ),
+                  })),
+              }))}
+              onSelect={key => {
                 for (const quiz of quizzes) {
                   const question = (quiz.questions || []).find(item =>
-                    event.target.value === `${quiz.quizKey}:${item.questionKey}`);
+                    key === `${quiz.quizKey}:${item.questionKey}`);
                   if (question) {
                     void selectQuestion(quiz, question);
                     return;
                   }
                 }
               }}
-            >
-              <option value="">Select a question…</option>
-              {quizzes.map(quiz => (
-                <optgroup key={`${quiz.quizKey}:${quiz.quizVersion}`} label={quiz.title || 'Case Questions'}>
-                  {[...(quiz.questions || [])].sort((a, b) =>
-                    Number(a.sortOrder || 0) - Number(b.sortOrder || 0)
-                  ).map((question, index) => (
-                    <option key={question.questionKey}
-                      value={`${quiz.quizKey}:${question.questionKey}`}>
-                      {index + 1}. {isLearnerQuestionAnswered(
-                        question, answersByQuizKey?.[quiz.quizKey]?.[question.questionKey]
-                      ) ? '✓ ' : ''} {question.title || question.prompt || question.questionKey}
-                    </option>
-                  ))}
-                </optgroup>
-              ))}
-            </select>
+            />
           </>
         ) : null}
       </div>
