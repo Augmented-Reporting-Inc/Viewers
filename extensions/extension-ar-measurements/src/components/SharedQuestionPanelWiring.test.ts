@@ -9,16 +9,22 @@ const research = fs.readFileSync(
 );
 
 describe('Education and Research share the same question presentation implementation', () => {
-  it('uses one selector, step navigation, card and measurement answer input', () => {
+  it('mounts the actual Learning renderer and keeps numeric inputs common', () => {
+    const renderer = fs.readFileSync(
+      path.resolve(__dirname, '../../../extension-ar-learning/src/panels/LearningQuestionPanel.tsx'),
+      'utf8'
+    );
+    expect(learning).toContain('<LearningQuestionPanel');
+    expect(research).toContain('<LearningQuestionPanel');
     for (const component of [
       'SharedQuestionSelector',
       'SharedQuestionStepNavigation',
       'SharedQuestionCard',
-      'SharedMeasurementValueInput',
     ]) {
-      expect(learning).toContain('<' + component);
-      expect(research).toContain('<' + component);
+      expect(renderer).toContain('<' + component);
     }
+    expect(learning).toContain('<SharedMeasurementValueInput');
+    expect(research).toContain('<SharedMeasurementValueInput');
   });
 
   it('keeps workflow-specific answer ownership instead of routing Research through quiz scoring', () => {
