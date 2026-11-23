@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { getEchoCompositeAcquisitionSteps } from '../../../extension-ar-measurements/src/utils/echoCompositeAcquisition';
 import {
   getResearchEchoPhases,
   getResearchEchoPhaseTarget,
@@ -39,6 +40,14 @@ export default function ResearchEchoGuidedControls({
     const result = await commandsManager.runCommand(name, payload);
     if (result?.ok === false) throw new Error(result?.reason || name + ' failed');
     return result;
+  };
+  const runCompositeSteps = async (
+    measurementKind: 'laVolumeDisks' | 'rvFac' | 'ivcCollapsibility',
+    slot: string, technique: 'freehand' | 'axisApex' = 'freehand'
+  ) => {
+    const steps = getEchoCompositeAcquisitionSteps(measurementKind, slot, technique);
+    if (!steps.length) throw new Error('Unsupported configured Echo measurement phase.');
+    for (const step of steps) await command(step.name, step.payload);
   };
   const openPhase = async (slot: string) => {
     const target = getResearchEchoPhaseTarget(field, slot);
@@ -189,28 +198,22 @@ export default function ResearchEchoGuidedControls({
                     ? <>
                       {button('Freehand', phase.slot + ':freehand', async () => {
                         await openPhase(phase.slot);
-                        await command('startLAVolumeWorkflow', {
-                          slot: phase.slot, contourTechnique: 'freehand', autoContinue: false,
-                        });
+                        await runCompositeSteps('laVolumeDisks', phase.slot, 'freehand');
                       }, blocked)}
                       {button('Axis + apex', phase.slot + ':axis', async () => {
                         await openPhase(phase.slot);
-                        await command('startLAVolumeWorkflow', {
-                          slot: phase.slot, contourTechnique: 'axisApex', autoContinue: false,
-                        });
+                        await runCompositeSteps('laVolumeDisks', phase.slot, 'axisApex');
                       }, blocked)}
                     </>
                     : kind === 'rvFac'
                       ? <>
                         {button('Freehand', phase.slot + ':freehand', async () => {
                           await openPhase(phase.slot);
-                          await command('startEchoAreaContourWorkflow', {
-                            slot: phase.slot, clickTrace: true,
-                          });
+                          await runCompositeSteps('rvFac', phase.slot, 'freehand');
                         }, blocked)}
                         {button('Axis + apex', phase.slot + ':axis', async () => {
                           await openPhase(phase.slot);
-                          await command('startGuidedRVFACContourWorkflow', { slot: phase.slot });
+                          await runCompositeSteps('rvFac', phase.slot, 'axisApex');
                         }, blocked)}
                       </>
                       : <>
@@ -219,10 +222,7 @@ export default function ResearchEchoGuidedControls({
                             (phase.slot === 'IVC_EXP' ? 'IVCexp' : 'IVCinsp'),
                           phase.slot + ':length', async () => {
                             await openPhase(phase.slot);
-                            await command('resetViewerLengthLabelMode', {});
-                            await command('activateViewerMeasurementTool', {
-                              toolName: 'Length', stopCine: true,
-                            });
+                            await runCompositeSteps('ivcCollapsibility', phase.slot);
                             // Keep the original annotation until the new
                             // calibrated source is verified after labelling.
                             onBeginIVCPhaseRedraw?.(field, phase.slot, phaseSources);
