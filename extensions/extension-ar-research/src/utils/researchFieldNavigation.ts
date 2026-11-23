@@ -301,27 +301,41 @@ export function getResearchCompatibleMeasurementCandidates(
 export function getResearchBindingSources(
   field: any, sources: Record<string, any> = {}, candidates: any[] = []
 ) {
+  const kind = cleanString(field?.componentKey);
+  const isIVC = kind === 'ivcCollapsibility';
+  const isGuidedComposite = ['lvEjectionFraction', 'laVolumeDisks', 'rvFac'].includes(kind);
   const fixedPhases = field?.config?.compositeFrameTargets;
-  if (cleanString(field?.componentKey) !== 'ivcCollapsibility' ||
-      !fixedPhases || typeof fixedPhases !== 'object' ||
-      !fixedPhases.IVC_EXP || !fixedPhases.IVC_INSP) return sources;
+  if ((!isIVC && !isGuidedComposite) ||
+      !fixedPhases || typeof fixedPhases !== 'object') return sources;
+  const requiredSlots: Record<string, string[]> = {
+    lvEjectionFraction: ['A4C_ED', 'A4C_ES', 'A2C_ED', 'A2C_ES'],
+    laVolumeDisks: ['A4C', 'A2C'],
+    rvFac: ['RV_ED', 'RV_ES'],
+    ivcCollapsibility: ['IVC_EXP', 'IVC_INSP'],
+  };
+  const slots = requiredSlots[kind];
+  if (!slots.every(slot => !!fixedPhases[slot])) return sources;
 
   const current = sources?.[field.key] || {};
   const currentKind = cleanString(current.source);
   const previousKey = cleanString(current.sourceMeasurementKey);
-  // When the reader intentionally replaces a validated Length, both source
-  // annotation IDs change. Keep the no-guessing rule: release the previous key
-  // only if there is exactly one compatible, verified IVC candidate.
+  // Retain existing manually selected values unless the protocol pins every
+  // phase and a single verified composite calculation supplies replacement.
+  // An old source key may be replaced only by one new verified candidate.
   const eligible = (Array.isArray(candidates) ? candidates : []).filter(item =>
     cleanString(item.source) === 'viewer-derived' &&
-    cleanString(item.sourceMeasurementKey).startsWith('ivc-collapse:')
+    cleanString(item.sourceMeasurementKey).startsWith(
+      kind === 'lvEjectionFraction' ? 'lv-simpson:' :
+      kind === 'laVolumeDisks' ? 'la-disks:' :
+      kind === 'rvFac' ? 'rv-fac:' : 'ivc-collapse:'
+    )
   );
   const changedVerifiedSource = eligible.length === 1 &&
     !!previousKey && previousKey !== cleanString(eligible[0].sourceMeasurementKey);
   if (currentKind !== 'manual' && !changedVerifiedSource) return sources;
-
+  if (eligible.length !== 1) return sources;
   return { ...sources, [field.key]: {
-    source: 'viewer-derived', sourceMeasurementKey:
-      changedVerifiedSource ? '' : previousKey,
+    source: 'viewer-derived',
+    sourceMeasurementKey: changedVerifiedSource ? '' : previousKey,
   } };
 }
