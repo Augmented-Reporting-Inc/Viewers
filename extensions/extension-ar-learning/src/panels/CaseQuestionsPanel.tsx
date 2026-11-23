@@ -3,6 +3,7 @@ import { EchoEFContourVolumes } from '../../../extension-ar-measurements/src/com
 import { EchoCompositeResultStatus } from '../../../extension-ar-measurements/src/components/EchoCompositeResultStatus';
 import { SharedQuestionSelector, SharedQuestionStepNavigation } from '../../../extension-ar-measurements/src/components/SharedQuestionNavigation';
 import { SharedMeasurementValueInput } from '../../../extension-ar-measurements/src/components/SharedMeasurementValueInput';
+import { SharedQuestionCard } from '../../../extension-ar-measurements/src/components/SharedQuestionCard';
 import { getEchoCompositeAcquisitionSteps } from '../../../extension-ar-measurements/src/utils/echoCompositeAcquisition';
 import { EchoContourTechniqueButtons } from '../../../extension-ar-measurements/src/components/EchoContourTechniqueButtons';
 import {
@@ -8853,60 +8854,27 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                           !shouldGuideFrameSelectionToInstance(question));
 
                       return (
-                        <div
+                        <SharedQuestionCard
+                          id={question.questionKey}
                           key={question.questionKey}
-                          className={`bg-gray-950/50 w-full min-w-0 max-w-full overflow-hidden rounded border p-2 ${
-                            isActiveQuestion
-                              ? 'border-blue-400'
-                              : hasViewerTarget
-                                ? 'border-gray-600'
-                                : 'border-gray-800'
-                          }`}
-                          onClick={() => selectQuestion(quiz, question)}
-                          onFocusCapture={event => {
-                            // Review buttons navigate explicitly to the exact
-                            // learner/gold frame. Focus must not start a second
-                            // background "open question" navigation that can
-                            // race and reset the viewport to the instance.
+                          index={index}
+                          title={question.title || question.prompt || question.questionKey}
+                          prompt={question.title ? question.prompt : ''}
+                          helpText={question.helpText}
+                          required={question.required}
+                          active={isActiveQuestion}
+                          hasViewerTarget={hasViewerTarget}
+                          onActivate={() => selectQuestion(quiz, question)}
+                          onFocusActivate={event => {
+                            // Quiz overlays have explicit navigation targets.
                             if ((event.target as HTMLElement)?.closest?.('[data-quiz-review-action]')) return;
                             selectQuestion(quiz, question);
                           }}
                         >
-                          {isActiveQuestion ? (
-                            <div className="mb-1 inline-flex rounded bg-blue-600 px-2 py-0.5 text-[11px] font-semibold text-white">
-                              Active Question
-                            </div>
-                          ) : null}
-                          <div
-                            className="min-w-0 max-w-full text-sm font-semibold"
-                            style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}
-                          >
-                            {index + 1}. {question.title || question.prompt}
-                            {question.required ? <span className="text-red-300"> *</span> : null}
-                          </div>
-
-                          {question.title ? (
-                            <div
-                              className="mt-1 min-w-0 max-w-full text-xs text-gray-300"
-                              style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}
-                            >
-                              {question.prompt}
-                            </div>
-                          ) : null}
-
-                          {question.helpText ? (
-                            <div
-                              className="mt-1 min-w-0 max-w-full text-xs text-gray-400"
-                              style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}
-                            >
-                              {question.helpText}
-                            </div>
-                          ) : null}
-
                           {renderQuestion(quiz, question, submitted || scoredReviewReadOnly)}
                           {renderQuestionReview(quiz, question, quizScore)}
                           {renderQuestionNavigation(quiz, question, questions, quizSaving)}
-                        </div>
+                        </SharedQuestionCard>
                       );
                     })}
                   </div>
