@@ -176,12 +176,18 @@ export function isResearchCandidateOnProtocolFrames(
   }
   if (!fixedTargets.length) return true;
   const sourceKeys = getResearchSourceAnnotationIds(candidate?.sourceMeasurementKey);
+  // The composite derived result must contain exactly one source per
+  // configured protocol phase, not a convenient subset plus unrelated ROI.
+  if (['lvEjectionFraction', 'laVolumeDisks', 'rvFac', 'ivcCollapsibility']
+      .includes(cleanString(field?.componentKey)) &&
+      sourceKeys.length !== fixedTargets.length) return false;
+  if (new Set(sourceKeys).size !== sourceKeys.length) return false;
   const matchedAnnotations = sourceKeys
     .map(key => annotations.find(item => cleanString(
       item?.annotationId || item?.annotationUID || item?.uid || item?.id
     ) === key))
     .filter(Boolean);
-  if (!matchedAnnotations.length) return false;
+  if (matchedAnnotations.length !== sourceKeys.length) return false;
   const remaining = [...matchedAnnotations];
   for (const { viewerTarget } of fixedTargets) {
     const index = remaining.findIndex(annotation =>
