@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState, useRef } from 'react';
 import { EchoEFContourVolumes } from '../../../extension-ar-measurements/src/components/EchoEFContourVolumes';
 import { EchoCompositeResultStatus } from '../../../extension-ar-measurements/src/components/EchoCompositeResultStatus';
 import { getEchoCompositeAcquisitionSteps } from '../../../extension-ar-measurements/src/utils/echoCompositeAcquisition';
+import { EchoContourTechniqueButtons } from '../../../extension-ar-measurements/src/components/EchoContourTechniqueButtons';
 import {
   getViewerQuizAuthoringContent,
   getViewerQuizzesForActiveStudy,
@@ -6097,32 +6098,19 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         {views.map(({ slot, label }) => (
           <div key={slot} className="mb-2 flex flex-wrap items-center gap-2">
             {renderCompositePhaseStatusAndDelete(quiz, question, slot, disabled, label)}
-            {[
-              { text: 'Freehand', contourTechnique: 'freehand' },
-              { text: 'Axis + apex', contourTechnique: 'axisApex' },
-            ].map(choice => (
-              <button
-                key={choice.contourTechnique}
-                type="button"
-                disabled={disabled || (config.compositeFrameGuidanceEnabled === true &&
-                  !plainObject(config.compositeFrameTargets)[slot]?.sopInstanceUID)}
-                className="rounded border border-cyan-600 px-2 py-1 text-cyan-100 disabled:opacity-40"
-                onClick={event => {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  void (async () => {
-                    await activateQuestionForPhaseCapture(quiz, question);
-                    if (!(await ensureConfiguredCompositePhaseFrame(question, slot))) return;
-                    for (const step of getEchoCompositeAcquisitionSteps(
-                      'laVolumeDisks', slot, choice.contourTechnique as 'freehand' | 'axisApex'
-                    )) await runViewerCommand(commandsManager, step.name, step.payload);
-                  })();
-                }}
-              >
-                {choice.text}
-              </button>
-            ))}
-          </div>
+            <EchoContourTechniqueButtons
+              disabled={disabled || (config.compositeFrameGuidanceEnabled === true &&
+                !plainObject(config.compositeFrameTargets)[slot]?.sopInstanceUID)}
+              onChoose={technique => {
+                void (async () => {
+                  await activateQuestionForPhaseCapture(quiz, question);
+                  if (!(await ensureConfiguredCompositePhaseFrame(question, slot))) return;
+                  for (const step of getEchoCompositeAcquisitionSteps(
+                    'laVolumeDisks', slot, technique
+                  )) await runViewerCommand(commandsManager, step.name, step.payload);
+                })();
+              }}
+            />         </div>
         ))}
       </div>
     );
@@ -6143,33 +6131,19 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         {slots.map(({ slot, label }) => (
           <div key={slot} className="mb-2 flex flex-wrap items-center gap-2">
             {renderCompositePhaseStatusAndDelete(quiz, question, slot, disabled, label)}
-            {[
-              { text: 'Freehand', command: 'startEchoAreaContourWorkflow' },
-              { text: 'Axis + apex', command: 'startGuidedRVFACContourWorkflow' },
-            ].map(choice => (
-              <button
-                key={choice.command}
-                type="button"
-                disabled={disabled || (config.compositeFrameGuidanceEnabled === true &&
-                  !plainObject(config.compositeFrameTargets)[slot]?.sopInstanceUID)}
-                className="rounded border border-cyan-600 px-2 py-1 text-cyan-100 disabled:opacity-40"
-                onClick={event => {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  void (async () => {
-                    await activateQuestionForPhaseCapture(quiz, question);
-                    if (!(await ensureConfiguredCompositePhaseFrame(question, slot))) return;
-                    for (const step of getEchoCompositeAcquisitionSteps(
-                      'rvFac', slot, choice.command === 'startEchoAreaContourWorkflow'
-                        ? 'freehand' : 'axisApex'
-                    )) await runViewerCommand(commandsManager, step.name, step.payload);
-                  })();
-                }}
-              >
-                {choice.text}
-              </button>
-            ))}
-          </div>
+            <EchoContourTechniqueButtons
+              disabled={disabled || (config.compositeFrameGuidanceEnabled === true &&
+                !plainObject(config.compositeFrameTargets)[slot]?.sopInstanceUID)}
+              onChoose={technique => {
+                void (async () => {
+                  await activateQuestionForPhaseCapture(quiz, question);
+                  if (!(await ensureConfiguredCompositePhaseFrame(question, slot))) return;
+                  for (const step of getEchoCompositeAcquisitionSteps(
+                    'rvFac', slot, technique
+                  )) await runViewerCommand(commandsManager, step.name, step.payload);
+                })();
+              }}
+            />         </div>
         ))}
       </div>
     );
