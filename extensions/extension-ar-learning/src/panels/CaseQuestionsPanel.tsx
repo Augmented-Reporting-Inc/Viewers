@@ -7283,7 +7283,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                   <div className="text-gray-300">
                     Endpoints: {formatMeasurementReviewEndpoints(rubricMeasurement)}
                   </div>
-                ) : null
+                ) : null}
               </div>
             ) : null}
           </>
