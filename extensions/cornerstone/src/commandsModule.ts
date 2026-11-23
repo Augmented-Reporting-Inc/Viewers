@@ -138,11 +138,12 @@ import { getEchoAreaSlot, calculateRVFACFromMeasurements } from '../../extension
 import { resolveViewerQuizCompositeResult, resolveViewerQuizLVSimpsonForStudy, isViewerQuizCompositeReviewCurrent, getViewerQuizCompositeStatus, calibratedLVContourAreaCM2 } from '../../extension-ar-measurements/src/utils/viewerQuizCompositeResults';
 import { createGuidedMouseToolOwnership } from './utils/guidedMouseToolOwnership';
 import { calibrateUSContourPoints, worldToImageIndex } from './utils/usRegionLengthCalibration';
-import { getQuizEchoAreaSourceMetadata, calculateCalibratedEchoAreaCM2, getSavedQuizEchoAreaDisplayInfo, getQuizCompositeContourViewportLines, getQuizCompositeGoldContourSlotMetadata, getVerifiedEFGoldContourViewportLines } from './utils/quizEchoAreaCalibration';
+import { getQuizEchoAreaSourceMetadata, calculateCalibratedEchoAreaCM2, getSavedQuizEchoAreaDisplayInfo, getQuizCompositeContourViewportLines, getQuizCompositeGoldContourSlotMetadata, getVerifiedEFGoldContourViewportLines, getVerifiedEFLearnerContourViewportLines } from './utils/quizEchoAreaCalibration';
 import { installQuizContourTextRenderer } from './utils/installQuizContourTextRenderer';
 import { consumeViewerLengthFirstLabelMode } from './utils/viewerLengthLabelMode';
 import { getViewerQuizRouteMeasurementDomain } from '../../extension-ar-learning/src/utils/viewerQuizMeasurementDomain';
 import { resolveViewerQuizGoldAreaBackfill, resolveSavedEFGoldContourAreas, resolveVerifiedEFGoldContourAreasFromDicom } from '../../extension-ar-measurements/src/utils/quizGoldAreaBackfill';
+import { getSubmittedEFReviewContour } from './utils/quizEFSubmittedReviewContour';
 
 const { DefaultHistoryMemo } = csUtils.HistoryMemo;
 const toggleSyncFunctions = {
@@ -5874,6 +5875,10 @@ function installLVSimpsonContourTextCleanupForViewport({ viewport, viewportId = 
         data?.arVerifiedQuizEFGoldContour
       );
       if (goldEFText) return goldEFText;
+      const learnerEFText = getVerifiedEFLearnerContourViewportLines(
+        data?.arVerifiedQuizEFLearnerContour
+      );
+      if (learnerEFText) return learnerEFText;
       const lv = data?.lvSimpson || {};
       const slot = String(lv.slot || '');
       if (['A4C_ED', 'A4C_ES', 'A2C_ED', 'A2C_ES'].includes(slot)) {
@@ -8508,7 +8513,7 @@ function commandsModule({
   const viewerMeasurementsModifiedInSession = new Set<string>();
   const viewerMeasurementsDeletedInSession = new Set<string>();
   const viewerQuizMeasurementComparisonAnnotationIds = new Set<string>();
-  const viewerQuizGoldEFDisplayAnnotationIds = new Set<string>();
+  const viewerQuizReviewEFDisplayAnnotationIds = new Set<string>();
   const {
     viewportGridService,
     toolGroupService,
@@ -8755,17 +8760,40 @@ function commandsModule({
         axisMM: Number.isFinite(axis) && axis > 0 ? axis : null,
       },
     };
-    viewerQuizGoldEFDisplayAnnotationIds.add(annotationId);
+    viewerQuizReviewEFDisplayAnnotationIds.add(annotationId);
+  }
+
+  // Temporary, read-only UI label. The persisted submitted answer supplies
+  // the per-slot calibrated volume; native ROI area is never a substitute.
+  function applyVerifiedEFLearnerLabel(
+    annotationId: string, slot: string, savedVolumeML: number | null, hydrated?: any
+  ) {
+    if (!['A4C_ED', 'A4C_ES', 'A2C_ED', 'A2C_ES'].includes(slot)) return;
+    const source = annotation.state.getAnnotation?.(annotationId) || hydrated;
+    if (!source) return;
+    const volume = Number(savedVolumeML);
+    source.data = {
+      ...(source.data || {}),
+      arVerifiedQuizEFLearnerContour: {
+        origin: 'quiz-learner', slot,
+        volumeML: savedVolumeML != null && Number.isFinite(volume) && volume > 0
+          ? volume : null,
+      },
+    };
+    viewerQuizReviewEFDisplayAnnotationIds.add(annotationId);
   }
 
   function clearViewerQuizMeasurementComparisonAnnotations() {
-    for (const annotationId of viewerQuizGoldEFDisplayAnnotationIds) {
+    for (const annotationId of viewerQuizReviewEFDisplayAnnotationIds) {
       const source = annotation.state.getAnnotation?.(annotationId);
       if (source?.data?.arVerifiedQuizEFGoldContour?.origin === 'quiz-gold') {
         delete source.data.arVerifiedQuizEFGoldContour;
       }
+      if (source?.data?.arVerifiedQuizEFLearnerContour?.origin === 'quiz-learner') {
+        delete source.data.arVerifiedQuizEFLearnerContour;
+      }
     }
-    viewerQuizGoldEFDisplayAnnotationIds.clear();
+    viewerQuizReviewEFDisplayAnnotationIds.clear();
     for (const annotationId of viewerQuizMeasurementComparisonAnnotationIds) {
       try {
         annotation.state.removeAnnotation?.(annotationId);
@@ -16660,6 +16688,8 @@ function commandsModule({
       viewerTarget = null,
       focusedCompositeSlot = '',
       questionKey = '',
+      quizKey = '',
+      quizVersion = 1,
       radius = null,
       radiusUnit = 'world',
       endpointToleranceMM = null,
@@ -16668,7 +16698,13 @@ function commandsModule({
       clearViewerQuizMeasurementComparisonAnnotations();
       clearAllViewerQuizMarkerOverlays();
 
-      const { learnerSeriesDoc, baseSeriesDoc } = await getViewerQuizMeasurementSeriesDocs();
+      const isFocusedEFReview = rubricMeasurement?.measurementKind === 'lvSimpsonEF' &&
+        ['A4C_ED', 'A4C_ES', 'A2C_ED', 'A2C_ES'].includes(focusedCompositeSlot) &&
+        !!String(quizKey || '').trim() && !!String(questionKey || '').trim();
+      const { learnerSeriesDoc, baseSeriesDoc } = await getViewerQuizMeasurementSeriesDocs({
+        // EF released gold is embedded; avoid the unrelated educator Series fetch.
+        includeBaseSeries: !isFocusedEFReview,
+      });
 
       // Opt-in BWT comparisons use two separate authorities: learner-copy
       // Series for learner evidence and versioned quiz JSON for educator gold.
@@ -16676,7 +16712,7 @@ function commandsModule({
         String(rubricMeasurement?.measurementKind || '') === 'length' &&
         /BWT/i.test(String(rubricMeasurement?.measurementType || '')) &&
         !!rubricMeasurement?.quizSpatialEvidence;
-      const learnerAnnotation = isBowelGoldReference
+      let learnerAnnotation = isBowelGoldReference
         ? findViewerQuizLearnerOwnedAnnotation(learnerMeasurement, learnerSeriesDoc)
         : findViewerQuizMeasurementAnnotationInSeriesDocs(learnerMeasurement, [
             learnerSeriesDoc, baseSeriesDoc,
@@ -16698,7 +16734,7 @@ function commandsModule({
       const rubricComponents = Array.isArray(rubricMeasurement?.compositeResult?.components)
         ? rubricMeasurement.compositeResult.components
         : [];
-      const expectedSlots =
+      const allExpectedSlots =
         rubricMeasurement?.measurementKind === 'lvSimpsonEF'
           ? ['A4C_ED', 'A4C_ES', 'A2C_ED', 'A2C_ES']
           : ['laVolumeBiplane', 'laVolumeBiplaneDisks'].includes(rubricMeasurement?.measurementKind)
@@ -16710,7 +16746,45 @@ function commandsModule({
                 : rubricMeasurement?.measurementKind === 'ivcCollapsibility'
                   ? ['IVC_EXP', 'IVC_INSP']
                   : [];
+      const expectedSlots = focusedCompositeSlot && allExpectedSlots.includes(focusedCompositeSlot)
+        ? [focusedCompositeSlot] : allExpectedSlots;
       const compositeRubric = expectedSlots.length > 0;
+
+      // Read only the exact submitted EF component for the selected phase.
+      // Generic 'best matching annotation' lookup can select another EF frame.
+      const focusedGold = rubricComponents.find(part => part?.slot === focusedCompositeSlot);
+      const submittedEFContour = isFocusedEFReview ? getSubmittedEFReviewContour({
+        learnerSeriesDoc, quizKey, quizVersion, questionKey,
+        slot: focusedCompositeSlot, goldTarget: focusedGold?.target,
+      }) : null;
+      if (isFocusedEFReview) {
+        const learnerTarget = submittedEFContour?.target || {};
+        const sourceImage = String(learnerTarget.referencedImageId ||
+          focusedGold?.target?.referencedImageId || '').trim();
+        const persisted = submittedEFContour
+          ? getRequestedWorkflowAnnotations(learnerSeriesDoc?.MeasurementAnnotations)
+            .find(part => getMeasurementAnnotationId(part) === submittedEFContour.annotationId)
+          : null;
+        const nativeTool = String(persisted?.toolName || '').trim();
+        learnerAnnotation = submittedEFContour && sourceImage ? {
+          annotationId: submittedEFContour.annotationId,
+          uid: submittedEFContour.annotationId,
+          workflow: VIEWER_MEASUREMENTS_WORKFLOW,
+          toolName: ['SplineROI', 'PlanarFreehandROI'].includes(nativeTool)
+            ? nativeTool : 'PlanarFreehandROI',
+          measurementKind: 'lvSimpsonEF',
+          label: focusedCompositeSlot,
+          measurementRole: focusedCompositeSlot,
+          lvSimpson: { slot: focusedCompositeSlot },
+          StudyInstanceUID: learnerTarget.studyInstanceUID,
+          SeriesInstanceUID: learnerTarget.seriesInstanceUID,
+          SOPInstanceUID: learnerTarget.sopInstanceUID,
+          frameNumber: Number(learnerTarget.frameNumber),
+          referencedImageId: sourceImage,
+          points: submittedEFContour.points,
+          contourClosed: true,
+        } : null;
+      }
       const embeddedContourFromComponent = (component: any, slot: string) => {
         const points = component?.points;
         const target = component?.target || {};
@@ -16723,7 +16797,9 @@ function commandsModule({
         if (
           !Array.isArray(points) ||
           points.length < (rubricMeasurement?.measurementKind === 'ivcCollapsibility' ? 2 : 3) ||
-          points.length > 5000 || !imageId ||
+          // Review accepts bounded high-resolution pinned contours; the
+          // scorer's separate submission limit is unchanged.
+          points.length > 10000 || !imageId ||
           (expectedStudy && (!study || study !== expectedStudy))
         ) {
           return null;
@@ -16811,6 +16887,11 @@ function commandsModule({
         });
       }
 
+      if (isFocusedEFReview && !learnerAnnotation) {
+        return { ok: false, reason: 'submitted-ef-phase-contour-unavailable',
+          learnerRendered: false, rubricRendered: false, renderedSlots: [] };
+      }
+
       if (!learnerAnnotation && !rubricAnnotation && resolvedRubricContours.length === 0) {
         console.warn('[ViewerQuiz] no source annotation available for highlight', {
           questionKey,
@@ -16834,11 +16915,33 @@ function commandsModule({
       let comparisonViewportId = viewportGridService.getActiveViewportId();
 
       if (comparisonTarget) {
-        const navigationResult = await actions.jumpToViewerQuizTarget({
-          viewerTarget: comparisonTarget,
-          questionKey,
-        });
-        comparisonViewportId = navigationResult?.viewportId || comparisonViewportId;
+        let alreadyAtExactFrame = false;
+        if (isFocusedEFReview) {
+          const current = await actions.getCurrentViewerQuizFrameAnswer({
+            viewportId: comparisonViewportId,
+          });
+          const active = current?.answer?.viewerTarget || current?.answer?.selectedTarget || {};
+          alreadyAtExactFrame = current?.ok === true &&
+            ['studyInstanceUID', 'seriesInstanceUID', 'sopInstanceUID'].every(key =>
+              !!String(comparisonTarget[key] || '').trim() &&
+              String(comparisonTarget[key]) === String(active[key])) &&
+            Number.isSafeInteger(Number(comparisonTarget.frameNumber)) &&
+            Number(comparisonTarget.frameNumber) > 0 &&
+            Number(comparisonTarget.frameNumber) === Number(active.frameNumber);
+        }
+        if (!alreadyAtExactFrame) {
+          const navigationResult = await actions.jumpToViewerQuizTarget({
+            viewerTarget: comparisonTarget,
+            questionKey,
+            requireExactSopFrame: isFocusedEFReview,
+            pauseCineOnTarget: isFocusedEFReview,
+          });
+          if (isFocusedEFReview && navigationResult?.ok !== true) {
+            return { ok: false, reason: 'exact-ef-source-frame-unavailable',
+              learnerRendered: false, rubricRendered: false, renderedSlots: [] };
+          }
+          comparisonViewportId = navigationResult?.viewportId || comparisonViewportId;
+        }
       }
 
       const viewport = cornerstoneViewportService.getCornerstoneViewport(comparisonViewportId);
@@ -16911,7 +17014,7 @@ function commandsModule({
         viewport?.getImageData?.()?.metadata?.FrameOfReferenceUID ||
         viewport?.getImageData?.()?.metadata?.frameOfReferenceUID ||
         '';
-      const learnerSourceAnnotationId =
+      const learnerSourceAnnotationId = isFocusedEFReview ? '' :
         getViewerQuizMeasurementSourceAnnotationId(learnerMeasurement);
       const existingLearnerAnnotation = learnerSourceAnnotationId
         ? annotation.state.getAnnotation?.(learnerSourceAnnotationId)
@@ -16936,7 +17039,7 @@ function commandsModule({
         {
           sourceAnnotation: learnerRendered ? null : learnerAnnotation,
           variant: 'learner' as const,
-          slot: '',
+          slot: isFocusedEFReview ? focusedCompositeSlot : '',
         },
         ...(compositeRubric
           ? resolvedRubricContours.map(entry => ({
@@ -16979,8 +17082,15 @@ function commandsModule({
         // contour against its own image rather than navigating the viewport to
         // each subsequent frame (which would leave the wrong frame visible).
         const match = entry.slot
-          ? { imageId: comparisonAnnotation.referencedImageId || '' }
+          ? findImageIdIndexForSavedAnnotation(viewport, comparisonAnnotation)
           : await waitForSavedAnnotationImageMatch(viewport, comparisonAnnotation);
+        if (entry.slot && match.index < 0) continue;
+        if (entry.slot && isFocusedEFReview) {
+          // Only show a per-slot contour on the exact currently displayed frame.
+          const activeImage = normalizeImageIdForCompare(viewport.getCurrentImageId?.() || '');
+          const matchedImage = normalizeImageIdForCompare(match.imageId || '');
+          if (!activeImage || activeImage !== matchedImage) continue;
+        }
         const hydrated = hydrateViewerQuizMeasurementComparisonAnnotation({
           comparisonAnnotation,
           viewport,
@@ -17046,6 +17156,12 @@ function commandsModule({
         if (entry.variant === 'rubric' && entry.slot &&
             rubricMeasurement?.measurementKind === 'lvSimpsonEF') {
           applyVerifiedEFGoldLabel(comparisonAnnotationId, entry.slot, rubricMeasurement, hydratedAnnotation);
+        }
+        if (entry.variant === 'learner' && isFocusedEFReview) {
+          applyVerifiedEFLearnerLabel(
+            comparisonAnnotationId, focusedCompositeSlot,
+            submittedEFContour?.volumeML ?? null, hydratedAnnotation
+          );
         }
         hydratedAnnotation.isLocked = true;
         hydratedAnnotation.isVisible = true;
