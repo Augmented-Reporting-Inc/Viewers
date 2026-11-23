@@ -1,4 +1,4 @@
-import { calculateCalibratedEchoAreaCM2, getSavedQuizEchoAreaDisplayInfo, getQuizCompositeContourViewportLines, getQuizCompositeGoldContourSlotMetadata, getVerifiedEFGoldContourViewportLines, getVerifiedEFLearnerContourViewportLines, getQuizEchoAreaSourceMetadata, registerQuizEchoAreaMeasurementSchema } from './quizEchoAreaCalibration';
+import { calculateCalibratedEchoAreaCM2, getSavedQuizEchoAreaDisplayInfo, getQuizCompositeContourViewportLines, getVerifiedReleasedLAGoldViewportLines, getQuizCompositeGoldContourSlotMetadata, getVerifiedEFGoldContourViewportLines, getVerifiedEFLearnerContourViewportLines, getQuizEchoAreaSourceMetadata, registerQuizEchoAreaMeasurementSchema } from './quizEchoAreaCalibration';
 
 describe('DICOM-calibrated quiz echo area', () => {
   it('calculates physical area in cm² from already calibrated millimetres', () => {
@@ -82,6 +82,31 @@ describe('quiz contour viewport area labels', () => {
     expect(getQuizCompositeContourViewportLines({
       echoArea: { slot: 'RV_ED' }, arSavedMeasurementDisplayText: ['19.3 mm²'],
     }, undefined)).toEqual(['RVEDA: calibrated area unavailable']);
+  });
+});
+
+describe('released pinned LA gold review labels', () => {
+  const evidence = (slot: string, areaCM2: any, kind = 'laVolumeBiplaneDisks') => ({
+    origin: 'released-pinned-quiz-gold', measurementKind: kind, slot, areaCM2,
+  });
+  it('shows each independently verified phase as gold cm², not native ROI area', () => {
+    expect(getVerifiedReleasedLAGoldViewportLines(evidence('A4C', 19.31)))
+      .toEqual(['Gold LA A4C: 19.31 cm²']);
+    expect(getVerifiedReleasedLAGoldViewportLines(evidence('A2C', 12.78)))
+      .toEqual(['Gold LA A2C: 12.78 cm²']);
+    expect(getVerifiedReleasedLAGoldViewportLines(evidence('A4C', 22.5, 'laVolumeBiplane')))
+      .toEqual(['Gold LA A4C: 22.50 cm²']);
+  });
+  it('fails closed when derived area is absent, bogus or comes from another workflow', () => {
+    for (const area of [null, '', undefined, 0, NaN, Infinity, -7]) {
+      expect(getVerifiedReleasedLAGoldViewportLines(evidence('A4C', area))).toBeNull();
+    }
+    expect(getVerifiedReleasedLAGoldViewportLines({
+      ...evidence('A4C', 10000), origin: 'quiz-learner',
+    })).toBeNull();
+    expect(getVerifiedReleasedLAGoldViewportLines(evidence('RV_ED', 18.5))).toBeNull();
+    expect(getVerifiedReleasedLAGoldViewportLines(evidence('A2C', 18.5, 'lvSimpsonEF')))
+      .toBeNull();
   });
 });
 
