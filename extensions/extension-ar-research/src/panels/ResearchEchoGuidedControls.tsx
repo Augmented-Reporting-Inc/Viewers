@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import ViewerEchoPhaseControls from '../../../extension-ar-measurements/src/panels/ViewerEchoPhaseControls';
 import {
   getResearchEchoPhases,
   getResearchEchoPhaseTarget,
@@ -152,128 +153,96 @@ export default function ResearchEchoGuidedControls({
         </div>
       ) : (
         <div className="mt-2 space-y-3">
-          {kind === 'laVolumeDisks' ? (
-            <p>Select A4C and A2C end-systolic sources. Use freehand or axis +
-              apex contours; the existing 20-disk calculator derives LA volume.</p>
-          ) : kind === 'rvFac' ? (
-            <p>Draw end-diastolic RVEDA and end-systolic RVESA from the
-              selected RV-focused views; existing viewer tools derive FAC.</p>
-          ) : (
-            <p>Draw two calibrated Length measurements: IVCexp and IVCinsp.
-              The existing IVC calculator derives collapsibility; RAP remains a separate explicit choice.</p>
-          )}
-          {phases.map(phase => {
-            const blocked = isRequiredResearchPhaseMissing(field, phase.slot);
-            const phaseSources = kind === 'ivcCollapsibility'
-              ? (ivcMeasurementState?.phaseSources?.[phase.slot] || [])
-              : [];
-            return (
-              <div key={phase.slot} className="border-t border-gray-700 pt-2">
-                <div className="mb-2 flex flex-wrap items-center justify-between gap-2 font-medium text-gray-100">
-                  <span>{phase.label}</span>
-                  {kind === 'ivcCollapsibility' ? (() => {
-                    const diameter = phase.slot === 'IVC_EXP'
-                      ? ivcMeasurementState?.values?.expirationDiameterMM
-                      : ivcMeasurementState?.values?.inspirationDiameterMM;
-                    return (
-                      <span className="text-cyan-100">
-                        {diameter != null && Number.isFinite(Number(diameter))
-                          ? Number(diameter).toFixed(1) + ' mm'
-                          : 'No calibrated diameter'}
-                      </span>
-                    );
-                  })() : null}
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  {kind === 'laVolumeDisks'
-                    ? <>
-                      {button('Freehand', phase.slot + ':freehand', async () => {
-                        await openPhase(phase.slot);
-                        await command('startLAVolumeWorkflow', {
-                          slot: phase.slot, contourTechnique: 'freehand', autoContinue: false,
-                        });
-                      }, blocked)}
-                      {button('Axis + apex', phase.slot + ':axis', async () => {
-                        await openPhase(phase.slot);
-                        await command('startLAVolumeWorkflow', {
-                          slot: phase.slot, contourTechnique: 'axisApex', autoContinue: false,
-                        });
-                      }, blocked)}
-                    </>
-                    : kind === 'rvFac'
-                      ? <>
-                        {button('Freehand', phase.slot + ':freehand', async () => {
-                          await openPhase(phase.slot);
-                          await command('startEchoAreaContourWorkflow', {
-                            slot: phase.slot, clickTrace: true,
-                          });
-                        }, blocked)}
-                        {button('Axis + apex', phase.slot + ':axis', async () => {
-                          await openPhase(phase.slot);
-                          await command('startGuidedRVFACContourWorkflow', { slot: phase.slot });
-                        }, blocked)}
-                      </>
-                      : <>
-                        {button(
-                          (phaseSources.length ? 'Redraw ' : 'Measure ') +
-                            (phase.slot === 'IVC_EXP' ? 'IVCexp' : 'IVCinsp'),
-                          phase.slot + ':length', async () => {
-                            await openPhase(phase.slot);
-                            await command('resetViewerLengthLabelMode', {});
-                            await command('activateViewerMeasurementTool', {
-                              toolName: 'Length', stopCine: true,
-                            });
-                            // Keep the original annotation until the new
-                            // calibrated source is verified after labelling.
-                            onBeginIVCPhaseRedraw?.(field, phase.slot, phaseSources);
-                          }, blocked)}
-                        {phaseSources.length === 0 ? viewTarget(phase.slot) : null}
-                        {phaseSources.map((annotation: any, index: number) => (
-                          <span key={String(annotation?.annotationId || annotation?.uid || index)}
-                            className="inline-flex flex-wrap items-center gap-2 rounded border border-gray-700 px-2 py-1">
-                            {phaseSources.length > 1 ? (
-                              <span className="text-amber-200">Source {index + 1}</span>
-                            ) : null}
-                            <button type="button" className="text-cyan-200 hover:underline"
-                              disabled={!onViewIVCSource}
-                              onClick={() => onViewIVCSource?.(annotation)}
-                            >View source</button>
-                            {!readOnly && !disabled ? (
-                              <button type="button" className="text-red-300 hover:underline"
-                                disabled={!onDeleteIVCSource}
-                                onClick={() => onDeleteIVCSource?.(annotation)}
-                              >Delete</button>
-                            ) : null}
-                          </span>
-                        ))}
-                      </>}
-                  {kind !== 'ivcCollapsibility' ? viewTarget(phase.slot) : null}
-                  {kind === 'ivcCollapsibility' && phaseSources.length > 1 ? (
-                    <span className="text-amber-200">
-                      Multiple measurements for this phase. Delete extras or redraw.
+          <ViewerEchoPhaseControls
+            kind={kind === 'laVolumeDisks' ? 'laVolumeBiplaneDisks'
+              : kind === 'rvFac' ? 'rvFAC' : 'ivcCollapsibility'}
+            disabled={disabled || readOnly || !!busy}
+            blockedPhase={slot => isRequiredResearchPhaseMissing(field, slot)}
+            renderPhaseStatus={(slot, label) => {
+              if (kind !== 'ivcCollapsibility') {
+                return <span className="min-w-40 font-medium text-gray-100">{label}</span>;
+              }
+              const diameter = slot === 'IVC_EXP'
+                ? ivcMeasurementState?.values?.expirationDiameterMM
+                : ivcMeasurementState?.values?.inspirationDiameterMM;
+              return (
+                <span className="flex min-w-40 flex-wrap items-center gap-2 font-medium text-gray-100">
+                  {label}
+                  <span className="text-cyan-100">
+                    {diameter != null && Number.isFinite(Number(diameter))
+                      ? Number(diameter).toFixed(1) + ' mm'
+                      : 'No calibrated diameter'}
+                  </span>
+                </span>
+              );
+            }}
+            renderPhaseTrailing={slot => {
+              const phaseSources = kind === 'ivcCollapsibility'
+                ? (ivcMeasurementState?.phaseSources?.[slot] || []) : [];
+              return (
+                <>
+                  {phaseSources.map((annotation: any, index: number) => (
+                    <span key={String(annotation?.annotationId || annotation?.uid || index)}
+                      className="inline-flex flex-wrap items-center gap-2 rounded border border-gray-700 px-2 py-1">
+                      {phaseSources.length > 1 ? (
+                        <span className="text-amber-200">Source {index + 1}</span>
+                      ) : null}
+                      <button type="button" className="text-cyan-200 hover:underline"
+                        disabled={!onViewIVCSource}
+                        onClick={() => onViewIVCSource?.(annotation)}>View source</button>
+                      {!readOnly && !disabled ? (
+                        <button type="button" className="text-red-300 hover:underline"
+                          disabled={!onDeleteIVCSource}
+                          onClick={() => onDeleteIVCSource?.(annotation)}>Delete</button>
+                      ) : null}
                     </span>
+                  ))}
+                  {viewTarget(slot)}
+                  {phaseSources.length > 1 ? (
+                    <span className="text-amber-200">Multiple measurements for this phase. Delete extras or redraw.</span>
                   ) : null}
-                  {blocked ? <span className="text-amber-300">Missing required protocol frame</span> : null}
-                  {!blocked && !getResearchEchoPhaseTarget(field, phase.slot)
-                    ? <span className="text-gray-400">No fixed frame for this phase — uses the current viewer image</span>
-                    : null}
-                </div>
-              </div>
-            );
-          })}
+                  {isRequiredResearchPhaseMissing(field, slot) ? (
+                    <span className="text-amber-300">Missing required protocol frame</span>
+                  ) : null}
+                  {!getResearchEchoPhaseTarget(field, slot) ? (
+                    <span className="text-gray-400">Current viewer image — no fixed frame</span>
+                  ) : null}
+                </>
+              );
+            }}
+            onCapture={(slot, action) => run(slot + ':' + action, async () => {
+              await openPhase(slot);
+              if (kind === 'laVolumeDisks') {
+                await command('startLAVolumeWorkflow', {
+                  slot, contourTechnique: action === 'freehand' ? 'freehand' : 'axisApex',
+                  autoContinue: false,
+                });
+              } else if (kind === 'rvFac') {
+                if (action === 'freehand') {
+                  await command('startEchoAreaContourWorkflow', { slot, clickTrace: true });
+                } else {
+                  await command('startGuidedRVFACContourWorkflow', { slot });
+                }
+              } else {
+                await command('resetViewerLengthLabelMode', {});
+                await command('activateViewerMeasurementTool', {
+                  toolName: 'Length', stopCine: true,
+                });
+                onBeginIVCPhaseRedraw?.(
+                  field, slot, ivcMeasurementState?.phaseSources?.[slot] || []
+                );
+              }
+            })}
+          />
           {kind === 'ivcCollapsibility' ? (
             <div className="border-t border-gray-700 pt-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <span className="font-semibold text-gray-100">
-                  Calculated IVC collapsibility
-                </span>
+                <span className="font-semibold text-gray-100">Calculated IVC collapsibility</span>
                 <span className="font-semibold text-cyan-100">
-                  {ivcMeasurementState?.candidate &&
-                    ivcReadValue !== null && ivcReadValue !== undefined &&
-                    String(ivcReadValue).trim() !== '' &&
+                  {ivcMeasurementState?.candidate && ivcReadValue !== null &&
+                    ivcReadValue !== undefined && String(ivcReadValue).trim() !== '' &&
                     Number.isFinite(Number(ivcReadValue))
-                    ? Number(ivcReadValue).toFixed(1) + '%'
-                    : 'Not yet calculated'}
+                    ? Number(ivcReadValue).toFixed(1) + '%' : 'Not yet calculated'}
                 </span>
               </div>
               {!ivcMeasurementState?.candidate ? (
@@ -283,11 +252,9 @@ export default function ResearchEchoGuidedControls({
                 </p>
               ) : (
                 <p className="mt-1 text-gray-400">
-                  Derived from the two calibrated diameters on their configured DICOM frames.
+                  Derived from two calibrated diameters on their configured DICOM frames.
                 </p>
               )}
-              {/* Off-protocol annotations remain excluded by the validation
-                  engine; they are diagnostic evidence, not reader results. */}
             </div>
           ) : null}
         </div>
