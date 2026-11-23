@@ -17,7 +17,16 @@ test('question stepping uses the existing selectQuestion workflow for both roles
   assert.doesNotMatch(panel, /renderQuestionNavigation\(quiz, question, questions, submitted \|\| quizSaving\)/);
   assert.match(panel, /authoringQuestions\.filter\(isViewerNativeQuestion\)/);
   assert.match(panel, /const navigatingDisabled = disabled \|\| !!capturingMeasurementKey/);
-  assert.match(panel, /disabled=\{navigatingDisabled \|\| !target\}/);
+  // Navigation button rendering is now shared by Education and Research.
+  // Preserve the selection/capture gate in Education and the out-of-range
+  // guard in the shared component rather than requiring duplicated JSX.
+  assert.match(panel, /<ViewerQuestionNavigation[\s\S]*?disabled=\{navigatingDisabled\}/);
+  const sharedNavigation = fs.readFileSync(
+    path.resolve(__dirname, '../../../extensions/extension-ar-measurements/src/panels/ViewerQuestionChrome.tsx'),
+    'utf8'
+  );
+  assert.match(sharedNavigation, /disabled=\{disabled \|\| nextIndex < 0 \|\| nextIndex >= count\}/);
+  assert.match(sharedNavigation, /onNavigate\(nextIndex\)/);
 });
 
 test('measurement clear actions are inline, accessible, and retain source-aware deletions', () => {
