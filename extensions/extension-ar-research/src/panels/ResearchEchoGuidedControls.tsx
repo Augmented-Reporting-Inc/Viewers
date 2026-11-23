@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { getEchoCompositeAcquisitionSteps } from '../../../extension-ar-measurements/src/utils/echoCompositeAcquisition';
 import { LearningEchoAcquisitionControls } from '../../../extension-ar-learning/src/components/LearningEchoAcquisitionControls';
+import { LearningEFPanelLauncher } from '../../../extension-ar-learning/src/components/LearningEFPanelLauncher';
 import {
   getResearchEchoPhases,
   getResearchEchoPhaseTarget,
@@ -114,8 +115,11 @@ export default function ResearchEchoGuidedControls({
           <p>Open the existing Simpson EF panel to draw or review four A4C/A2C
             end-diastolic/end-systolic contours, choose the drawing technique,
             calculate EF, and inspect existing source frames.</p>
-          {button('Open EF contour panel', 'ef', async () => {
-            if (hasIncompleteRequiredEF) {
+          <LearningEFPanelLauncher
+            disabled={disabled || readOnly || !!busy || hasIncompleteRequiredEF}
+            busy={busy === 'ef'}
+            onOpen={() => void run('ef', async () => {
+if (hasIncompleteRequiredEF) {
               throw new Error('Configure all four EF frames in Research Manager before opening the guided protocol.');
             }
             // The Research Review owns these saved contour annotations even
@@ -136,7 +140,8 @@ export default function ResearchEchoGuidedControls({
               allowCanonicalFrameTargets: true,
               questionKey: field.key,
             });
-          }, hasIncompleteRequiredEF)}
+            })}
+          />
           {phases.map(phase => (
             <div key={phase.slot} className="flex flex-wrap items-center gap-2">
               <span className="min-w-36">{phase.label}</span>
