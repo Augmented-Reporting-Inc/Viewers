@@ -8289,7 +8289,8 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                 ? 'Numeric tolerance (' +
                   (['lvSimpsonEF', 'rvFAC', 'ivcCollapsibility'].includes(cleanString(answerConfig.measurementKind))
                     ? '%' : cleanString(answerConfig.measurementKind) === 'raArea' ? 'cm²' : 'mL') + ')'
-                : 'Length tolerance'}
+                : cleanString(answerConfig.measurementKind) === 'trVmax'
+                  ? 'Velocity tolerance (m/s)' : 'Length tolerance'}
             </label>
             <input
               className="mt-1 w-36 rounded border border-gray-700 bg-black px-2 py-1 text-sm text-white"
