@@ -402,7 +402,9 @@ test('multiple-BWT post-score review shows each gold length and scoring rules', 
   assert.match(panelSource, /bowelReference\.goldMeasurements/);
   assert.match(panelSource, /Correct reference lengths/);
   assert.match(panelSource, /numeric tolerance:/i);
-  assert.match(panelSource, /current rubric does not require/);
+  assert.match(panelSource, /reviewDetails\.endpointToleranceMM != null/);
+  assert.match(panelSource, /This rubric does not require endpoint location matching/);
+  assert.match(panelSource, /Each learner caliper must also match both endpoints/);
   assert.match(panelSource, /reviewDetails\.spatial\.observed/);
 });
 
