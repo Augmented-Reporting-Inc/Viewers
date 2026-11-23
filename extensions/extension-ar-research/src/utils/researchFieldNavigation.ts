@@ -82,14 +82,18 @@ export function getResearchProtocolViewerTargets(field: any): Array<{label: stri
 }
 
 /**
- * A multi-phase question normally waits for the reader to choose a phase.
- * For Research IVC, the initial expiration phase is explicitly defined by
- * protocol and is also the natural starting point in Education. Never use
- * generic "first target" ordering for EF/LA/RV or invent a missing IVC frame.
+ * Match the Education quiz's intentional first-frame behavior: EF opens the
+ * explicit A4C end-diastole target, IVC opens expiration. LA and RV wait for
+ * a phase/technique click. Never choose another case's frame or guess the
+ * first target when the expected phase has not been configured.
  */
 export function getResearchQuestionEntryTarget(field: any) {
   const targets = getResearchProtocolViewerTargets(field);
-  if (String(field?.componentKey || '').trim() === 'ivcCollapsibility') {
+  const componentKey = String(field?.componentKey || '').trim();
+  if (componentKey === 'lvEjectionFraction') {
+    return targets.find(item => item.label === 'A4C_ED')?.viewerTarget || null;
+  }
+  if (componentKey === 'ivcCollapsibility') {
     return targets.find(item => item.label === 'IVC_EXP')?.viewerTarget || null;
   }
   if (targets.length === 1) return targets[0].viewerTarget;
