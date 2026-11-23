@@ -7103,6 +7103,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       reviewDetails.mode === 'bowelMeasurementSet' && correctAnswerVisible &&
       bowelGoldLengths.length > 0;
     const compositeReviewKind = cleanString(plainObject(question.answerConfig).measurementKind);
+    const isCaliperLengthReview = compositeReviewKind === 'length';
     const compositeSlotLabels: Record<string, string[]> = {
       lvSimpsonEF: ['A4C_ED', 'A4C_ES', 'A2C_ED', 'A2C_ES'],
       laVolumeBiplane: ['A4C', 'A2C'],
@@ -7263,22 +7264,26 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
             <div className="mt-2">
               <div className="font-semibold">Your answer</div>
               <div className="mt-1 text-gray-300">
-                Length: {formatMeasurementReviewLength(learnerMeasurementLength, measurementUnit)}
+                {isCaliperLengthReview ? 'Length' : 'Value'}: {formatMeasurementReviewLength(learnerMeasurementLength, measurementUnit)}
               </div>
-              <div className="text-gray-300">
-                Endpoints: {formatMeasurementReviewEndpoints(learnerMeasurement)}
-              </div>
+              {isCaliperLengthReview ? (
+                <div className="text-gray-300">
+                  Endpoints: {formatMeasurementReviewEndpoints(learnerMeasurement)}
+                </div>
+              ) : null}
             </div>
 
             {correctAnswerVisible ? (
               <div className="mt-2">
                 <div className="font-semibold">Correct answer</div>
                 <div className="mt-1 text-gray-300">
-                  Length: {formatMeasurementReviewLength(correctMeasurementLength, measurementUnit)}
+                  {isCaliperLengthReview ? 'Length' : 'Value'}: {formatMeasurementReviewLength(correctMeasurementLength, measurementUnit)}
                 </div>
-                <div className="text-gray-300">
-                  Endpoints: {formatMeasurementReviewEndpoints(rubricMeasurement)}
-                </div>
+                {isCaliperLengthReview ? (
+                  <div className="text-gray-300">
+                    Endpoints: {formatMeasurementReviewEndpoints(rubricMeasurement)}
+                  </div>
+                ) : null
               </div>
             ) : null}
           </>
@@ -7327,13 +7332,13 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         {reviewDetails.mode === 'measurementNumeric' ? (
           <div className="mt-1 space-y-1 text-gray-300">
             <div>
-              Length difference: {formatReviewNumber(measurementLengthDifference, 2)}{' '}
-              {measurementUnit}; accepted length tolerance: ±
+              {isCaliperLengthReview ? 'Length' : 'Value'} difference: {formatReviewNumber(measurementLengthDifference, 2)}{' '}
+              {measurementUnit}; accepted {isCaliperLengthReview ? 'length' : 'numeric'} tolerance: ±
               {formatReviewNumber(reviewDetails.absoluteTolerance, 2)} {measurementUnit}.
             </div>
 
             <div>
-              Measurement length:{' '}
+              {isCaliperLengthReview ? 'Measurement length' : 'Measured value'}:{' '}
               {reviewDetails.lengthMatched === true ? 'within tolerance' : 'outside tolerance'}.
             </div>
 
