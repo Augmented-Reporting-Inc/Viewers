@@ -50,6 +50,12 @@ jobs:
             modes/mode-ar-learning/tests/quiz-single-question-ivc-label.test.cjs \
             modes/mode-ar-learning/tests/quiz-question-navigation-inline-delete.test.cjs \
             modes/mode-ar-learning/tests/quiz-tr-vmax-rvsp.test.cjs
+      - name: Validate merged scored-review EF, area calibration and gold-label safeguards
+        run: |
+          yarn jest --config extensions/cornerstone/jest.config.js --runInBand --coverage=false --runTestsByPath \
+            extensions/cornerstone/src/utils/quizEFSubmittedReviewContour.test.ts \
+            extensions/cornerstone/src/utils/quizReviewLabelLayout.test.ts \
+            extensions/cornerstone/src/utils/quizEchoAreaCalibration.test.ts
       - name: Babel-compile both question panels and shared controls
         run: |
           node - <<'NODE'
