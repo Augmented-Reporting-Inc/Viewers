@@ -1,5 +1,4 @@
 import React from 'react';
-import { renderToStaticMarkup } from 'react-dom/server';
 import { EchoEFContourVolumes, getLVSimpsonSourceVolumes } from './EchoEFContourVolumes';
 
 jest.mock('../utils/lvSimpson', () => ({
@@ -7,6 +6,18 @@ jest.mock('../utils/lvSimpson', () => ({
   calculateLVSimpsonContourVolumeForMeasurement: (source: any) =>
     source?.verifiedVolumeML ?? null,
 }));
+
+// Pure presentational component: inspect its React element tree without
+// requiring the browser-oriented server renderer or TextEncoder in Jest/jsdom.
+function renderedText(element: any): string {
+  if (element == null || typeof element === 'boolean') return '';
+  if (typeof element === 'string' || typeof element === 'number') return String(element);
+  if (Array.isArray(element)) return element.map(renderedText).join(' ');
+  if (typeof element.type === 'function') {
+    return renderedText(element.type(element.props));
+  }
+  return renderedText(element.props?.children);
+}
 
 const contour = (slot: string, verifiedVolumeML: number | null) => ({
   measurementKind: 'lvSimpsonSlot',
@@ -22,9 +33,7 @@ describe('shared Research/Education EF contour presentation', () => {
       contour('A2C_ED', 72.77),
       contour('A2C_ES', 75.91),
     ]);
-    const markup = renderToStaticMarkup(
-      React.createElement(EchoEFContourVolumes, { volumes: sourceVolumes, status: 'Saved' })
-    );
+    const markup = renderedText(React.createElement(EchoEFContourVolumes, { volumes: sourceVolumes, status: 'Saved' }));
     expect(markup).toContain('Saved single-view LV contour volumes (mL)');
     expect(markup).toContain('A4C end-diastole');
     expect(markup).toContain('A2C end-systole');
@@ -41,15 +50,13 @@ describe('shared Research/Education EF contour presentation', () => {
       { measurementKind: 'laVolumeSlot', lvSimpson: { slot: 'A2C_ES' }, verifiedVolumeML: 100 },
     ]);
     expect(values).toEqual({ A4C_ED: null, A4C_ES: null, A2C_ED: null });
-    const markup = renderToStaticMarkup(React.createElement(EchoEFContourVolumes, { volumes: values }));
+    const markup = renderedText(React.createElement(EchoEFContourVolumes, { volumes: values }));
     expect(markup).not.toContain('70.00 mL');
     expect(markup).toContain('Not available');
   });
 
   it('does not turn a zero or absent slot into a measurement', () => {
-    const markup = renderToStaticMarkup(
-      React.createElement(EchoEFContourVolumes, { volumes: { A4C_ED: 0, A4C_ES: undefined } })
-    );
+    const markup = renderedText(React.createElement(EchoEFContourVolumes, { volumes: { A4C_ED: 0, A4C_ES: undefined } }));
     expect(markup).toContain('Not available');
     expect(markup).not.toContain('0.00 mL');
   });
