@@ -62,8 +62,15 @@ test('viewer authoring retains full quiz ordinals while skipping non-viewer ques
   assert.deepEqual(numbers, [1, 2, 4, 6, 7, 8]);
 });
 
-test('learner cards display an explicit active question status', () => {
-  assert.match(panelSource, /isActiveQuestion \? \(\s*<div[^>]*>[\s\S]*?Active Question/);
+test('learner cards display an explicit active question status through shared quiz chrome', () => {
+  const chrome = fs.readFileSync(
+    path.join(__dirname, '..', '..', '..', 'extensions', 'extension-ar-measurements',
+      'src', 'panels', 'ViewerQuestionChrome.tsx'),
+    'utf8'
+  );
+  assert.match(panelSource, /<ViewerQuestionCard[\s\S]*?active=\{isActiveQuestion\}/);
+  assert.match(chrome, /active \? \([\s\S]*?Active Question/);
+  assert.match(chrome, /border-blue-400/);
 });
 
 test('learner measurement domain prefers the authorized quiz before URL fallback', () => {
