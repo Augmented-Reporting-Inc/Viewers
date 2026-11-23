@@ -7195,10 +7195,15 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
           };
         }
 
-        // Render only the selected released slot. The comparison command
-        // supports multi-frame composites, but each review action must
-        // prove its own exact source frame and avoid unrelated placeholders.
+        // Keep the complete released EF set and its verified per-contour
+        // volume/area metadata: the existing EF renderer expects all four
+        // slots for helpful gold labels. For other kinds, hydrate only the
+        // selected slot to avoid unrelated contours on different frames.
         const visibleGold = { ...goldFrame, target: displayTarget };
+        const isEF = released.measurementKind === 'lvSimpsonEF';
+        const displayComponents = isEF
+          ? components.map((part: any) => part.slot === slot ? visibleGold : part)
+          : [visibleGold];
         const result = await runViewerCommand(commandsManager,
           'showViewerQuizMeasurementComparison', {
             learnerMeasurement,
@@ -7207,7 +7212,10 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               value: released.value,
               unit: released.unit,
               viewerTarget: displayTarget,
-              compositeResult: { components: [visibleGold] },
+              compositeResult: {
+                components: displayComponents,
+                derived: plainObject(released.derived),
+              },
             },
             viewerTarget: displayTarget,
             focusedCompositeSlot: slot,
@@ -7218,7 +7226,8 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               released.ivcEndpointToleranceEnabled === true,
           });
         if (result?.rubricRendered !== true ||
-            Number(result?.compositeContoursResolved) !== 1) {
+            !Array.isArray(result?.renderedSlots) ||
+            !result.renderedSlots.includes(slot)) {
           throw new Error(cleanString(result?.reason) ||
             'The selected gold contour could not be displayed on its source frame.');
         }
