@@ -6,7 +6,7 @@ import React, {
   useState,
 } from 'react';
 import { buildViewerMeasurementValueCandidates } from 'extension-ar-measurements';
-import { ViewerQuestionCard, ViewerQuestionNavigation } from '../../../extension-ar-measurements/src/panels/ViewerQuestionChrome';
+import { ViewerNumericMeasurementInput, ViewerQuestionCard, ViewerQuestionNavigation } from '../../../extension-ar-measurements/src/panels/ViewerQuestionChrome';
 import {
   getResearchViewerQuestionMeasurementKind,
   setViewerQuestionMeasurementContext,
@@ -135,11 +135,13 @@ function ReadField({
   disabled,
   onChange,
   readDomain,
+  showHeading = true,
 }: {
   field: any;
   value: any;
   source?: any;
   disabled: boolean;
+  showHeading?: boolean;
   onChange: (value: any) => void;
   readDomain?: string;
 }) {
@@ -160,7 +162,8 @@ function ReadField({
   const calculated = cleanString(field?.config?.calculation?.type).toLowerCase() === 'rvsp';
 
   return (
-    <div className="rounded border border-gray-700 bg-gray-950 p-3">
+    <div className="mt-2 min-w-0 space-y-2">
+      {showHeading ? (
       <div className="mb-2 flex items-start justify-between gap-2">
         <div>
           <div className="text-sm font-semibold text-white">{field.label}</div>
@@ -176,6 +179,7 @@ function ReadField({
           </span>
         ) : null}
       </div>
+      ) : null}
 
       {['viewer-measurement', 'viewer-derived'].includes(cleanString(source?.source)) ? (
         <div className="mb-2 text-xs text-blue-300">
@@ -205,20 +209,25 @@ function ReadField({
           onChange={event => onChange(event.target.value)}
           placeholder="Enter reader comment"
         />
+      ) : numeric ? (
+        <ViewerNumericMeasurementInput
+          value={value ?? ''}
+          unit={unit}
+          disabled={disabled}
+          readOnly={calculated}
+          min={field?.config?.min}
+          max={field?.config?.max}
+          step={field?.config?.step || 'any'}
+          onChange={onChange}
+        />
       ) : (
-        <div className="flex items-center gap-2">
-          <input
-            className="min-w-0 flex-1 rounded border border-gray-600 bg-black px-3 py-2 text-sm text-white"
-            type={numeric ? 'number' : 'text'}
-            value={value ?? ''}
-            disabled={disabled || calculated}
-            min={numeric ? field?.config?.min : undefined}
-            max={numeric ? field?.config?.max : undefined}
-            step={numeric ? field?.config?.step || 'any' : undefined}
-            onChange={event => onChange(event.target.value)}
-          />
-          {unit ? <span className="text-sm text-gray-300">{unit}</span> : null}
-        </div>
+        <input
+          className="w-full rounded border border-gray-600 bg-black px-3 py-2 text-sm text-white"
+          type="text"
+          value={value ?? ''}
+          disabled={disabled || calculated}
+          onChange={event => onChange(event.target.value)}
+        />
       )}
     </div>
   );
@@ -1239,6 +1248,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
               readDomain={readDomain}
               value={calculatedReadState.values[selectedField.key] ?? ''}
               source={calculatedReadState.sources[selectedField.key]}
+              showHeading={false}
               disabled={context.readOnly || context.preview || isBusy}
               onChange={nextValue => updateValue(selectedField.key, nextValue)}
             />
