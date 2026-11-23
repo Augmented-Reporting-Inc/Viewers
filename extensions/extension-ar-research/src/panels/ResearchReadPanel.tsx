@@ -288,7 +288,8 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
     ? getResearchEchoPhases({ componentKey: protocolFramePickerIntent.componentKey })
     : [];
   const capturePhaseKey = isBatchFramePicker
-    ? (capturePhaseSelection || capturePhases[0]?.slot || '')
+    ? (capturePhases.find(phase => phase.slot === capturePhaseSelection)?.slot ||
+      capturePhases[0]?.slot || '')
     : (protocolFramePickerIntent?.phaseKey || '');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
