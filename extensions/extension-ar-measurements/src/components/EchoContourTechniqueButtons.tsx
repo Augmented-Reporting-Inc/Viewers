@@ -23,7 +23,7 @@ export function EchoContourTechniqueButtons({
             event.preventDefault();
             event.stopPropagation();
             onChoose(technique);
-          }
+          }}
         >{label}</button>
       ))}
     </>
