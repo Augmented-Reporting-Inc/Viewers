@@ -1,3 +1,4 @@
+import ViewerEchoPhaseControls from '../../../extension-ar-measurements/src/panels/ViewerEchoPhaseControls';
 import { ViewerQuestionCard, ViewerQuestionNavigation } from '../../../extension-ar-measurements/src/panels/ViewerQuestionChrome';
 import { setViewerQuestionMeasurementContext } from '../../../extension-ar-measurements/src/utils/viewerQuestionMeasurementContext';
 import React, { useEffect, useMemo, useState, useRef } from 'react';
@@ -6011,150 +6012,80 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
 
   function renderIVCCaliperControls(quiz: QuizDefinition, question: QuizQuestion, disabled: boolean) {
     return (
-      <div className="mt-2 rounded border border-cyan-700/70 p-2 text-xs">
-        <div className="mb-1 font-semibold text-cyan-100">IVC phase measurements</div>
-        <p className="mb-2 text-gray-300">
-          Choose a phase below and draw the calibrated Length caliper.
-          When prompted, label it IVCexp or IVCinsp respectively.
-        </p>
-        <div className="space-y-2">
-          {[
-            { slot: 'IVC_EXP', label: 'Measure expiration (IVCexp)' },
-            { slot: 'IVC_INSP', label: 'Measure inspiration (IVCinsp)' },
-          ].map(phase => (
-            <div key={phase.slot} className="flex flex-wrap items-center gap-2">
-            {renderCompositePhaseStatusAndDelete(quiz, question, phase.slot, disabled, phase.slot === 'IVC_EXP' ? 'IVCexp' : 'IVCinsp')}
-            <button
-              type="button"
-              disabled={disabled}
-              className="rounded border border-cyan-600 px-2 py-1 text-cyan-100 disabled:opacity-40"
-              onClick={event => {
-                event.preventDefault();
-                event.stopPropagation();
-                void (async () => {
-                  await activateQuestionForPhaseCapture(quiz, question);
-                  if (!(await ensureConfiguredCompositePhaseFrame(question, phase.slot))) return;
-                  // Learners explicitly choose IVCexp / IVCinsp in the
-                  // ordinary Length dialog. Avoid a global measure-only flag:
-                  // it could suppress labels in other quiz questions.
-                  await runViewerCommand(commandsManager, 'resetViewerLengthLabelMode', {});
-                  const activation = await runViewerCommand(
-                    commandsManager, 'activateViewerMeasurementTool', {
-                      toolName: 'Length', stopCine: true,
-                    }
-                  );
-                  if (activation?.ok === false) {
-                    uiNotificationService.show({
-                      title: 'IVC measurement',
-                      message: 'The calibrated Length tool could not be activated.',
-                      type: 'warning', duration: 5000,
-                    });
-                  }
-                })();
-              }}
-            >
-              {phase.label}
-            </button>
-            </div>
-          ))}
-        </div>
-      </div>
+      <ViewerEchoPhaseControls
+        kind="ivcCollapsibility"
+        disabled={disabled}
+        renderPhaseStatus={(slot, label) =>
+          renderCompositePhaseStatusAndDelete(quiz, question, slot, disabled, label)
+        }
+        onCapture={async slot => {
+          await activateQuestionForPhaseCapture(quiz, question);
+          if (!(await ensureConfiguredCompositePhaseFrame(question, slot))) return;
+          // Preserve the ordinary Length dialogue and its required IVC label.
+          await runViewerCommand(commandsManager, 'resetViewerLengthLabelMode', {});
+          const activation = await runViewerCommand(commandsManager, 'activateViewerMeasurementTool', {
+            toolName: 'Length', stopCine: true,
+          });
+          if (activation?.ok === false) {
+            uiNotificationService.show({
+              title: 'IVC measurement',
+              message: 'The calibrated Length tool could not be activated.',
+              type: 'warning', duration: 5000,
+            });
+          }
+        }}
+      />
     );
   }
 
   function renderLAVolumeContourControls(quiz: QuizDefinition, question: QuizQuestion, disabled: boolean) {
-    const views = [
-      { slot: 'A4C', label: 'Apical four-chamber' },
-      { slot: 'A2C', label: 'Apical two-chamber' },
-    ];
     const config = plainObject(question.answerConfig);
+    const kind = cleanString(config.measurementKind) === 'laVolumeBiplane'
+      ? 'laVolumeBiplane' : 'laVolumeBiplaneDisks';
     return (
-      <div className="mt-2 rounded border border-cyan-700 bg-cyan-950/20 p-2 text-xs">
-        <div className="mb-1 font-semibold text-cyan-100">LA volume contour technique</div>
-        <p className="mb-2 text-gray-300">
-          For each apical view, click the desired measuring tool to navigate to its selected image.
-          Freehand: click a mitral hinge, trace the LA cavity without holding the mouse,
-          and finish at the opposite hinge. Axis + apex: draw the annular line and superior LA axis.
-        </p>
-        {views.map(({ slot, label }) => (
-          <div key={slot} className="mb-2 flex flex-wrap items-center gap-2">
-            {renderCompositePhaseStatusAndDelete(quiz, question, slot, disabled, label)}
-            {[
-              { text: 'Freehand', contourTechnique: 'freehand' },
-              { text: 'Axis + apex', contourTechnique: 'axisApex' },
-            ].map(choice => (
-              <button
-                key={choice.contourTechnique}
-                type="button"
-                disabled={disabled || (config.compositeFrameGuidanceEnabled === true &&
-                  !plainObject(config.compositeFrameTargets)[slot]?.sopInstanceUID)}
-                className="rounded border border-cyan-600 px-2 py-1 text-cyan-100 disabled:opacity-40"
-                onClick={event => {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  void (async () => {
-                    await activateQuestionForPhaseCapture(quiz, question);
-                    if (!(await ensureConfiguredCompositePhaseFrame(question, slot))) return;
-                    await runViewerCommand(commandsManager, 'startLAVolumeWorkflow', {
-                      slot,
-                      contourTechnique: choice.contourTechnique,
-                      autoContinue: false,
-                    });
-                  })();
-                }}
-              >
-                {choice.text}
-              </button>
-            ))}
-          </div>
-        ))}
-      </div>
+      <ViewerEchoPhaseControls
+        kind={kind}
+        disabled={disabled}
+        blockedPhase={slot => config.compositeFrameGuidanceEnabled === true &&
+          !plainObject(config.compositeFrameTargets)[slot]?.sopInstanceUID}
+        renderPhaseStatus={(slot, label) =>
+          renderCompositePhaseStatusAndDelete(quiz, question, slot, disabled, label)
+        }
+        onCapture={async (slot, action) => {
+          await activateQuestionForPhaseCapture(quiz, question);
+          if (!(await ensureConfiguredCompositePhaseFrame(question, slot))) return;
+          await runViewerCommand(commandsManager, 'startLAVolumeWorkflow', {
+            slot, contourTechnique: action === 'freehand' ? 'freehand' : 'axisApex',
+            autoContinue: false,
+          });
+        }}
+      />
     );
   }
 
   function renderRVFACContourControls(quiz: QuizDefinition, question: QuizQuestion, disabled: boolean) {
-    const slots = [
-      { slot: 'RV_ED', label: 'End-diastolic area (RVEDA)' },
-      { slot: 'RV_ES', label: 'End-systolic area (RVESA)' },
-    ];
     const config = plainObject(question.answerConfig);
     return (
-      <div className="mt-2 rounded border border-cyan-700 bg-cyan-950/20 p-2 text-xs">
-        <div className="mb-1 font-semibold text-cyan-100">RV FAC contour technique</div>
-        <div className="mb-2 text-gray-300">
-          For each area click the desired measuring tool to navigate to its image.
-        </div>
-        {slots.map(({ slot, label }) => (
-          <div key={slot} className="mb-2 flex flex-wrap items-center gap-2">
-            {renderCompositePhaseStatusAndDelete(quiz, question, slot, disabled, label)}
-            {[
-              { text: 'Freehand', command: 'startEchoAreaContourWorkflow' },
-              { text: 'Axis + apex', command: 'startGuidedRVFACContourWorkflow' },
-            ].map(choice => (
-              <button
-                key={choice.command}
-                type="button"
-                disabled={disabled || (config.compositeFrameGuidanceEnabled === true &&
-                  !plainObject(config.compositeFrameTargets)[slot]?.sopInstanceUID)}
-                className="rounded border border-cyan-600 px-2 py-1 text-cyan-100 disabled:opacity-40"
-                onClick={event => {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  void (async () => {
-                    await activateQuestionForPhaseCapture(quiz, question);
-                    if (!(await ensureConfiguredCompositePhaseFrame(question, slot))) return;
-                    await runViewerCommand(commandsManager, choice.command, {
-                      slot, clickTrace: choice.command === 'startEchoAreaContourWorkflow',
-                    });
-                  })();
-                }}
-              >
-                {choice.text}
-              </button>
-            ))}
-          </div>
-        ))}
-      </div>
+      <ViewerEchoPhaseControls
+        kind="rvFAC"
+        disabled={disabled}
+        blockedPhase={slot => config.compositeFrameGuidanceEnabled === true &&
+          !plainObject(config.compositeFrameTargets)[slot]?.sopInstanceUID}
+        renderPhaseStatus={(slot, label) =>
+          renderCompositePhaseStatusAndDelete(quiz, question, slot, disabled, label)
+        }
+        onCapture={async (slot, action) => {
+          await activateQuestionForPhaseCapture(quiz, question);
+          if (!(await ensureConfiguredCompositePhaseFrame(question, slot))) return;
+          if (action === 'freehand') {
+            await runViewerCommand(commandsManager, 'startEchoAreaContourWorkflow', {
+              slot, clickTrace: true,
+            });
+          } else {
+            await runViewerCommand(commandsManager, 'startGuidedRVFACContourWorkflow', { slot });
+          }
+        }}
+      />
     );
   }
 
