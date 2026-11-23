@@ -139,7 +139,7 @@ import { getEchoAreaSlot, calculateRVFACFromMeasurements } from '../../extension
 import { resolveViewerQuizCompositeResult, resolveViewerQuizLVSimpsonForStudy, isViewerQuizCompositeReviewCurrent, getViewerQuizCompositeStatus, calibratedLVContourAreaCM2 } from '../../extension-ar-measurements/src/utils/viewerQuizCompositeResults';
 import { createGuidedMouseToolOwnership } from './utils/guidedMouseToolOwnership';
 import { calibrateUSContourPoints, worldToImageIndex } from './utils/usRegionLengthCalibration';
-import { getQuizEchoAreaSourceMetadata, calculateCalibratedEchoAreaCM2, getSavedQuizEchoAreaDisplayInfo, getQuizCompositeContourViewportLines, getQuizCompositeGoldContourSlotMetadata, getVerifiedEFGoldContourViewportLines, getVerifiedEFLearnerContourViewportLines } from './utils/quizEchoAreaCalibration';
+import { getQuizEchoAreaSourceMetadata, calculateCalibratedEchoAreaCM2, getSavedQuizEchoAreaDisplayInfo, getQuizCompositeContourViewportLines, getQuizCompositeGoldContourSlotMetadata, getVerifiedReleasedLAGoldViewportLines, getVerifiedEFGoldContourViewportLines, getVerifiedEFLearnerContourViewportLines } from './utils/quizEchoAreaCalibration';
 import { installQuizContourTextRenderer } from './utils/installQuizContourTextRenderer';
 import { consumeViewerLengthFirstLabelMode } from './utils/viewerLengthLabelMode';
 import { getViewerQuizRouteMeasurementDomain } from '../../extension-ar-learning/src/utils/viewerQuizMeasurementDomain';
@@ -5788,6 +5788,12 @@ function installQuizCompositeContourTextOverrideForViewport({
     const laSlot = !!contourData?.laVolume?.slot &&
       ['A4C', 'A2C'].includes(slot);
     if (!echoSlot && !laSlot) return null;
+    // The released gold is an immutable review overlay, not a live ROI
+    // measurement; its validated per-phase cm² value has its own provenance.
+    const releasedGoldText = getVerifiedReleasedLAGoldViewportLines(
+      contourData?.arVerifiedReleasedLAGoldArea
+    );
+    if (releasedGoldText) return releasedGoldText;
 
     const kind = echoSlot ? (slot === 'RA_ES' ? 'raArea' : 'rvFAC')
       : 'laVolumeBiplane';
@@ -8517,6 +8523,7 @@ function commandsModule({
   const viewerMeasurementsDeletedInSession = new Set<string>();
   const viewerQuizMeasurementComparisonAnnotationIds = new Set<string>();
   const viewerQuizReviewEFDisplayAnnotationIds = new Set<string>();
+  const viewerQuizReviewLAGoldAreaAnnotationIds = new Set<string>();
   const viewerQuizReviewOriginalTextBoxes = new Map<string, any>();
   let viewerQuizComparisonGeneration = 0;
   const {
@@ -8731,6 +8738,38 @@ function commandsModule({
     };
   }
 
+  // Trust only the allowed per-slot physical areas returned by the released,
+  // version-pinned gold endpoint. Do not re-calibrate flattened world/pixel
+  // contour points or read an arbitrary live MeasurementService annotation.
+  function applyVerifiedReleasedLAGoldAreaLabel(
+    displayAnnotationId: string, sourceAnnotationId: string,
+    slot: string, gold: any, hydrated?: any
+  ) {
+    const kind = String(gold?.measurementKind || '');
+    if (!['laVolumeBiplane', 'laVolumeBiplaneDisks'].includes(kind) ||
+        !['A4C', 'A2C'].includes(slot)) return;
+    const components = gold?.compositeResult?.components;
+    if (!Array.isArray(components) ||
+        components.filter((part: any) =>
+          part?.slot === slot &&
+          String(part.annotationId || '') === sourceAnnotationId).length !== 1) return;
+    const key = slot === 'A4C' ? 'a4cAreaCM2' : 'a2cAreaCM2';
+    const raw = gold?.compositeResult?.derived?.[key];
+    if (raw === null || raw === undefined || raw === '') return;
+    const area = Number(raw);
+    if (!Number.isFinite(area) || area <= 0) return;
+    const source = annotation.state.getAnnotation?.(displayAnnotationId) || hydrated;
+    if (!source) return;
+    source.data = {
+      ...(source.data || {}),
+      arVerifiedReleasedLAGoldArea: {
+        origin: 'released-pinned-quiz-gold', measurementKind: kind,
+        slot, areaCM2: area,
+      },
+    };
+    viewerQuizReviewLAGoldAreaAnnotationIds.add(displayAnnotationId);
+  }
+
   function applyVerifiedEFGoldLabel(annotationId: string, slot: string, gold: any, hydrated?: any) {
     const areaRaw = gold?.compositeResult?.derived?.slotAreaCM2?.[slot];
     if (areaRaw === null || areaRaw === undefined || areaRaw === '') return;
@@ -8832,6 +8871,13 @@ function commandsModule({
       else delete handles.textBox;
     }
     viewerQuizReviewOriginalTextBoxes.clear();
+    for (const annotationId of viewerQuizReviewLAGoldAreaAnnotationIds) {
+      const source = annotation.state.getAnnotation?.(annotationId);
+      if (source?.data?.arVerifiedReleasedLAGoldArea?.origin === 'released-pinned-quiz-gold') {
+        delete source.data.arVerifiedReleasedLAGoldArea;
+      }
+    }
+    viewerQuizReviewLAGoldAreaAnnotationIds.clear();
     for (const annotationId of viewerQuizReviewEFDisplayAnnotationIds) {
       const source = annotation.state.getAnnotation?.(annotationId);
       if (source?.data?.arVerifiedQuizEFGoldContour?.origin === 'quiz-gold') {
@@ -17127,6 +17173,11 @@ function commandsModule({
               rubricMeasurement?.measurementKind === 'lvSimpsonEF') {
             applyVerifiedEFGoldLabel(sourceId, entry.slot, rubricMeasurement);
           }
+          if (entry.variant === 'rubric' && entry.slot && quizKey && questionKey) {
+            applyVerifiedReleasedLAGoldAreaLabel(
+              sourceId, sourceId, entry.slot, rubricMeasurement
+            );
+          }
           if (entry.variant === 'learner' && isFocusedEFReview) {
             applyVerifiedEFLearnerLabel(
               sourceId, focusedCompositeSlot, submittedEFContour?.volumeML ?? null
@@ -17231,6 +17282,11 @@ function commandsModule({
         if (entry.variant === 'rubric' && entry.slot &&
             rubricMeasurement?.measurementKind === 'lvSimpsonEF') {
           applyVerifiedEFGoldLabel(comparisonAnnotationId, entry.slot, rubricMeasurement, hydratedAnnotation);
+        }
+        if (entry.variant === 'rubric' && entry.slot && quizKey && questionKey) {
+          applyVerifiedReleasedLAGoldAreaLabel(
+            comparisonAnnotationId, sourceId, entry.slot, rubricMeasurement, hydratedAnnotation
+          );
         }
         if (entry.variant === 'learner' && isFocusedEFReview) {
           applyVerifiedEFLearnerLabel(
