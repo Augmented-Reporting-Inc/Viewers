@@ -118,6 +118,28 @@ export function getQuizCompositeContourViewportLines(
 
 
 /**
+ * The released, version-pinned scored-review gold response can carry a
+ * previously validated per-phase LA area. This is *not* a source of new
+ * calibration: no native ROI cachedStats, pixel polygon, or live MeasurementService
+ * value may substitute for an absent released derived area.
+ */
+export function getVerifiedReleasedLAGoldViewportLines(evidence: any): string[] | null {
+  if (evidence?.origin !== 'released-pinned-quiz-gold' ||
+      !['laVolumeBiplane', 'laVolumeBiplaneDisks'].includes(
+        String(evidence?.measurementKind || ''))) return null;
+  const slot = String(evidence?.slot || '').trim().toUpperCase();
+  if (!['A4C', 'A2C'].includes(slot)) return null;
+  const raw = evidence?.areaCM2;
+  if (raw === null || raw === undefined || raw === '') return null;
+  const area = Number(raw);
+  if (!Number.isFinite(area) || area <= 0) return null;
+  const formatted = getQuizCompositeContourViewportLines(
+    { laVolume: { slot } }, area
+  );
+  return formatted?.length ? ['Gold ' + formatted[0]] : null;
+}
+
+/**
  * The native SplineROI adapter carries two structured Echo-area source fields.
  * Both must be registered with the OHIF MeasurementService schema; otherwise
  * it rejects annotation updates with "Invalid measurement key: measurementKind".
@@ -142,6 +164,20 @@ export function getQuizEchoAreaSourceMetadata(data: any = {}): Record<string, an
  * Viewer-only gold comparison overlay. Values come exclusively from the
  * verified educator composite result, not native ROI cachedStats.
  */
+/**
+ * Read-only learner EF comparison text uses the exact submitted phase's saved
+ * calibrated single-view volume. Never display native ROI area as EF volume.
+ */
+export function getVerifiedEFLearnerContourViewportLines(evidence: any): string[] | null {
+  if (evidence?.origin !== 'quiz-learner') return null;
+  const slot = String(evidence?.slot || '').trim().toUpperCase();
+  if (!['A4C_ED', 'A4C_ES', 'A2C_ED', 'A2C_ES'].includes(slot)) return null;
+  const raw = evidence.volumeML;
+  const volume = raw == null || raw === '' ? NaN : Number(raw);
+  return ['Your ' + slot.replace('_', ' ') + ' single-view LV volume: ' +
+    (Number.isFinite(volume) && volume > 0 ? volume.toFixed(2) + ' mL' : 'unavailable')];
+}
+
 /** Saved gold text requires a separately persisted, verified single-view volume. */
 export function getVerifiedEFGoldContourViewportLines(evidence: any): string[] | null {
   if (evidence?.origin !== 'quiz-gold') return null;

@@ -246,7 +246,20 @@ async function fetchJson(url: string, options: RequestInit = {}) {
 
   if (!response.ok) {
     const message = body?.message || body?.error || `${response.status}`;
-    throw new Error(message);
+    // This particular 409 follows full learner/tenant and answer-release
+    // authorization. Expose only non-sensitive slot/reason diagnostics, never
+    // patient/DICOM IDs, educator annotation IDs or coordinates.
+    const compositeReasons =
+      body?.error === 'pinned_composite_gold_invalid' &&
+      Array.isArray(body?.invalidGoldSlots)
+        ? body.invalidGoldSlots
+          .filter((entry: any) => typeof entry?.slot === 'string' &&
+            typeof entry?.reason === 'string')
+          .map((entry: any) => `${entry.slot}: ${entry.reason}`)
+          .slice(0, 4)
+        : [];
+    throw new Error(compositeReasons.length
+      ? `${message} (${compositeReasons.join(', ')})` : message);
   }
 
   return body;

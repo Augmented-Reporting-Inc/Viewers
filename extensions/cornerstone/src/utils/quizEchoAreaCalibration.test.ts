@@ -1,4 +1,4 @@
-import { calculateCalibratedEchoAreaCM2, getSavedQuizEchoAreaDisplayInfo, getQuizCompositeContourViewportLines, getQuizCompositeGoldContourSlotMetadata, getVerifiedEFGoldContourViewportLines, getQuizEchoAreaSourceMetadata, registerQuizEchoAreaMeasurementSchema } from './quizEchoAreaCalibration';
+import { calculateCalibratedEchoAreaCM2, getSavedQuizEchoAreaDisplayInfo, getQuizCompositeContourViewportLines, getVerifiedReleasedLAGoldViewportLines, getQuizCompositeGoldContourSlotMetadata, getVerifiedEFGoldContourViewportLines, getVerifiedEFLearnerContourViewportLines, getQuizEchoAreaSourceMetadata, registerQuizEchoAreaMeasurementSchema } from './quizEchoAreaCalibration';
 
 describe('DICOM-calibrated quiz echo area', () => {
   it('calculates physical area in cm² from already calibrated millimetres', () => {
@@ -85,6 +85,31 @@ describe('quiz contour viewport area labels', () => {
   });
 });
 
+describe('released pinned LA gold review labels', () => {
+  const evidence = (slot: string, areaCM2: any, kind = 'laVolumeBiplaneDisks') => ({
+    origin: 'released-pinned-quiz-gold', measurementKind: kind, slot, areaCM2,
+  });
+  it('shows each independently verified phase as gold cm², not native ROI area', () => {
+    expect(getVerifiedReleasedLAGoldViewportLines(evidence('A4C', 19.31)))
+      .toEqual(['Gold LA A4C: 19.31 cm²']);
+    expect(getVerifiedReleasedLAGoldViewportLines(evidence('A2C', 12.78)))
+      .toEqual(['Gold LA A2C: 12.78 cm²']);
+    expect(getVerifiedReleasedLAGoldViewportLines(evidence('A4C', 22.5, 'laVolumeBiplane')))
+      .toEqual(['Gold LA A4C: 22.50 cm²']);
+  });
+  it('fails closed when derived area is absent, bogus or comes from another workflow', () => {
+    for (const area of [null, '', undefined, 0, NaN, Infinity, -7]) {
+      expect(getVerifiedReleasedLAGoldViewportLines(evidence('A4C', area))).toBeNull();
+    }
+    expect(getVerifiedReleasedLAGoldViewportLines({
+      ...evidence('A4C', 10000), origin: 'quiz-learner',
+    })).toBeNull();
+    expect(getVerifiedReleasedLAGoldViewportLines(evidence('RV_ED', 18.5))).toBeNull();
+    expect(getVerifiedReleasedLAGoldViewportLines(evidence('A2C', 18.5, 'lvSimpsonEF')))
+      .toBeNull();
+  });
+});
+
 describe('composite gold comparison source contours retain quiz identity', () => {
   it('restores RV, RA and LA contour slots without inferring kinds from labels', () => {
     expect(getQuizCompositeGoldContourSlotMetadata('rvFAC', 'RV_ED')).toEqual({
@@ -160,6 +185,29 @@ describe('EF educator gold contour viewport text', () => {
     })).toBeNull();
     expect(getVerifiedEFGoldContourViewportLines({
       origin: 'quiz-gold', slot: 'RV_ED', areaCM2: 27.5, volumeML: 100,
+    })).toBeNull();
+  });
+});
+
+describe('EF submitted learner comparison text', () => {
+  it('shows the verified saved mL value and never native ROI area', () => {
+    expect(getVerifiedEFLearnerContourViewportLines({
+      origin: 'quiz-learner', slot: 'A4C_ED', volumeML: 86.44,
+      cachedStats: { area: 21.13, areaUnit: 'cm²' },
+    })).toEqual(['Your A4C ED single-view LV volume: 86.44 mL']);
+    expect(getVerifiedEFLearnerContourViewportLines({
+      origin: 'quiz-learner', slot: 'A2C_ES', volumeML: 60.38,
+    })).toEqual(['Your A2C ES single-view LV volume: 60.38 mL']);
+  });
+  it('does not invent volume or override other annotations', () => {
+    expect(getVerifiedEFLearnerContourViewportLines({
+      origin: 'quiz-learner', slot: 'A4C_ES', volumeML: null,
+    })).toEqual(['Your A4C ES single-view LV volume: unavailable']);
+    expect(getVerifiedEFLearnerContourViewportLines({
+      origin: 'quiz-gold', slot: 'A4C_ES', volumeML: 53.88,
+    })).toBeNull();
+    expect(getVerifiedEFLearnerContourViewportLines({
+      origin: 'quiz-learner', slot: 'RV_ES', volumeML: 53.88,
     })).toBeNull();
   });
 });

@@ -2,7 +2,7 @@ name: Validate shared Education/Research question UI
 
 on:
   pull_request:
-    branches: [port/3.11-custom, fix/scored-review-no-capture-duplicate-composite-20261122]
+    branches: [port/3.11-custom]
     paths:
       - 'extensions/extension-ar-measurements/src/panels/ViewerQuestionChrome*'
       - 'extensions/extension-ar-measurements/src/panels/ViewerEchoPhaseControls*'

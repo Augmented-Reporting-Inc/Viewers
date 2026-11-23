@@ -65,6 +65,7 @@ import {
   hydrateMeasurementAnnotationsForActiveStudy as hydrateMeasurementAnnotationsForActiveStudyUtil,
 } from './utils/measurementAnnotationHydration';
 import { isSavedLVSimpsonImageMatch } from './utils/savedVolumeContourMetadata';
+import { getViewerQuizComparisonLabelCanvasPosition } from './utils/quizReviewLabelLayout';
 import { buildFormApiFetchOptions, buildFormApiUrl } from './utils/formApi';
 import { callMultilineTextDialog } from './utils/callMultilineTextDialog';
 import {
@@ -138,11 +139,12 @@ import { getEchoAreaSlot, calculateRVFACFromMeasurements } from '../../extension
 import { resolveViewerQuizCompositeResult, resolveViewerQuizLVSimpsonForStudy, isViewerQuizCompositeReviewCurrent, getViewerQuizCompositeStatus, calibratedLVContourAreaCM2 } from '../../extension-ar-measurements/src/utils/viewerQuizCompositeResults';
 import { createGuidedMouseToolOwnership } from './utils/guidedMouseToolOwnership';
 import { calibrateUSContourPoints, worldToImageIndex } from './utils/usRegionLengthCalibration';
-import { getQuizEchoAreaSourceMetadata, calculateCalibratedEchoAreaCM2, getSavedQuizEchoAreaDisplayInfo, getQuizCompositeContourViewportLines, getQuizCompositeGoldContourSlotMetadata, getVerifiedEFGoldContourViewportLines } from './utils/quizEchoAreaCalibration';
+import { getQuizEchoAreaSourceMetadata, calculateCalibratedEchoAreaCM2, getSavedQuizEchoAreaDisplayInfo, getQuizCompositeContourViewportLines, getQuizCompositeGoldContourSlotMetadata, getVerifiedReleasedLAGoldViewportLines, getVerifiedEFGoldContourViewportLines, getVerifiedEFLearnerContourViewportLines } from './utils/quizEchoAreaCalibration';
 import { installQuizContourTextRenderer } from './utils/installQuizContourTextRenderer';
 import { consumeViewerLengthFirstLabelMode } from './utils/viewerLengthLabelMode';
 import { getViewerQuizRouteMeasurementDomain } from '../../extension-ar-learning/src/utils/viewerQuizMeasurementDomain';
 import { resolveViewerQuizGoldAreaBackfill, resolveSavedEFGoldContourAreas, resolveVerifiedEFGoldContourAreasFromDicom } from '../../extension-ar-measurements/src/utils/quizGoldAreaBackfill';
+import { getSubmittedEFReviewContour } from './utils/quizEFSubmittedReviewContour';
 
 const { DefaultHistoryMemo } = csUtils.HistoryMemo;
 const toggleSyncFunctions = {
@@ -5786,6 +5788,12 @@ function installQuizCompositeContourTextOverrideForViewport({
     const laSlot = !!contourData?.laVolume?.slot &&
       ['A4C', 'A2C'].includes(slot);
     if (!echoSlot && !laSlot) return null;
+    // The released gold is an immutable review overlay, not a live ROI
+    // measurement; its validated per-phase cm² value has its own provenance.
+    const releasedGoldText = getVerifiedReleasedLAGoldViewportLines(
+      contourData?.arVerifiedReleasedLAGoldArea
+    );
+    if (releasedGoldText) return releasedGoldText;
 
     const kind = echoSlot ? (slot === 'RA_ES' ? 'raArea' : 'rvFAC')
       : 'laVolumeBiplane';
@@ -5866,14 +5874,20 @@ function installLVSimpsonContourTextCleanupForViewport({ viewport, viewportId = 
   const nextConfiguration = {
     ...(toolInstance.configuration || {}),
     getTextLines: function (...args) {
-      const lines =
-        typeof previousGetTextLines === 'function' ? previousGetTextLines.call(this, ...args) : [];
       const raw = args[0];
       const data = raw?.annotation?.data || raw?.data || raw;
+      // Verified scored-review values take precedence over any generic ROI
+      // cachedStats or saved measurement text, without recalculation.
       const goldEFText = getVerifiedEFGoldContourViewportLines(
         data?.arVerifiedQuizEFGoldContour
       );
       if (goldEFText) return goldEFText;
+      const learnerEFText = getVerifiedEFLearnerContourViewportLines(
+        data?.arVerifiedQuizEFLearnerContour
+      );
+      if (learnerEFText) return learnerEFText;
+      const lines =
+        typeof previousGetTextLines === 'function' ? previousGetTextLines.call(this, ...args) : [];
       const lv = data?.lvSimpson || {};
       const slot = String(lv.slot || '');
       if (['A4C_ED', 'A4C_ES', 'A2C_ED', 'A2C_ES'].includes(slot)) {
@@ -8508,7 +8522,10 @@ function commandsModule({
   const viewerMeasurementsModifiedInSession = new Set<string>();
   const viewerMeasurementsDeletedInSession = new Set<string>();
   const viewerQuizMeasurementComparisonAnnotationIds = new Set<string>();
-  const viewerQuizGoldEFDisplayAnnotationIds = new Set<string>();
+  const viewerQuizReviewEFDisplayAnnotationIds = new Set<string>();
+  const viewerQuizReviewLAGoldAreaAnnotationIds = new Set<string>();
+  const viewerQuizReviewOriginalTextBoxes = new Map<string, any>();
+  let viewerQuizComparisonGeneration = 0;
   const {
     viewportGridService,
     toolGroupService,
@@ -8721,6 +8738,38 @@ function commandsModule({
     };
   }
 
+  // Trust only the allowed per-slot physical areas returned by the released,
+  // version-pinned gold endpoint. Do not re-calibrate flattened world/pixel
+  // contour points or read an arbitrary live MeasurementService annotation.
+  function applyVerifiedReleasedLAGoldAreaLabel(
+    displayAnnotationId: string, sourceAnnotationId: string,
+    slot: string, gold: any, hydrated?: any
+  ) {
+    const kind = String(gold?.measurementKind || '');
+    if (!['laVolumeBiplane', 'laVolumeBiplaneDisks'].includes(kind) ||
+        !['A4C', 'A2C'].includes(slot)) return;
+    const components = gold?.compositeResult?.components;
+    if (!Array.isArray(components) ||
+        components.filter((part: any) =>
+          part?.slot === slot &&
+          String(part.annotationId || '') === sourceAnnotationId).length !== 1) return;
+    const key = slot === 'A4C' ? 'a4cAreaCM2' : 'a2cAreaCM2';
+    const raw = gold?.compositeResult?.derived?.[key];
+    if (raw === null || raw === undefined || raw === '') return;
+    const area = Number(raw);
+    if (!Number.isFinite(area) || area <= 0) return;
+    const source = annotation.state.getAnnotation?.(displayAnnotationId) || hydrated;
+    if (!source) return;
+    source.data = {
+      ...(source.data || {}),
+      arVerifiedReleasedLAGoldArea: {
+        origin: 'released-pinned-quiz-gold', measurementKind: kind,
+        slot, areaCM2: area,
+      },
+    };
+    viewerQuizReviewLAGoldAreaAnnotationIds.add(displayAnnotationId);
+  }
+
   function applyVerifiedEFGoldLabel(annotationId: string, slot: string, gold: any, hydrated?: any) {
     const areaRaw = gold?.compositeResult?.derived?.slotAreaCM2?.[slot];
     if (areaRaw === null || areaRaw === undefined || areaRaw === '') return;
@@ -8755,17 +8804,90 @@ function commandsModule({
         axisMM: Number.isFinite(axis) && axis > 0 ? axis : null,
       },
     };
-    viewerQuizGoldEFDisplayAnnotationIds.add(annotationId);
+    viewerQuizReviewEFDisplayAnnotationIds.add(annotationId);
+  }
+
+  // Temporary, read-only UI label. The persisted submitted answer supplies
+  // the per-slot calibrated volume; native ROI area is never a substitute.
+  function applyVerifiedEFLearnerLabel(
+    annotationId: string, slot: string, savedVolumeML: number | null, hydrated?: any
+  ) {
+    if (!['A4C_ED', 'A4C_ES', 'A2C_ED', 'A2C_ES'].includes(slot)) return;
+    const source = annotation.state.getAnnotation?.(annotationId) || hydrated;
+    if (!source) return;
+    const volume = Number(savedVolumeML);
+    source.data = {
+      ...(source.data || {}),
+      arVerifiedQuizEFLearnerContour: {
+        origin: 'quiz-learner', slot,
+        volumeML: savedVolumeML != null && Number.isFinite(volume) && volume > 0
+          ? volume : null,
+      },
+    };
+    viewerQuizReviewEFDisplayAnnotationIds.add(annotationId);
+  }
+
+  // Only reposition the review text box. Never move the clinical contour or
+  // persist an annotation edit. Restore native source text boxes on cleanup.
+  function positionViewerQuizComparisonTextBox(
+    annotationId: string, viewport: any, variant: 'learner' | 'rubric'
+  ) {
+    const source = annotation.state.getAnnotation?.(annotationId);
+    const handles = source?.data?.handles;
+    const element = viewport?.element;
+    if (!handles || !element || typeof viewport?.canvasToWorld !== 'function') return;
+    const position = getViewerQuizComparisonLabelCanvasPosition({
+      width: element.clientWidth, height: element.clientHeight, variant,
+    });
+    if (!position) return;
+    let world: any;
+    try { world = viewport.canvasToWorld(position); } catch { return; }
+    const worldPoint: number[] = world && typeof world.length === 'number'
+      ? Array.from(world as ArrayLike<number>) : [];
+    if (worldPoint.length < 3 ||
+        worldPoint.some(value => !Number.isFinite(value))) return;
+    const previous = handles.textBox || {};
+    if (!annotationId.startsWith('ar-viewer-quiz-') &&
+        !viewerQuizReviewOriginalTextBoxes.has(annotationId)) {
+      viewerQuizReviewOriginalTextBoxes.set(annotationId, {
+        hadTextBox: !!handles.textBox,
+        textBox: handles.textBox ? {
+          ...handles.textBox,
+          worldPosition: Array.isArray(handles.textBox.worldPosition)
+            ? [...handles.textBox.worldPosition] : handles.textBox.worldPosition,
+        } : null,
+      });
+    }
+    handles.textBox = { ...previous, hasMoved: true,
+      worldPosition: worldPoint.slice(0, 3), worldBoundingBox: null };
   }
 
   function clearViewerQuizMeasurementComparisonAnnotations() {
-    for (const annotationId of viewerQuizGoldEFDisplayAnnotationIds) {
+    viewerQuizComparisonGeneration += 1;
+    for (const [annotationId, saved] of viewerQuizReviewOriginalTextBoxes) {
+      const handles = annotation.state.getAnnotation?.(annotationId)?.data?.handles;
+      if (!handles) continue;
+      if (saved.hadTextBox) handles.textBox = saved.textBox;
+      else delete handles.textBox;
+    }
+    viewerQuizReviewOriginalTextBoxes.clear();
+    for (const annotationId of viewerQuizReviewLAGoldAreaAnnotationIds) {
+      const source = annotation.state.getAnnotation?.(annotationId);
+      if (source?.data?.arVerifiedReleasedLAGoldArea?.origin === 'released-pinned-quiz-gold') {
+        delete source.data.arVerifiedReleasedLAGoldArea;
+      }
+    }
+    viewerQuizReviewLAGoldAreaAnnotationIds.clear();
+    for (const annotationId of viewerQuizReviewEFDisplayAnnotationIds) {
       const source = annotation.state.getAnnotation?.(annotationId);
       if (source?.data?.arVerifiedQuizEFGoldContour?.origin === 'quiz-gold') {
         delete source.data.arVerifiedQuizEFGoldContour;
       }
+      if (source?.data?.arVerifiedQuizEFLearnerContour?.origin === 'quiz-learner') {
+        delete source.data.arVerifiedQuizEFLearnerContour;
+      }
     }
-    viewerQuizGoldEFDisplayAnnotationIds.clear();
+    viewerQuizReviewEFDisplayAnnotationIds.clear();
     for (const annotationId of viewerQuizMeasurementComparisonAnnotationIds) {
       try {
         annotation.state.removeAnnotation?.(annotationId);
@@ -8779,7 +8901,8 @@ function commandsModule({
     try {
       document.querySelectorAll?.(
         '[data-review-state="bowel-gold-endpoint-tolerance"], ' +
-        '[data-review-state="bowel-gold-reference-radius"]'
+        '[data-review-state="bowel-gold-reference-radius"], ' +
+        '[data-review-state="gold-tolerance"]'
       ).forEach(node => node.remove());
     } catch {}
 
@@ -16660,15 +16783,27 @@ function commandsModule({
       viewerTarget = null,
       focusedCompositeSlot = '',
       questionKey = '',
+      quizKey = '',
+      quizVersion = 1,
       radius = null,
       radiusUnit = 'world',
       endpointToleranceMM = null,
       ivcEndpointToleranceEnabled = false,
     } = {}) => {
       clearViewerQuizMeasurementComparisonAnnotations();
+      const comparisonGeneration = viewerQuizComparisonGeneration;
       clearAllViewerQuizMarkerOverlays();
 
-      const { learnerSeriesDoc, baseSeriesDoc } = await getViewerQuizMeasurementSeriesDocs();
+      const isFocusedEFReview = rubricMeasurement?.measurementKind === 'lvSimpsonEF' &&
+        ['A4C_ED', 'A4C_ES', 'A2C_ED', 'A2C_ES'].includes(focusedCompositeSlot) &&
+        !!String(quizKey || '').trim() && !!String(questionKey || '').trim();
+      const { learnerSeriesDoc, baseSeriesDoc } = await getViewerQuizMeasurementSeriesDocs({
+        // EF released gold is embedded; avoid the unrelated educator Series fetch.
+        includeBaseSeries: !isFocusedEFReview,
+      });
+      if (comparisonGeneration !== viewerQuizComparisonGeneration) {
+        return { ok: false, reason: 'review-question-changed', renderedCount: 0 };
+      }
 
       // Opt-in BWT comparisons use two separate authorities: learner-copy
       // Series for learner evidence and versioned quiz JSON for educator gold.
@@ -16676,13 +16811,13 @@ function commandsModule({
         String(rubricMeasurement?.measurementKind || '') === 'length' &&
         /BWT/i.test(String(rubricMeasurement?.measurementType || '')) &&
         !!rubricMeasurement?.quizSpatialEvidence;
-      const learnerAnnotation = isBowelGoldReference
+      let learnerAnnotation = isFocusedEFReview ? null : isBowelGoldReference
         ? findViewerQuizLearnerOwnedAnnotation(learnerMeasurement, learnerSeriesDoc)
         : findViewerQuizMeasurementAnnotationInSeriesDocs(learnerMeasurement, [
             learnerSeriesDoc, baseSeriesDoc,
           ]) || getViewerQuizMeasurementAnnotationFromService(learnerMeasurement);
       const embeddedGoldAnnotation = buildViewerQuizGoldBwtDisplaySource(rubricMeasurement);
-      const persistedRubricAnnotation = isBowelGoldReference ? null :
+      const persistedRubricAnnotation = isBowelGoldReference || isFocusedEFReview ? null :
         findViewerQuizMeasurementAnnotationInSeriesDocs(rubricMeasurement, [
           baseSeriesDoc,
           learnerSeriesDoc,
@@ -16698,7 +16833,7 @@ function commandsModule({
       const rubricComponents = Array.isArray(rubricMeasurement?.compositeResult?.components)
         ? rubricMeasurement.compositeResult.components
         : [];
-      const expectedSlots =
+      const allExpectedSlots =
         rubricMeasurement?.measurementKind === 'lvSimpsonEF'
           ? ['A4C_ED', 'A4C_ES', 'A2C_ED', 'A2C_ES']
           : ['laVolumeBiplane', 'laVolumeBiplaneDisks'].includes(rubricMeasurement?.measurementKind)
@@ -16710,7 +16845,45 @@ function commandsModule({
                 : rubricMeasurement?.measurementKind === 'ivcCollapsibility'
                   ? ['IVC_EXP', 'IVC_INSP']
                   : [];
+      const expectedSlots = focusedCompositeSlot && allExpectedSlots.includes(focusedCompositeSlot)
+        ? [focusedCompositeSlot] : allExpectedSlots;
       const compositeRubric = expectedSlots.length > 0;
+
+      // Read only the exact submitted EF component for the selected phase.
+      // Generic 'best matching annotation' lookup can select another EF frame.
+      const focusedGold = rubricComponents.find(part => part?.slot === focusedCompositeSlot);
+      const submittedEFContour = isFocusedEFReview ? getSubmittedEFReviewContour({
+        learnerSeriesDoc, quizKey, quizVersion, questionKey,
+        slot: focusedCompositeSlot, goldTarget: focusedGold?.target,
+      }) : null;
+      if (isFocusedEFReview) {
+        const learnerTarget = submittedEFContour?.target || {};
+        const sourceImage = String(learnerTarget.referencedImageId ||
+          focusedGold?.target?.referencedImageId || '').trim();
+        const persisted = submittedEFContour
+          ? getRequestedWorkflowAnnotations(learnerSeriesDoc?.MeasurementAnnotations)
+            .find(part => getMeasurementAnnotationId(part) === submittedEFContour.annotationId)
+          : null;
+        const nativeTool = String(persisted?.toolName || '').trim();
+        learnerAnnotation = submittedEFContour && sourceImage ? {
+          annotationId: submittedEFContour.annotationId,
+          uid: submittedEFContour.annotationId,
+          workflow: VIEWER_MEASUREMENTS_WORKFLOW,
+          toolName: ['SplineROI', 'PlanarFreehandROI'].includes(nativeTool)
+            ? nativeTool : 'PlanarFreehandROI',
+          measurementKind: 'lvSimpsonEF',
+          label: focusedCompositeSlot,
+          measurementRole: focusedCompositeSlot,
+          lvSimpson: { slot: focusedCompositeSlot },
+          StudyInstanceUID: learnerTarget.studyInstanceUID,
+          SeriesInstanceUID: learnerTarget.seriesInstanceUID,
+          SOPInstanceUID: learnerTarget.sopInstanceUID,
+          frameNumber: Number(learnerTarget.frameNumber),
+          referencedImageId: sourceImage,
+          points: submittedEFContour.points,
+          contourClosed: true,
+        } : null;
+      }
       const embeddedContourFromComponent = (component: any, slot: string) => {
         const points = component?.points;
         const target = component?.target || {};
@@ -16723,7 +16896,9 @@ function commandsModule({
         if (
           !Array.isArray(points) ||
           points.length < (rubricMeasurement?.measurementKind === 'ivcCollapsibility' ? 2 : 3) ||
-          points.length > 5000 || !imageId ||
+          // Review accepts bounded high-resolution pinned contours; the
+          // scorer's separate submission limit is unchanged.
+          points.length > 10000 || !imageId ||
           (expectedStudy && (!study || study !== expectedStudy))
         ) {
           return null;
@@ -16811,6 +16986,11 @@ function commandsModule({
         });
       }
 
+      if (isFocusedEFReview && !learnerAnnotation) {
+        return { ok: false, reason: 'submitted-ef-phase-contour-unavailable',
+          learnerRendered: false, rubricRendered: false, renderedSlots: [] };
+      }
+
       if (!learnerAnnotation && !rubricAnnotation && resolvedRubricContours.length === 0) {
         console.warn('[ViewerQuiz] no source annotation available for highlight', {
           questionKey,
@@ -16834,13 +17014,38 @@ function commandsModule({
       let comparisonViewportId = viewportGridService.getActiveViewportId();
 
       if (comparisonTarget) {
-        const navigationResult = await actions.jumpToViewerQuizTarget({
-          viewerTarget: comparisonTarget,
-          questionKey,
-        });
-        comparisonViewportId = navigationResult?.viewportId || comparisonViewportId;
+        let alreadyAtExactFrame = false;
+        if (isFocusedEFReview) {
+          const current = await actions.getCurrentViewerQuizFrameAnswer({
+            viewportId: comparisonViewportId,
+          });
+          const active = current?.answer?.viewerTarget || current?.answer?.selectedTarget || {};
+          alreadyAtExactFrame = current?.ok === true &&
+            ['studyInstanceUID', 'seriesInstanceUID', 'sopInstanceUID'].every(key =>
+              !!String(comparisonTarget[key] || '').trim() &&
+              String(comparisonTarget[key]) === String(active[key])) &&
+            Number.isSafeInteger(Number(comparisonTarget.frameNumber)) &&
+            Number(comparisonTarget.frameNumber) > 0 &&
+            Number(comparisonTarget.frameNumber) === Number(active.frameNumber);
+        }
+        if (!alreadyAtExactFrame) {
+          const navigationResult = await actions.jumpToViewerQuizTarget({
+            viewerTarget: comparisonTarget,
+            questionKey,
+            requireExactSopFrame: isFocusedEFReview,
+            pauseCineOnTarget: isFocusedEFReview,
+          });
+          if (isFocusedEFReview && navigationResult?.ok !== true) {
+            return { ok: false, reason: 'exact-ef-source-frame-unavailable',
+              learnerRendered: false, rubricRendered: false, renderedSlots: [] };
+          }
+          comparisonViewportId = navigationResult?.viewportId || comparisonViewportId;
+        }
       }
 
+      if (comparisonGeneration !== viewerQuizComparisonGeneration) {
+        return { ok: false, reason: 'review-question-changed', renderedCount: 0 };
+      }
       const viewport = cornerstoneViewportService.getCornerstoneViewport(comparisonViewportId);
 
       if (!viewport) {
@@ -16911,13 +17116,16 @@ function commandsModule({
         viewport?.getImageData?.()?.metadata?.FrameOfReferenceUID ||
         viewport?.getImageData?.()?.metadata?.frameOfReferenceUID ||
         '';
-      const learnerSourceAnnotationId =
+      const learnerSourceAnnotationId = isFocusedEFReview ? '' :
         getViewerQuizMeasurementSourceAnnotationId(learnerMeasurement);
       const existingLearnerAnnotation = learnerSourceAnnotationId
         ? annotation.state.getAnnotation?.(learnerSourceAnnotationId)
         : null;
       let learnerRendered = false;
       let rubricRendered = false;
+      const reviewContourLabels = ['rvFAC', 'laVolumeBiplane',
+        'laVolumeBiplaneDisks', 'lvSimpsonEF'].includes(rubricMeasurement?.measurementKind);
+      const renderedSlots = new Set<string>();
       let renderedCount = 0;
 
       if (existingLearnerAnnotation) {
@@ -16935,7 +17143,7 @@ function commandsModule({
         {
           sourceAnnotation: learnerRendered ? null : learnerAnnotation,
           variant: 'learner' as const,
-          slot: '',
+          slot: isFocusedEFReview ? focusedCompositeSlot : '',
         },
         ...(compositeRubric
           ? resolvedRubricContours.map(entry => ({
@@ -16949,23 +17157,46 @@ function commandsModule({
       for (const entry of entries) {
         const sourceId = String(entry.sourceAnnotation?.annotationId ||
           entry.sourceAnnotation?.uid || '').trim();
-        const native = compositeRubric && entry.variant === 'rubric' && sourceId
+        const native = compositeRubric && sourceId &&
+          (entry.variant === 'rubric' || (entry.variant === 'learner' && isFocusedEFReview))
           ? annotation.state.getAnnotation?.(sourceId) : null;
         const expectedImage = normalizeImageIdForCompare(
           entry.sourceAnnotation?.referencedImageId || '');
         const nativeImage = normalizeImageIdForCompare(
           native?.metadata?.referencedImageId || '');
         if (native && expectedImage && nativeImage === expectedImage) {
+          if (isFocusedEFReview) {
+            const activeImage = normalizeImageIdForCompare(viewport.getCurrentImageId?.() || '');
+            if (!activeImage || activeImage !== expectedImage) continue;
+          }
           if (entry.variant === 'rubric' &&
               rubricMeasurement?.measurementKind === 'lvSimpsonEF') {
             applyVerifiedEFGoldLabel(sourceId, entry.slot, rubricMeasurement);
           }
+          if (entry.variant === 'rubric' && entry.slot && quizKey && questionKey) {
+            applyVerifiedReleasedLAGoldAreaLabel(
+              sourceId, sourceId, entry.slot, rubricMeasurement
+            );
+          }
+          if (entry.variant === 'learner' && isFocusedEFReview) {
+            applyVerifiedEFLearnerLabel(
+              sourceId, focusedCompositeSlot, submittedEFContour?.volumeML ?? null
+            );
+          }
           native.isVisible = true;
+          native.isLocked = true;
+          if (reviewContourLabels) positionViewerQuizComparisonTextBox(sourceId, viewport, entry.variant);
           cornerstoneTools.annotation.selection.setAnnotationSelected?.(
-            sourceId, !focusedCompositeSlot || entry.slot === focusedCompositeSlot
+            sourceId, entry.variant === 'rubric' &&
+              (!focusedCompositeSlot || entry.slot === focusedCompositeSlot)
           );
           renderedCount++;
-          rubricRendered = true;
+          if (entry.variant === 'learner') {
+            learnerRendered = true;
+          } else {
+            rubricRendered = true;
+            if (entry.slot) renderedSlots.add(entry.slot);
+          }
           continue;
         }
         const comparisonAnnotation = buildViewerQuizMeasurementComparisonAnnotation({
@@ -16977,8 +17208,15 @@ function commandsModule({
         // contour against its own image rather than navigating the viewport to
         // each subsequent frame (which would leave the wrong frame visible).
         const match = entry.slot
-          ? { imageId: comparisonAnnotation.referencedImageId || '' }
+          ? findImageIdIndexForSavedAnnotation(viewport, comparisonAnnotation)
           : await waitForSavedAnnotationImageMatch(viewport, comparisonAnnotation);
+        if (entry.slot && match.index < 0) continue;
+        if (entry.slot && isFocusedEFReview) {
+          // Only show a per-slot contour on the exact currently displayed frame.
+          const activeImage = normalizeImageIdForCompare(viewport.getCurrentImageId?.() || '');
+          const matchedImage = normalizeImageIdForCompare(match.imageId || '');
+          if (!activeImage || activeImage !== matchedImage) continue;
+        }
         const hydrated = hydrateViewerQuizMeasurementComparisonAnnotation({
           comparisonAnnotation,
           viewport,
@@ -17045,6 +17283,17 @@ function commandsModule({
             rubricMeasurement?.measurementKind === 'lvSimpsonEF') {
           applyVerifiedEFGoldLabel(comparisonAnnotationId, entry.slot, rubricMeasurement, hydratedAnnotation);
         }
+        if (entry.variant === 'rubric' && entry.slot && quizKey && questionKey) {
+          applyVerifiedReleasedLAGoldAreaLabel(
+            comparisonAnnotationId, sourceId, entry.slot, rubricMeasurement, hydratedAnnotation
+          );
+        }
+        if (entry.variant === 'learner' && isFocusedEFReview) {
+          applyVerifiedEFLearnerLabel(
+            comparisonAnnotationId, focusedCompositeSlot,
+            submittedEFContour?.volumeML ?? null, hydratedAnnotation
+          );
+        }
         hydratedAnnotation.isLocked = true;
         hydratedAnnotation.isVisible = true;
         const focused = entry.variant === 'rubric' && !!focusedCompositeSlot &&
@@ -17058,11 +17307,15 @@ function commandsModule({
           comparisonAnnotationId, focused
         );
         viewerQuizMeasurementComparisonAnnotationIds.add(comparisonAnnotationId);
+        if (reviewContourLabels) {
+          positionViewerQuizComparisonTextBox(comparisonAnnotationId, viewport, entry.variant);
+        }
         renderedCount += 1;
         if (entry.variant === 'learner') {
           learnerRendered = true;
         } else if (entry.variant === 'rubric') {
           rubricRendered = true;
+          if (entry.slot) renderedSlots.add(entry.slot);
         }
       }
 
@@ -17073,9 +17326,10 @@ function commandsModule({
       const endpointRadius = endpointToleranceMM === null || endpointToleranceMM === ''
         ? null : Number(endpointToleranceMM);
       const isIVC = rubricMeasurement?.measurementKind === 'ivcCollapsibility';
+      const isTRVmax = rubricMeasurement?.measurementKind === 'trVmax';
       const useEndpointTolerance =
         isIVC ? ivcEndpointToleranceEnabled === true
-          : rubricMeasurement?.measurementKind === 'length' &&
+          : ['length', 'trVmax'].includes(rubricMeasurement?.measurementKind) &&
             endpointRadius !== null;
       let toleranceCircleRendered = false;
       let endpointCirclesRendered = 0;
@@ -17107,7 +17361,7 @@ function commandsModule({
             (expectedInstanceFrame && activeImage.includes(expectedInstanceFrame))
           );
           // Composite phase geometry must only appear on its exact gold image/frame.
-          if (isIVC && !frameMatches) continue;
+          if ((isIVC || isTRVmax) && !frameMatches) continue;
           const points = getViewerQuizMeasurementPoints(part);
           if (points.length !== 2) continue;
           for (const coordinates of points) {
@@ -17162,6 +17416,7 @@ function commandsModule({
         rubricRendered,
         compositeContoursExpected: compositeRubric ? expectedSlots.length : 0,
         compositeContoursResolved: resolvedRubricContours.length,
+        renderedSlots: [...renderedSlots],
         toleranceCircleRendered,
         endpointCirclesRendered,
       };
