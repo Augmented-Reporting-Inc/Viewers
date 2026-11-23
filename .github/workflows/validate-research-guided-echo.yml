@@ -57,7 +57,8 @@ jobs:
             extensions/extension-ar-measurements/src/components/EchoEFContourVolumes.test.ts \
             extensions/extension-ar-measurements/src/components/EchoCompositeResultStatus.test.ts \
             extensions/extension-ar-measurements/src/utils/echoCompositeAcquisition.test.ts \
-            extensions/extension-ar-measurements/src/components/EchoContourTechniqueButtons.test.ts
+            extensions/extension-ar-measurements/src/components/EchoContourTechniqueButtons.test.ts \
+            extensions/extension-ar-measurements/src/components/SharedQuestionPanel.test.tsx
       - name: Compile Research panels and shared Length registration
         run: |
           node - <<'NODE'
@@ -68,6 +69,8 @@ jobs:
             'extensions/extension-ar-measurements/src/components/EchoEFContourVolumes.tsx',
             'extensions/extension-ar-measurements/src/components/EchoCompositeResultStatus.tsx',
             'extensions/extension-ar-measurements/src/components/EchoContourTechniqueButtons.tsx',
+            'extensions/extension-ar-measurements/src/components/SharedQuestionNavigation.tsx',
+            'extensions/extension-ar-measurements/src/components/SharedMeasurementValueInput.tsx',
             'extensions/extension-ar-measurements/src/utils/echoCompositeAcquisition.ts',
             'extensions/extension-ar-learning/src/panels/CaseQuestionsPanel.tsx',
             'extensions/extension-ar-research/src/panels/ResearchEchoGuidedControls.tsx',
