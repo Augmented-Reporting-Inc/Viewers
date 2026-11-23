@@ -376,6 +376,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
         {
           domain: cleanString(context?.readSchema?.domain) || 'generic',
           workflow: VIEWER_MEASUREMENTS_WORKFLOW,
+          includeResearchEchoContours: true,
         }
       );
 
@@ -646,6 +647,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
         {
           domain: cleanString(context?.readSchema?.domain) || 'generic',
           workflow: VIEWER_MEASUREMENTS_WORKFLOW,
+          includeResearchEchoContours: true,
         }
       );
 
