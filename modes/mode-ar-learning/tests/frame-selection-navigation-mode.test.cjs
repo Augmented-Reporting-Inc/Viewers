@@ -289,7 +289,7 @@ test('frame-only navigation re-resolves the display-set viewport and reports fai
 
 test('measurement label wraps and longitudinal caliper spacing uses learner calibration', () => {
   assert.match(panelSource, /getBowelMeasurementSetMidpointSpacingMm\(bowelGeometryEntries\)/);
-  assert.match(panelSource, /Caliper midpoint spacing:/);
+  assert.match(panelSource, /Caliper spacing \(centre-to-centre\):/);
   assert.match(panelSource, /whitespace-normal break-words text-xs text-gray-300/);
   assert.match(panelSource, /getLearnerBwtCaptureFailureMessage\(reason\)/);
 });
@@ -409,7 +409,7 @@ test('multiple-BWT post-score review shows each gold length and scoring rules', 
   assert.match(panelSource, /bowelReference\.goldMeasurements/);
   assert.match(panelSource, /Correct reference lengths/);
   assert.match(panelSource, /numeric tolerance:/i);
-  assert.match(panelSource, /current rubric does not require/);
+  assert.match(panelSource, /This rubric does not require endpoint location matching/);
   assert.match(panelSource, /reviewDetails\.spatial\.observed/);
 });
 
