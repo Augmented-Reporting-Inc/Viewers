@@ -1,3 +1,4 @@
+import { ViewerQuestionCard, ViewerQuestionNavigation } from '../../../extension-ar-measurements/src/panels/ViewerQuestionChrome';
 import React, { useEffect, useMemo, useState, useRef } from 'react';
 import {
   getViewerQuizAuthoringContent,
@@ -8455,27 +8456,15 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     const navigatingDisabled = disabled || !!capturingMeasurementKey ||
       !!capturingFrameKey || !!capturingPointKey || !!capturingAuthoringKey;
     return (
-      <nav aria-label="Question navigation" className="mt-3 flex items-center justify-between gap-2 border-t border-gray-700 pt-3">
-        {([-1, 1] as const).map(direction => {
-          const target = orderedQuestions[index + direction];
-          const label = direction === -1 ? 'Previous' : 'Next';
-          return (
-            <button
-              key={direction}
-              type="button"
-              data-quiz-review-action="navigation"
-              aria-label={`${label} question`}
-              className="rounded border border-blue-600 px-3 py-2 text-xs font-semibold text-blue-100 hover:bg-blue-950 disabled:cursor-not-allowed disabled:opacity-40"
-              disabled={navigatingDisabled || !target}
-              onClick={event => {
-                event.preventDefault();
-                event.stopPropagation();
-                if (target) void selectQuestion(quiz, target);
-              }}
-            >{label}</button>
-          );
-        })}
-      </nav>
+      <ViewerQuestionNavigation
+        index={index}
+        count={orderedQuestions.length}
+        disabled={navigatingDisabled}
+        onNavigate={nextIndex => {
+          const target = orderedQuestions[nextIndex];
+          if (target) void selectQuestion(quiz, target);
+        }}
+      />
     );
   }
 
@@ -8744,60 +8733,26 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                           !shouldGuideFrameSelectionToInstance(question));
 
                       return (
-                        <div
+                        <ViewerQuestionCard
                           key={question.questionKey}
-                          className={`bg-gray-950/50 w-full min-w-0 max-w-full overflow-hidden rounded border p-2 ${
-                            isActiveQuestion
-                              ? 'border-blue-400'
-                              : hasViewerTarget
-                                ? 'border-gray-600'
-                                : 'border-gray-800'
-                          }`}
-                          onClick={() => selectQuestion(quiz, question)}
+                          number={index + 1}
+                          title={question.title || question.prompt}
+                          prompt={question.prompt}
+                          showPrompt={!!question.title}
+                          helpText={question.helpText}
+                          required={question.required}
+                          active={isActiveQuestion}
+                          hasViewerTarget={hasViewerTarget}
+                          onSelect={() => selectQuestion(quiz, question)}
                           onFocusCapture={event => {
-                            // Review buttons navigate explicitly to the exact
-                            // learner/gold frame. Focus must not start a second
-                            // background "open question" navigation that can
-                            // race and reset the viewport to the instance.
                             if ((event.target as HTMLElement)?.closest?.('[data-quiz-review-action]')) return;
                             selectQuestion(quiz, question);
                           }}
                         >
-                          {isActiveQuestion ? (
-                            <div className="mb-1 inline-flex rounded bg-blue-600 px-2 py-0.5 text-[11px] font-semibold text-white">
-                              Active Question
-                            </div>
-                          ) : null}
-                          <div
-                            className="min-w-0 max-w-full text-sm font-semibold"
-                            style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}
-                          >
-                            {index + 1}. {question.title || question.prompt}
-                            {question.required ? <span className="text-red-300"> *</span> : null}
-                          </div>
-
-                          {question.title ? (
-                            <div
-                              className="mt-1 min-w-0 max-w-full text-xs text-gray-300"
-                              style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}
-                            >
-                              {question.prompt}
-                            </div>
-                          ) : null}
-
-                          {question.helpText ? (
-                            <div
-                              className="mt-1 min-w-0 max-w-full text-xs text-gray-400"
-                              style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}
-                            >
-                              {question.helpText}
-                            </div>
-                          ) : null}
-
                           {renderQuestion(quiz, question, submitted)}
                           {renderQuestionReview(quiz, question, quizScore)}
                           {renderQuestionNavigation(quiz, question, questions, quizSaving)}
-                        </div>
+                        </ViewerQuestionCard>
                       );
                     })}
                   </div>
