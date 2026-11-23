@@ -3333,6 +3333,13 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       return;
     }
     lastActivatedQuestionRef.current = nextActiveQuestionKey;
+    // Remove review-only overlays before async navigation; preserve sources.
+    try {
+      await runViewerCommand(commandsManager, 'clearViewerQuizMeasurementComparison', {});
+    } catch (error) {
+      console.warn('[CaseQuestionsPanel] review overlay cleanup failed', error);
+    }
+    if (lastActivatedQuestionRef.current !== nextActiveQuestionKey) return;
     if (isNewQuestion) {
       setShownBowelGoldQuestionKey('');
       // The IVC measure-only setting must never leak into ordinary learner
@@ -3380,7 +3387,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     const hasSavedGoldComposite = savedGoldComponents.length > 0 &&
       savedGoldComponents.every(component => component.complete);
     const educatorEF = authoringMode && measurementKind === 'lvSimpsonEF';
-    const deferGuidedActivation = isNewQuestion &&
+    const deferGuidedActivation = !scoredReviewReadOnly && isNewQuestion &&
       isGuidedQuizCompositeKind(measurementKind) &&
       !hasSavedGoldComposite;
     const activateGuidedAfterNavigation = async () => {
@@ -3419,10 +3426,6 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       }
     };
 
-    try {
-      await runViewerCommand(commandsManager, 'clearViewerQuizMeasurementComparison', {});
-    } catch {}
-
     if (question.type === 'measurementNumeric') {
       const quizMeasurementDomain = authoringMode
         ? authoringMeasurementDomain || resolveQuizAuthoringMeasurementDomain(authoringDefinition)
@@ -3445,7 +3448,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         Number(existingTRGold.value) > 0 &&
         !!cleanString(existingTRGold.sourceAnnotationId) &&
         targetHasNavigationIdentity(existingTRGold.viewerTarget);
-      if (!isGuidedQuizCompositeKind(measurementKind) && !reviewSavedTR) {
+      // A scored review must only navigate/restore saved annotations, not
+      // start spectral Vmax, Length or other capture tools and their toasts.
+      if (!scoredReviewReadOnly && !isGuidedQuizCompositeKind(measurementKind) && !reviewSavedTR) {
         const activationResult = await runViewerCommand(
           commandsManager,
           'activateViewerQuizMeasurementTool',
@@ -7101,6 +7106,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       reviewDetails.mode === 'bowelMeasurementSet' && correctAnswerVisible &&
       bowelGoldLengths.length > 0;
     const compositeReviewKind = cleanString(plainObject(question.answerConfig).measurementKind);
+    const isCaliperLengthReview = compositeReviewKind === 'length';
     const compositeSlotLabels: Record<string, string[]> = {
       lvSimpsonEF: ['A4C_ED', 'A4C_ES', 'A2C_ED', 'A2C_ES'],
       laVolumeBiplane: ['A4C', 'A2C'],
@@ -7150,9 +7156,54 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
             components.length !== compositeReviewSlots.length ||
             !compositeReviewSlots.every(expected =>
               components.filter((item: any) => item?.slot === expected).length === 1) ||
-            !goldFrame?.target?.referencedImageId) {
+            !goldFrame?.target?.studyInstanceUID ||
+            !goldFrame?.target?.seriesInstanceUID ||
+            !goldFrame?.target?.sopInstanceUID ||
+            !Number.isSafeInteger(Number(goldFrame?.target?.frameNumber)) ||
+            Number(goldFrame?.target?.frameNumber) < 1) {
           throw new Error('The released gold contour set is incomplete or has changed.');
         }
+
+        let displayTarget = goldFrame.target;
+        if (!cleanString(displayTarget.referencedImageId)) {
+          // RV FAC and LA captured contours can have an exact DICOM SOP/frame
+          // but no saved OHIF image-cache URL. Resolve that URL only from
+          // the image actually reached by an exact-frame viewer jump.
+          const navigation = await runViewerCommand(commandsManager,
+            'jumpToViewerQuizTarget', {
+              viewerTarget: displayTarget,
+              questionKey: question.questionKey,
+              requireExactSopFrame: true,
+              pauseCineOnTarget: true,
+            });
+          if (navigation?.ok !== true) {
+            throw new Error('The saved gold DICOM frame could not be opened exactly.');
+          }
+          const activeFrame = await runViewerCommand(commandsManager,
+            'getCurrentViewerQuizFrameAnswer', { viewportId: navigation.viewportId });
+          const current = plainObject(activeFrame?.answer?.viewerTarget);
+          const equalIdentity = (a: any, b: any) =>
+            !!cleanString(a) && cleanString(a) === cleanString(b);
+          if (activeFrame?.ok !== true ||
+              !equalIdentity(current.studyInstanceUID, displayTarget.studyInstanceUID) ||
+              !equalIdentity(current.seriesInstanceUID, displayTarget.seriesInstanceUID) ||
+              !equalIdentity(current.sopInstanceUID, displayTarget.sopInstanceUID) ||
+              Number(current.frameNumber) !== Number(displayTarget.frameNumber) ||
+              !cleanString(current.referencedImageId)) {
+            throw new Error('The opened DICOM image does not match the saved gold SOP/frame.');
+          }
+          displayTarget = {
+            ...displayTarget,
+            referencedImageId: current.referencedImageId,
+          };
+        }
+
+        // Show only this exact phase: each EF learner/gold pair belongs to
+        // one DICOM frame. The full derived map is retained for mL labels,
+        // but hydrating the other three contours adds latency and confusion.
+        const visibleGold = { ...goldFrame, target: displayTarget };
+        const isEF = released.measurementKind === 'lvSimpsonEF';
+        const displayComponents = [visibleGold];
         const result = await runViewerCommand(commandsManager,
           'showViewerQuizMeasurementComparison', {
             learnerMeasurement,
@@ -7160,21 +7211,29 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               measurementKind: released.measurementKind,
               value: released.value,
               unit: released.unit,
-              viewerTarget: goldFrame.target,
-              compositeResult: { components },
+              viewerTarget: displayTarget,
+              compositeResult: {
+                components: displayComponents,
+                derived: plainObject(released.derived),
+              },
             },
-            viewerTarget: goldFrame.target,
+            viewerTarget: displayTarget,
             focusedCompositeSlot: slot,
             questionKey: question.questionKey,
+            quizKey: quiz.quizKey,
+            quizVersion: Number(quiz.quizVersion || 1),
             endpointToleranceMM: released.endpointToleranceMM ?? null,
             ivcEndpointToleranceEnabled:
               released.measurementKind === 'ivcCollapsibility' &&
               released.ivcEndpointToleranceEnabled === true,
           });
         if (result?.rubricRendered !== true ||
-            Number(result?.compositeContoursResolved) !== components.length) {
-          throw new Error(cleanString(result?.reason) ||
-            'Not all released gold contours could be displayed on their source frames.');
+            (isEF && result?.learnerRendered !== true) ||
+            !Array.isArray(result?.renderedSlots) ||
+            !result.renderedSlots.includes(slot)) {
+          throw new Error(cleanString(result?.reason) || (isEF
+            ? 'The saved learner and gold EF contours could not both be displayed on their source frame.'
+            : 'The selected gold contour could not be displayed on its source frame.'));
         }
       } catch (error) {
         uiNotificationService.show({
@@ -7261,22 +7320,26 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
             <div className="mt-2">
               <div className="font-semibold">Your answer</div>
               <div className="mt-1 text-gray-300">
-                Length: {formatMeasurementReviewLength(learnerMeasurementLength, measurementUnit)}
+                {isCaliperLengthReview ? 'Length' : 'Value'}: {formatMeasurementReviewLength(learnerMeasurementLength, measurementUnit)}
               </div>
-              <div className="text-gray-300">
-                Endpoints: {formatMeasurementReviewEndpoints(learnerMeasurement)}
-              </div>
+              {isCaliperLengthReview ? (
+                <div className="text-gray-300">
+                  Endpoints: {formatMeasurementReviewEndpoints(learnerMeasurement)}
+                </div>
+              ) : null}
             </div>
 
             {correctAnswerVisible ? (
               <div className="mt-2">
                 <div className="font-semibold">Correct answer</div>
                 <div className="mt-1 text-gray-300">
-                  Length: {formatMeasurementReviewLength(correctMeasurementLength, measurementUnit)}
+                  {isCaliperLengthReview ? 'Length' : 'Value'}: {formatMeasurementReviewLength(correctMeasurementLength, measurementUnit)}
                 </div>
-                <div className="text-gray-300">
-                  Endpoints: {formatMeasurementReviewEndpoints(rubricMeasurement)}
-                </div>
+                {isCaliperLengthReview ? (
+                  <div className="text-gray-300">
+                    Endpoints: {formatMeasurementReviewEndpoints(rubricMeasurement)}
+                  </div>
+                ) : null}
               </div>
             ) : null}
           </>
@@ -7325,20 +7388,20 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         {reviewDetails.mode === 'measurementNumeric' ? (
           <div className="mt-1 space-y-1 text-gray-300">
             <div>
-              Length difference: {formatReviewNumber(measurementLengthDifference, 2)}{' '}
-              {measurementUnit}; accepted length tolerance: ±
+              {isCaliperLengthReview ? 'Length' : 'Value'} difference: {formatReviewNumber(measurementLengthDifference, 2)}{' '}
+              {measurementUnit}; accepted {isCaliperLengthReview ? 'length' : 'numeric'} tolerance: ±
               {formatReviewNumber(reviewDetails.absoluteTolerance, 2)} {measurementUnit}.
             </div>
 
             <div>
-              Measurement length:{' '}
+              {isCaliperLengthReview ? 'Measurement length' : 'Measured value'}:{' '}
               {reviewDetails.lengthMatched === true ? 'within tolerance' : 'outside tolerance'}.
             </div>
 
             {configuredEndpointToleranceMM != null ? (
               <div>
                 Configured endpoint tolerance: {formatReviewNumber(configuredEndpointToleranceMM, 2)} mm
-                at each gold caliper endpoint.
+                at each gold {compositeReviewKind === 'trVmax' ? 'TR spectral endpoint' : 'caliper endpoint'}.
               </div>
             ) : measurementRadius !== null && typeof measurementRadius !== 'undefined' ? (
               <>
@@ -7355,6 +7418,19 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                     : 'outside tolerance'}.
                 </div>
               </>
+            ) : null}
+            {correctAnswerVisible && compositeReviewKind === 'trVmax' &&
+              configuredEndpointToleranceMM != null ? (
+              <div className="mt-1">
+                TR Vmax endpoint placement: {reviewDetails.endpointScoring?.matched === true
+                  ? 'both endpoints within tolerance' : 'outside tolerance or verified source unavailable'}.
+                {Array.isArray(reviewDetails.endpointScoring?.endpointDistancesMM) &&
+                  reviewDetails.endpointScoring.endpointDistancesMM.length === 2 ? (
+                  <span> Endpoint distances: {reviewDetails.endpointScoring.endpointDistancesMM.map(
+                    (distance: number) => formatReviewNumber(distance, 2) + ' mm'
+                  ).join(' · ')}.</span>
+                ) : null}
+              </div>
             ) : null}
           </div>
         ) : null}
@@ -7416,7 +7492,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               </button>
             )) : null}
 
-            {canShowComparison ? (
+            {/* Composite questions already expose the exact individual gold
+                frame controls above; a generic action only duplicates slot 1. */}
+            {canShowComparison && !canShowCompositeGoldComparison ? (
               <button
                 type="button"
                 data-quiz-review-action="correct"
@@ -7476,7 +7554,8 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                           questionKey: question.questionKey,
                           radius: measurementRadius,
                           radiusUnit: measurementRadiusUnit,
-                          endpointToleranceMM: cleanString(plainObject(question.answerConfig).measurementKind) === 'length'
+                          endpointToleranceMM: ['length', 'trVmax'].includes(
+                             cleanString(plainObject(question.answerConfig).measurementKind))
                             ? plainObject(question.scoringConfig).endpointToleranceMM ?? null
                             : null,
                         }
@@ -8210,7 +8289,8 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                 ? 'Numeric tolerance (' +
                   (['lvSimpsonEF', 'rvFAC', 'ivcCollapsibility'].includes(cleanString(answerConfig.measurementKind))
                     ? '%' : cleanString(answerConfig.measurementKind) === 'raArea' ? 'cm²' : 'mL') + ')'
-                : 'Length tolerance'}
+                : cleanString(answerConfig.measurementKind) === 'trVmax'
+                  ? 'Velocity tolerance (m/s)' : 'Length tolerance'}
             </label>
             <input
               className="mt-1 w-36 rounded border border-gray-700 bg-black px-2 py-1 text-sm text-white"
@@ -8276,10 +8356,13 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               </div>
             ) : null}
 
-            {cleanString(answerConfig.measurementKind) === 'length' ? (
+            {['length', 'trVmax'].includes(cleanString(answerConfig.measurementKind)) ? (
               <div className="mt-3 text-xs text-gray-200">
                 <label className="block" htmlFor={`length-endpoint-tolerance-${question.questionKey}`}>
-                  {bowelSet ? 'Optional endpoint tolerance (mm; both ends of every gold BWT caliper)' : 'Optional endpoint tolerance (mm; both ends)'}
+                  {bowelSet ? 'Optional endpoint tolerance (mm; both ends of every gold BWT caliper)' :
+                    cleanString(answerConfig.measurementKind) === 'trVmax'
+                      ? 'Optional TR Vmax endpoint tolerance (mm; both spectral endpoints)' :
+                        'Optional endpoint tolerance (mm; both ends)'}
                 </label>
                 <input
                   id={`length-endpoint-tolerance-${question.questionKey}`}
@@ -8301,7 +8384,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                 <p className="mt-1 text-gray-400">
                   {bowelSet
                     ? 'When set, both endpoints of each learner caliper must match one distinct gold caliper within the configured radius, in addition to numeric accuracy and axial/angular separation. Leave blank for legacy scoring.'
-                    : 'When set, view both gold endpoint circles; leave empty for numeric-only grading unless a legacy centre radius is configured.'}
+                    : cleanString(answerConfig.measurementKind) === 'trVmax'
+                      ? 'When set, both source-verified learner TR spectral endpoints must be within this world-coordinate tolerance of the corresponding gold endpoints, as well as meeting the numeric velocity tolerance. Leave blank to keep legacy TR scoring.'
+                      : 'When set, view both gold endpoint circles; leave empty for numeric-only grading unless a legacy centre radius is configured.'}
                 </p>
                 {numberOrEmpty(plainObject(question.scoringConfig).radius) !== '' ? (
                   <button type="button"
