@@ -7,9 +7,11 @@ import {
   getViewerQuizzesForActiveStudy,
   getViewerQuizScoreForActiveStudy,
   getReleasedBowelGoldCalipersForActiveStudy,
+  getReleasedCompositeGoldForActiveStudy,
   getViewerQuizAuthoringContextFromUrl,
   getViewerQuizSessionKeyFromUrl,
   isViewerQuizAuthoringMode,
+  isViewerQuizReadOnlyReportReview,
   saveViewerQuizAuthoringDraft,
   saveViewerQuizResponseForActiveStudy,
   ensureViewerQuizSaveSeriesDoc,
@@ -1400,17 +1402,15 @@ function getMeasurementMidpointDistance(leftValue: any, rightValue: any): number
   return Math.hypot(left.x - right.x, left.y - right.y, left.z - right.z);
 }
 
-function formatMeasurementReviewMidpoint(value: any): string {
-  const midpoint = getMeasurementReviewMidpoint(value);
-
-  if (!midpoint) {
-    return 'Unavailable';
-  }
-
-  return `(${formatReviewNumber(midpoint.x, 2)}, ${formatReviewNumber(
-    midpoint.y,
-    2
-  )}, ${formatReviewNumber(midpoint.z, 2)}) mm`;
+function formatMeasurementReviewEndpoints(value: any): string {
+  // Only two-point length/caliper geometry has meaningful endpoints.
+  // Do not substitute contour centroids or a midpoint when source geometry
+  // was stripped from the learner-safe score projection.
+  const points = getMeasurementReviewPoints(value);
+  if (points.length !== 2) return 'Unavailable';
+  return points.map((point, index) =>
+    `End ${index + 1}: (${formatReviewNumber(Number(point[0]), 2)}, ${formatReviewNumber(Number(point[1]), 2)}, ${formatReviewNumber(Number(point[2] || 0), 2)}) mm`
+  ).join(' · ');
 }
 
 function getMeasurementReviewLength(...values: any[]): number | null {
@@ -2087,6 +2087,7 @@ function getOverlayMarkerOptionsForQuestion(
 function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsPanelProps) {
   const { uiNotificationService, measurementService } = servicesManager.services;
   const authoringMode = isViewerQuizAuthoringMode();
+  const scoredReviewReadOnly = isViewerQuizReadOnlyReportReview();
   // The backend authorizes the launch and supplies this scoring mode. Combined
   // report assessments collect answers here but release scores in the report.
   const deferredReportScoring = !authoringMode &&
@@ -2290,8 +2291,11 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       const nextScoringPayload = await getViewerQuizScoreForActiveStudy();
       setScoringPayload(nextScoringPayload);
       return nextScoringPayload;
-    } catch {
+    } catch (error) {
       setScoringPayload(null);
+      // Do not render an editable/answerless panel if scored review
+      // authorization fails, including a transient API or release failure.
+      if (scoredReviewReadOnly) throw error;
       return null;
     }
   }
@@ -2391,6 +2395,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       const persistedAnswers = buildInitialAnswers(nextQuizzes, nextPayload.responses || []);
       const sessionState = readViewerQuizSessionState(sessionStateKey);
       const answersToUse =
+        !scoredReviewReadOnly &&
         learnerQuizIdentity && sessionState?.learnerQuizIdentity === learnerQuizIdentity
           ? mergeQuizAnswers(persistedAnswers, sessionState.answersByQuizKey || {})
           : persistedAnswers;
@@ -3061,6 +3066,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
   }
 
   function setAnswer(quizKey: string, question: QuizQuestion, value: any) {
+    if (scoredReviewReadOnly) return;
     reportEducationChange(`quiz:${quizKey}`);
     setAnswersByQuizKey(current => {
       const quizAnswers = current[quizKey] || {};
@@ -3371,7 +3377,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     const hasSavedGoldComposite = savedGoldComponents.length > 0 &&
       savedGoldComponents.every(component => component.complete);
     const educatorEF = authoringMode && measurementKind === 'lvSimpsonEF';
-    const deferGuidedActivation = isNewQuestion &&
+    const deferGuidedActivation = !scoredReviewReadOnly && isNewQuestion &&
       isGuidedQuizCompositeKind(measurementKind) &&
       !hasSavedGoldComposite;
     const activateGuidedAfterNavigation = async () => {
@@ -3436,7 +3442,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         Number(existingTRGold.value) > 0 &&
         !!cleanString(existingTRGold.sourceAnnotationId) &&
         targetHasNavigationIdentity(existingTRGold.viewerTarget);
-      if (!isGuidedQuizCompositeKind(measurementKind) && !reviewSavedTR) {
+      // A scored review must only navigate/restore saved annotations, not
+      // start spectral Vmax, Length or other capture tools and their toasts.
+      if (!scoredReviewReadOnly && !isGuidedQuizCompositeKind(measurementKind) && !reviewSavedTR) {
         const activationResult = await runViewerCommand(
           commandsManager,
           'activateViewerQuizMeasurementTool',
@@ -3913,6 +3921,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     question: QuizQuestion,
     options: { measurementId?: string; silent?: boolean; verifyCompositeStatus?: boolean } = {}
   ) {
+    if (scoredReviewReadOnly) return false;
     const captureKey = `${quiz.quizKey}:${question.questionKey}`;
 
     setCapturingMeasurementKey(captureKey);
@@ -4113,6 +4122,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
 
   useEffect(() => {
     function handleQuizMeasurementAdded(event: Event) {
+      if (scoredReviewReadOnly) return;
       const detail = (event as CustomEvent)?.detail || {};
       const measurementId = cleanString(detail.measurementId);
       const labelCompleted = event.type === AR_QUIZ_MEASUREMENT_LABELLED_EVENT;
@@ -4602,6 +4612,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
   }
 
   async function saveQuiz(quiz: QuizDefinition, status: 'draft' | 'submitted') {
+    if (scoredReviewReadOnly) return null;
     const quizAnswers = answersByQuizKey[quiz.quizKey] || {};
 
     if (status === 'submitted' && hasRequiredMissing(quiz, quizAnswers)) {
@@ -6709,7 +6720,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               ) : null}
               {midpointSpacingMm !== null ? (
                 <div className="mt-1 text-blue-200">
-                  Caliper midpoint spacing: {midpointSpacingMm.toFixed(1)} mm (informational; not scored)
+                  Caliper spacing (centre-to-centre): {midpointSpacingMm.toFixed(1)} mm (informational; not an endpoint scoring tolerance)
                 </div>
               ) : null}
               {estimatedRadialAngle !== null ? (
@@ -6999,6 +7010,20 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     const canShowBowelGoldComparison = question.type === 'measurementNumeric' &&
       reviewDetails.mode === 'bowelMeasurementSet' && correctAnswerVisible &&
       bowelGoldLengths.length > 0;
+    const compositeReviewKind = cleanString(plainObject(question.answerConfig).measurementKind);
+    const isCaliperLengthReview = compositeReviewKind === 'length';
+    const compositeSlotLabels: Record<string, string[]> = {
+      lvSimpsonEF: ['A4C_ED', 'A4C_ES', 'A2C_ED', 'A2C_ES'],
+      laVolumeBiplane: ['A4C', 'A2C'],
+      laVolumeBiplaneDisks: ['A4C', 'A2C'],
+      rvFAC: ['RV_ED', 'RV_ES'],
+      ivcCollapsibility: ['IVC_EXP', 'IVC_INSP'],
+    };
+    // A quiz score never grants geometry access on its own. The endpoint
+    // revalidates each released question and exact pinned scored attempt.
+    const compositeReviewSlots = scoredReviewReadOnly && question.type === 'measurementNumeric' && correctAnswerVisible
+      ? compositeSlotLabels[compositeReviewKind] || [] : [];
+    const canShowCompositeGoldComparison = compositeReviewSlots.length > 0;
     const canShowFrameComparison = question.type === 'frameSelection' && !!correctTarget;
     const canShowMeasurementComparison =
       question.type === 'measurementNumeric' &&
@@ -7007,16 +7032,112 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       hasMeasurementComparisonReference(rubricMeasurement);
     const canShowComparison =
       canShowMarkerComparison || canShowFrameComparison || canShowMeasurementComparison ||
-      canShowBowelGoldComparison;
+      canShowBowelGoldComparison || canShowCompositeGoldComparison;
     const canShowLearnerAnswerButton =
       !!learnerTarget &&
       question.type !== 'measurementNumeric' &&
       !isPlaceMarkerQuestionType(question);
     const measurementRadius = reviewDetails.radius ?? plainObject(question.scoringConfig).radius;
+    const configuredEndpointToleranceMM =
+      plainObject(question.scoringConfig).endpointToleranceMM ??
+      (cleanString(plainObject(question.answerConfig).measurementKind) === 'ivcCollapsibility' &&
+       plainObject(question.scoringConfig).caliperEndpointToleranceEnabled !== false
+        ? plainObject(question.scoringConfig).caliperEndpointToleranceMM ?? 5
+        : null);
     const measurementRadiusUnit =
       cleanString(reviewDetails.radiusUnit) ||
       cleanString(plainObject(question.scoringConfig).radiusUnit) ||
       'mm';
+
+    async function showReleasedCompositeFrame(slot: string) {
+      if (!canShowCompositeGoldComparison || !compositeReviewSlots.includes(slot)) return;
+      try {
+        const released = await getReleasedCompositeGoldForActiveStudy({
+          quizKey: quiz.quizKey, questionKey: question.questionKey,
+        });
+        const components = Array.isArray(released?.components) ? released.components : [];
+        const goldFrame = components.find((item: any) => item?.slot === slot);
+        if (released?.ok !== true || released?.measurementKind !== compositeReviewKind ||
+            components.length !== compositeReviewSlots.length ||
+            !compositeReviewSlots.every(expected =>
+              components.filter((item: any) => item?.slot === expected).length === 1) ||
+            !goldFrame?.target?.studyInstanceUID ||
+            !goldFrame?.target?.seriesInstanceUID ||
+            !goldFrame?.target?.sopInstanceUID ||
+            !Number.isSafeInteger(Number(goldFrame?.target?.frameNumber)) ||
+            Number(goldFrame?.target?.frameNumber) < 1) {
+          throw new Error('The released gold contour set is incomplete or has changed.');
+        }
+
+        let displayTarget = goldFrame.target;
+        if (!cleanString(displayTarget.referencedImageId)) {
+          // RV FAC and LA captured contours can have an exact DICOM SOP/frame
+          // but no saved OHIF image-cache URL. Resolve that URL only from
+          // the image actually reached by an exact-frame viewer jump.
+          const navigation = await runViewerCommand(commandsManager,
+            'jumpToViewerQuizTarget', {
+              viewerTarget: displayTarget,
+              questionKey: question.questionKey,
+              requireExactSopFrame: true,
+              pauseCineOnTarget: true,
+            });
+          if (navigation?.ok !== true) {
+            throw new Error('The saved gold DICOM frame could not be opened exactly.');
+          }
+          const activeFrame = await runViewerCommand(commandsManager,
+            'getCurrentViewerQuizFrameAnswer', { viewportId: navigation.viewportId });
+          const current = plainObject(activeFrame?.answer?.viewerTarget);
+          const equalIdentity = (a: any, b: any) =>
+            !!cleanString(a) && cleanString(a) === cleanString(b);
+          if (activeFrame?.ok !== true ||
+              !equalIdentity(current.studyInstanceUID, displayTarget.studyInstanceUID) ||
+              !equalIdentity(current.seriesInstanceUID, displayTarget.seriesInstanceUID) ||
+              !equalIdentity(current.sopInstanceUID, displayTarget.sopInstanceUID) ||
+              Number(current.frameNumber) !== Number(displayTarget.frameNumber) ||
+              !cleanString(current.referencedImageId)) {
+            throw new Error('The opened DICOM image does not match the saved gold SOP/frame.');
+          }
+          displayTarget = {
+            ...displayTarget,
+            referencedImageId: current.referencedImageId,
+          };
+        }
+
+        // Render only the selected released slot. The comparison command
+        // supports multi-frame composites, but each review action must
+        // prove its own exact source frame and avoid unrelated placeholders.
+        const visibleGold = { ...goldFrame, target: displayTarget };
+        const result = await runViewerCommand(commandsManager,
+          'showViewerQuizMeasurementComparison', {
+            learnerMeasurement,
+            rubricMeasurement: {
+              measurementKind: released.measurementKind,
+              value: released.value,
+              unit: released.unit,
+              viewerTarget: displayTarget,
+              compositeResult: { components: [visibleGold] },
+            },
+            viewerTarget: displayTarget,
+            focusedCompositeSlot: slot,
+            questionKey: question.questionKey,
+            endpointToleranceMM: released.endpointToleranceMM ?? null,
+            ivcEndpointToleranceEnabled:
+              released.measurementKind === 'ivcCollapsibility' &&
+              released.ivcEndpointToleranceEnabled === true,
+          });
+        if (result?.rubricRendered !== true ||
+            Number(result?.compositeContoursResolved) !== 1) {
+          throw new Error(cleanString(result?.reason) ||
+            'The selected gold contour could not be displayed on its source frame.');
+        }
+      } catch (error) {
+        uiNotificationService.show({
+          title: 'Correct answer',
+          message: `Unable to display ${slot}: ${String(error?.message || error)}`,
+          type: 'warning', duration: 6000,
+        });
+      }
+    }
 
     return (
       <div
@@ -7094,22 +7215,26 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
             <div className="mt-2">
               <div className="font-semibold">Your answer</div>
               <div className="mt-1 text-gray-300">
-                Length: {formatMeasurementReviewLength(learnerMeasurementLength, measurementUnit)}
+                {isCaliperLengthReview ? 'Length' : 'Value'}: {formatMeasurementReviewLength(learnerMeasurementLength, measurementUnit)}
               </div>
-              <div className="text-gray-300">
-                Midpoint: {formatMeasurementReviewMidpoint(learnerMeasurementMidpoint)}
-              </div>
+              {isCaliperLengthReview ? (
+                <div className="text-gray-300">
+                  Endpoints: {formatMeasurementReviewEndpoints(learnerMeasurement)}
+                </div>
+              ) : null}
             </div>
 
             {correctAnswerVisible ? (
               <div className="mt-2">
                 <div className="font-semibold">Correct answer</div>
                 <div className="mt-1 text-gray-300">
-                  Length: {formatMeasurementReviewLength(correctMeasurementLength, measurementUnit)}
+                  {isCaliperLengthReview ? 'Length' : 'Value'}: {formatMeasurementReviewLength(correctMeasurementLength, measurementUnit)}
                 </div>
-                <div className="text-gray-300">
-                  Midpoint: {formatMeasurementReviewMidpoint(correctMeasurementMidpoint)}
-                </div>
+                {isCaliperLengthReview ? (
+                  <div className="text-gray-300">
+                    Endpoints: {formatMeasurementReviewEndpoints(rubricMeasurement)}
+                  </div>
+                ) : null}
               </div>
             ) : null}
           </>
@@ -7158,31 +7283,34 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         {reviewDetails.mode === 'measurementNumeric' ? (
           <div className="mt-1 space-y-1 text-gray-300">
             <div>
-              Length difference: {formatReviewNumber(measurementLengthDifference, 2)}{' '}
-              {measurementUnit}; accepted length tolerance: ±
+              {isCaliperLengthReview ? 'Length' : 'Value'} difference: {formatReviewNumber(measurementLengthDifference, 2)}{' '}
+              {measurementUnit}; accepted {isCaliperLengthReview ? 'length' : 'numeric'} tolerance: ±
               {formatReviewNumber(reviewDetails.absoluteTolerance, 2)} {measurementUnit}.
             </div>
 
             <div>
-              Measurement length:{' '}
+              {isCaliperLengthReview ? 'Measurement length' : 'Measured value'}:{' '}
               {reviewDetails.lengthMatched === true ? 'within tolerance' : 'outside tolerance'}.
             </div>
 
-            {measurementRadius !== null && typeof measurementRadius !== 'undefined' ? (
+            {configuredEndpointToleranceMM != null ? (
+              <div>
+                Configured endpoint tolerance: {formatReviewNumber(configuredEndpointToleranceMM, 2)} mm
+                at each gold caliper endpoint.
+              </div>
+            ) : measurementRadius !== null && typeof measurementRadius !== 'undefined' ? (
               <>
                 <div>
-                  Midpoint distance: {formatReviewNumber(measurementMidpointDistance, 2)}{' '}
-                  {normalizeReviewDistanceUnit(measurementRadiusUnit)}; accepted location radius:{' '}
+                  Legacy centre distance: {formatReviewNumber(measurementMidpointDistance, 2)}{' '}
+                  {normalizeReviewDistanceUnit(measurementRadiusUnit)}; accepted legacy centre radius:{' '}
                   {formatReviewNumber(measurementRadius, 2)}{' '}
                   {normalizeReviewDistanceUnit(measurementRadiusUnit)}.
                 </div>
-
                 <div>
-                  Location:{' '}
+                  Legacy location result:{' '}
                   {reviewDetails.positionMatched === true
                     ? 'within tolerance'
-                    : 'outside tolerance'}
-                  .
+                    : 'outside tolerance'}.
                 </div>
               </>
             ) : null}
@@ -7229,7 +7357,26 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               </button>
             ) : null}
 
-            {canShowComparison ? (
+            {canShowCompositeGoldComparison ? compositeReviewSlots.map(slot => (
+              <button
+                key={slot}
+                type="button"
+                data-quiz-review-action="correct"
+                className="rounded border border-blue-600 px-2 py-1 font-semibold text-blue-100 hover:bg-blue-950"
+                title={`Show the released gold contour on its exact ${slot} DICOM frame`}
+                onClick={event => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  void showReleasedCompositeFrame(slot);
+                }}
+              >
+                Show {slot.replace(/_/g, ' ')}
+              </button>
+            )) : null}
+
+            {/* Composite questions already expose the exact individual gold
+                frame controls above; a generic action only duplicates slot 1. */}
+            {canShowComparison && !canShowCompositeGoldComparison ? (
               <button
                 type="button"
                 data-quiz-review-action="correct"
@@ -7270,6 +7417,10 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                         message: `Could not show correct BWT calipers: ${String(error?.message || error)}`,
                         type: 'warning', duration: 5000 });
                     }
+                    return;
+                  }
+                  if (canShowCompositeGoldComparison) {
+                    await showReleasedCompositeFrame(compositeReviewSlots[0]);
                     return;
                   }
                   if (canShowMeasurementComparison) {
@@ -8508,7 +8659,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
 
   const hasLearnerQuizContent = !loading && !errorMessage && payload?.enabled && quizzes.length > 0;
 
-  const learnerFooterQuizzes = hasLearnerQuizContent
+  const learnerFooterQuizzes = hasLearnerQuizContent && !scoredReviewReadOnly
     ? quizzes.filter(quiz => {
         const response = getResponseForQuiz(responses, quiz);
         const submitted = cleanString(response?.status).toLowerCase() === 'submitted';
@@ -8584,6 +8735,11 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
           <div className="text-sm text-gray-400">No case questions for this study.</div>
         ) : (
           <div className="space-y-4">
+            {scoredReviewReadOnly ? (
+              <div role="status" className="rounded border border-blue-700 bg-blue-950/30 p-2 text-sm font-semibold text-blue-100">
+                Review — Read Only. Your submitted answers and official score cannot be changed.
+              </div>
+            ) : null}
             {viewerQuizScore ? (
               <div className="bg-green-950/30 rounded border border-green-700 p-2 text-sm">
                 <div className="font-semibold">Viewer Quiz Score</div>
@@ -8656,7 +8812,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                             selectQuestion(quiz, question);
                           }}
                         >
-                          {renderQuestion(quiz, question, submitted)}
+                          {renderQuestion(quiz, question, submitted || scoredReviewReadOnly)}
                           {renderQuestionReview(quiz, question, quizScore)}
                           {renderQuestionNavigation(quiz, question, questions, quizSaving)}
                         </ViewerQuestionCard>

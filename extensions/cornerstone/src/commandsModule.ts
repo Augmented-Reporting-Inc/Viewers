@@ -17166,8 +17166,10 @@ function commandsModule({
         endpointCirclesRendered,
       };
     },
-    getCurrentViewerQuizFrameAnswer: async () => {
-      const activeViewportId = viewportGridService.getActiveViewportId();
+    getCurrentViewerQuizFrameAnswer: async ({ viewportId = '' } = {}) => {
+      // Exact-frame gold review may navigate to an updated viewport other
+      // than the currently active viewport. Read back the one actually used.
+      const activeViewportId = viewportId || viewportGridService.getActiveViewportId();
       const viewport = cornerstoneViewportService.getCornerstoneViewport(activeViewportId);
 
       if (!viewport) {
