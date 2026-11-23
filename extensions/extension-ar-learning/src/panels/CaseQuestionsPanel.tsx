@@ -8736,6 +8736,14 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
             `${quiz.quizKey}:${item.questionKey}`);
           if (question) void selectQuestion(quiz, question);
         }}
+        onActivateSelected={selected
+          ? () => void selectQuestion(quiz, selected) : undefined}
+        onFocusActivateSelected={selected
+          ? event => {
+              if ((event.target as HTMLElement)?.closest?.('[data-quiz-review-action]')) return;
+              void selectQuestion(quiz, selected);
+            }
+          : undefined}
         disabled={!!capturingMeasurementKey || !!capturingFrameKey ||
           !!capturingPointKey || quizSaving}
         readOnly={questionLocked}
