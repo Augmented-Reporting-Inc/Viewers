@@ -16918,6 +16918,7 @@ function commandsModule({
         : null;
       let learnerRendered = false;
       let rubricRendered = false;
+      const renderedSlots = new Set<string>();
       let renderedCount = 0;
 
       if (existingLearnerAnnotation) {
@@ -16966,6 +16967,7 @@ function commandsModule({
           );
           renderedCount++;
           rubricRendered = true;
+          if (entry.slot) renderedSlots.add(entry.slot);
           continue;
         }
         const comparisonAnnotation = buildViewerQuizMeasurementComparisonAnnotation({
@@ -17063,6 +17065,7 @@ function commandsModule({
           learnerRendered = true;
         } else if (entry.variant === 'rubric') {
           rubricRendered = true;
+          if (entry.slot) renderedSlots.add(entry.slot);
         }
       }
 
@@ -17162,6 +17165,7 @@ function commandsModule({
         rubricRendered,
         compositeContoursExpected: compositeRubric ? expectedSlots.length : 0,
         compositeContoursResolved: resolvedRubricContours.length,
+        renderedSlots: [...renderedSlots],
         toleranceCircleRendered,
         endpointCirclesRendered,
       };
