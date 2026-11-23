@@ -119,6 +119,23 @@ describe('Research protocol frame enforcement', () => {
     expect(isResearchCandidateOnProtocolFrames(field,
       candidate('source1,source2,source3,source3'), annotations)).toBe(false);
   });
+  it('preserves legacy partial phase pinning when the other phases remain reader-selectable', () => {
+    const field = { componentKey: 'lvEjectionFraction', config: {
+      compositeFrameGuidanceEnabled: false,
+      compositeFrameTargets: {
+        A4C_ED: { sopInstanceUID: 'sop1', frameNumber: 2 },
+      },
+    } };
+    const all = [1, 2, 3, 4].map(n => ({
+      annotationId: 'phase' + n,
+      SOPInstanceUID: 'sop' + n,
+      frameNumber: n + 1,
+    }));
+    expect(isResearchCandidateOnProtocolFrames(field,
+      { sourceMeasurementKey: 'lv-simpson:phase1,phase2,phase3,phase4' },
+      all)).toBe(true);
+  });
+
   it('leaves protocols with no configured target untouched', () => {
     expect(isResearchCandidateOnProtocolFrames({
       componentKey: 'trVmax', config: {},
