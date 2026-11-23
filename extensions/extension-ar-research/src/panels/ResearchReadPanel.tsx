@@ -7,6 +7,7 @@ import React, {
 } from 'react';
 import { buildViewerMeasurementValueCandidates, EchoEFContourVolumes, getLVSimpsonSourceVolumes } from 'extension-ar-measurements';
 import ResearchEchoGuidedControls from './ResearchEchoGuidedControls';
+import { reconcileResearchEchoCompositeAnswers } from '../utils/researchEchoAnswerBinding';
 import {
   getResearchFramePickerIntent,
   getResearchCapturedFrameTarget,
@@ -320,41 +321,14 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
     if (context?.readOnly || context?.preview) {
       return { values, sources: valueSources };
     }
-    // Derive the IVC number from verified, case-scoped Length annotations as
-    // soon as they exist. Do not wait for an unrelated MeasurementService
-    // event to bind the value into local React state.
-    const ivcField = fields.find(field =>
-      field.componentKey === 'ivcCollapsibility'
+    // All guided Echo composites now reconcile from the same verified
+    // source-annotation snapshot. Education and Research share the calculation
+    // engines; Research retains its own ReadSchema values and ownership.
+    const reconciled = reconcileResearchEchoCompositeAnswers(
+      fields, values, valueSources, allAnnotations
     );
-    const ivcCandidates = ivcField
-      ? getResearchCompatibleMeasurementCandidates(
-          ivcField, viewerCandidates || [], allAnnotations
-        )
-      : [];
-    const updates = ivcField
-      ? buildViewerMeasurementReadUpdates(
-          [ivcField], ivcCandidates,
-          getResearchBindingSources(ivcField, valueSources, ivcCandidates)
-        )
-      : [];
-    const nextValues = { ...values };
-    const nextSources = { ...valueSources };
-    // Do not display an old collapsibility percentage when its source pair
-    // has been deleted, is duplicated, or no longer matches the fixed frames.
-    if (ivcField && getResearchProtocolViewerTargets(ivcField).length &&
-        !ivcCandidates.length) {
-      delete nextValues[ivcField.key];
-      delete nextSources[ivcField.key];
-    }
-    for (const update of updates) {
-      nextValues[update.fieldKey] = update.value;
-      nextSources[update.fieldKey] = {
-        source: update.source,
-        sourceMeasurementKey: update.sourceMeasurementKey,
-      };
-    }
     return buildCalculatedReadState(
-      fields, nextValues, nextSources, viewerCandidates
+      fields, reconciled.values, reconciled.sources, viewerCandidates
     );
   }, [context?.readOnly, context?.preview, fields, values, valueSources,
       viewerCandidates, allAnnotations]);
@@ -712,8 +686,13 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
           getResearchBindingSources(field, valueSourcesRef.current, compatible)
         );
       });
-      const latestValues = { ...values };
-      const latestSources = { ...valueSourcesRef.current };
+      // Save must use the same verified derived values shown in the question,
+      // even if the last MeasurementService event has not yet been delivered.
+      const reconciled = reconcileResearchEchoCompositeAnswers(
+        fields, values, valueSourcesRef.current, measurementAnnotations
+      );
+      const latestValues = { ...reconciled.values };
+      const latestSources = { ...reconciled.sources };
       for (const update of freshUpdates) {
         latestValues[update.fieldKey] = update.value;
         latestSources[update.fieldKey] = {
