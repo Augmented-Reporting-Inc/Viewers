@@ -2,12 +2,15 @@ name: Validate shared Education/Research question UI
 
 on:
   pull_request:
-    branches: [port/3.11-custom]
+    branches: [port/3.11-custom, fix/scored-review-no-capture-duplicate-composite-20261122]
     paths:
       - 'extensions/extension-ar-measurements/src/panels/ViewerQuestionChrome*'
       - 'extensions/extension-ar-measurements/src/panels/ViewerEchoPhaseControls*'
       - 'extensions/extension-ar-measurements/src/utils/viewerQuestionMeasurementContext*'
       - 'extensions/extension-ar-learning/src/panels/CaseQuestionsPanel.tsx'
+      - 'modes/mode-ar-learning/tests/frame-selection-navigation-mode.test.cjs'
+      - 'modes/mode-ar-learning/tests/quiz-single-question-ivc-label.test.cjs'
+      - 'modes/mode-ar-learning/tests/quiz-question-navigation-inline-delete.test.cjs'
       - 'extensions/extension-ar-research/src/panels/ResearchReadPanel.tsx'
       - 'extensions/extension-ar-research/src/panels/ResearchEchoGuidedControls.tsx'
       - '.github/workflows/validate-shared-viewer-question-ui.yml'
@@ -40,6 +43,13 @@ jobs:
             extensions/extension-ar-research/src/utils/readSchemaCalculated.test.ts
           yarn jest --config extensions/extension-ar-learning/jest.config.js --runInBand --coverage=false --runTestsByPath \
             extensions/extension-ar-learning/src/utils/restoredQuizMeasurementContext.test.ts
+      - name: Verify Education question navigation and deployed scored-review safeguards
+        run: |
+          node --test \
+            modes/mode-ar-learning/tests/frame-selection-navigation-mode.test.cjs \
+            modes/mode-ar-learning/tests/quiz-single-question-ivc-label.test.cjs \
+            modes/mode-ar-learning/tests/quiz-question-navigation-inline-delete.test.cjs \
+            modes/mode-ar-learning/tests/quiz-tr-vmax-rvsp.test.cjs
       - name: Babel-compile both question panels and shared controls
         run: |
           node - <<'NODE'
