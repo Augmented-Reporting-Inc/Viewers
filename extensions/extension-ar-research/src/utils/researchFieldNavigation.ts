@@ -339,7 +339,11 @@ export function getResearchBindingSources(
   const changedVerifiedSource = eligible.length === 1 &&
     !!previousKey && previousKey !== cleanString(eligible[0].sourceMeasurementKey);
   if (currentKind !== 'manual' && !changedVerifiedSource) return sources;
-  if (eligible.length !== 1) return sources;
+  // Preserve the established IVC contract: a fixed two-phase protocol may
+  // release a manual placeholder before a candidate arrives. The caller
+  // still requires calibrated, source-linked evidence to populate the value.
+  // Newly supported EF/LA/RV fields wait for one verified candidate instead.
+  if (eligible.length !== 1 && !(isIVC && currentKind === 'manual')) return sources;
   return { ...sources, [field.key]: {
     source: 'viewer-derived',
     sourceMeasurementKey: changedVerifiedSource ? '' : previousKey,
