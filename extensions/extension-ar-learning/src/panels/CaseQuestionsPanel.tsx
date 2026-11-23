@@ -1,4 +1,5 @@
 import { ViewerQuestionCard, ViewerQuestionNavigation } from '../../../extension-ar-measurements/src/panels/ViewerQuestionChrome';
+import { setViewerQuestionMeasurementContext } from '../../../extension-ar-measurements/src/utils/viewerQuestionMeasurementContext';
 import React, { useEffect, useMemo, useState, useRef } from 'react';
 import {
   getViewerQuizAuthoringContent,
@@ -2258,18 +2259,14 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       const kind = getRestoredQuizMeasurementKind({
         activeQuestionKey, authoringMode: true, authoringQuestions,
       });
-      void runViewerCommand(commandsManager, 'setViewerQuizMeasurementContext', {
-        measurementKind: kind,
-      }).catch(error => console.warn('[CaseQuestionsPanel] restoring authoring measurement context failed', error));
+      void setViewerQuestionMeasurementContext(commandsManager, kind).catch(error => console.warn('[CaseQuestionsPanel] restoring authoring measurement context failed', error));
       return;
     }
     const [quizKey, questionKey] = activeQuestionKey.split(':');
     const quiz = quizzes.find(item => item.quizKey === quizKey);
     const question = quiz?.questions?.find(item => item.questionKey === questionKey);
     const kind = getRestoredQuizMeasurementKind({ activeQuestionKey, quizzes });
-    void runViewerCommand(commandsManager, 'setViewerQuizMeasurementContext', {
-      measurementKind: kind,
-    }).catch(error => console.warn('[CaseQuestionsPanel] restoring learner measurement context failed', error));
+    void setViewerQuestionMeasurementContext(commandsManager, kind).catch(error => console.warn('[CaseQuestionsPanel] restoring learner measurement context failed', error));
     let domain = question?.type === 'measurementNumeric'
       ? getQuizQuestionMeasurementDomain(quiz, question, payload) : '';
     if (!domain && quizzes.length) {
@@ -3357,9 +3354,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     // The toolbar reflects the selected quiz measurement workflow even when
     // saved contours are being reviewed and no drawing should start.
     try {
-      await runViewerCommand(commandsManager, 'setViewerQuizMeasurementContext', {
-        measurementKind,
-      });
+      await setViewerQuestionMeasurementContext(commandsManager, measurementKind);
     } catch (error) {
       console.warn('[CaseQuestionsPanel] could not highlight quiz measurement toolbar', error);
     }
