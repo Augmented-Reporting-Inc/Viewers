@@ -8604,6 +8604,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
           if (target) void selectQuestion(quiz, target);
         }}
       />
+    );
   }
 
   if (authoringMode) {
