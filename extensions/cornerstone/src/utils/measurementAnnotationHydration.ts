@@ -14,7 +14,7 @@ import {
   buildSpectralDopplerDisplayText,
 } from './spectralDoppler';
 import { BOWEL_CURVED_LENGTH_MEASUREMENT_KIND } from '../../../extension-ar-measurements/src/utils/bowelMeasurementTargets';
-import { calculateCalibratedEchoAreaCM2, getSavedQuizEchoAreaDisplayInfo, getVerifiedEFGoldContourViewportLines } from './quizEchoAreaCalibration';
+import { calculateCalibratedEchoAreaCM2, getSavedQuizEchoAreaDisplayInfo, getVerifiedEFGoldContourViewportLines, getVerifiedEFLearnerContourViewportLines } from './quizEchoAreaCalibration';
 import { getVerifiedLAVolumeContourAreaCM2 } from '../../../extension-ar-measurements/src/utils/laVolume';
 
 const CONTOUR_TOOL_NAMES = new Set(['SplineROI', 'PlanarFreehandROI', 'LivewireContour']);
@@ -926,6 +926,12 @@ function installSavedContourTextOverrideForViewport({ viewport, viewportId = '',
           candidate?.arVerifiedQuizEFGoldContour
         );
         if (goldEFText) return goldEFText;
+        // Only an exact submitted EF learner contour carries this marker.
+        // Its saved calibrated mL must supersede generic ROI area text.
+        const learnerEFText = getVerifiedEFLearnerContourViewportLines(
+          candidate?.arVerifiedQuizEFLearnerContour
+        );
+        if (learnerEFText) return learnerEFText;
         const overrideText = candidate?.arSavedMeasurementDisplayText;
 
         if (Array.isArray(overrideText) && overrideText.length > 0) {
