@@ -7,6 +7,10 @@ import React, {
 } from 'react';
 import { buildViewerMeasurementValueCandidates } from 'extension-ar-measurements';
 import { ViewerQuestionCard, ViewerQuestionNavigation } from '../../../extension-ar-measurements/src/panels/ViewerQuestionChrome';
+import {
+  getResearchViewerQuestionMeasurementKind,
+  setViewerQuestionMeasurementContext,
+} from '../../../extension-ar-measurements/src/utils/viewerQuestionMeasurementContext';
 import ResearchEchoGuidedControls from './ResearchEchoGuidedControls';
 import {
   getResearchFramePickerIntent,
@@ -309,6 +313,20 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
     );
     if (target) setSelectedFieldKey(target.key);
   }, [protocolFramePickerIntent, visibleFields]);
+
+  // An existing Research Read reopens with the same measurement-toolbar
+  // context as a saved Education quiz. This only highlights/clears tools;
+  // it must never manufacture a learner quiz response or trigger scoring.
+  useEffect(() => {
+    const selected = visibleFields.find(field => field.key === selectedFieldKey);
+    if (!selected || !commandsManager) return;
+    void setViewerQuestionMeasurementContext(
+      commandsManager,
+      getResearchViewerQuestionMeasurementKind(selected, readDomain)
+    ).catch(error => {
+      console.warn('[AR Research] unable to restore measurement toolbar context', error);
+    });
+  }, [commandsManager, visibleFields, selectedFieldKey, readDomain]);
 
   const allAnnotations = useMemo(
     () => mergeMeasurementAnnotations(
@@ -996,13 +1014,23 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
   };
 
   const selectField = (key: string) => {
-    const field = fields.find(item => item.key === key);
+    const field = visibleFields.find(item => item.key === key);
     if (!field) return;
     // Leaving an unfinished redraw abandons the pending replacement, not the
     // old source. No annotation is removed until a new one has been verified.
     pendingIVCReplacementRef.current = null;
     setSelectedFieldKey(key);
-    void navigateToField(field);
+    void (async () => {
+      try {
+        await setViewerQuestionMeasurementContext(
+          commandsManager,
+          getResearchViewerQuestionMeasurementKind(field, readDomain)
+        );
+      } catch (selectionError) {
+        console.warn('[AR Research] could not select question measurement toolbar', selectionError);
+      }
+      await navigateToField(field);
+    })();
   };
 
   const selectSourceCandidate = (field: any, candidate: any) => {
