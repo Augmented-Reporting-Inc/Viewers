@@ -1,4 +1,4 @@
-import { calculateCalibratedEchoAreaCM2, getSavedQuizEchoAreaDisplayInfo, getQuizCompositeContourViewportLines, getQuizCompositeGoldContourSlotMetadata, getVerifiedEFGoldContourViewportLines, getQuizEchoAreaSourceMetadata, registerQuizEchoAreaMeasurementSchema } from './quizEchoAreaCalibration';
+import { calculateCalibratedEchoAreaCM2, getSavedQuizEchoAreaDisplayInfo, getQuizCompositeContourViewportLines, getQuizCompositeGoldContourSlotMetadata, getVerifiedEFGoldContourViewportLines, getVerifiedEFLearnerContourViewportLines, getQuizEchoAreaSourceMetadata, registerQuizEchoAreaMeasurementSchema } from './quizEchoAreaCalibration';
 
 describe('DICOM-calibrated quiz echo area', () => {
   it('calculates physical area in cm² from already calibrated millimetres', () => {
@@ -160,6 +160,29 @@ describe('EF educator gold contour viewport text', () => {
     })).toBeNull();
     expect(getVerifiedEFGoldContourViewportLines({
       origin: 'quiz-gold', slot: 'RV_ED', areaCM2: 27.5, volumeML: 100,
+    })).toBeNull();
+  });
+});
+
+describe('EF submitted learner comparison text', () => {
+  it('shows the verified saved mL value and never native ROI area', () => {
+    expect(getVerifiedEFLearnerContourViewportLines({
+      origin: 'quiz-learner', slot: 'A4C_ED', volumeML: 86.44,
+      cachedStats: { area: 21.13, areaUnit: 'cm²' },
+    })).toEqual(['Your A4C ED single-view LV volume: 86.44 mL']);
+    expect(getVerifiedEFLearnerContourViewportLines({
+      origin: 'quiz-learner', slot: 'A2C_ES', volumeML: 60.38,
+    })).toEqual(['Your A2C ES single-view LV volume: 60.38 mL']);
+  });
+  it('does not invent volume or override other annotations', () => {
+    expect(getVerifiedEFLearnerContourViewportLines({
+      origin: 'quiz-learner', slot: 'A4C_ES', volumeML: null,
+    })).toEqual(['Your A4C ES single-view LV volume: unavailable']);
+    expect(getVerifiedEFLearnerContourViewportLines({
+      origin: 'quiz-gold', slot: 'A4C_ES', volumeML: 53.88,
+    })).toBeNull();
+    expect(getVerifiedEFLearnerContourViewportLines({
+      origin: 'quiz-learner', slot: 'RV_ES', volumeML: 53.88,
     })).toBeNull();
   });
 });
