@@ -102,7 +102,8 @@ describe('Research source-backed composite answer capture', () => {
   it('refuses two competing derived candidates and does not guess', () => {
     const { field, candidate, annotations } = fixture('lvEjectionFraction');
     mockCandidates.mockReturnValue([candidate, {
-      ...candidate, sourceMeasurementKey: candidate.sourceMeasurementKey + '-other',
+      ...candidate,
+      sourceMeasurementKey: 'lv-simpson:' + annotations.slice().reverse().map(a => a.annotationId).join(','),
       value: 66,
     }]);
     const state = reconcileResearchEchoCompositeAnswers([field], {}, {}, annotations);
