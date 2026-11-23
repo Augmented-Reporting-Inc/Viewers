@@ -15,6 +15,7 @@ on:
       - port/3.11-custom
       - AR-1106-shared-echo-ef-question-volume
       - fix/research-ef-contour-capture-and-length-20261123
+      - refactor/shared-learning-research-question-panel-20261123
     paths:
       - 'extensions/extension-ar-research/src/**'
       - 'extensions/extension-ar-measurements/src/**'
@@ -60,7 +61,8 @@ jobs:
             extensions/extension-ar-measurements/src/utils/echoCompositeAcquisition.test.ts \
             extensions/extension-ar-measurements/src/components/EchoContourTechniqueButtons.test.ts \
             extensions/extension-ar-measurements/src/components/SharedQuestionPanel.test.tsx \
-            extensions/extension-ar-measurements/src/components/SharedQuestionPanelWiring.test.ts
+            extensions/extension-ar-measurements/src/components/SharedQuestionPanelWiring.test.ts \
+            extensions/extension-ar-learning/src/panels/LearningQuestionPanel.test.tsx
       - name: Compile Research panels and shared Length registration
         run: |
           node - <<'NODE'
@@ -74,6 +76,8 @@ jobs:
             'extensions/extension-ar-measurements/src/components/SharedQuestionNavigation.tsx',
             'extensions/extension-ar-measurements/src/components/SharedMeasurementValueInput.tsx',
             'extensions/extension-ar-measurements/src/components/SharedQuestionCard.tsx',
+            'extensions/extension-ar-learning/src/panels/LearningQuestionPanel.tsx',
+            'extensions/extension-ar-learning/src/components/LearningEchoAcquisitionControls.tsx',
             'extensions/extension-ar-measurements/src/utils/echoCompositeAcquisition.ts',
             'extensions/extension-ar-learning/src/panels/CaseQuestionsPanel.tsx',
             'extensions/extension-ar-research/src/panels/ResearchEchoGuidedControls.tsx',
