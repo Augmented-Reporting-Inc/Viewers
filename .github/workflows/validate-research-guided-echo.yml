@@ -59,7 +59,8 @@ jobs:
             extensions/extension-ar-measurements/src/components/EchoCompositeResultStatus.test.ts \
             extensions/extension-ar-measurements/src/utils/echoCompositeAcquisition.test.ts \
             extensions/extension-ar-measurements/src/components/EchoContourTechniqueButtons.test.ts \
-            extensions/extension-ar-measurements/src/components/SharedQuestionPanel.test.tsx
+            extensions/extension-ar-measurements/src/components/SharedQuestionPanel.test.tsx \
+            extensions/extension-ar-measurements/src/components/SharedQuestionPanelWiring.test.ts
       - name: Compile Research panels and shared Length registration
         run: |
           node - <<'NODE'
