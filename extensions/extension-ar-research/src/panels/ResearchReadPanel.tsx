@@ -1079,7 +1079,6 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
   // This is presentation only; Research ReadSchema owns the numeric answer.
   const efVolumes = selectedField?.componentKey === 'lvEjectionFraction'
     ? getLVSimpsonSourceVolumes(allAnnotations) : {};
-  const hasEFSourceVolumes = Object.keys(efVolumes).length > 0;
   const protocolTargets = selectedField ? getResearchProtocolViewerTargets(selectedField) : [];
   const guidedOwnsProtocolFrames = readDomain === 'echo' &&
     ['trVmax', 'lvEjectionFraction', 'laVolumeDisks', 'rvFac', 'ivcCollapsibility']
@@ -1102,15 +1101,6 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
   const completedFields = visibleFields.filter(field =>
     isResearchQuestionAnswered(field, fields, calculatedReadState.values, readDomain)
   ).length;
-  const linkedAnnotationKeys = new Set(fields.flatMap(field =>
-    getResearchFieldSourceAnnotations(
-      calculatedReadState.sources[field.key], allAnnotations,
-      getResearchFieldMeasurementCandidates(field, viewerCandidates || [])
-    ).map(getAnnotationKey)
-  ));
-  const unlinkedAnnotations = allAnnotations.filter(annotation =>
-    !linkedAnnotationKeys.has(getAnnotationKey(annotation))
-  );
 
   return (
     <div className="h-full overflow-auto p-3 text-white">
@@ -1261,7 +1251,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
               />
             </div>
           ) : null}
-          {selectedField?.componentKey === 'lvEjectionFraction' && hasEFSourceVolumes ? (
+          {selectedField?.componentKey === 'lvEjectionFraction' ? (
             <EchoEFContourVolumes volumes={efVolumes} status={context.readOnly ? "Saved" : "Current"} />
           ) : null}
           {!isIVCRapRVSPQuestion ? groupedFields.map(companionField => (
@@ -1328,12 +1318,13 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
                         disabled={!commandsManager}
                         onClick={() => void jumpToAnnotation(annotation)}
                       >View source</button>
-                      {!context.readOnly && !context.preview ? (
-                        <button type="button"
-                          className="shrink-0 text-red-300 hover:underline disabled:opacity-40"
+                      {!context.readOnly && !context.preview &&
+                        selectedSources.length > 1 ? (
+                        <button type="button" aria-label="Delete this measurement source"
+                          className="shrink-0 rounded border border-gray-600 px-2 py-1 font-bold text-red-200 disabled:opacity-40"
                           disabled={isBusy}
                           onClick={() => void deleteResearchAnnotation(annotation)}
-                        >Delete</button>
+                        >×</button>
                       ) : null}
                     </div>
                   ))}
@@ -1404,27 +1395,6 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
         </div>
       ) : null}
 
-      {!context.preview && unlinkedAnnotations.length ? (
-        <details className="mt-3 rounded border border-gray-700 bg-gray-950 p-3">
-          <summary className="cursor-pointer text-xs font-semibold text-gray-300">
-            Other viewer annotations ({unlinkedAnnotations.length})
-          </summary>
-          <div className="mt-2 space-y-1">
-            {unlinkedAnnotations.slice(0, 12).map((annotation, index) => (
-              <button
-                key={getAnnotationKey(annotation) || index}
-                type="button"
-                className="block w-full rounded border border-gray-700 bg-black px-2 py-2 text-left text-xs hover:border-blue-700"
-                onClick={() => void jumpToAnnotation(annotation)}
-                disabled={!commandsManager}
-              >
-                {getAnnotationLabel(annotation)}
-                {getAnnotationValue(annotation) ? ' · ' + getAnnotationValue(annotation) : ''}
-              </button>
-            ))}
-          </div>
-        </details>
-      ) : null}
 
       {!context.preview && !context.readOnly ? (
         <div className="sticky bottom-0 mt-4 border-t border-gray-700 bg-black/95 pt-3">
