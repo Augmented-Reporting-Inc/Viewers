@@ -1,6 +1,6 @@
 import { buildViewerMeasurementValueCandidates } from '../../../extension-ar-measurements/src/utils/measurementValueCandidates';
 import { reconcileResearchEchoCompositeAnswers } from './researchEchoAnswerBinding';
-import { buildReadFields, buildReadResultEntries } from './readSchema';
+import { buildReadFields, buildReadResultEntries, buildReadValueState } from './readSchema';
 
 jest.mock('../../../extension-ar-measurements/src/utils/measurementValueCandidates', () => ({
   buildViewerMeasurementValueCandidates: jest.fn(),
@@ -60,6 +60,18 @@ describe('Research source-backed composite answer capture', () => {
     expect(buildReadResultEntries([field], state.values, state.sources)).toMatchObject([{
       componentKey: kind, value: 62.4, source: 'viewer-derived',
     }]);
+  });
+
+  it('keeps exact value and source identity across Research Read result serialization/reopen', () => {
+    const { field, candidate, annotations } = fixture('lvEjectionFraction', 61.19);
+    mockCandidates.mockReturnValue([candidate]);
+    const state = reconcileResearchEchoCompositeAnswers([field], {}, {}, annotations);
+    const persisted = buildReadResultEntries([field], state.values, state.sources);
+    const reopened = buildReadValueState({ entries: persisted });
+    expect(reopened.values[field.key]).toBe(61.2);
+    expect(reopened.sources[field.key]).toEqual({
+      source: 'viewer-derived', sourceMeasurementKey: candidate.sourceMeasurementKey,
+    });
   });
 
   it('replaces an old fixed-frame EF result only after verifying new evidence', () => {
