@@ -9,6 +9,7 @@ import { buildViewerMeasurementValueCandidates } from '../../../extension-ar-mea
 import { EchoEFContourVolumes, getLVSimpsonSourceVolumes } from '../../../extension-ar-measurements/src/components/EchoEFContourVolumes';
 import { EchoCompositeResultStatus } from '../../../extension-ar-measurements/src/components/EchoCompositeResultStatus';
 import { SharedQuestionSelector, SharedQuestionStepNavigation } from '../../../extension-ar-measurements/src/components/SharedQuestionNavigation';
+import { SharedMeasurementValueInput } from '../../../extension-ar-measurements/src/components/SharedMeasurementValueInput';
 import ResearchEchoGuidedControls from './ResearchEchoGuidedControls';
 import { reconcileResearchEchoCompositeAnswers } from '../utils/researchEchoAnswerBinding';
 import { getResearchMeasurementToolForField } from '../utils/researchMeasurementTool';
@@ -207,27 +208,28 @@ function ReadField({
           onChange={event => onChange(event.target.value)}
           placeholder="Enter reader comment"
         />
+      ) : numeric ? (
+        <SharedMeasurementValueInput
+          value={value}
+          onChange={onChange}
+          unit={unit}
+          disabled={disabled || calculated}
+          min={field?.config?.min}
+          max={field?.config?.max}
+          step={field?.config?.step || 'any'}
+          onDelete={!disabled && !calculated &&
+            value !== null && value !== undefined && String(value).trim() !== ''
+              ? onDelete : undefined}
+          deleteLabel={`Delete ${field.label} measurement`}
+        />
       ) : (
-        <div className="flex items-center gap-2">
-          <input
-            className="min-w-0 flex-1 rounded border border-gray-600 bg-black px-3 py-2 text-sm text-white"
-            type={numeric ? 'number' : 'text'}
-            value={value ?? ''}
-            disabled={disabled || calculated}
-            min={numeric ? field?.config?.min : undefined}
-            max={numeric ? field?.config?.max : undefined}
-            step={numeric ? field?.config?.step || 'any' : undefined}
-            onChange={event => onChange(event.target.value)}
-          />
-          {onDelete && !disabled && !calculated &&
-            value !== null && value !== undefined && String(value).trim() !== '' ? (
-            <button type="button" aria-label={`Delete ${field.label} measurement`}
-              title="Delete measurement" onClick={onDelete}
-              className="shrink-0 rounded border border-gray-600 px-2 py-1 font-bold text-red-200 hover:bg-red-950"
-            >×</button>
-          ) : null}
-          {unit ? <span className="text-sm text-gray-300">{unit}</span> : null}
-        </div>
+        <input
+          className="w-full min-w-0 rounded border border-gray-600 bg-black px-3 py-2 text-sm text-white"
+          type="text"
+          value={value ?? ''}
+          disabled={disabled || calculated}
+          onChange={event => onChange(event.target.value)}
+        />
       )}
     </div>
   );
