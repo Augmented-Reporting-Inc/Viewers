@@ -3380,7 +3380,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     const hasSavedGoldComposite = savedGoldComponents.length > 0 &&
       savedGoldComponents.every(component => component.complete);
     const educatorEF = authoringMode && measurementKind === 'lvSimpsonEF';
-    const deferGuidedActivation = isNewQuestion &&
+    const deferGuidedActivation = !scoredReviewReadOnly && isNewQuestion &&
       isGuidedQuizCompositeKind(measurementKind) &&
       !hasSavedGoldComposite;
     const activateGuidedAfterNavigation = async () => {
@@ -3445,7 +3445,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         Number(existingTRGold.value) > 0 &&
         !!cleanString(existingTRGold.sourceAnnotationId) &&
         targetHasNavigationIdentity(existingTRGold.viewerTarget);
-      if (!isGuidedQuizCompositeKind(measurementKind) && !reviewSavedTR) {
+      // A scored review must only navigate/restore saved annotations, not
+      // start spectral Vmax, Length or other capture tools and their toasts.
+      if (!scoredReviewReadOnly && !isGuidedQuizCompositeKind(measurementKind) && !reviewSavedTR) {
         const activationResult = await runViewerCommand(
           commandsManager,
           'activateViewerQuizMeasurementTool',
@@ -7416,7 +7418,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               </button>
             )) : null}
 
-            {canShowComparison ? (
+            {/* Composite questions already expose the exact individual gold
+                frame controls above; a generic action only duplicates slot 1. */}
+            {canShowComparison && !canShowCompositeGoldComparison ? (
               <button
                 type="button"
                 data-quiz-review-action="correct"
