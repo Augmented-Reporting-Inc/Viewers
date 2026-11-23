@@ -1,5 +1,5 @@
 import ViewerEchoPhaseControls from '../../../extension-ar-measurements/src/panels/ViewerEchoPhaseControls';
-import { ViewerQuestionCard, ViewerQuestionNavigation } from '../../../extension-ar-measurements/src/panels/ViewerQuestionChrome';
+import { ViewerNumericMeasurementInput, ViewerQuestionCard, ViewerQuestionNavigation } from '../../../extension-ar-measurements/src/panels/ViewerQuestionChrome';
 import { setViewerQuestionMeasurementContext } from '../../../extension-ar-measurements/src/utils/viewerQuestionMeasurementContext';
 import React, { useEffect, useMemo, useState, useRef } from 'react';
 import {
@@ -6772,45 +6772,26 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               cleanString(plainObject(question.answerConfig).measurementKind)
             ) ? null : cleanString(plainObject(question.answerConfig).measurementKind) === 'trVmax'
               ? null : (
-                        <div className="flex w-full min-w-0 max-w-full items-center gap-2 overflow-hidden">
-                          <div className="flex min-w-0 flex-1 items-center rounded border border-gray-700 bg-black">
-                            <input
-                              className="min-w-0 flex-1 bg-transparent px-2 py-1 text-sm text-white"
-                              type="number"
-                              inputMode="decimal"
-                              step="0.01"
-                              value={numberOrEmpty(value?.value)}
-                              onChange={event =>
-                                setAnswer(
-                                  quiz.quizKey,
-                                  question,
-                                  setObjectAnswerPart(value, {
-                                    value: event.target.value,
-                                    measurementType:
-                                      value?.measurementType || question?.answerConfig?.measurementType || '',
-                                    unit: value?.unit || question?.answerConfig?.unit || '',
-                                  })
-                                )
-                              }
-                              disabled={disabled}
-                              placeholder="Measurement value"
-                            />
-                            {cleanString(value?.sourceAnnotationId) ? (
-                              <button type="button" data-quiz-review-action="delete"
-                                className="shrink-0 border-l border-gray-700 px-2 py-1 font-bold text-red-200 hover:bg-red-950 disabled:opacity-40"
-                                title="Delete measurement" aria-label="Delete measurement"
-                                disabled={disabled || captureInProgress}
-                                onClick={event => {
-                                  event.preventDefault();
-                                  event.stopPropagation();
-                                  void deleteLearnerQuizSourceMeasurement(quiz, question, value);
-                                }}>×</button>
-                            ) : null}
-                          </div>
-                          <div className="w-14 shrink-0 truncate rounded border border-gray-700 px-2 py-1 text-center text-sm text-gray-300">
-                            {value?.unit || question?.answerConfig?.unit || ''}
-                          </div>
-                        </div>
+                        <ViewerNumericMeasurementInput
+                          value={numberOrEmpty(value?.value)}
+                          unit={value?.unit || question?.answerConfig?.unit || ''}
+                          disabled={disabled}
+                          onChange={nextValue =>
+                            setAnswer(
+                              quiz.quizKey,
+                              question,
+                              setObjectAnswerPart(value, {
+                                value: nextValue,
+                                measurementType:
+                                  value?.measurementType || question?.answerConfig?.measurementType || '',
+                                unit: value?.unit || question?.answerConfig?.unit || '',
+                              })
+                            )
+                          }
+                          onDelete={cleanString(value?.sourceAnnotationId) ? () =>
+                            void deleteLearnerQuizSourceMeasurement(quiz, question, value) : undefined}
+                          deleteDisabled={captureInProgress}
+                        />
             )}
 
 
