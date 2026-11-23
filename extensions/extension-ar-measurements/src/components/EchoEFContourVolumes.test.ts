@@ -12,7 +12,7 @@ jest.mock('../utils/lvSimpson', () => ({
 function renderedText(element: any): string {
   if (element == null || typeof element === 'boolean') return '';
   if (typeof element === 'string' || typeof element === 'number') return String(element);
-  if (Array.isArray(element)) return element.map(renderedText).join(' ');
+  if (Array.isArray(element)) return element.map(renderedText).join('');
   if (typeof element.type === 'function') {
     return renderedText(element.type(element.props));
   }
