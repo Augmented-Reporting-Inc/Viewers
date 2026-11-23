@@ -98,6 +98,20 @@ describe('Research source-backed composite answer capture', () => {
     expect(state.sources).not.toHaveProperty(field.key);
   });
 
+  it('clears stale derived answers for unpinned research protocols after annotation deletion', () => {
+    const { field, candidate, annotations } = fixture('rvFac');
+    field.config.compositeFrameTargets = {};
+    field.config.compositeFrameGuidanceEnabled = false;
+    mockCandidates.mockReturnValue([]);
+    const state = reconcileResearchEchoCompositeAnswers([field],
+      { [field.key]: 28 },
+      { [field.key]: { source: 'viewer-derived',
+        sourceMeasurementKey: candidate.sourceMeasurementKey } },
+      annotations);
+    expect(state.values).not.toHaveProperty(field.key);
+    expect(state.sources).not.toHaveProperty(field.key);
+  });
+
   it('does not overwrite a manual value on an unpinned Research protocol', () => {
     const { field, candidate, annotations } = fixture('rvFac');
     field.config.compositeFrameTargets = {};
