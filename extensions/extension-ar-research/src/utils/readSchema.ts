@@ -1,4 +1,4 @@
-import { calculateRVSP } from 'extension-ar-measurements';
+import { calculateRVSP } from '../../../extension-ar-measurements/src/utils/rightHeartMeasurements';
 
 function cleanString(value: unknown) {
   return String(value || '').trim();
