@@ -16712,13 +16712,13 @@ function commandsModule({
         String(rubricMeasurement?.measurementKind || '') === 'length' &&
         /BWT/i.test(String(rubricMeasurement?.measurementType || '')) &&
         !!rubricMeasurement?.quizSpatialEvidence;
-      let learnerAnnotation = isBowelGoldReference
+      let learnerAnnotation = isFocusedEFReview ? null : isBowelGoldReference
         ? findViewerQuizLearnerOwnedAnnotation(learnerMeasurement, learnerSeriesDoc)
         : findViewerQuizMeasurementAnnotationInSeriesDocs(learnerMeasurement, [
             learnerSeriesDoc, baseSeriesDoc,
           ]) || getViewerQuizMeasurementAnnotationFromService(learnerMeasurement);
       const embeddedGoldAnnotation = buildViewerQuizGoldBwtDisplaySource(rubricMeasurement);
-      const persistedRubricAnnotation = isBowelGoldReference ? null :
+      const persistedRubricAnnotation = isBowelGoldReference || isFocusedEFReview ? null :
         findViewerQuizMeasurementAnnotationInSeriesDocs(rubricMeasurement, [
           baseSeriesDoc,
           learnerSeriesDoc,
