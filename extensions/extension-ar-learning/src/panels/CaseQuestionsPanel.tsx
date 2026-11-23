@@ -4,6 +4,7 @@ import { EchoCompositeResultStatus } from '../../../extension-ar-measurements/sr
 import { SharedQuestionSelector, SharedQuestionStepNavigation } from '../../../extension-ar-measurements/src/components/SharedQuestionNavigation';
 import { SharedMeasurementValueInput } from '../../../extension-ar-measurements/src/components/SharedMeasurementValueInput';
 import { SharedQuestionCard } from '../../../extension-ar-measurements/src/components/SharedQuestionCard';
+import { LearningEchoAcquisitionControls } from '../components/LearningEchoAcquisitionControls';
 import { getEchoCompositeAcquisitionSteps } from '../../../extension-ar-measurements/src/utils/echoCompositeAcquisition';
 import { EchoContourTechniqueButtons } from '../../../extension-ar-measurements/src/components/EchoContourTechniqueButtons';
 import {
@@ -6028,130 +6029,71 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     }
   }
 
-  function renderIVCCaliperControls(quiz: QuizDefinition, question: QuizQuestion, disabled: boolean) {
+  // Education and Research render the same acquisition controls. Their
+  // separate adapters own frame navigation, source deletion and persistence.
+  function renderSharedEchoPhaseControls(
+    quiz: QuizDefinition, question: QuizQuestion, disabled: boolean,
+    kind: 'ivcCollapsibility' | 'laVolumeDisks' | 'rvFac'
+  ) {
+    const config = plainObject(question.answerConfig);
     return (
-      <div className="mt-2 rounded border border-cyan-700/70 p-2 text-xs">
-        <div className="mb-1 font-semibold text-cyan-100">IVC phase measurements</div>
-        <p className="mb-2 text-gray-300">
-          Choose a phase below and draw the calibrated Length caliper.
-          When prompted, label it IVCexp or IVCinsp respectively.
-        </p>
-        <div className="space-y-2">
-          {[
-            { slot: 'IVC_EXP', label: 'Measure expiration (IVCexp)' },
-            { slot: 'IVC_INSP', label: 'Measure inspiration (IVCinsp)' },
-          ].map(phase => (
-            <div key={phase.slot} className="flex flex-wrap items-center gap-2">
-            {renderCompositePhaseStatusAndDelete(quiz, question, phase.slot, disabled, phase.slot === 'IVC_EXP' ? 'IVCexp' : 'IVCinsp')}
-            <button
-              type="button"
-              disabled={disabled}
-              className="rounded border border-cyan-600 px-2 py-1 text-cyan-100 disabled:opacity-40"
-              onClick={event => {
-                event.preventDefault();
-                event.stopPropagation();
-                void (async () => {
-                  await activateQuestionForPhaseCapture(quiz, question);
-                  if (!(await ensureConfiguredCompositePhaseFrame(question, phase.slot))) return;
-                  // Learners explicitly choose IVCexp / IVCinsp in the
-                  // ordinary Length dialog. Avoid a global measure-only flag:
-                  // it could suppress labels in other quiz questions.
-                  let activation = null;
-                  for (const step of getEchoCompositeAcquisitionSteps(
-                    'ivcCollapsibility', phase.slot
-                  )) {
-                    activation = await runViewerCommand(
-                      commandsManager, step.name, step.payload
-                    );
-                    if (activation?.ok === false) break;
-                  }
-                  if (activation?.ok === false) {
-                    uiNotificationService.show({
-                      title: 'IVC measurement',
-                      message: 'The calibrated Length tool could not be activated.',
-                      type: 'warning', duration: 5000,
-                    });
-                  }
-                })();
-              }}
-            >
-              {phase.label}
-            </button>
-            </div>
-          ))}
-        </div>
-      </div>
+      <LearningEchoAcquisitionControls
+        kind={kind}
+        disabled={disabled}
+        renderPhaseStatus={(slot, label) =>
+          renderCompositePhaseStatusAndDelete(quiz, question, slot, disabled,
+            kind === 'ivcCollapsibility'
+              ? slot === 'IVC_EXP' ? 'IVCexp' : 'IVCinsp'
+              : label)
+        }
+        isPhaseBlocked={slot =>
+          kind !== 'ivcCollapsibility' &&
+          config.compositeFrameGuidanceEnabled === true &&
+          !plainObject(config.compositeFrameTargets)[slot]?.sopInstanceUID
+        }
+        onAcquire={(slot, technique) => {
+          void (async () => {
+            await activateQuestionForPhaseCapture(quiz, question);
+            if (!(await ensureConfiguredCompositePhaseFrame(question, slot))) return;
+            const steps = getEchoCompositeAcquisitionSteps(
+              kind,
+              slot,
+              technique || 'freehand'
+            );
+            for (const step of steps) {
+              const result = await runViewerCommand(commandsManager, step.name, step.payload);
+              if (result?.ok === false) {
+                uiNotificationService.show({
+                  title: 'Case Questions',
+                  message: 'The measurement tool could not be activated.',
+                  type: 'warning', duration: 5000,
+                });
+                return;
+              }
+            }
+          })().catch(error => {
+            console.warn('[CaseQuestionsPanel] shared acquisition failed', error);
+            uiNotificationService.show({
+              title: 'Case Questions',
+              message: 'Unable to activate measurement acquisition.',
+              type: 'warning', duration: 5000,
+            });
+          });
+        }}
+      />
     );
+  }
+
+  function renderIVCCaliperControls(quiz: QuizDefinition, question: QuizQuestion, disabled: boolean) {
+    return renderSharedEchoPhaseControls(quiz, question, disabled, 'ivcCollapsibility');
   }
 
   function renderLAVolumeContourControls(quiz: QuizDefinition, question: QuizQuestion, disabled: boolean) {
-    const views = [
-      { slot: 'A4C', label: 'Apical four-chamber' },
-      { slot: 'A2C', label: 'Apical two-chamber' },
-    ];
-    const config = plainObject(question.answerConfig);
-    return (
-      <div className="mt-2 rounded border border-cyan-700 bg-cyan-950/20 p-2 text-xs">
-        <div className="mb-1 font-semibold text-cyan-100">LA volume contour technique</div>
-        <p className="mb-2 text-gray-300">
-          For each apical view, click the desired measuring tool to navigate to its selected image.
-          Freehand: click a mitral hinge, trace the LA cavity without holding the mouse,
-          and finish at the opposite hinge. Axis + apex: draw the annular line and superior LA axis.
-        </p>
-        {views.map(({ slot, label }) => (
-          <div key={slot} className="mb-2 flex flex-wrap items-center gap-2">
-            {renderCompositePhaseStatusAndDelete(quiz, question, slot, disabled, label)}
-            <EchoContourTechniqueButtons
-              disabled={disabled || (config.compositeFrameGuidanceEnabled === true &&
-                !plainObject(config.compositeFrameTargets)[slot]?.sopInstanceUID)}
-              onChoose={technique => {
-                void (async () => {
-                  await activateQuestionForPhaseCapture(quiz, question);
-                  if (!(await ensureConfiguredCompositePhaseFrame(question, slot))) return;
-                  for (const step of getEchoCompositeAcquisitionSteps(
-                    'laVolumeDisks', slot, technique
-                  )) await runViewerCommand(commandsManager, step.name, step.payload);
-                })();
-              }}
-            />
-          </div>
-        ))}
-      </div>
-    );
+    return renderSharedEchoPhaseControls(quiz, question, disabled, 'laVolumeDisks');
   }
 
   function renderRVFACContourControls(quiz: QuizDefinition, question: QuizQuestion, disabled: boolean) {
-    const slots = [
-      { slot: 'RV_ED', label: 'End-diastolic area (RVEDA)' },
-      { slot: 'RV_ES', label: 'End-systolic area (RVESA)' },
-    ];
-    const config = plainObject(question.answerConfig);
-    return (
-      <div className="mt-2 rounded border border-cyan-700 bg-cyan-950/20 p-2 text-xs">
-        <div className="mb-1 font-semibold text-cyan-100">RV FAC contour technique</div>
-        <div className="mb-2 text-gray-300">
-          For each area click the desired measuring tool to navigate to its image.
-        </div>
-        {slots.map(({ slot, label }) => (
-          <div key={slot} className="mb-2 flex flex-wrap items-center gap-2">
-            {renderCompositePhaseStatusAndDelete(quiz, question, slot, disabled, label)}
-            <EchoContourTechniqueButtons
-              disabled={disabled || (config.compositeFrameGuidanceEnabled === true &&
-                !plainObject(config.compositeFrameTargets)[slot]?.sopInstanceUID)}
-              onChoose={technique => {
-                void (async () => {
-                  await activateQuestionForPhaseCapture(quiz, question);
-                  if (!(await ensureConfiguredCompositePhaseFrame(question, slot))) return;
-                  for (const step of getEchoCompositeAcquisitionSteps(
-                    'rvFac', slot, technique
-                  )) await runViewerCommand(commandsManager, step.name, step.payload);
-                })();
-              }}
-            />
-          </div>
-        ))}
-      </div>
-    );
+    return renderSharedEchoPhaseControls(quiz, question, disabled, 'rvFac');
   }
 
   function renderLearnerIVCRapReview(
