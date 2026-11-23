@@ -74,6 +74,24 @@ describe('Research source-backed composite answer capture', () => {
     });
   });
 
+  it('uses live verified EF result when persisted contour metadata is compacted', () => {
+    const { field, candidate, annotations } = fixture('lvEjectionFraction', 57.83);
+    // Stored compact source annotations retain IDs/frames but no calibrated
+    // points, so they cannot themselves recalculate EF.
+    mockCandidates.mockReturnValue([]);
+    const state = reconcileResearchEchoCompositeAnswers(
+      [field], {}, {}, annotations, [candidate]
+    );
+    expect(state.values[field.key]).toBe(57.8);
+    expect(state.sources[field.key]).toEqual({
+      source: 'viewer-derived', sourceMeasurementKey: candidate.sourceMeasurementKey,
+    });
+    const incomplete = reconcileResearchEchoCompositeAnswers(
+      [field], {}, {}, annotations.slice(0, 3), [candidate]
+    );
+    expect(incomplete.values).not.toHaveProperty(field.key);
+  });
+
   it('replaces an old fixed-frame EF result only after verifying new evidence', () => {
     const { field, candidate, annotations } = fixture('lvEjectionFraction', 53.24);
     mockCandidates.mockReturnValue([candidate]);
