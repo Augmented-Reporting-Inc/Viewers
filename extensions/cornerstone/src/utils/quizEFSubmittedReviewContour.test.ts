@@ -43,8 +43,9 @@ describe('submitted EF answer review contour selection', () => {
       const found = select(doc, slot);
       expect(found?.annotationId).toBe('learner-' + slot);
       expect(found?.points.length).toBe(4096);
-      expect(found?.volumeML).toBe(doc.viewerQuizResponses[0].answers[0]
-        .value.compositeResult.derived.slotVolumeML[slot]);
+      const volumes: Record<string, number> = doc.viewerQuizResponses[0].answers[0]
+        .value.compositeResult.derived.slotVolumeML;
+      expect(found?.volumeML).toBe(volumes[slot]);
     }
     expect(select(doc, 'A4C_ED')?.annotationId).not.toBe(select(doc, 'A2C_ES')?.annotationId);
   });
