@@ -72,6 +72,7 @@ jobs:
             'extensions/extension-ar-measurements/src/components/EchoContourTechniqueButtons.tsx',
             'extensions/extension-ar-measurements/src/components/SharedQuestionNavigation.tsx',
             'extensions/extension-ar-measurements/src/components/SharedMeasurementValueInput.tsx',
+            'extensions/extension-ar-measurements/src/components/SharedQuestionCard.tsx',
             'extensions/extension-ar-measurements/src/utils/echoCompositeAcquisition.ts',
             'extensions/extension-ar-learning/src/panels/CaseQuestionsPanel.tsx',
             'extensions/extension-ar-research/src/panels/ResearchEchoGuidedControls.tsx',
