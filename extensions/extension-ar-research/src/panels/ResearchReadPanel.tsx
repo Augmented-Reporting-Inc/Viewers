@@ -1206,7 +1206,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
             />
           ) : null}
           {selectedField?.componentKey === 'lvEjectionFraction' && hasEFSourceVolumes ? (
-            <EchoEFContourVolumes volumes={efVolumes} status="Current" />
+            <EchoEFContourVolumes volumes={efVolumes} status={context.readOnly ? "Saved" : "Current"} />
           ) : null}
           {!isIVCRapRVSPQuestion ? groupedFields.map(companionField => (
             <ReadField
