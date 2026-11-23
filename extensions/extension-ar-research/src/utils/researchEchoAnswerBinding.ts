@@ -23,11 +23,29 @@ export function reconcileResearchEchoCompositeAnswers(
   fields: any[] = [],
   values: Record<string, any> = {},
   sources: Record<string, any> = {},
-  annotations: any[] = []
+  annotations: any[] = [],
+  verifiedLiveCandidates: any[] = []
 ) {
   const nextValues = { ...values };
   const nextSources = { ...sources };
-  const candidates = buildViewerMeasurementValueCandidates(annotations);
+  // Calibrated contours are compacted before persistence. Live verified
+  // derived candidates are computed upstream from the same raw source
+  // snapshot, with no second calculation or new saved-answer schema.
+  const validIds = new Set((Array.isArray(annotations) ? annotations : []).map(item =>
+    String(item?.annotationId || item?.uid || '').trim()
+  ).filter(Boolean));
+  const verified = (Array.isArray(verifiedLiveCandidates) ? verifiedLiveCandidates : [])
+    .filter(candidate => {
+      if (candidate?.source !== 'viewer-derived') return false;
+      const key = String(candidate?.sourceMeasurementKey || '');
+      const ids = key.replace(/^(lv-simpson|la-disks|rv-fac|ivc-collapse):/, '')
+        .split(',').map(item => item.trim()).filter(Boolean);
+      return ids.length > 0 && ids.every(id => validIds.has(id));
+    });
+  const candidates = [
+    ...buildViewerMeasurementValueCandidates(annotations),
+    ...verified,
+  ];
   for (const field of fields) {
     if (!GUIDED_COMPOSITE_KINDS.has(String(field?.componentKey || ''))) continue;
     const compatible = getResearchCompatibleMeasurementCandidates(
