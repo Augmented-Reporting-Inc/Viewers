@@ -1,6 +1,6 @@
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { ViewerQuestionCard, ViewerQuestionNavigation } from './ViewerQuestionChrome';
+import { ViewerNumericMeasurementInput, ViewerQuestionCard, ViewerQuestionNavigation } from './ViewerQuestionChrome';
 
 describe('quiz/research shared viewer question presentation', () => {
   test('renders the exact selected-question treatment and required marker', () => {
@@ -25,6 +25,32 @@ describe('quiz/research shared viewer question presentation', () => {
     expect(html).toContain('Next question');
     expect(html).toContain('data-quiz-review-action="navigation"');
     expect((html.match(/disabled=""/g) || []).length).toBe(1);
+  });
+
+  test('Education and Research display the same numeric row and unit badge', () => {
+    const html = renderToStaticMarkup(
+      <ViewerNumericMeasurementInput
+        value={42.5}
+        unit="%"
+        onChange={() => {}}
+        onDelete={() => {}}
+      />
+    );
+    expect(html).toContain('type="number"');
+    expect(html).toContain('42.5');
+    expect(html).toContain('%');
+    expect(html).toContain('aria-label="Delete measurement"');
+    expect(html).toContain('data-quiz-review-action="delete"');
+  });
+
+  test('calculated Research result cannot be edited or deleted', () => {
+    const html = renderToStaticMarkup(
+      <ViewerNumericMeasurementInput value={55} unit="mmHg" readOnly
+        onChange={() => {}} onDelete={() => {}} />
+    );
+    expect(html).toContain('disabled=""');
+    expect(html).toContain('mmHg');
+    expect(html).not.toContain('Delete measurement');
   });
 
   test('retains the quiz question prompt and help presentation', () => {
