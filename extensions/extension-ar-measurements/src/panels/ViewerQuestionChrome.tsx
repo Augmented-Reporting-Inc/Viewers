@@ -113,3 +113,70 @@ export function ViewerQuestionNavigation({
     </nav>
   );
 }
+
+/**
+ * Exact quiz learner measurement-value row, shared with Research Read.
+ * Scalar edits and source deletion are delegated to their workflow owners.
+ */
+export function ViewerNumericMeasurementInput({
+  value,
+  unit = '',
+  disabled = false,
+  readOnly = false,
+  min,
+  max,
+  step = '0.01',
+  onChange,
+  onDelete,
+  deleteDisabled = false,
+  placeholder = 'Measurement value',
+}: {
+  value: string | number;
+  unit?: string;
+  disabled?: boolean;
+  readOnly?: boolean;
+  min?: number;
+  max?: number;
+  step?: string | number;
+  onChange: (value: string) => void;
+  onDelete?: () => void;
+  deleteDisabled?: boolean;
+  placeholder?: string;
+}) {
+  return (
+    <div className="flex w-full min-w-0 max-w-full items-center gap-2 overflow-hidden">
+      <div className="flex min-w-0 flex-1 items-center rounded border border-gray-700 bg-black">
+        <input
+          className="min-w-0 flex-1 bg-transparent px-2 py-1 text-sm text-white"
+          type="number"
+          inputMode="decimal"
+          min={min}
+          max={max}
+          step={step}
+          value={value ?? ''}
+          onChange={event => onChange(event.target.value)}
+          disabled={disabled || readOnly}
+          placeholder={placeholder}
+        />
+        {onDelete && !readOnly ? (
+          <button
+            type="button"
+            data-quiz-review-action="delete"
+            className="shrink-0 border-l border-gray-700 px-2 py-1 font-bold text-red-200 hover:bg-red-950 disabled:opacity-40"
+            title="Delete measurement"
+            aria-label="Delete measurement"
+            disabled={disabled || deleteDisabled}
+            onClick={event => {
+              event.preventDefault();
+              event.stopPropagation();
+              onDelete();
+            }}
+          >×</button>
+        ) : null}
+      </div>
+      <div className="w-14 shrink-0 truncate rounded border border-gray-700 px-2 py-1 text-center text-sm text-gray-300">
+        {unit}
+      </div>
+    </div>
+  );
+}
