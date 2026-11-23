@@ -1,0 +1,54 @@
+name: Validate shared Education/Research question UI
+
+on:
+  pull_request:
+    branches: [port/3.11-custom]
+    paths:
+      - 'extensions/extension-ar-measurements/src/panels/ViewerQuestionChrome*'
+      - 'extensions/extension-ar-measurements/src/utils/viewerQuestionMeasurementContext*'
+      - 'extensions/extension-ar-learning/src/panels/CaseQuestionsPanel.tsx'
+      - 'extensions/extension-ar-research/src/panels/ResearchReadPanel.tsx'
+      - '.github/workflows/validate-shared-viewer-question-ui.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  question-parity:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: yarn
+      - name: Install locked dependencies
+        run: yarn install --frozen-lockfile --non-interactive
+      - name: Test shared chrome, context and Research measurement logic
+        run: |
+          yarn jest --config extensions/extension-ar-measurements/jest.config.js --runInBand --coverage=false --runTestsByPath \
+            extensions/extension-ar-measurements/src/panels/ViewerQuestionChrome.test.tsx \
+            extensions/extension-ar-measurements/src/utils/viewerQuestionMeasurementContext.test.ts
+          yarn jest --config extensions/extension-ar-research/jest.config.js --runInBand --coverage=false --runTestsByPath \
+            extensions/extension-ar-research/src/utils/researchEchoWorkflow.test.ts \
+            extensions/extension-ar-research/src/utils/researchFieldNavigation.test.ts \
+            extensions/extension-ar-research/src/utils/readSchemaCalculated.test.ts
+          yarn jest --config extensions/extension-ar-learning/jest.config.js --runInBand --coverage=false --runTestsByPath \
+            extensions/extension-ar-learning/src/utils/restoredQuizMeasurementContext.test.ts
+      - name: Babel-compile both question panels and shared controls
+        run: |
+          node - <<'NODE'
+          const babel = require('@babel/core');
+          for (const path of [
+            'extensions/extension-ar-measurements/src/panels/ViewerQuestionChrome.tsx',
+            'extensions/extension-ar-measurements/src/utils/viewerQuestionMeasurementContext.ts',
+            'extensions/extension-ar-learning/src/panels/CaseQuestionsPanel.tsx',
+            'extensions/extension-ar-research/src/panels/ResearchReadPanel.tsx',
+          ]) {
+            const result = babel.transformFileSync(path, { envName: 'production' });
+            if (!result?.code) throw Error('Compilation failed: ' + path);
+            console.log('Compiled', path);
+          }
+          NODE
