@@ -6,6 +6,7 @@ import { SharedMeasurementValueInput } from '../../../extension-ar-measurements/
 import { SharedQuestionCard } from '../../../extension-ar-measurements/src/components/SharedQuestionCard';
 import { LearningEchoAcquisitionControls } from '../components/LearningEchoAcquisitionControls';
 import { LearningEFPanelLauncher } from '../components/LearningEFPanelLauncher';
+import { LearningSingleChoiceAnswer } from '../components/LearningSingleChoiceAnswer';
 import LearningQuestionPanel from './LearningQuestionPanel';
 import { getEchoCompositeAcquisitionSteps } from '../../../extension-ar-measurements/src/utils/echoCompositeAcquisition';
 import { EchoContourTechniqueButtons } from '../../../extension-ar-measurements/src/components/EchoContourTechniqueButtons';
@@ -6438,28 +6439,13 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
 
     if (question.type === 'single_choice' || question.type === 'true_false') {
       return (
-        <div className="mt-2 space-y-1">
-          {choices.map(choice => {
-            const choiceValue = normalizeChoiceValue(choice.value);
-            const selected = normalizeChoiceValue(value) === choiceValue;
-
-            return (
-              <label
-                key={choiceValue}
-                className="flex cursor-pointer items-center gap-2 rounded border border-gray-700 px-2 py-1 text-sm hover:border-blue-400 hover:bg-gray-900"
-              >
-                <input
-                  type="radio"
-                  name={`${quiz.quizKey}-${question.questionKey}`}
-                  checked={selected}
-                  onChange={() => setAnswer(quiz.quizKey, question, choice.value)}
-                  disabled={disabled}
-                />
-                <span>{choice.label || choice.value}</span>
-              </label>
-            );
-          })}
-        </div>
+        <LearningSingleChoiceAnswer
+          name={`${quiz.quizKey}-${question.questionKey}`}
+          choices={choices}
+          value={value}
+          disabled={disabled}
+          onChange={choice => setAnswer(quiz.quizKey, question, choice)}
+        />
       );
     }
 
