@@ -51,7 +51,7 @@ jobs:
       - name: Test shared EF contour presentation
         run: |
           yarn jest --config extensions/extension-ar-measurements/jest.config.js --runInBand --coverage=false --runTestsByPath \
-            extensions/extension-ar-measurements/src/components/EchoEFContourVolumes.test.tsx
+            extensions/extension-ar-measurements/src/components/EchoEFContourVolumes.test.ts
       - name: Compile Research panels and shared Length registration
         run: |
           node - <<'NODE'
