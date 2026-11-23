@@ -19,7 +19,11 @@ export function EchoContourTechniqueButtons({
           type="button"
           disabled={disabled}
           className="rounded border border-cyan-600 px-2 py-1 text-xs text-cyan-100 hover:bg-cyan-950/40 disabled:opacity-40"
-          onClick={() => onChoose(technique)}
+          onClick={event => {
+            event.preventDefault();
+            event.stopPropagation();
+            onChoose(technique);
+          }
         >{label}</button>
       ))}
     </>
