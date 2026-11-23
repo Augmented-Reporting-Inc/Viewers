@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { getEchoCompositeAcquisitionSteps } from '../../../extension-ar-measurements/src/utils/echoCompositeAcquisition';
+import { EchoContourTechniqueButtons } from '../../../extension-ar-measurements/src/components/EchoContourTechniqueButtons';
 import {
   getResearchEchoPhases,
   getResearchEchoPhaseTarget,
@@ -194,28 +195,16 @@ export default function ResearchEchoGuidedControls({
                   })() : null}
                 </div>
                 <div className="flex flex-wrap gap-2">
-                  {kind === 'laVolumeDisks'
-                    ? <>
-                      {button('Freehand', phase.slot + ':freehand', async () => {
-                        await openPhase(phase.slot);
-                        await runCompositeSteps('laVolumeDisks', phase.slot, 'freehand');
-                      }, blocked)}
-                      {button('Axis + apex', phase.slot + ':axis', async () => {
-                        await openPhase(phase.slot);
-                        await runCompositeSteps('laVolumeDisks', phase.slot, 'axisApex');
-                      }, blocked)}
-                    </>
-                    : kind === 'rvFac'
-                      ? <>
-                        {button('Freehand', phase.slot + ':freehand', async () => {
-                          await openPhase(phase.slot);
-                          await runCompositeSteps('rvFac', phase.slot, 'freehand');
-                        }, blocked)}
-                        {button('Axis + apex', phase.slot + ':axis', async () => {
-                          await openPhase(phase.slot);
-                          await runCompositeSteps('rvFac', phase.slot, 'axisApex');
-                        }, blocked)}
-                      </>
+                  {kind === 'laVolumeDisks' || kind === 'rvFac'
+                    ? <EchoContourTechniqueButtons
+                        disabled={disabled || readOnly || !!busy || blocked}
+                        onChoose={technique => void run(
+                          phase.slot + ':' + technique, async () => {
+                            await openPhase(phase.slot);
+                            await runCompositeSteps(kind, phase.slot, technique);
+                          }
+                        )}
+                      />
                       : <>
                         {button(
                           (phaseSources.length ? 'Redraw ' : 'Measure ') +
