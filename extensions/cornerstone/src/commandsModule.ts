@@ -17053,24 +17053,40 @@ function commandsModule({
       for (const entry of entries) {
         const sourceId = String(entry.sourceAnnotation?.annotationId ||
           entry.sourceAnnotation?.uid || '').trim();
-        const native = compositeRubric && entry.variant === 'rubric' && sourceId
+        const native = compositeRubric && sourceId &&
+          (entry.variant === 'rubric' || (entry.variant === 'learner' && isFocusedEFReview))
           ? annotation.state.getAnnotation?.(sourceId) : null;
         const expectedImage = normalizeImageIdForCompare(
           entry.sourceAnnotation?.referencedImageId || '');
         const nativeImage = normalizeImageIdForCompare(
           native?.metadata?.referencedImageId || '');
         if (native && expectedImage && nativeImage === expectedImage) {
+          if (isFocusedEFReview) {
+            const activeImage = normalizeImageIdForCompare(viewport.getCurrentImageId?.() || '');
+            if (!activeImage || activeImage !== expectedImage) continue;
+          }
           if (entry.variant === 'rubric' &&
               rubricMeasurement?.measurementKind === 'lvSimpsonEF') {
             applyVerifiedEFGoldLabel(sourceId, entry.slot, rubricMeasurement);
           }
+          if (entry.variant === 'learner' && isFocusedEFReview) {
+            applyVerifiedEFLearnerLabel(
+              sourceId, focusedCompositeSlot, submittedEFContour?.volumeML ?? null
+            );
+          }
           native.isVisible = true;
+          native.isLocked = true;
           cornerstoneTools.annotation.selection.setAnnotationSelected?.(
-            sourceId, !focusedCompositeSlot || entry.slot === focusedCompositeSlot
+            sourceId, entry.variant === 'rubric' &&
+              (!focusedCompositeSlot || entry.slot === focusedCompositeSlot)
           );
           renderedCount++;
-          rubricRendered = true;
-          if (entry.slot) renderedSlots.add(entry.slot);
+          if (entry.variant === 'learner') {
+            learnerRendered = true;
+          } else {
+            rubricRendered = true;
+            if (entry.slot) renderedSlots.add(entry.slot);
+          }
           continue;
         }
         const comparisonAnnotation = buildViewerQuizMeasurementComparisonAnnotation({
