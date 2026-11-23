@@ -8,6 +8,7 @@ import React, {
 import { buildViewerMeasurementValueCandidates } from '../../../extension-ar-measurements/src/utils/measurementValueCandidates';
 import { EchoEFContourVolumes, getLVSimpsonSourceVolumes } from '../../../extension-ar-measurements/src/components/EchoEFContourVolumes';
 import { EchoCompositeResultStatus } from '../../../extension-ar-measurements/src/components/EchoCompositeResultStatus';
+import { SharedQuestionSelector, SharedQuestionStepNavigation } from '../../../extension-ar-measurements/src/components/SharedQuestionNavigation';
 import ResearchEchoGuidedControls from './ResearchEchoGuidedControls';
 import { reconcileResearchEchoCompositeAnswers } from '../utils/researchEchoAnswerBinding';
 import { getResearchMeasurementToolForField } from '../utils/researchMeasurementTool';
@@ -1216,43 +1217,35 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
       ) : null}
 
       <div className="mb-3 rounded border border-gray-700 bg-gray-950 p-3">
-        <label htmlFor="research-read-field-select" className="text-xs font-semibold text-gray-200">
-          Question / measurement
-        </label>
-        <select
+        <SharedQuestionSelector
           id="research-read-field-select"
-          className="mt-1 w-full min-w-0 rounded border border-gray-600 bg-gray-900 px-2 py-2 text-sm text-white"
-          value={selectedField?.key || ''}
-          onChange={event => selectField(event.target.value)}
+          title="Question / measurement"
+          selectedKey={selectedField?.key || ''}
           disabled={isBusy}
-        >
-          {visibleFields.map((field, index) => {
-            const answered = isResearchQuestionAnswered(
-              field, fields, calculatedReadState.values, readDomain
-            );
-            return <option key={field.key} value={field.key}>
-              {index + 1}. {answered ? '✓ ' : ''}
-              {getResearchQuestionLabel(field, fields, readDomain)}
-              {field.required ? ' (required)' : ''}
-            </option>;
-          })}
-        </select>
+          groups={[{
+            key: 'research-read-fields',
+            questions: visibleFields.map(field => ({
+              key: field.key,
+              label: getResearchQuestionLabel(field, fields, readDomain),
+              answered: isResearchQuestionAnswered(
+                field, fields, calculatedReadState.values, readDomain
+              ),
+              required: field.required,
+            })),
+          }]}
+          onSelect={selectField}
+        />
         <div className="mt-2 flex items-center justify-between gap-2">
-          <span className="text-xs text-gray-400">{completedFields}/{visibleFields.length} questions answered</span>
-          <div className="flex items-center gap-1">
-            <button
-              type="button"
-              className="rounded border border-gray-600 px-2 py-1 text-xs text-gray-200 disabled:opacity-40"
-              disabled={isBusy || visibleFields.indexOf(selectedField) <= 0}
-              onClick={() => selectField(visibleFields[visibleFields.indexOf(selectedField) - 1].key)}
-            >Previous</button>
-            <button
-              type="button"
-              className="rounded border border-gray-600 px-2 py-1 text-xs text-gray-200 disabled:opacity-40"
-              disabled={isBusy || visibleFields.indexOf(selectedField) >= visibleFields.length - 1}
-              onClick={() => selectField(visibleFields[visibleFields.indexOf(selectedField) + 1].key)}
-            >Next</button>
-          </div>
+          <span className="text-xs text-gray-400">
+            {completedFields}/{visibleFields.length} questions answered
+          </span>
+          <SharedQuestionStepNavigation
+            compact
+            disabled={isBusy}
+            previousKey={visibleFields[visibleFields.indexOf(selectedField) - 1]?.key || ''}
+            nextKey={visibleFields[visibleFields.indexOf(selectedField) + 1]?.key || ''}
+            onNavigate={selectField}
+          />
         </div>
       </div>
 
