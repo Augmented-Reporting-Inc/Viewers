@@ -142,6 +142,20 @@ export function getQuizEchoAreaSourceMetadata(data: any = {}): Record<string, an
  * Viewer-only gold comparison overlay. Values come exclusively from the
  * verified educator composite result, not native ROI cachedStats.
  */
+/**
+ * Read-only learner EF comparison text uses the exact submitted phase's saved
+ * calibrated single-view volume. Never display native ROI area as EF volume.
+ */
+export function getVerifiedEFLearnerContourViewportLines(evidence: any): string[] | null {
+  if (evidence?.origin !== 'quiz-learner') return null;
+  const slot = String(evidence?.slot || '').trim().toUpperCase();
+  if (!['A4C_ED', 'A4C_ES', 'A2C_ED', 'A2C_ES'].includes(slot)) return null;
+  const raw = evidence.volumeML;
+  const volume = raw == null || raw === '' ? NaN : Number(raw);
+  return ['Your ' + slot.replace('_', ' ') + ' single-view LV volume: ' +
+    (Number.isFinite(volume) && volume > 0 ? volume.toFixed(2) + ' mL' : 'unavailable')];
+}
+
 /** Saved gold text requires a separately persisted, verified single-view volume. */
 export function getVerifiedEFGoldContourViewportLines(evidence: any): string[] | null {
   if (evidence?.origin !== 'quiz-gold') return null;
