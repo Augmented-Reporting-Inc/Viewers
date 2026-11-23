@@ -10,6 +10,7 @@ import { EchoEFContourVolumes, getLVSimpsonSourceVolumes } from '../../../extens
 import { EchoCompositeResultStatus } from '../../../extension-ar-measurements/src/components/EchoCompositeResultStatus';
 import { SharedQuestionSelector, SharedQuestionStepNavigation } from '../../../extension-ar-measurements/src/components/SharedQuestionNavigation';
 import { SharedMeasurementValueInput } from '../../../extension-ar-measurements/src/components/SharedMeasurementValueInput';
+import { SharedQuestionCard } from '../../../extension-ar-measurements/src/components/SharedQuestionCard';
 import ResearchEchoGuidedControls from './ResearchEchoGuidedControls';
 import { reconcileResearchEchoCompositeAnswers } from '../utils/researchEchoAnswerBinding';
 import { getResearchMeasurementToolForField } from '../utils/researchMeasurementTool';
@@ -137,6 +138,7 @@ function ReadField({
   onChange,
   onDelete,
   readDomain,
+  hideHeader = false,
 }: {
   field: any;
   value: any;
@@ -145,6 +147,7 @@ function ReadField({
   onChange: (value: any) => void;
   onDelete?: () => void;
   readDomain?: string;
+  hideHeader?: boolean;
 }) {
   const kind = cleanString(field.kind).toLowerCase();
   const numeric = ['measurement', 'continuous', 'number', 'numeric'].includes(kind);
@@ -164,6 +167,7 @@ function ReadField({
 
   return (
     <div className="rounded border border-gray-700 bg-gray-950 p-3">
+      {!hideHeader ? (
       <div className="mb-2 flex items-start justify-between gap-2">
         <div>
           <div className="text-sm font-semibold text-white">{field.label}</div>
@@ -179,6 +183,7 @@ function ReadField({
           </span>
         ) : null}
       </div>
+      ) : null}
 
       {['viewer-measurement', 'viewer-derived'].includes(cleanString(source?.source)) ? (
         <div className="mb-2 text-xs text-blue-300">
@@ -1252,12 +1257,20 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
       </div>
 
       {selectedField ? (
-        <div className="space-y-2">
+        <SharedQuestionCard
+          id={selectedField.key}
+          index={visibleFields.indexOf(selectedField)}
+          title={getResearchQuestionLabel(selectedField, fields, readDomain)}
+          required={selectedField.required}
+          active
+          hasViewerTarget={!!getResearchProtocolViewerTargets(selectedField).length}
+        >
           {!showGuidedIVCValue ? (
             <ReadField
               key={selectedField.key}
               field={selectedField}
               readDomain={readDomain}
+              hideHeader
               value={calculatedReadState.values[selectedField.key] ?? ''}
               source={calculatedReadState.sources[selectedField.key]}
               disabled={context.readOnly || context.preview || isBusy}
@@ -1432,9 +1445,8 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
               ) : null}
             </div>
           ) : null}
-        </div>
+        </SharedQuestionCard>
       ) : null}
-
 
       {!context.preview && !context.readOnly ? (
         <div className="sticky bottom-0 mt-4 border-t border-gray-700 bg-black/95 pt-3">
