@@ -76,6 +76,9 @@ jobs:
           }
           NODE
 
+      - name: Build Research extension without deploying
+        run: yarn --cwd extensions/extension-ar-research build
+
       - name: Validate PR 156 edited LV Simpson physical recalibration and contour safety
         # This targets the modified EF logic. The separate legacy saved-contour
         # hydration suite currently has 4 pre-existing failures on PR #156 too
