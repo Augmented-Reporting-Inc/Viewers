@@ -53,7 +53,8 @@ jobs:
           yarn jest --config extensions/extension-ar-measurements/jest.config.js --runInBand --coverage=false --runTestsByPath \
             extensions/extension-ar-measurements/src/components/EchoEFContourVolumes.test.ts \
             extensions/extension-ar-measurements/src/components/EchoCompositeResultStatus.test.ts \
-            extensions/extension-ar-measurements/src/utils/echoCompositeAcquisition.test.ts
+            extensions/extension-ar-measurements/src/utils/echoCompositeAcquisition.test.ts \
+            extensions/extension-ar-measurements/src/components/EchoContourTechniqueButtons.test.ts
       - name: Compile Research panels and shared Length registration
         run: |
           node - <<'NODE'
@@ -63,6 +64,7 @@ jobs:
             'extensions/extension-ar-research/src/utils/researchEchoAnswerBinding.ts',
             'extensions/extension-ar-measurements/src/components/EchoEFContourVolumes.tsx',
             'extensions/extension-ar-measurements/src/components/EchoCompositeResultStatus.tsx',
+            'extensions/extension-ar-measurements/src/components/EchoContourTechniqueButtons.tsx',
             'extensions/extension-ar-measurements/src/utils/echoCompositeAcquisition.ts',
             'extensions/extension-ar-learning/src/panels/CaseQuestionsPanel.tsx',
             'extensions/extension-ar-research/src/panels/ResearchEchoGuidedControls.tsx',
