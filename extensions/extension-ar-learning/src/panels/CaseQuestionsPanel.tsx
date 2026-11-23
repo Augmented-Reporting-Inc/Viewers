@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState, useRef } from 'react';
 import { EchoEFContourVolumes } from '../../../extension-ar-measurements/src/components/EchoEFContourVolumes';
+import { EchoCompositeResultStatus } from '../../../extension-ar-measurements/src/components/EchoCompositeResultStatus';
 import {
   getViewerQuizAuthoringContent,
   getViewerQuizzesForActiveStudy,
@@ -2886,23 +2887,17 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       <div className={needsLearnerRAP
         ? "mt-2 rounded border border-amber-700/70 bg-amber-950/10 px-2 py-2 text-xs"
         : "mt-2 rounded border border-emerald-700/60 bg-emerald-950/10 px-2 py-2 text-xs"}>
-        {hasLive ? (
-          <div className="font-semibold text-emerald-200">
-            {sameGold ? (authoringMode ? 'Calculated and saved gold: ' : 'Calculated: ')
-              : 'Calculated measurement: '}
-            {Number(status.value).toFixed(2)} {unit}
-          </div>
-        ) : hasGold ? (
-          <div className="font-semibold text-emerald-200">
-            {authoringMode ? 'Saved gold: ' : 'Saved answer: '}
-            {Number(gold.value).toFixed(2)} {unit}
-          </div>
-        ) : (
-          <div className="text-amber-200">
-            Calculation not ready: {cleanString(status.message) ||
-              'Complete both calibrated measurements and their source references.'}
-          </div>
-        )}
+        <EchoCompositeResultStatus
+          value={hasLive ? status.value : hasGold ? gold.value : null}
+          unit={unit}
+          label={hasLive
+            ? sameGold
+              ? (authoringMode ? 'Calculated and saved gold' : 'Calculated')
+              : 'Calculated measurement'
+            : authoringMode ? 'Saved gold' : 'Saved answer'}
+          unavailableMessage={cleanString(status.message) ||
+            'Complete both calibrated measurements and their source references.'}
+        />
         {needsLearnerRAP ? (
           <div className="mt-1 text-amber-200" role="status">
             IVC collapsibility is recorded, but this question is not complete until
