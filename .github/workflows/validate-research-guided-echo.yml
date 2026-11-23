@@ -62,7 +62,8 @@ jobs:
             extensions/extension-ar-measurements/src/components/EchoContourTechniqueButtons.test.ts \
             extensions/extension-ar-measurements/src/components/SharedQuestionPanel.test.tsx \
             extensions/extension-ar-measurements/src/components/SharedQuestionPanelWiring.test.ts \
-            extensions/extension-ar-learning/src/panels/LearningQuestionPanel.test.tsx
+            extensions/extension-ar-learning/src/panels/LearningQuestionPanel.test.tsx \
+            extensions/extension-ar-learning/src/components/LearningSingleChoiceAnswer.test.tsx
       - name: Compile Research panels and shared Length registration
         run: |
           node - <<'NODE'
@@ -79,6 +80,7 @@ jobs:
             'extensions/extension-ar-learning/src/panels/LearningQuestionPanel.tsx',
             'extensions/extension-ar-learning/src/components/LearningEchoAcquisitionControls.tsx',
             'extensions/extension-ar-learning/src/components/LearningEFPanelLauncher.tsx',
+            'extensions/extension-ar-learning/src/components/LearningSingleChoiceAnswer.tsx',
             'extensions/extension-ar-measurements/src/utils/echoCompositeAcquisition.ts',
             'extensions/extension-ar-learning/src/panels/CaseQuestionsPanel.tsx',
             'extensions/extension-ar-research/src/panels/ResearchEchoGuidedControls.tsx',
