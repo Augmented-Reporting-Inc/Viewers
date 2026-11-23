@@ -5867,10 +5867,10 @@ function installLVSimpsonContourTextCleanupForViewport({ viewport, viewportId = 
   const nextConfiguration = {
     ...(toolInstance.configuration || {}),
     getTextLines: function (...args) {
-      const lines =
-        typeof previousGetTextLines === 'function' ? previousGetTextLines.call(this, ...args) : [];
       const raw = args[0];
       const data = raw?.annotation?.data || raw?.data || raw;
+      // Verified scored-review values take precedence over any generic ROI
+      // cachedStats or saved measurement text, without recalculation.
       const goldEFText = getVerifiedEFGoldContourViewportLines(
         data?.arVerifiedQuizEFGoldContour
       );
@@ -5879,6 +5879,8 @@ function installLVSimpsonContourTextCleanupForViewport({ viewport, viewportId = 
         data?.arVerifiedQuizEFLearnerContour
       );
       if (learnerEFText) return learnerEFText;
+      const lines =
+        typeof previousGetTextLines === 'function' ? previousGetTextLines.call(this, ...args) : [];
       const lv = data?.lvSimpson || {};
       const slot = String(lv.slot || '');
       if (['A4C_ED', 'A4C_ES', 'A2C_ED', 'A2C_ES'].includes(slot)) {
