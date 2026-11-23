@@ -7177,7 +7177,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
             throw new Error('The saved gold DICOM frame could not be opened exactly.');
           }
           const activeFrame = await runViewerCommand(commandsManager,
-            'getCurrentViewerQuizFrameAnswer', {});
+            'getCurrentViewerQuizFrameAnswer', { viewportId: navigation.viewportId });
           const current = plainObject(activeFrame?.answer?.viewerTarget);
           const equalIdentity = (a: any, b: any) =>
             !!cleanString(a) && cleanString(a) === cleanString(b);
