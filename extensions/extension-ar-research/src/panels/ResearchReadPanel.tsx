@@ -7,6 +7,7 @@ import React, {
 } from 'react';
 import { buildViewerMeasurementValueCandidates } from 'extension-ar-measurements';
 import { EchoEFContourVolumes, getLVSimpsonSourceVolumes } from '../../../extension-ar-measurements/src/components/EchoEFContourVolumes';
+import { EchoCompositeResultStatus } from '../../../extension-ar-measurements/src/components/EchoCompositeResultStatus';
 import ResearchEchoGuidedControls from './ResearchEchoGuidedControls';
 import { reconcileResearchEchoCompositeAnswers } from '../utils/researchEchoAnswerBinding';
 import {
@@ -1205,6 +1206,19 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
               disabled={context.readOnly || context.preview || isBusy}
               onChange={nextValue => updateValue(selectedField.key, nextValue)}
             />
+          ) : null}
+          {['lvEjectionFraction', 'laVolumeDisks', 'rvFac'].includes(
+            cleanString(selectedField?.componentKey)
+          ) ? (
+            <div className="rounded border border-gray-700 bg-gray-950 p-2 text-xs">
+              <EchoCompositeResultStatus
+                value={calculatedReadState.sources[selectedField.key]?.source === 'viewer-derived'
+                  ? calculatedReadState.values[selectedField.key] : null}
+                unit={cleanString(selectedField.config?.unit)}
+                label={context.readOnly ? 'Saved calculated result' : 'Calculated measurement'}
+                unavailableMessage="Complete the calibrated contours on their protocol-selected frames."
+              />
+            </div>
           ) : null}
           {selectedField?.componentKey === 'lvEjectionFraction' && hasEFSourceVolumes ? (
             <EchoEFContourVolumes volumes={efVolumes} status={context.readOnly ? "Saved" : "Current"} />
