@@ -8803,8 +8803,10 @@ function commandsModule({
     if (!position) return;
     let world: any;
     try { world = viewport.canvasToWorld(position); } catch { return; }
-    if (!Array.isArray(world) || world.length < 3 ||
-        world.some(value => !Number.isFinite(Number(value)))) return;
+    const worldPoint: number[] = world && typeof world.length === 'number'
+      ? Array.from(world as ArrayLike<number>) : [];
+    if (worldPoint.length < 3 ||
+        worldPoint.some(value => !Number.isFinite(value))) return;
     const previous = handles.textBox || {};
     if (!annotationId.startsWith('ar-viewer-quiz-') &&
         !viewerQuizReviewOriginalTextBoxes.has(annotationId)) {
@@ -8818,7 +8820,7 @@ function commandsModule({
       });
     }
     handles.textBox = { ...previous, hasMoved: true,
-      worldPosition: [...world], worldBoundingBox: null };
+      worldPosition: worldPoint.slice(0, 3), worldBoundingBox: null };
   }
 
   function clearViewerQuizMeasurementComparisonAnnotations() {
