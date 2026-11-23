@@ -7153,9 +7153,52 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
             components.length !== compositeReviewSlots.length ||
             !compositeReviewSlots.every(expected =>
               components.filter((item: any) => item?.slot === expected).length === 1) ||
-            !goldFrame?.target?.referencedImageId) {
+            !goldFrame?.target?.studyInstanceUID ||
+            !goldFrame?.target?.seriesInstanceUID ||
+            !goldFrame?.target?.sopInstanceUID ||
+            !Number.isSafeInteger(Number(goldFrame?.target?.frameNumber)) ||
+            Number(goldFrame?.target?.frameNumber) < 1) {
           throw new Error('The released gold contour set is incomplete or has changed.');
         }
+
+        let displayTarget = goldFrame.target;
+        if (!cleanString(displayTarget.referencedImageId)) {
+          // RV FAC and LA captured contours can have an exact DICOM SOP/frame
+          // but no saved OHIF image-cache URL. Resolve that URL only from
+          // the image actually reached by an exact-frame viewer jump.
+          const navigation = await runViewerCommand(commandsManager,
+            'jumpToViewerQuizTarget', {
+              viewerTarget: displayTarget,
+              questionKey: question.questionKey,
+              requireExactSopFrame: true,
+              pauseCineOnTarget: true,
+            });
+          if (navigation?.ok !== true) {
+            throw new Error('The saved gold DICOM frame could not be opened exactly.');
+          }
+          const activeFrame = await runViewerCommand(commandsManager,
+            'getCurrentViewerQuizFrameAnswer', {});
+          const current = plainObject(activeFrame?.answer?.viewerTarget);
+          const equalIdentity = (a: any, b: any) =>
+            !!cleanString(a) && cleanString(a) === cleanString(b);
+          if (activeFrame?.ok !== true ||
+              !equalIdentity(current.studyInstanceUID, displayTarget.studyInstanceUID) ||
+              !equalIdentity(current.seriesInstanceUID, displayTarget.seriesInstanceUID) ||
+              !equalIdentity(current.sopInstanceUID, displayTarget.sopInstanceUID) ||
+              Number(current.frameNumber) !== Number(displayTarget.frameNumber) ||
+              !cleanString(current.referencedImageId)) {
+            throw new Error('The opened DICOM image does not match the saved gold SOP/frame.');
+          }
+          displayTarget = {
+            ...displayTarget,
+            referencedImageId: current.referencedImageId,
+          };
+        }
+
+        // Render only the selected released slot. The comparison command
+        // supports multi-frame composites, but each review action must
+        // prove its own exact source frame and avoid unrelated placeholders.
+        const visibleGold = { ...goldFrame, target: displayTarget };
         const result = await runViewerCommand(commandsManager,
           'showViewerQuizMeasurementComparison', {
             learnerMeasurement,
@@ -7163,10 +7206,10 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               measurementKind: released.measurementKind,
               value: released.value,
               unit: released.unit,
-              viewerTarget: goldFrame.target,
-              compositeResult: { components },
+              viewerTarget: displayTarget,
+              compositeResult: { components: [visibleGold] },
             },
-            viewerTarget: goldFrame.target,
+            viewerTarget: displayTarget,
             focusedCompositeSlot: slot,
             questionKey: question.questionKey,
             endpointToleranceMM: released.endpointToleranceMM ?? null,
@@ -7175,9 +7218,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               released.ivcEndpointToleranceEnabled === true,
           });
         if (result?.rubricRendered !== true ||
-            Number(result?.compositeContoursResolved) !== components.length) {
+            Number(result?.compositeContoursResolved) !== 1) {
           throw new Error(cleanString(result?.reason) ||
-            'Not all released gold contours could be displayed on their source frames.');
+            'The selected gold contour could not be displayed on its source frame.');
         }
       } catch (error) {
         uiNotificationService.show({
