@@ -65,6 +65,7 @@ import {
   hydrateMeasurementAnnotationsForActiveStudy as hydrateMeasurementAnnotationsForActiveStudyUtil,
 } from './utils/measurementAnnotationHydration';
 import { isSavedLVSimpsonImageMatch } from './utils/savedVolumeContourMetadata';
+import { getViewerQuizComparisonLabelCanvasPosition } from './utils/quizReviewLabelLayout';
 import { buildFormApiFetchOptions, buildFormApiUrl } from './utils/formApi';
 import { callMultilineTextDialog } from './utils/callMultilineTextDialog';
 import {
@@ -8516,6 +8517,8 @@ function commandsModule({
   const viewerMeasurementsDeletedInSession = new Set<string>();
   const viewerQuizMeasurementComparisonAnnotationIds = new Set<string>();
   const viewerQuizReviewEFDisplayAnnotationIds = new Set<string>();
+  const viewerQuizReviewOriginalTextBoxes = new Map<string, any>();
+  let viewerQuizComparisonGeneration = 0;
   const {
     viewportGridService,
     toolGroupService,
@@ -8785,7 +8788,48 @@ function commandsModule({
     viewerQuizReviewEFDisplayAnnotationIds.add(annotationId);
   }
 
+  // Only reposition the review text box. Never move the clinical contour or
+  // persist an annotation edit. Restore native source text boxes on cleanup.
+  function positionViewerQuizComparisonTextBox(
+    annotationId: string, viewport: any, variant: 'learner' | 'rubric'
+  ) {
+    const source = annotation.state.getAnnotation?.(annotationId);
+    const handles = source?.data?.handles;
+    const element = viewport?.element;
+    if (!handles || !element || typeof viewport?.canvasToWorld !== 'function') return;
+    const position = getViewerQuizComparisonLabelCanvasPosition({
+      width: element.clientWidth, height: element.clientHeight, variant,
+    });
+    if (!position) return;
+    let world: any;
+    try { world = viewport.canvasToWorld(position); } catch { return; }
+    if (!Array.isArray(world) || world.length < 3 ||
+        world.some(value => !Number.isFinite(Number(value)))) return;
+    const previous = handles.textBox || {};
+    if (!annotationId.startsWith('ar-viewer-quiz-') &&
+        !viewerQuizReviewOriginalTextBoxes.has(annotationId)) {
+      viewerQuizReviewOriginalTextBoxes.set(annotationId, {
+        hadTextBox: !!handles.textBox,
+        textBox: handles.textBox ? {
+          ...handles.textBox,
+          worldPosition: Array.isArray(handles.textBox.worldPosition)
+            ? [...handles.textBox.worldPosition] : handles.textBox.worldPosition,
+        } : null,
+      });
+    }
+    handles.textBox = { ...previous, hasMoved: true,
+      worldPosition: [...world], worldBoundingBox: null };
+  }
+
   function clearViewerQuizMeasurementComparisonAnnotations() {
+    viewerQuizComparisonGeneration += 1;
+    for (const [annotationId, saved] of viewerQuizReviewOriginalTextBoxes) {
+      const handles = annotation.state.getAnnotation?.(annotationId)?.data?.handles;
+      if (!handles) continue;
+      if (saved.hadTextBox) handles.textBox = saved.textBox;
+      else delete handles.textBox;
+    }
+    viewerQuizReviewOriginalTextBoxes.clear();
     for (const annotationId of viewerQuizReviewEFDisplayAnnotationIds) {
       const source = annotation.state.getAnnotation?.(annotationId);
       if (source?.data?.arVerifiedQuizEFGoldContour?.origin === 'quiz-gold') {
@@ -8809,7 +8853,8 @@ function commandsModule({
     try {
       document.querySelectorAll?.(
         '[data-review-state="bowel-gold-endpoint-tolerance"], ' +
-        '[data-review-state="bowel-gold-reference-radius"]'
+        '[data-review-state="bowel-gold-reference-radius"], ' +
+        '[data-review-state="gold-tolerance"]'
       ).forEach(node => node.remove());
     } catch {}
 
@@ -16698,6 +16743,7 @@ function commandsModule({
       ivcEndpointToleranceEnabled = false,
     } = {}) => {
       clearViewerQuizMeasurementComparisonAnnotations();
+      const comparisonGeneration = viewerQuizComparisonGeneration;
       clearAllViewerQuizMarkerOverlays();
 
       const isFocusedEFReview = rubricMeasurement?.measurementKind === 'lvSimpsonEF' &&
@@ -16707,6 +16753,9 @@ function commandsModule({
         // EF released gold is embedded; avoid the unrelated educator Series fetch.
         includeBaseSeries: !isFocusedEFReview,
       });
+      if (comparisonGeneration !== viewerQuizComparisonGeneration) {
+        return { ok: false, reason: 'review-question-changed', renderedCount: 0 };
+      }
 
       // Opt-in BWT comparisons use two separate authorities: learner-copy
       // Series for learner evidence and versioned quiz JSON for educator gold.
@@ -16946,6 +16995,9 @@ function commandsModule({
         }
       }
 
+      if (comparisonGeneration !== viewerQuizComparisonGeneration) {
+        return { ok: false, reason: 'review-question-changed', renderedCount: 0 };
+      }
       const viewport = cornerstoneViewportService.getCornerstoneViewport(comparisonViewportId);
 
       if (!viewport) {
@@ -17023,6 +17075,8 @@ function commandsModule({
         : null;
       let learnerRendered = false;
       let rubricRendered = false;
+      const reviewContourLabels = ['rvFAC', 'laVolumeBiplane',
+        'laVolumeBiplaneDisks', 'lvSimpsonEF'].includes(rubricMeasurement?.measurementKind);
       const renderedSlots = new Set<string>();
       let renderedCount = 0;
 
@@ -17078,6 +17132,7 @@ function commandsModule({
           }
           native.isVisible = true;
           native.isLocked = true;
+          if (reviewContourLabels) positionViewerQuizComparisonTextBox(sourceId, viewport, entry.variant);
           cornerstoneTools.annotation.selection.setAnnotationSelected?.(
             sourceId, entry.variant === 'rubric' &&
               (!focusedCompositeSlot || entry.slot === focusedCompositeSlot)
@@ -17194,6 +17249,9 @@ function commandsModule({
           comparisonAnnotationId, focused
         );
         viewerQuizMeasurementComparisonAnnotationIds.add(comparisonAnnotationId);
+        if (reviewContourLabels) {
+          positionViewerQuizComparisonTextBox(comparisonAnnotationId, viewport, entry.variant);
+        }
         renderedCount += 1;
         if (entry.variant === 'learner') {
           learnerRendered = true;
@@ -17210,9 +17268,10 @@ function commandsModule({
       const endpointRadius = endpointToleranceMM === null || endpointToleranceMM === ''
         ? null : Number(endpointToleranceMM);
       const isIVC = rubricMeasurement?.measurementKind === 'ivcCollapsibility';
+      const isTRVmax = rubricMeasurement?.measurementKind === 'trVmax';
       const useEndpointTolerance =
         isIVC ? ivcEndpointToleranceEnabled === true
-          : rubricMeasurement?.measurementKind === 'length' &&
+          : ['length', 'trVmax'].includes(rubricMeasurement?.measurementKind) &&
             endpointRadius !== null;
       let toleranceCircleRendered = false;
       let endpointCirclesRendered = 0;
@@ -17244,7 +17303,7 @@ function commandsModule({
             (expectedInstanceFrame && activeImage.includes(expectedInstanceFrame))
           );
           // Composite phase geometry must only appear on its exact gold image/frame.
-          if (isIVC && !frameMatches) continue;
+          if ((isIVC || isTRVmax) && !frameMatches) continue;
           const points = getViewerQuizMeasurementPoints(part);
           if (points.length !== 2) continue;
           for (const coordinates of points) {
