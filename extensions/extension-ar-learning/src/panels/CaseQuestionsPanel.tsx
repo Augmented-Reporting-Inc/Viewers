@@ -3333,6 +3333,13 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       return;
     }
     lastActivatedQuestionRef.current = nextActiveQuestionKey;
+    // Remove review-only overlays before async navigation; preserve sources.
+    try {
+      await runViewerCommand(commandsManager, 'clearViewerQuizMeasurementComparison', {});
+    } catch (error) {
+      console.warn('[CaseQuestionsPanel] review overlay cleanup failed', error);
+    }
+    if (lastActivatedQuestionRef.current !== nextActiveQuestionKey) return;
     if (isNewQuestion) {
       setShownBowelGoldQuestionKey('');
       // The IVC measure-only setting must never leak into ordinary learner
@@ -3418,10 +3425,6 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
         });
       }
     };
-
-    try {
-      await runViewerCommand(commandsManager, 'clearViewerQuizMeasurementComparison', {});
-    } catch {}
 
     if (question.type === 'measurementNumeric') {
       const quizMeasurementDomain = authoringMode
@@ -7398,7 +7401,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
             {configuredEndpointToleranceMM != null ? (
               <div>
                 Configured endpoint tolerance: {formatReviewNumber(configuredEndpointToleranceMM, 2)} mm
-                at each gold caliper endpoint.
+                at each gold {compositeReviewKind === 'trVmax' ? 'TR spectral endpoint' : 'caliper endpoint'}.
               </div>
             ) : measurementRadius !== null && typeof measurementRadius !== 'undefined' ? (
               <>
@@ -7415,6 +7418,19 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                     : 'outside tolerance'}.
                 </div>
               </>
+            ) : null}
+            {correctAnswerVisible && compositeReviewKind === 'trVmax' &&
+              configuredEndpointToleranceMM != null ? (
+              <div className="mt-1">
+                TR Vmax endpoint placement: {reviewDetails.endpointScoring?.matched === true
+                  ? 'both endpoints within tolerance' : 'outside tolerance or verified source unavailable'}.
+                {Array.isArray(reviewDetails.endpointScoring?.endpointDistancesMM) &&
+                  reviewDetails.endpointScoring.endpointDistancesMM.length === 2 ? (
+                  <span> Endpoint distances: {reviewDetails.endpointScoring.endpointDistancesMM.map(
+                    (distance: number) => formatReviewNumber(distance, 2) + ' mm'
+                  ).join(' · ')}.</span>
+                ) : null}
+              </div>
             ) : null}
           </div>
         ) : null}
@@ -7538,7 +7554,8 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                           questionKey: question.questionKey,
                           radius: measurementRadius,
                           radiusUnit: measurementRadiusUnit,
-                          endpointToleranceMM: cleanString(plainObject(question.answerConfig).measurementKind) === 'length'
+                          endpointToleranceMM: ['length', 'trVmax'].includes(
+                             cleanString(plainObject(question.answerConfig).measurementKind))
                             ? plainObject(question.scoringConfig).endpointToleranceMM ?? null
                             : null,
                         }
@@ -8338,10 +8355,13 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               </div>
             ) : null}
 
-            {cleanString(answerConfig.measurementKind) === 'length' ? (
+            {['length', 'trVmax'].includes(cleanString(answerConfig.measurementKind)) ? (
               <div className="mt-3 text-xs text-gray-200">
                 <label className="block" htmlFor={`length-endpoint-tolerance-${question.questionKey}`}>
-                  {bowelSet ? 'Optional endpoint tolerance (mm; both ends of every gold BWT caliper)' : 'Optional endpoint tolerance (mm; both ends)'}
+                  {bowelSet ? 'Optional endpoint tolerance (mm; both ends of every gold BWT caliper)' :
+                    cleanString(answerConfig.measurementKind) === 'trVmax'
+                      ? 'Optional TR Vmax endpoint tolerance (mm; both spectral endpoints)' :
+                        'Optional endpoint tolerance (mm; both ends)'}
                 </label>
                 <input
                   id={`length-endpoint-tolerance-${question.questionKey}`}
@@ -8363,7 +8383,9 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                 <p className="mt-1 text-gray-400">
                   {bowelSet
                     ? 'When set, both endpoints of each learner caliper must match one distinct gold caliper within the configured radius, in addition to numeric accuracy and axial/angular separation. Leave blank for legacy scoring.'
-                    : 'When set, view both gold endpoint circles; leave empty for numeric-only grading unless a legacy centre radius is configured.'}
+                    : cleanString(answerConfig.measurementKind) === 'trVmax'
+                      ? 'When set, both source-verified learner TR spectral endpoints must be within this world-coordinate tolerance of the corresponding gold endpoints, as well as meeting the numeric velocity tolerance. Leave blank to keep legacy TR scoring.'
+                      : 'When set, view both gold endpoint circles; leave empty for numeric-only grading unless a legacy centre radius is configured.'}
                 </p>
                 {numberOrEmpty(plainObject(question.scoringConfig).radius) !== '' ? (
                   <button type="button"
