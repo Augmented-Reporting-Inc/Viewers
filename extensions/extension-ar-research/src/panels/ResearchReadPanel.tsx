@@ -5,7 +5,8 @@ import React, {
   useRef,
   useState,
 } from 'react';
-import { buildViewerMeasurementValueCandidates, EchoEFContourVolumes, getLVSimpsonSourceVolumes } from 'extension-ar-measurements';
+import { buildViewerMeasurementValueCandidates } from 'extension-ar-measurements';
+import { EchoEFContourVolumes, getLVSimpsonSourceVolumes } from '../../../extension-ar-measurements/src/components/EchoEFContourVolumes';
 import ResearchEchoGuidedControls from './ResearchEchoGuidedControls';
 import { reconcileResearchEchoCompositeAnswers } from '../utils/researchEchoAnswerBinding';
 import {
