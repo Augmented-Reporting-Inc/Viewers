@@ -298,6 +298,21 @@ describe('Research question-entry source frame navigation', () => {
     })).toBeNull();
   });
 
+  it('opens the configured EF A4C ED image even when phase keys are stored out of order', () => {
+    const ef = {
+      componentKey: 'lvEjectionFraction', config: {
+        compositeFrameTargets: {
+          A2C_ES: source(44), A4C_ES: source(21),
+          A4C_ED: source(2), A2C_ED: source(31),
+        },
+      },
+    };
+    expect(getResearchQuestionEntryTarget(ef)).toEqual(source(2));
+    expect(getResearchQuestionEntryTarget({
+      ...ef, config: { compositeFrameTargets: { A4C_ES: source(21) } },
+    })).toBeNull();
+  });
+
   it('preserves other composite question phase choice and single TR navigation', () => {
     expect(getResearchQuestionEntryTarget({
       componentKey: 'rvFac', config: {
