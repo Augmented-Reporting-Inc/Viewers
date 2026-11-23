@@ -44,14 +44,20 @@ export function reconcileResearchEchoCompositeAnswers(
       nextSources[field.key] = {
         source: update.source, sourceMeasurementKey: update.sourceMeasurementKey,
       };
-    } else if (
-      // A result linked to removed, changed or now invalid source evidence
-      // must not remain as a seemingly verified research answer.
-      getResearchProtocolViewerTargets(field).length > 0 ||
-      field?.config?.compositeFrameGuidanceEnabled === true
-    ) {
-      if (current.source === 'viewer-derived' ||
-          (String(field.componentKey) === 'ivcCollapsibility' && !compatible.length)) {
+    } else {
+      // Even an unpinned research protocol must not retain an old derived
+      // value after its source annotation was deleted or superseded. Do not
+      // replace it with another candidate unless the frame-pinned workflow
+      // or the reader's explicit source selection authorizes that binding.
+      const previousKey = String(current.sourceMeasurementKey || '').trim();
+      const previousStillValid = compatible.some(candidate =>
+        candidate.sourceMeasurementKey === previousKey
+      );
+      const fixedProtocol = getResearchProtocolViewerTargets(field).length > 0 ||
+        field?.config?.compositeFrameGuidanceEnabled === true;
+      if ((current.source === 'viewer-derived' && !previousStillValid) ||
+          (fixedProtocol && String(field.componentKey) === 'ivcCollapsibility' &&
+            !compatible.length)) {
         delete nextValues[field.key];
         delete nextSources[field.key];
       }
