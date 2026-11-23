@@ -15294,6 +15294,7 @@ function commandsModule({
       domain: explicitDomain = '',
       workflow = VIEWER_MEASUREMENTS_WORKFLOW,
       measurementIds = null,
+      includeResearchEchoContours = false,
     } = {}) => {
       const domain = String(explicitDomain || '').trim() || inferDomainWithoutSeriesDoc('');
       const restrictMeasurementIds = Array.isArray(measurementIds);
@@ -15316,7 +15317,19 @@ function commandsModule({
           const measurementId = String(measurement?.uid || '').trim();
           return (
             measurement?.toolName &&
-            isPersistableViewerMeasurement(measurement) &&
+            (
+              isPersistableViewerMeasurement(measurement) ||
+              // Research needs complete guided source evidence, including
+              // contour session records whose labels are intentionally blank.
+              // This is explicitly opt-in; leave all other serialization
+              // and persistence call sites unchanged.
+              (includeResearchEchoContours === true &&
+                workflow === VIEWER_MEASUREMENTS_WORKFLOW &&
+                domain === 'echo' &&
+                (isLVSimpsonMeasurement(measurement) ||
+                  isLAVolumeMeasurement(measurement) ||
+                  !!getEchoAreaSlot(measurement)))
+            ) &&
             (!restrictMeasurementIds || requestedMeasurementIds.has(measurementId))
           );
         })
