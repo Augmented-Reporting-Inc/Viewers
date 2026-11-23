@@ -47,7 +47,9 @@ function fixture(kind: string, numericValue = 62.37) {
 describe('Research source-backed composite answer capture', () => {
   beforeEach(() => mockCandidates.mockReset());
 
-  it.each(Object.keys(slots))('binds the verified %s composite and preserves answer provenance', kind => {
+  // The IVC path has its own calibrated Length/phase tests; synthetic EF/LA/RV
+  // fixtures below cover the newly unified answer-binding contracts.
+  it.each(['lvEjectionFraction', 'laVolumeDisks', 'rvFac'])('binds the verified %s composite and preserves answer provenance', kind => {
     const { field, candidate, annotations } = fixture(kind);
     mockCandidates.mockReturnValue([candidate]);
     const state = reconcileResearchEchoCompositeAnswers([field], {}, {}, annotations);
