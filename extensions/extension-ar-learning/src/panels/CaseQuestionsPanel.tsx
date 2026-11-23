@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState, useRef } from 'react';
-import { EchoEFContourVolumes } from 'extension-ar-measurements';
+import { EchoEFContourVolumes } from '../../../extension-ar-measurements/src/components/EchoEFContourVolumes';
 import {
   getViewerQuizAuthoringContent,
   getViewerQuizzesForActiveStudy,
