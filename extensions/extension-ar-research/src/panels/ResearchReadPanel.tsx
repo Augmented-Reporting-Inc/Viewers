@@ -22,6 +22,7 @@ import {
 } from '../utils/researchFramePicker';
 import {
   getResearchRapChoices,
+  getResearchEchoPhases,
   getResearchGroupedFields,
   getResearchQuestionLabel,
   isResearchQuestionAnswered,
@@ -274,6 +275,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
   const [selectedFieldKey, setSelectedFieldKey] = useState('');
   const [capturingProtocolFrame, setCapturingProtocolFrame] = useState(false);
   const [capturedProtocolFrame, setCapturedProtocolFrame] = useState('');
+  const [capturePhaseSelection, setCapturePhaseSelection] = useState('');
   const protocolFramePickerIntent = useMemo(
     () => getResearchFramePickerIntent(
       typeof window !== 'undefined' ? window.location.search : '',
@@ -281,6 +283,13 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
     ),
     []
   );
+  const isBatchFramePicker = protocolFramePickerIntent?.phaseKey === '__all__';
+  const capturePhases = isBatchFramePicker
+    ? getResearchEchoPhases({ componentKey: protocolFramePickerIntent.componentKey })
+    : [];
+  const capturePhaseKey = isBatchFramePicker
+    ? (capturePhaseSelection || capturePhases[0]?.slot || '')
+    : (protocolFramePickerIntent?.phaseKey || '');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [completing, setCompleting] = useState(false);
@@ -990,17 +999,22 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
         session: protocolFramePickerIntent.session,
         studyInstanceUID: protocolFramePickerIntent.studyInstanceUID,
         componentKey: protocolFramePickerIntent.componentKey,
-        phaseKey: protocolFramePickerIntent.phaseKey,
+        phaseKey: capturePhaseKey,
         target,
       }, protocolFramePickerIntent.parentOrigin);
       setCapturedProtocolFrame(
         'Captured frame ' + target.frameNumber +
         ' for ' + protocolFramePickerIntent.componentKey +
-        (protocolFramePickerIntent.phaseKey
-          ? ' / ' + protocolFramePickerIntent.phaseKey : '') +
+        (capturePhaseKey ? ' / ' + capturePhaseKey : '') +
         '. Return to Research Manager and click Save.'
       );
       notify(servicesManager, 'Frame sent to Research Manager. Save the protocol there.');
+      if (isBatchFramePicker) {
+        const currentIndex = capturePhases.findIndex(phase => phase.slot === capturePhaseKey);
+        if (currentIndex >= 0 && currentIndex + 1 < capturePhases.length) {
+          setCapturePhaseSelection(capturePhases[currentIndex + 1].slot);
+        }
+      }
     } catch (captureError) {
       console.warn('[AR Research] unable to capture authoring frame', captureError);
       notify(servicesManager,
@@ -1219,17 +1233,38 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
           <div className="font-semibold text-sm">Research protocol frame authoring</div>
           <p className="mt-1">
             Capture the source for {protocolFramePickerIntent.componentKey}
-            {protocolFramePickerIntent.phaseKey
+            {!isBatchFramePicker && protocolFramePickerIntent.phaseKey
               ? ' / ' + protocolFramePickerIntent.phaseKey : ''}.
             Select the correct instance and cine frame in the viewer first.
+            {isBatchFramePicker
+              ? ' Capture each phase here without reopening the viewer.' : ''}
           </p>
+          {isBatchFramePicker && capturePhases.length > 0 ? (
+            <label className="mt-2 block text-xs">
+              Contour / measurement phase
+              <select
+                className="mt-1 block w-full rounded border border-cyan-500 bg-gray-950 p-2 text-white"
+                value={capturePhaseKey}
+                disabled={capturingProtocolFrame}
+                onChange={event => setCapturePhaseSelection(event.target.value)}
+              >
+                {capturePhases.map(phase => (
+                  <option key={phase.slot} value={phase.slot}>{phase.label}</option>
+                ))}
+              </select>
+            </label>
+          ) : null}
           <button
             type="button"
             className="mt-2 rounded border border-cyan-500 bg-cyan-900 px-3 py-2 font-semibold text-white disabled:opacity-40"
             disabled={capturingProtocolFrame || !commandsManager}
             onClick={() => void captureCurrentProtocolFrame()}
           >
-            {capturingProtocolFrame ? 'Capturing current frame…' : 'Capture current frame'}
+            {capturingProtocolFrame
+              ? 'Capturing current frame…'
+              : isBatchFramePicker && capturePhaseKey
+                ? 'Capture ' + capturePhaseKey + ' frame'
+                : 'Capture current frame'}
           </button>
           {capturedProtocolFrame ? (
             <div role="status" className="mt-2 text-green-200">
