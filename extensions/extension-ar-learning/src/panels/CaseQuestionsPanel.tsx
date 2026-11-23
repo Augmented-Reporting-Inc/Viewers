@@ -6114,7 +6114,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                     await activateQuestionForPhaseCapture(quiz, question);
                     if (!(await ensureConfiguredCompositePhaseFrame(question, slot))) return;
                     for (const step of getEchoCompositeAcquisitionSteps(
-                      'laVolumeDisks', slot, choice.contourTechnique
+                      'laVolumeDisks', slot, choice.contourTechnique as 'freehand' | 'axisApex'
                     )) await runViewerCommand(commandsManager, step.name, step.payload);
                   })();
                 }}
