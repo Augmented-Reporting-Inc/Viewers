@@ -5,6 +5,7 @@ import { SharedQuestionSelector, SharedQuestionStepNavigation } from '../../../e
 import { SharedMeasurementValueInput } from '../../../extension-ar-measurements/src/components/SharedMeasurementValueInput';
 import { SharedQuestionCard } from '../../../extension-ar-measurements/src/components/SharedQuestionCard';
 import { LearningEchoAcquisitionControls } from '../components/LearningEchoAcquisitionControls';
+import LearningQuestionPanel from './LearningQuestionPanel';
 import { getEchoCompositeAcquisitionSteps } from '../../../extension-ar-measurements/src/utils/echoCompositeAcquisition';
 import { EchoContourTechniqueButtons } from '../../../extension-ar-measurements/src/components/EchoContourTechniqueButtons';
 import {
@@ -8677,6 +8678,140 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
 
   const learnerPanelTitle =
     quizzes.length === 1 ? cleanString(quizzes[0]?.title) || 'Case Questions' : 'Case Questions';
+
+  // Learning is the reference implementation of the shared panel. A normal,
+  // single-quiz learner sees the exact same question renderer used by Research.
+  // Keep combined/multi-quiz, scoring review, and educator authoring in their
+  // established implementations until each has dedicated regression coverage.
+  if (hasLearnerQuizContent && quizzes.length === 1 && !scoredReviewReadOnly) {
+    const quiz = quizzes[0];
+    const questions = [...(quiz.questions || [])]
+      .sort((a, b) => Number(a.sortOrder || 0) - Number(b.sortOrder || 0));
+    const selected = questions.find(question =>
+      activeQuestionKey === `${quiz.quizKey}:${question.questionKey}`);
+    const index = selected ? questions.indexOf(selected) : -1;
+    const response = getResponseForQuiz(responses, quiz);
+    const submitted = cleanString(response?.status).toLowerCase() === 'submitted';
+    const quizScore = viewerQuizScore ? getQuizScoreItem(viewerQuizScore, quiz) : null;
+    const quizSaving = savingQuizKey === quiz.quizKey;
+    const quizScoring = scoringQuizKey === quiz.quizKey;
+    const saveButtonLabels = getLearnerQuizSaveButtonLabels({
+      quizSaving, savingAction: savingQuizAction, deferredReportScoring,
+    });
+    const footerVisible = learnerFooterQuizzes.some(item => item.quizKey === quiz.quizKey);
+    const questionLocked = submitted || scoredReviewReadOnly;
+
+    return (
+      <LearningQuestionPanel
+        title={learnerPanelTitle}
+        groups={[{
+          key: `${quiz.quizKey}:${quiz.quizVersion}`,
+          label: quiz.title || 'Case Questions',
+          questions: questions.map(question => ({
+            key: `${quiz.quizKey}:${question.questionKey}`,
+            label: question.title || question.prompt || question.questionKey,
+            answered: isLearnerQuestionAnswered(
+              question, answersByQuizKey?.[quiz.quizKey]?.[question.questionKey]
+            ),
+          })),
+        }]}
+        selectedKey={selected ? `${quiz.quizKey}:${selected.questionKey}` : ''}
+        selectedQuestion={selected ? {
+          key: selected.questionKey,
+          index,
+          title: selected.title || selected.prompt || selected.questionKey,
+          prompt: selected.title ? selected.prompt : '',
+          helpText: selected.helpText,
+          required: selected.required,
+          hasViewerTarget: !!getQuestionViewerTarget(selected) &&
+            !(selected.type === 'frameSelection' &&
+              !shouldGuideFrameSelectionToInstance(selected)),
+        } : null}
+        onSelect={key => {
+          const question = questions.find(item => key ===
+            `${quiz.quizKey}:${item.questionKey}`);
+          if (question) void selectQuestion(quiz, question);
+        }}
+        disabled={!!capturingMeasurementKey || !!capturingFrameKey ||
+          !!capturingPointKey || quizSaving}
+        readOnly={questionLocked}
+        description={getLearnerQuizDescription(quiz)}
+        topContent={
+          <>
+            {viewerQuizScore ? (
+              <div className="bg-green-950/30 rounded border border-green-700 p-2 text-sm">
+                <div className="font-semibold">Viewer Quiz Score</div>
+                <div>{Number(viewerQuizScore.total || 0)} / {Number(viewerQuizScore.max || 0)}</div>
+              </div>
+            ) : null}
+            {submitted ? (
+              <div className="bg-green-950/30 rounded border border-green-700 p-2 text-sm text-green-100">
+                <div className="font-semibold">Submitted</div>
+                {quizScore
+                  ? 'Score: ' + Number(quizScore.total || 0) + ' / ' + Number(quizScore.max || 0)
+                  : 'Your answers have been submitted, but no score is available yet.'}
+              </div>
+            ) : null}
+          </>
+        }
+        questionContent={selected ? (
+          <>
+            {renderQuestion(quiz, selected, questionLocked)}
+            {renderQuestionReview(quiz, selected, quizScore)}
+          </>
+        ) : null}
+        footer={footerVisible ? (
+          submitted && deferredReportScoring ? (
+            <div className="text-xs text-green-200">
+              Answers submitted. Return to the report and select Submit for Scoring.
+            </div>
+          ) : submitted && !quizScore ? (
+            <div className="space-y-2">
+              <div className="text-xs text-green-200">
+                Submitted, but no score is available yet.
+              </div>
+              <button type="button"
+                className="w-full rounded bg-green-700 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                disabled={quizSaving || quizScoring || submitting}
+                onClick={() => retryScoreQuiz(quiz)}>
+                {quizScoring ? 'Scoring…' : 'Retry scoring'}
+              </button>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+              <button type="button"
+                className="rounded bg-blue-600 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                disabled={quizSaving || submitting}
+                onClick={() => saveQuiz(quiz, 'draft')}>
+                {saveButtonLabels.draft}
+              </button>
+              <button type="button"
+                className="rounded bg-green-600 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                disabled={quizSaving || submitting}
+                onClick={() => saveQuiz(quiz, 'submitted')}>
+                {saveButtonLabels.submit}
+              </button>
+            </div>
+          )
+        ) : null}
+        overlay={
+          <ClinicalReportMeasurementReviewModal
+            review={quizMeasurementReview}
+            selectedRowKeys={quizMeasurementSelectedRows}
+            showReviewBeforeSave={true}
+            isSaving={quizMeasurementApplying}
+            onToggleRow={key => setQuizMeasurementSelectedRows(current =>
+              current.includes(key) ? current.filter(item => item !== key) : [...current, key])}
+            onToggleAll={selectAll => setQuizMeasurementSelectedRows(
+              selectAll ? quizMeasurementReview?.rows.map(row => row.key) || [] : [])}
+            onPreferenceChange={() => {}}
+            onCancel={() => finishQuizMeasurementReview(false)}
+            onApply={applyQuizMeasurementReview}
+          />
+        }
+      />
+    );
+  }
 
   return (
     <div className="flex h-full min-h-0 min-w-0 max-w-full flex-col overflow-x-hidden bg-black text-white">
