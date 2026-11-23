@@ -6,6 +6,7 @@ import React, {
   useState,
 } from 'react';
 import { buildViewerMeasurementValueCandidates } from 'extension-ar-measurements';
+import { ViewerQuestionCard, ViewerQuestionNavigation } from '../../../extension-ar-measurements/src/panels/ViewerQuestionChrome';
 import ResearchEchoGuidedControls from './ResearchEchoGuidedControls';
 import {
   getResearchFramePickerIntent,
@@ -1099,7 +1100,8 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
   );
 
   return (
-    <div className="h-full overflow-auto p-3 text-white">
+    <div className="flex h-full min-h-0 min-w-0 max-w-full flex-col overflow-x-hidden bg-black text-white">
+      <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto p-3">
       <div className="mb-3 rounded border border-gray-700 bg-gray-950 p-3">
         <div className="text-sm font-semibold">{title}</div>
         <div className="mt-1 text-xs text-gray-400">
@@ -1188,27 +1190,20 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
             </option>;
           })}
         </select>
-        <div className="mt-2 flex items-center justify-between gap-2">
-          <span className="text-xs text-gray-400">{completedFields}/{visibleFields.length} questions answered</span>
-          <div className="flex items-center gap-1">
-            <button
-              type="button"
-              className="rounded border border-gray-600 px-2 py-1 text-xs text-gray-200 disabled:opacity-40"
-              disabled={isBusy || visibleFields.indexOf(selectedField) <= 0}
-              onClick={() => selectField(visibleFields[visibleFields.indexOf(selectedField) - 1].key)}
-            >Previous</button>
-            <button
-              type="button"
-              className="rounded border border-gray-600 px-2 py-1 text-xs text-gray-200 disabled:opacity-40"
-              disabled={isBusy || visibleFields.indexOf(selectedField) >= visibleFields.length - 1}
-              onClick={() => selectField(visibleFields[visibleFields.indexOf(selectedField) + 1].key)}
-            >Next</button>
-          </div>
+        <div className="mt-2 text-xs text-gray-400">
+          {completedFields}/{visibleFields.length} questions answered
         </div>
       </div>
 
       {selectedField ? (
-        <div className="space-y-2">
+        <ViewerQuestionCard
+          number={visibleFields.indexOf(selectedField) + 1}
+          title={getResearchQuestionLabel(selectedField, fields, readDomain)}
+          required={selectedField.required}
+          helpText={cleanString(selectedField?.config?.helpText)}
+          active={true}
+        >
+        <div className="space-y-2 mt-3">
           {!showGuidedIVCValue ? (
             <ReadField
               key={selectedField.key}
@@ -1358,6 +1353,13 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
             </div>
           ) : null}
         </div>
+        <ViewerQuestionNavigation
+          index={visibleFields.indexOf(selectedField)}
+          count={visibleFields.length}
+          disabled={isBusy}
+          onNavigate={index => selectField(visibleFields[index].key)}
+        />
+        </ViewerQuestionCard>
       ) : null}
 
       {!context.preview && unlinkedAnnotations.length ? (
@@ -1382,8 +1384,9 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
         </details>
       ) : null}
 
+      </div>
       {!context.preview && !context.readOnly ? (
-        <div className="sticky bottom-0 mt-4 border-t border-gray-700 bg-black/95 pt-3">
+        <div className="shrink-0 border-t border-gray-700 bg-black p-3">
           {missingRequired.length ? (
             <div className="mb-2 text-xs text-yellow-300">
               {missingRequired.length} required field
