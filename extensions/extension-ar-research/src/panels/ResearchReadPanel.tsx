@@ -237,6 +237,9 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
   const [values, setValues] = useState<Record<string, any>>({});
   const [valueSources, setValueSources] = useState<Record<string, any>>({});
   const [viewerCandidates, setViewerCandidates] = useState<any[] | null>(null);
+  const [liveVerifiedEchoEvidence, setLiveVerifiedEchoEvidence] = useState<{
+    candidates: any[]; efVolumes: Record<string, number | null>;
+  }>({ candidates: [], efVolumes: {} });
   const valueSourcesRef = useRef<Record<string, any>>({});
   const [savedAnnotations, setSavedAnnotations] = useState<any[]>([]);
   const [liveAnnotations, setLiveAnnotations] = useState<any[]>([]);
@@ -283,6 +286,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
       deletedAnnotationIdsRef.current = new Set();
       pendingIVCReplacementRef.current = null;
       setLiveAnnotations([]);
+      setLiveVerifiedEchoEvidence({ candidates: [], efVolumes: {} });
       setViewerCandidates(buildViewerMeasurementValueCandidates(persistedAnnotations));
       setSavedAnnotations(persistedAnnotations);
     } catch (loadError) {
@@ -337,13 +341,14 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
     // source-annotation snapshot. Education and Research share the calculation
     // engines; Research retains its own ReadSchema values and ownership.
     const reconciled = reconcileResearchEchoCompositeAnswers(
-      fields, values, valueSources, allAnnotations
+      fields, values, valueSources, allAnnotations,
+      liveVerifiedEchoEvidence.candidates
     );
     return buildCalculatedReadState(
       fields, reconciled.values, reconciled.sources, viewerCandidates
     );
   }, [context?.readOnly, context?.preview, fields, values, valueSources,
-      viewerCandidates, allAnnotations]);
+      viewerCandidates, allAnnotations, liveVerifiedEchoEvidence.candidates]);
   const missingRequired = useMemo(
     () => getMissingRequiredReadFields(fields, calculatedReadState.values),
     [fields, calculatedReadState.values]
@@ -404,8 +409,21 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
       const available = mergeMeasurementAnnotations(
         savedAnnotations, snapshot, deletedAnnotationIdsRef.current
       );
-      const candidates = buildViewerMeasurementValueCandidates(available);
-
+      const evidence = serialized?.researchEchoEvidence || {};
+      const liveVerified = (Array.isArray(evidence.candidates)
+        ? evidence.candidates : []).filter(candidate =>
+        getResearchSourceAnnotationIds(candidate?.sourceMeasurementKey).every(id =>
+          available.some(item => getAnnotationKey(item) === id)
+        )
+      );
+      setLiveVerifiedEchoEvidence({
+        candidates: liveVerified,
+        efVolumes: evidence.efVolumes || {},
+      });
+      const candidates = [
+        ...buildViewerMeasurementValueCandidates(available),
+        ...liveVerified,
+      ];
       setViewerCandidates(candidates);
       const updates = fields.flatMap(field => {
         const compatible = getResearchCompatibleMeasurementCandidates(
@@ -649,7 +667,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
   ]);
 
   const captureViewerAnnotations = useCallback(async () => {
-    if (!commandsManager) return savedAnnotations;
+    if (!commandsManager) throw new Error('Viewer measurement service unavailable');
 
     try {
       const serialized = await commandsManager.runCommand(
@@ -661,19 +679,21 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
         }
       );
 
-      return mergeMeasurementAnnotations(
-        savedAnnotations,
-        Array.isArray(serialized?.annotations) ? serialized.annotations : [],
-        deletedAnnotationIdsRef.current
-      );
+      return {
+        annotations: mergeMeasurementAnnotations(
+          savedAnnotations,
+          Array.isArray(serialized?.annotations) ? serialized.annotations : [],
+          deletedAnnotationIdsRef.current
+        ),
+        verifiedCandidates: Array.isArray(serialized?.researchEchoEvidence?.candidates)
+          ? serialized.researchEchoEvidence.candidates : [],
+      };
     } catch (captureError) {
       console.warn(
         '[AR Research] viewer measurement capture failed; preserving saved annotations',
         captureError
       );
-      return savedAnnotations.filter(annotation =>
-        !deletedAnnotationIdsRef.current.has(getAnnotationKey(annotation))
-      );
+      throw new Error('Could not capture current viewer annotations. Research Read was not saved.');
     }
   }, [commandsManager, context?.readSchema?.domain, savedAnnotations]);
 
@@ -686,11 +706,21 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
     setError('');
 
     try {
-      const measurementAnnotations = await captureViewerAnnotations();
+      const captured = await captureViewerAnnotations();
+      const measurementAnnotations = captured.annotations;
       // Recompute against the exact annotations being persisted. Otherwise a
       // fresh toolbar measurement can race the React event/state update and
       // save as an unlinked viewer annotation with an empty numeric field.
-      const latestCandidates = buildViewerMeasurementValueCandidates(measurementAnnotations);
+      const validCapturedIds = new Set(measurementAnnotations.map(getAnnotationKey));
+      const freshVerified = captured.verifiedCandidates.filter(candidate =>
+        getResearchSourceAnnotationIds(candidate?.sourceMeasurementKey).every(id =>
+          validCapturedIds.has(id)
+        )
+      );
+      const latestCandidates = [
+        ...buildViewerMeasurementValueCandidates(measurementAnnotations),
+        ...freshVerified,
+      ];
       const freshUpdates = fields.flatMap(field => {
         const compatible = getResearchCompatibleMeasurementCandidates(
           field, latestCandidates, measurementAnnotations
@@ -703,7 +733,8 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
       // Save must use the same verified derived values shown in the question,
       // even if the last MeasurementService event has not yet been delivered.
       const reconciled = reconcileResearchEchoCompositeAnswers(
-        fields, values, valueSourcesRef.current, measurementAnnotations
+        fields, values, valueSourcesRef.current, measurementAnnotations,
+        freshVerified
       );
       const latestValues = { ...reconciled.values };
       const latestSources = { ...reconciled.sources };
@@ -1078,7 +1109,10 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
   // verified single-view calculator and display component as Education.
   // This is presentation only; Research ReadSchema owns the numeric answer.
   const efVolumes = selectedField?.componentKey === 'lvEjectionFraction'
-    ? getLVSimpsonSourceVolumes(allAnnotations) : {};
+    ? {
+        ...getLVSimpsonSourceVolumes(allAnnotations),
+        ...liveVerifiedEchoEvidence.efVolumes,
+      } : {};
   const protocolTargets = selectedField ? getResearchProtocolViewerTargets(selectedField) : [];
   const guidedOwnsProtocolFrames = readDomain === 'echo' &&
     ['trVmax', 'lvEjectionFraction', 'laVolumeDisks', 'rvFac', 'ivcCollapsibility']
