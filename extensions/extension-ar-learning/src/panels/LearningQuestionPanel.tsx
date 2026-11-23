@@ -32,6 +32,8 @@ export function LearningQuestionPanel({
   selectedKey,
   selectedQuestion,
   onSelect,
+  onActivateSelected,
+  onFocusActivateSelected,
   disabled = false,
   readOnly = false,
   loading = false,
@@ -50,6 +52,8 @@ export function LearningQuestionPanel({
   selectedKey: string;
   selectedQuestion?: LearningQuestionPanelQuestion | null;
   onSelect: (key: string) => void;
+  onActivateSelected?: () => void;
+  onFocusActivateSelected?: (event: React.FocusEvent<HTMLDivElement>) => void;
   disabled?: boolean;
   readOnly?: boolean;
   loading?: boolean;
@@ -125,6 +129,8 @@ export function LearningQuestionPanel({
                     helpText={selectedQuestion.helpText}
                     required={selectedQuestion.required}
                     hasViewerTarget={selectedQuestion.hasViewerTarget}
+                    onActivate={onActivateSelected}
+                    onFocusActivate={onFocusActivateSelected}
                   >
                     {questionContent}
                     <SharedQuestionStepNavigation
