@@ -10,7 +10,7 @@ import { EchoEFContourVolumes, getLVSimpsonSourceVolumes } from '../../../extens
 import { EchoCompositeResultStatus } from '../../../extension-ar-measurements/src/components/EchoCompositeResultStatus';
 import { SharedQuestionSelector, SharedQuestionStepNavigation } from '../../../extension-ar-measurements/src/components/SharedQuestionNavigation';
 import { SharedMeasurementValueInput } from '../../../extension-ar-measurements/src/components/SharedMeasurementValueInput';
-import { SharedQuestionCard } from '../../../extension-ar-measurements/src/components/SharedQuestionCard';
+import LearningQuestionPanel from '../../../extension-ar-learning/src/panels/LearningQuestionPanel';
 import ResearchEchoGuidedControls from './ResearchEchoGuidedControls';
 import { reconcileResearchEchoCompositeAnswers } from '../utils/researchEchoAnswerBinding';
 import { getResearchMeasurementToolForField } from '../utils/researchMeasurementTool';
@@ -1155,36 +1155,47 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
     isResearchQuestionAnswered(field, fields, calculatedReadState.values, readDomain)
   ).length;
 
+  // The Research controller retains its Research Review contract, verified
+  // DICOM source evidence and completion authorization. The rendered panel
+  // itself is the same LearningQuestionPanel used by Education.
   return (
-    <div className="h-full overflow-auto p-3 text-white">
-      <div className="mb-3 rounded border border-gray-700 bg-gray-950 p-3">
-        <div className="text-sm font-semibold">{title}</div>
-        <div className="mt-1 text-xs text-gray-400">
-          {cleanString(context?.imagingProfile?.label) ||
-            cleanString(context?.imagingProfileKey) ||
-            'Research imaging profile'}
-          {' - '}
-          {cleanString(context?.readSchema?.schemaKey)}
-          {context?.readSchema?.schemaVersion
-            ? ` v${context.readSchema.schemaVersion}`
-            : ''}
-        </div>
-        <div className="mt-2 flex flex-wrap gap-2 text-xs">
-          <span className="rounded bg-gray-800 px-2 py-1">
+    <LearningQuestionPanel
+      title={title}
+      groups={[{
+        key: 'research-read-fields',
+        questions: visibleFields.map(field => ({
+          key: field.key,
+          label: getResearchQuestionLabel(field, fields, readDomain),
+          answered: isResearchQuestionAnswered(
+            field, fields, calculatedReadState.values, readDomain
+          ),
+          required: field.required,
+        })),
+      }]}
+      selectedKey={selectedField?.key || ''}
+      selectedQuestion={selectedField ? {
+        key: selectedField.key,
+        index: visibleFields.indexOf(selectedField),
+        title: getResearchQuestionLabel(selectedField, fields, readDomain),
+        required: selectedField.required,
+        hasViewerTarget: getResearchProtocolViewerTargets(selectedField).length > 0,
+      } : null}
+      onSelect={selectField}
+      disabled={isBusy}
+      readOnly={context.readOnly}
+      selectorTitle="Question"
+      description={
+        (cleanString(context?.imagingProfile?.label) ||
+          cleanString(context?.imagingProfileKey) || 'Research imaging profile') +
+        ' · ' + cleanString(context?.readSchema?.schemaKey) +
+        (context?.readSchema?.schemaVersion ? ' v' + context.readSchema.schemaVersion : '')
+      }
+      topContent={
+        <>
+          <div className="text-xs text-gray-400">
             {context.preview ? 'Protocol preview' : reviewStatus}
-          </span>
-          {context.readOnly ? (
-            <span className="rounded bg-yellow-950 px-2 py-1 text-yellow-200">
-              Read-only
-            </span>
-          ) : (
-            <span className="rounded bg-green-950 px-2 py-1 text-green-200">
-              Editable
-            </span>
-          )}
-        </div>
-      </div>
-
+            {' · '}{completedFields}/{visibleFields.length} questions answered
+          </div>
       {context.preview ? (
         <div className="mb-3 rounded border border-blue-900 bg-blue-950 p-3 text-xs text-blue-100">
           Protocol preview. Fields are shown exactly as readers will receive them;
@@ -1216,55 +1227,10 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
           ) : null}
         </div>
       ) : null}
-
-      {error ? (
-        <div className="mb-3 rounded border border-red-800 bg-red-950 p-3 text-sm text-red-100">
-          {error}
-        </div>
-      ) : null}
-
-      <div className="mb-3 rounded border border-gray-700 bg-gray-950 p-3">
-        <SharedQuestionSelector
-          id="research-read-field-select"
-          title="Question / measurement"
-          selectedKey={selectedField?.key || ''}
-          disabled={isBusy}
-          groups={[{
-            key: 'research-read-fields',
-            questions: visibleFields.map(field => ({
-              key: field.key,
-              label: getResearchQuestionLabel(field, fields, readDomain),
-              answered: isResearchQuestionAnswered(
-                field, fields, calculatedReadState.values, readDomain
-              ),
-              required: field.required,
-            })),
-          }]}
-          onSelect={selectField}
-        />
-        <div className="mt-2 flex items-center justify-between gap-2">
-          <span className="text-xs text-gray-400">
-            {completedFields}/{visibleFields.length} questions answered
-          </span>
-          <SharedQuestionStepNavigation
-            compact
-            disabled={isBusy}
-            previousKey={visibleFields[visibleFields.indexOf(selectedField) - 1]?.key || ''}
-            nextKey={visibleFields[visibleFields.indexOf(selectedField) + 1]?.key || ''}
-            onNavigate={selectField}
-          />
-        </div>
-      </div>
-
-      {selectedField ? (
-        <SharedQuestionCard
-          id={selectedField.key}
-          index={visibleFields.indexOf(selectedField)}
-          title={getResearchQuestionLabel(selectedField, fields, readDomain)}
-          required={selectedField.required}
-          active
-          hasViewerTarget={!!getResearchProtocolViewerTargets(selectedField).length}
-        >
+        </>
+      }
+      questionContent={
+        <>
           {!showGuidedIVCValue ? (
             <ReadField
               key={selectedField.key}
@@ -1445,11 +1411,10 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
               ) : null}
             </div>
           ) : null}
-        </SharedQuestionCard>
-      ) : null}
-
-      {!context.preview && !context.readOnly ? (
-        <div className="sticky bottom-0 mt-4 border-t border-gray-700 bg-black/95 pt-3">
+        </>
+      }
+      footer={!context.preview && !context.readOnly ? (
+        <div className="space-y-2">
           {missingRequired.length ? (
             <div className="mb-2 text-xs text-yellow-300">
               {missingRequired.length} required field
@@ -1476,6 +1441,6 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
           </div>
         </div>
       ) : null}
-    </div>
+    />
   );
 }
