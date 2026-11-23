@@ -512,6 +512,14 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
       !getResearchSourceAnnotationIds(candidate?.sourceMeasurementKey)
         .some(id => removed.has(id))
     ));
+    setLiveVerifiedEchoEvidence(current => ({
+      candidates: current.candidates.filter(candidate =>
+        !getResearchSourceAnnotationIds(candidate?.sourceMeasurementKey)
+          .some(id => removed.has(id))
+      ),
+      // Clear live slot readouts until the post-deletion snapshot is verified.
+      efVolumes: {},
+    }));
     const affected = new Set(Object.entries(valueSourcesRef.current)
       .filter(([, source]) =>
         getResearchSourceAnnotationIds(source?.sourceMeasurementKey)
@@ -678,6 +686,9 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
           includeResearchEchoContours: true,
         }
       );
+      if (!Array.isArray(serialized?.annotations)) {
+        throw new Error('Viewer measurement snapshot is unavailable');
+      }
 
       return {
         annotations: mergeMeasurementAnnotations(
