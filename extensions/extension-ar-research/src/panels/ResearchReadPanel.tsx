@@ -11,6 +11,7 @@ import { EchoCompositeResultStatus } from '../../../extension-ar-measurements/sr
 import { SharedQuestionSelector, SharedQuestionStepNavigation } from '../../../extension-ar-measurements/src/components/SharedQuestionNavigation';
 import { SharedMeasurementValueInput } from '../../../extension-ar-measurements/src/components/SharedMeasurementValueInput';
 import LearningQuestionPanel from '../../../extension-ar-learning/src/panels/LearningQuestionPanel';
+import { LearningSingleChoiceAnswer } from '../../../extension-ar-learning/src/components/LearningSingleChoiceAnswer';
 import ResearchEchoGuidedControls from './ResearchEchoGuidedControls';
 import { reconcileResearchEchoCompositeAnswers } from '../utils/researchEchoAnswerBinding';
 import { getResearchMeasurementToolForField } from '../utils/researchMeasurementTool';
@@ -191,7 +192,17 @@ function ReadField({
         </div>
       ) : null}
 
-      {options.length > 0 ? (
+      {options.length > 0 && field.componentKey !== 'rap' ? (
+        <LearningSingleChoiceAnswer
+          name={field.key}
+          choices={options}
+          value={value}
+          disabled={disabled || calculated}
+          onChange={onChange}
+        />
+      ) : options.length > 0 ? (
+        // RAP is a clinical numeric interpretation; Learning also uses
+        // a dropdown for RAP. Never infer it from IVC automatically.
         <select
           className="w-full rounded border border-gray-600 bg-black px-3 py-2 text-sm text-white"
           value={value ?? ''}
