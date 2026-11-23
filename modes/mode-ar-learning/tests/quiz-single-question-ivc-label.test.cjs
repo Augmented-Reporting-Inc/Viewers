@@ -25,7 +25,7 @@ test('learner question dropdown uses saved selection and only renders its questi
   assert.match(panel, /value=\{quizzes\.some\(quiz/);
   assert.match(panel, /if \(question\) \{\s*void selectQuestion\(quiz, question\);/);
   assert.match(panel, /if \(activeQuestionKey !== questionSelectionKey\) return null;/);
-  assert.match(panel, /\{renderQuestion\(quiz, question, submitted\)\}/);
+  assert.match(panel, /\{renderQuestion\(quiz, question, submitted \|\| scoredReviewReadOnly\)\}/);
   assert.match(panel, /\{renderQuestionReview\(quiz, question, quizScore\)\}/);
 });
 
@@ -41,11 +41,16 @@ test('explicit learner IVC phase navigates exactly and retains the normal calibr
   const end = panel.indexOf('\n  function ', start + 1);
   assert.ok(start >= 0, 'IVC phase control exists');
   const ivcControls = panel.slice(start, end > start ? end : undefined);
-  assert.match(ivcControls, /ensureConfiguredCompositePhaseFrame\(question, phase\.slot\)/);
+  assert.match(ivcControls, /ensureConfiguredCompositePhaseFrame\(question, slot\)/);
   assert.match(ivcControls, /resetViewerLengthLabelMode'/);
   assert.match(ivcControls, /'activateViewerMeasurementTool'/);
   assert.match(ivcControls, /toolName: 'Length', stopCine: true/);
-  assert.match(ivcControls, /label it IVCexp or IVCinsp respectively/);
+  const sharedPhaseControls = fs.readFileSync(path.join(
+    __dirname, '..', '..', '..', 'extensions', 'extension-ar-measurements',
+    'src', 'panels', 'ViewerEchoPhaseControls.tsx'
+  ), 'utf8');
+  assert.match(sharedPhaseControls, /label it IVCexp or IVCinsp respectively/);
+  assert.match(ivcControls, /kind="ivcCollapsibility"/);
   assert.doesNotMatch(ivcControls, /labelMode: 'measure-only'/,
     'a global measure-only override would suppress labels on other quiz questions');
   assert.match(commands, /measurement\?\.toolName === 'Length'/);
