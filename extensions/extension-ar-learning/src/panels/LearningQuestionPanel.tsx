@@ -43,6 +43,7 @@ export function LearningQuestionPanel({
   topContent,
   questionContent,
   footer,
+  overlay,
 }: {
   title: string;
   groups: QuestionNavigationGroup[];
@@ -60,6 +61,7 @@ export function LearningQuestionPanel({
   topContent?: ReactNode;
   questionContent?: ReactNode;
   footer?: ReactNode;
+  overlay?: ReactNode;
 }) {
   const questions = groups.flatMap(group => group.questions);
   const index = questions.findIndex(question => question.key === selectedKey);
@@ -141,6 +143,7 @@ export function LearningQuestionPanel({
       {footer ? (
         <div className="shrink-0 border-t border-gray-700 bg-black p-3">{footer}</div>
       ) : null}
+      {overlay}
     </div>
   );
 }
