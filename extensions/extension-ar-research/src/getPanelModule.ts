@@ -6,8 +6,8 @@ export default function getPanelModule({ servicesManager, commandsManager }) {
     {
       name: 'researchRead',
       iconName: 'tab-linear',
-      iconLabel: 'Research Read',
-      label: 'Research Read',
+      iconLabel: 'Questions',
+      label: 'Case Questions',
       component: props =>
         React.createElement(ResearchReadPanel, {
           ...props,
