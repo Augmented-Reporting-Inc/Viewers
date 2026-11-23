@@ -5,6 +5,7 @@ import { SharedQuestionSelector, SharedQuestionStepNavigation } from '../../../e
 import { SharedMeasurementValueInput } from '../../../extension-ar-measurements/src/components/SharedMeasurementValueInput';
 import { SharedQuestionCard } from '../../../extension-ar-measurements/src/components/SharedQuestionCard';
 import { LearningEchoAcquisitionControls } from '../components/LearningEchoAcquisitionControls';
+import { LearningEFPanelLauncher } from '../components/LearningEFPanelLauncher';
 import LearningQuestionPanel from './LearningQuestionPanel';
 import { getEchoCompositeAcquisitionSteps } from '../../../extension-ar-measurements/src/utils/echoCompositeAcquisition';
 import { EchoContourTechniqueButtons } from '../../../extension-ar-measurements/src/components/EchoContourTechniqueButtons';
@@ -6803,33 +6804,36 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
             )}
 
 
+          {!bowelSet && cleanString(plainObject(question.answerConfig).measurementKind) === 'lvSimpsonEF' ? (
+            <LearningEFPanelLauncher
+              disabled={disabled || captureInProgress}
+              onOpen={() => void runViewerCommand(commandsManager, 'activateViewerQuizMeasurementTool', {
+                measurementKind: 'lvSimpsonEF',
+                questionKey: question.questionKey,
+                efContourTargets: getCompleteEFContourFrameTargets(question.answerConfig),
+              })}
+            />
+          ) : null}
+
           {!bowelSet && (linkedRVSP || ['laVolumeBiplane',
-            'laVolumeBiplaneDisks', 'lvSimpsonEF'].includes(
+            'laVolumeBiplaneDisks'].includes(
               cleanString(plainObject(question.answerConfig).measurementKind)
-            )) ? <button
-            type="button"
-            className="rounded border border-gray-600 px-2 py-1 text-[11px] text-gray-300 hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-50"
-            disabled={disabled || captureInProgress}
-            onClick={event => {
-              event.preventDefault();
-              event.stopPropagation();
-              if (cleanString(plainObject(question.answerConfig).measurementKind) === 'lvSimpsonEF') {
-                void runViewerCommand(commandsManager, 'activateViewerQuizMeasurementTool', {
-                  measurementKind: 'lvSimpsonEF', questionKey: question.questionKey,
-                  efContourTargets: getCompleteEFContourFrameTargets(question.answerConfig),
-                });
-              } else {
+            )) ? (
+            <button
+              type="button"
+              className="rounded border border-gray-600 px-2 py-1 text-[11px] text-gray-300 hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-50"
+              disabled={disabled || captureInProgress}
+              onClick={event => {
+                event.preventDefault();
+                event.stopPropagation();
                 void captureSelectedMeasurementAnswer(quiz, question);
-              }
-            }}
-          >
-            {captureInProgress
-              ? 'Capturing…'
-              : linkedRVSP
-                ? 'Accept IVC / RAP / RVSP measurement'
-              : cleanString(plainObject(question.answerConfig).measurementKind) === 'lvSimpsonEF'
-                ? 'Open EF panel' : 'Recalculate from measured contours'}
-          </button> : null}
+              }}
+            >
+              {captureInProgress ? 'Capturing…'
+                : linkedRVSP ? 'Accept IVC / RAP / RVSP measurement'
+                : 'Recalculate from measured contours'}
+            </button>
+          ) : null}
 
           {cleanString(plainObject(question.answerConfig).measurementKind) === 'lvSimpsonEF' ? (() => {
             const key = quiz.quizKey + ':' + question.questionKey;
