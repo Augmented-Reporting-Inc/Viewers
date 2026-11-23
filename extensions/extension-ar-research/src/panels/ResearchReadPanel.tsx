@@ -5,7 +5,7 @@ import React, {
   useRef,
   useState,
 } from 'react';
-import { buildViewerMeasurementValueCandidates } from 'extension-ar-measurements';
+import { buildViewerMeasurementValueCandidates, EchoEFContourVolumes, getLVSimpsonSourceVolumes } from 'extension-ar-measurements';
 import ResearchEchoGuidedControls from './ResearchEchoGuidedControls';
 import {
   getResearchFramePickerIntent,
@@ -1066,6 +1066,12 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
     ? getResearchFieldSourceAnnotations(
         calculatedReadState.sources[selectedField.key], allAnnotations, selectedCandidates
       ) : [];
+  // Research review annotations are already review-scoped. Use the same
+  // verified single-view calculator and display component as Education.
+  // This is presentation only; Research ReadSchema owns the numeric answer.
+  const efVolumes = selectedField?.componentKey === 'lvEjectionFraction'
+    ? getLVSimpsonSourceVolumes(allAnnotations) : {};
+  const hasEFSourceVolumes = Object.keys(efVolumes).length > 0;
   const protocolTargets = selectedField ? getResearchProtocolViewerTargets(selectedField) : [];
   const guidedOwnsProtocolFrames = readDomain === 'echo' &&
     ['trVmax', 'lvEjectionFraction', 'laVolumeDisks', 'rvFac', 'ivcCollapsibility']
@@ -1219,6 +1225,9 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
               disabled={context.readOnly || context.preview || isBusy}
               onChange={nextValue => updateValue(selectedField.key, nextValue)}
             />
+          ) : null}
+          {selectedField?.componentKey === 'lvEjectionFraction' && hasEFSourceVolumes ? (
+            <EchoEFContourVolumes volumes={efVolumes} status="Current" />
           ) : null}
           {!isIVCRapRVSPQuestion ? groupedFields.map(companionField => (
             <ReadField
