@@ -10,6 +10,7 @@ import { EchoEFContourVolumes, getLVSimpsonSourceVolumes } from '../../../extens
 import { EchoCompositeResultStatus } from '../../../extension-ar-measurements/src/components/EchoCompositeResultStatus';
 import ResearchEchoGuidedControls from './ResearchEchoGuidedControls';
 import { reconcileResearchEchoCompositeAnswers } from '../utils/researchEchoAnswerBinding';
+import { getResearchMeasurementToolForField } from '../utils/researchMeasurementTool';
 import {
   getResearchFramePickerIntent,
   getResearchCapturedFrameTarget,
@@ -132,6 +133,7 @@ function ReadField({
   source,
   disabled,
   onChange,
+  onDelete,
   readDomain,
 }: {
   field: any;
@@ -139,6 +141,7 @@ function ReadField({
   source?: any;
   disabled: boolean;
   onChange: (value: any) => void;
+  onDelete?: () => void;
   readDomain?: string;
 }) {
   const kind = cleanString(field.kind).toLowerCase();
@@ -215,6 +218,13 @@ function ReadField({
             step={numeric ? field?.config?.step || 'any' : undefined}
             onChange={event => onChange(event.target.value)}
           />
+          {onDelete && !disabled && !calculated &&
+            value !== null && value !== undefined && String(value).trim() !== '' ? (
+            <button type="button" aria-label={`Delete ${field.label} measurement`}
+              title="Delete measurement" onClick={onDelete}
+              className="shrink-0 rounded border border-gray-600 px-2 py-1 font-bold text-red-200 hover:bg-red-950"
+            >×</button>
+          ) : null}
           {unit ? <span className="text-sm text-gray-300">{unit}</span> : null}
         </div>
       )}
@@ -977,14 +987,29 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
     }
   };
 
+  const latestSelectionRef = useRef('');
   const selectField = (key: string) => {
     const field = fields.find(item => item.key === key);
     if (!field) return;
     // Leaving an unfinished redraw abandons the pending replacement, not the
     // old source. No annotation is removed until a new one has been verified.
     pendingIVCReplacementRef.current = null;
+    latestSelectionRef.current = key;
     setSelectedFieldKey(key);
-    void navigateToField(field);
+    void (async () => {
+      await navigateToField(field);
+      if (latestSelectionRef.current !== key ||
+          context?.readOnly || context?.preview || saving || completing) return;
+      const toolName = getResearchMeasurementToolForField(field, readDomain);
+      if (toolName) {
+        await commandsManager?.runCommand('activateViewerMeasurementTool', {
+          toolName, stopCine: true,
+        });
+      }
+    })().catch(error => {
+      console.warn('[AR Research] could not activate configured measurement tool', error);
+      notify(servicesManager, 'Unable to activate the selected measurement tool.', 'warning');
+    });
   };
 
   const selectSourceCandidate = (field: any, candidate: any) => {
@@ -1207,6 +1232,20 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
               source={calculatedReadState.sources[selectedField.key]}
               disabled={context.readOnly || context.preview || isBusy}
               onChange={nextValue => updateValue(selectedField.key, nextValue)}
+              onDelete={() => {
+                const source = calculatedReadState.sources[selectedField.key];
+                if (['viewer-derived', 'viewer-measurement'].includes(source?.source)) {
+                  if (selectedSources.length === 1) {
+                    void deleteResearchAnnotation(selectedSources[0]);
+                  } else {
+                    notify(servicesManager,
+                      'Select the exact measurement source to delete; multiple sources are linked.',
+                      'warning');
+                  }
+                } else {
+                  updateValue(selectedField.key, '');
+                }
+              }}
             />
           ) : null}
           {['lvEjectionFraction', 'laVolumeDisks', 'rvFac'].includes(
