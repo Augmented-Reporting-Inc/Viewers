@@ -136,6 +136,8 @@ import {
 } from '../../extension-ar-measurements/src/utils/lvSimpson';
 import { getVerifiedLAVolumeContourAreaCM2 } from '../../extension-ar-measurements/src/utils/laVolume';
 import { getEchoAreaSlot, calculateRVFACFromMeasurements } from '../../extension-ar-measurements/src/utils/echoAreaMeasurements';
+import { buildViewerMeasurementValueCandidates } from '../../extension-ar-measurements/src/utils/measurementValueCandidates';
+import { getLVSimpsonSourceVolumes } from '../../extension-ar-measurements/src/utils/echoEFSourceVolumes';
 import { resolveViewerQuizCompositeResult, resolveViewerQuizLVSimpsonForStudy, isViewerQuizCompositeReviewCurrent, getViewerQuizCompositeStatus, calibratedLVContourAreaCM2 } from '../../extension-ar-measurements/src/utils/viewerQuizCompositeResults';
 import { createGuidedMouseToolOwnership } from './utils/guidedMouseToolOwnership';
 import { calibrateUSContourPoints, worldToImageIndex } from './utils/usRegionLengthCalibration';
@@ -15341,6 +15343,27 @@ function commandsModule({
         )
         .filter(annotation => annotation.referencedImageId || annotation.points?.length);
 
+      // Research derives live Echo values BEFORE the persistence serializer
+      // strips redundant calibrated contour geometry. The derived evidence is
+      // transient client-side UI data, never added to saved annotations.
+      // Restrict it to exactly the source IDs being returned for this review.
+      if (includeResearchEchoContours === true &&
+          workflow === VIEWER_MEASUREMENTS_WORKFLOW && domain === 'echo') {
+        const serializedIds = new Set(annotations.map(annotation =>
+          String(annotation?.annotationId || '').trim()
+        ).filter(Boolean));
+        const includedLiveMeasurements = measurements.filter(measurement =>
+          serializedIds.has(getMeasurementAnnotationId(measurement))
+        );
+        return {
+          domain, workflow, annotations,
+          researchEchoEvidence: {
+            candidates: buildViewerMeasurementValueCandidates(includedLiveMeasurements)
+              .filter(candidate => candidate?.source === 'viewer-derived'),
+            efVolumes: getLVSimpsonSourceVolumes(includedLiveMeasurements),
+          },
+        };
+      }
       return { domain, workflow, annotations };
     },
     // Learner quiz correction must only remove an annotation proven to belong
