@@ -7195,15 +7195,12 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
           };
         }
 
-        // Keep the complete released EF set and its verified per-contour
-        // volume/area metadata: the existing EF renderer expects all four
-        // slots for helpful gold labels. For other kinds, hydrate only the
-        // selected slot to avoid unrelated contours on different frames.
+        // Show only this exact phase: each EF learner/gold pair belongs to
+        // one DICOM frame. The full derived map is retained for mL labels,
+        // but hydrating the other three contours adds latency and confusion.
         const visibleGold = { ...goldFrame, target: displayTarget };
         const isEF = released.measurementKind === 'lvSimpsonEF';
-        const displayComponents = isEF
-          ? components.map((part: any) => part.slot === slot ? visibleGold : part)
-          : [visibleGold];
+        const displayComponents = [visibleGold];
         const result = await runViewerCommand(commandsManager,
           'showViewerQuizMeasurementComparison', {
             learnerMeasurement,
@@ -7220,16 +7217,20 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
             viewerTarget: displayTarget,
             focusedCompositeSlot: slot,
             questionKey: question.questionKey,
+            quizKey: quiz.quizKey,
+            quizVersion: Number(quiz.quizVersion || 1),
             endpointToleranceMM: released.endpointToleranceMM ?? null,
             ivcEndpointToleranceEnabled:
               released.measurementKind === 'ivcCollapsibility' &&
               released.ivcEndpointToleranceEnabled === true,
           });
         if (result?.rubricRendered !== true ||
+            (isEF && result?.learnerRendered !== true) ||
             !Array.isArray(result?.renderedSlots) ||
             !result.renderedSlots.includes(slot)) {
-          throw new Error(cleanString(result?.reason) ||
-            'The selected gold contour could not be displayed on its source frame.');
+          throw new Error(cleanString(result?.reason) || (isEF
+            ? 'The saved learner and gold EF contours could not both be displayed on their source frame.'
+            : 'The selected gold contour could not be displayed on its source frame.'));
         }
       } catch (error) {
         uiNotificationService.show({
