@@ -97,3 +97,29 @@ export async function restoreSavedLVSimpsonSlots(deps: RestorationDeps) {
   }
   return result();
 }
+
+/** Panel-only evidence. Never insert these records into the live measurement
+ * service or use them as newly calculated EF evidence. A live same-ID record
+ * supersedes its saved counterpart; deletion always wins. */
+export function mergeSavedLVSimpsonPanelSources({
+  saved = [], live = [], studyInstanceId, getId, getSlot, isDeleted, isChanged,
+}: {
+  saved?: any[]; live?: any[]; studyInstanceId: string;
+  getId: (source: any) => string; getSlot: (source: any) => string;
+  isDeleted: (id: string) => boolean; isChanged: (source: any) => boolean;
+}) {
+  const byId = new Map<string, any>();
+  const belongs = (source: any) => String(source?.StudyInstanceUID ||
+    source?.referenceStudyUID || '').trim() === studyInstanceId;
+  for (const source of saved) {
+    const id = getId(source);
+    if (!studyInstanceId || !belongs(source) || !id || !getSlot(source) ||
+        isDeleted(id) || isChanged(source)) continue;
+    byId.set(id, { ...source, arSavedEFPanelSource: true });
+  }
+  for (const source of live) {
+    const id = getId(source);
+    if (id && belongs(source) && getSlot(source) && !isDeleted(id)) byId.set(id, source);
+  }
+  return [...byId.values()];
+}
