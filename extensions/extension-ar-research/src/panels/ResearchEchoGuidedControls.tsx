@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { getEchoCompositeAcquisitionSteps } from '../../../extension-ar-measurements/src/utils/echoCompositeAcquisition';
 import { LearningEchoAcquisitionControls } from '../../../extension-ar-learning/src/components/LearningEchoAcquisitionControls';
-import { LearningEFPanelLauncher } from '../../../extension-ar-learning/src/components/LearningEFPanelLauncher';
+import { SharedEFQuestionAnswer } from '../../../extension-ar-learning/src/components/SharedEFQuestionAnswer';
 import {
   getResearchEchoPhases,
   getResearchEchoPhaseTarget,
@@ -17,6 +17,7 @@ import {
 export default function ResearchEchoGuidedControls({
   field, commandsManager, disabled = false, readOnly = false, onError,
   sourceAnnotations = [], ivcMeasurementState = null, ivcReadValue = null,
+  efValue = '', onChangeEFValue, onDeleteEFValue,
   onBeginIVCPhaseRedraw, onViewIVCSource, onDeleteIVCSource,
 }: {
   field: any;
@@ -27,6 +28,9 @@ export default function ResearchEchoGuidedControls({
   sourceAnnotations?: any[];
   ivcMeasurementState?: any;
   ivcReadValue?: any;
+  efValue?: string | number | null;
+  onChangeEFValue?: (value: string) => void;
+  onDeleteEFValue?: () => void;
   onBeginIVCPhaseRedraw?: (field: any, slot: string, existing: any[]) => void;
   onViewIVCSource?: (annotation: any) => void;
   onDeleteIVCSource?: (annotation: any) => void;
@@ -107,25 +111,22 @@ export default function ResearchEchoGuidedControls({
   const hasIncompleteRequiredEF = kind === 'lvEjectionFraction' &&
     phases.some(phase => isRequiredResearchPhaseMissing(field, phase.slot));
 
-  return (
-    <div className="rounded border border-cyan-700/70 bg-cyan-950/10 p-3 text-xs text-gray-200">
-      <div className="font-semibold text-cyan-100">Guided Echo measurement</div>
-      {kind === 'lvEjectionFraction' ? (
-        <div className="mt-2 space-y-2">
-          <p>Open the existing Simpson EF panel to draw or review four A4C/A2C
-            end-diastolic/end-systolic contours, choose the drawing technique,
-            calculate EF, and inspect existing source frames.</p>
-          <LearningEFPanelLauncher
-            disabled={disabled || readOnly || !!busy || hasIncompleteRequiredEF}
-            busy={busy === 'ef'}
-            onOpen={() => void run('ef', async () => {
-if (hasIncompleteRequiredEF) {
+  if (kind === 'lvEjectionFraction') {
+    return (
+      <div className="space-y-2">
+        <SharedEFQuestionAnswer
+          value={efValue}
+          onChange={onChangeEFValue || (() => {})}
+          onDelete={onDeleteEFValue}
+          unit={String(field?.config?.unit || '%')}
+          disabled={disabled || readOnly || hasIncompleteRequiredEF || !onChangeEFValue}
+          busy={busy === 'ef'}
+          onOpen={() => void run('ef', async () => {
+            if (hasIncompleteRequiredEF) {
               throw new Error('Configure all four EF frames in Research Manager before opening the guided protocol.');
             }
-            // The Research Review owns these saved contour annotations even
-            // when the shared study has no clinical AR Series document.
-            // Restore their exact source images one at a time before opening
-            // the established EF panel. Never substitute another frame.
+            // Preserve Research-owned source evidence. The existing EF panel
+            // remains responsible for contours, volumes, DICOM targets, and EF.
             const seen = new Set<string>();
             for (const annotation of sourceAnnotations) {
               const id = String(annotation?.annotationId || annotation?.uid || annotation?.id || '');
@@ -140,18 +141,22 @@ if (hasIncompleteRequiredEF) {
               allowCanonicalFrameTargets: true,
               questionKey: field.key,
             });
-            })}
-          />
-          {phases.map(phase => (
-            <div key={phase.slot} className="flex flex-wrap items-center gap-2">
-              <span className="min-w-36">{phase.label}</span>
-              {viewTarget(phase.slot)}
-              {isRequiredResearchPhaseMissing(field, phase.slot)
-                ? <span className="text-amber-300">Missing required frame</span> : null}
-            </div>
-          ))}
-        </div>
-      ) : kind === 'trVmax' ? (
+          })}
+        />
+        {hasIncompleteRequiredEF ? (
+          <div role="alert" className="text-xs text-amber-200">
+            The Research protocol requires all four configured EF source frames
+            before measurement can begin.
+          </div>
+        ) : null}
+      </div>
+    );
+  }
+
+  return (
+    <div className="rounded border border-cyan-700/70 bg-cyan-950/10 p-3 text-xs text-gray-200">
+      <div className="font-semibold text-cyan-100">Guided Echo measurement</div>
+      {kind === 'trVmax' ? (
         <div className="mt-2 space-y-2">
           <p>Use the calibrated TR spectral Doppler Vmax tool. The stored value is
             converted to m/s and linked to its source annotation.</p>
