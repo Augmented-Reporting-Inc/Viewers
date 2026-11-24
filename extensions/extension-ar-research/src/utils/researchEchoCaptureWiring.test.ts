@@ -66,6 +66,19 @@ describe('Research source capture is opt-in without changing other viewer workfl
     expect(panel).toContain('freshVerifiedEvidence, { verifiedEFOnly: true }');
   });
 
+  it('uses a defined current shared EF snapshot for both drawing methods and preserves the partial panel', () => {
+    const start = viewerCommands.indexOf('startLVSimpsonEFWorkflow: async');
+    const end = viewerCommands.indexOf('startLAVolumeWorkflow: async', start);
+    expect(start).toBeGreaterThan(0);
+    expect(end).toBeGreaterThan(start);
+    const workflow = viewerCommands.slice(start, end);
+    expect(workflow).not.toMatch(/\b(?:liveMeasurements|sessionLVSimpsonMeasurements)\b/);
+    expect(workflow.match(/measurements: lvSimpsonPanelController\?\.getMeasurements\?\.\(\) \|\| \[\]/g)).toHaveLength(3);
+    expect(workflow).toContain('pendingSavedEFRestoration || slotCandidates.size > 0');
+    expect(workflow).toContain('cancelDrawingWithoutClosingPanel();\n            await actions.startLVSimpsonEFWorkflow');
+    expect(workflow).toContain('viewerMeasurementsDeletedInSession.has(getMeasurementAnnotationId(item))');
+  });
+
   it('uses a source-safe delete x and activates Length from the selected question', () => {
     expect(panel).toContain('getResearchMeasurementToolForField(field, readDomain)');
     expect(panel).toContain('activateViewerMeasurementTool');
