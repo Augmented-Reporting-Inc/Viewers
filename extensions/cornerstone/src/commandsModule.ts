@@ -9904,12 +9904,27 @@ function commandsModule({
       const explicitSlot = normalizeLVSimpsonSlot(requestedSlot);
       const panelSources = (live: any[], studyInstanceId: string) => panelFirst
         ? mergeSavedLVSimpsonPanelSources({
-            saved: assessmentSavedEFAnnotations, live, studyInstanceId,
+            saved: assessmentSavedEFAnnotations,
+            // A stale MeasurementService record is not a restored source.
+            // Preserve saved evidence until the native exact-frame contour exists.
+            live: live.filter(item => {
+              const native = cornerstoneTools.annotation.state.getAnnotation?.(getMeasurementAnnotationId(item));
+              return !!native?.data?.lvSimpson &&
+                isSavedLVSimpsonImageMatch(item, native.metadata?.referencedImageId);
+            }),
+            studyInstanceId,
             getId: getMeasurementAnnotationId, getSlot: getLVSimpsonSlotFromMeasurement,
             isDeleted: id => viewerMeasurementsDeletedInSession.has(id),
             isChanged: source => getSavedLVSimpsonSourceRevisionState(source) === 'changed',
           }) : live;
-      const hasSavedPanelSources = panelFirst && panelSources([], activeEFStudy).length > 0;
+      const savedPanelSources = panelFirst ? panelSources([], activeEFStudy) : [];
+      const hasSavedPanelSources = savedPanelSources.length > 0;
+      if (panelFirst) openProfile?.setRestoration({
+        savedSlots: savedPanelSources.length,
+        restoredSlots: savedPanelSources.filter(source =>
+          getSavedLVSimpsonSourceRevisionState(source) === 'unchanged').length,
+        pending: false,
+      });
       const nextMissingSlot = getNextMissingLVSimpsonSlot(slotCandidates);
       // When every restored slot already exists, opening the EF quiz question
       // is a review action, not permission to overwrite A4C ED or restart
