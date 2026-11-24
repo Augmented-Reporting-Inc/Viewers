@@ -90,3 +90,22 @@ describe('Research source capture is opt-in without changing other viewer workfl
     expect(panel).toContain('selectedSources.length === 1');
   });
 });
+
+describe('Research Length selection uses shared restoration and permissions', () => {
+  it('restores linked Length before protocol-only navigation', () => {
+    const start = panel.indexOf('const navigateToField = async');
+    const end = panel.indexOf('const selectionGenerationRef', start);
+    const navigation = panel.slice(start, end);
+    expect(navigation).toContain('getResearchLengthSourceState(');
+    expect(navigation).toContain('requireExactSopFrame: true, isCancelled');
+    expect(navigation.indexOf('return jumpToAnnotation({')).toBeLessThan(
+      navigation.indexOf('const target = getResearchQuestionEntryTarget(field)'));
+    expect(navigation).toContain('isLocked: true');
+    expect(navigation).toContain("state.status === 'invalid' || state.status === 'ambiguous'");
+    expect(panel).toContain('selectionQueueRef.current.then(run, run)');
+    expect(panel).toContain('initializedReviewRef.current === reviewKey');
+    expect(panel).toContain('selectedLength ? showLengthSourceResolution');
+    expect(viewerCommands).toContain('findImageIdIndexForSavedAnnotation(latestViewport, annotation, requireExactSopFrame)');
+    expect(viewerCommands).toContain('saved-source-frame-changed-before-hydration');
+  });
+});

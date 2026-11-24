@@ -78,3 +78,13 @@ export function SharedMeasurementValueInput({
     </div>
   );
 }
+
+/** Shared captured measurement label; the caller supplies the owned source. */
+export function SharedMeasurementLabel({ label }: { label?: string }) {
+  const text = String(label || '').trim();
+  return text ? (
+    <div className="min-w-0 whitespace-normal break-words text-xs text-gray-300" title={text}>
+      Measurement label: {text}
+    </div>
+  ) : null;
+}

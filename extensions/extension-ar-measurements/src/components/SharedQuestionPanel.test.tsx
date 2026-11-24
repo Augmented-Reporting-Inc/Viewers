@@ -5,7 +5,7 @@ import {
   SharedQuestionSelector,
   SharedQuestionStepNavigation,
 } from './SharedQuestionNavigation';
-import { SharedMeasurementValueInput } from './SharedMeasurementValueInput';
+import { SharedMeasurementValueInput, SharedMeasurementLabel } from './SharedMeasurementValueInput';
 
 function flatten(element: any): any[] {
   if (element == null || typeof element === 'boolean') return [];
@@ -51,6 +51,13 @@ describe('shared Learning/Research question UI', () => {
     expect(buttons[1].props.disabled).toBe(false);
     buttons[1].props.onClick({ preventDefault: () => {}, stopPropagation: () => {} });
     expect(selected).toEqual(['other']);
+  });
+
+  it('renders the same captured label and hides empty labels', () => {
+    const nodes = flatten(<SharedMeasurementLabel label="LVIDd" />);
+    expect(nodes.find(node => node.type === 'div').props.title).toBe('LVIDd');
+    expect(nodes.filter(node => typeof node === 'string').join('')).toBe('Measurement label: LVIDd');
+    expect(flatten(<SharedMeasurementLabel label="" />)).toEqual([]);
   });
 
   it('keeps deletion delegated to owning Learning or Research workflow', () => {

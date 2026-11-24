@@ -1606,6 +1606,7 @@ async function waitForCurrentSavedAnnotationViewport({
   viewportId,
   annotation,
   attempts = 150,
+  requireExactSopFrame = false,
 }) {
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     const activeViewportId = viewportGridService.getActiveViewportId();
@@ -1617,7 +1618,7 @@ async function waitForCurrentSavedAnnotationViewport({
 
     if (
       latestViewport &&
-      findImageIdIndexForSavedAnnotation(latestViewport, annotation).index >= 0
+      findImageIdIndexForSavedAnnotation(latestViewport, annotation, requireExactSopFrame).index >= 0
     ) {
       return latestViewport;
     }
@@ -1628,7 +1629,7 @@ async function waitForCurrentSavedAnnotationViewport({
   return null;
 }
 
-function findImageIdIndexForSavedAnnotation(viewport, annotation) {
+function findImageIdIndexForSavedAnnotation(viewport, annotation, requireExactSopFrame = false) {
   const imageIds = getViewportImageIds(viewport);
   const sopInstanceId = annotation?.SOPInstanceUID;
   const frameNumber = getFrameNumberForAnnotation(annotation);
@@ -1653,6 +1654,12 @@ function findImageIdIndexForSavedAnnotation(viewport, annotation) {
     return { index, imageId: index >= 0 ? imageIds[index] : '', imageIds };
   }
 
+  if (requireExactSopFrame) {
+    const index = imageIds.findIndex(imageId =>
+      isExactViewerQuizSopFrameImageId(imageId, sopInstanceId, annotation.frameNumber));
+    return { index, imageId: index >= 0 ? imageIds[index] : '', imageIds };
+  }
+
   let index = expectedInstanceFrame ? imageIds.findIndex(imageId =>
     normalizeImageIdForCompare(imageId).includes(expectedInstanceFrame)
   ) : -1;
@@ -1671,7 +1678,7 @@ function findImageIdIndexForSavedAnnotation(viewport, annotation) {
   };
 }
 
-async function waitForSavedAnnotationImageMatch(viewport, annotation, attempts = 150) {
+async function waitForSavedAnnotationImageMatch(viewport, annotation, attempts = 150, requireExactSopFrame = false) {
   let lastMatch = {
     index: -1,
     imageId: '',
@@ -1679,7 +1686,7 @@ async function waitForSavedAnnotationImageMatch(viewport, annotation, attempts =
   };
 
   for (let i = 0; i < attempts; i++) {
-    lastMatch = findImageIdIndexForSavedAnnotation(viewport, annotation);
+    lastMatch = findImageIdIndexForSavedAnnotation(viewport, annotation, requireExactSopFrame);
 
     if (lastMatch.index >= 0) {
       return lastMatch;
@@ -1691,8 +1698,8 @@ async function waitForSavedAnnotationImageMatch(viewport, annotation, attempts =
   return lastMatch;
 }
 
-async function jumpViewportToSavedAnnotationImage(viewport, annotation) {
-  const match = await waitForSavedAnnotationImageMatch(viewport, annotation);
+async function jumpViewportToSavedAnnotationImage(viewport, annotation, requireExactSopFrame = false) {
+  const match = await waitForSavedAnnotationImageMatch(viewport, annotation, 150, requireExactSopFrame);
 
   if (match.index < 0) {
     console.warn(
@@ -15899,6 +15906,7 @@ function commandsModule({
       selectAnnotation = true,
       runDelayedDisplayRefresh = true,
       pauseCineOnSource = false,
+      requireExactSopFrame = false,
       isCancelled = () => false,
     } = {}) => {
       const cancelledResult = { ok: false, reason: 'cancelled' };
@@ -15987,6 +15995,7 @@ function commandsModule({
         viewportGridService,
         viewportId: targetViewportId,
         annotation: savedAnnotation,
+        requireExactSopFrame,
       });
 
       endViewportReady();
@@ -16015,7 +16024,8 @@ function commandsModule({
       const endFrameJump = beginEFOpenStage('frame-jump');
       const actualReferencedImageId = await jumpViewportToSavedAnnotationImage(
         viewport,
-        savedAnnotation
+        savedAnnotation,
+        requireExactSopFrame
       );
 
       endFrameJump();
@@ -16038,7 +16048,9 @@ function commandsModule({
 
       endFrameReady();
       if (isCancelled()) return cancelledResult;
-      if (!readyReferencedImageId) {
+      if (!readyReferencedImageId || (requireExactSopFrame &&
+          !isExactViewerQuizSopFrameImageId(readyReferencedImageId,
+            savedAnnotation.SOPInstanceUID, savedAnnotation.frameNumber))) {
         return {
           ok: false,
           reason: 'saved-image-render-not-ready',
@@ -16060,6 +16072,13 @@ function commandsModule({
           viewportGridService.getActiveViewportId()
         ) ||
         viewport;
+
+      if (requireExactSopFrame && !isExactViewerQuizSopFrameImageId(
+          hydratedViewport.getCurrentImageId?.(), savedAnnotation.SOPInstanceUID,
+          savedAnnotation.frameNumber)) {
+        return { ok: false, reason: 'saved-source-frame-changed-before-hydration', annotationId,
+          viewportId: hydratedViewport.id || targetViewportId };
+      }
 
       if (isCineCommentViewerMeasurement(savedAnnotation)) {
         hydratedViewport.render?.();
@@ -16274,11 +16293,13 @@ function commandsModule({
         // A second stack load is not needed when the cine is stopped and
         // the exact saved EF image is still current and ready.
         const currentImage = String(hydratedViewport.getCurrentImageId?.() || '');
-        const finalImage = isLVSimpsonMeasurement(savedAnnotation) &&
-          isSavedLVSimpsonImageMatch(savedAnnotation, currentImage) &&
-          hydratedViewport.getImageData?.()
+        const exactCurrent = isLVSimpsonMeasurement(savedAnnotation)
+          ? isSavedLVSimpsonImageMatch(savedAnnotation, currentImage)
+          : requireExactSopFrame && isExactViewerQuizSopFrameImageId(currentImage,
+              savedAnnotation.SOPInstanceUID, savedAnnotation.frameNumber);
+        const finalImage = exactCurrent && hydratedViewport.getImageData?.()
           ? currentImage
-          : await jumpViewportToSavedAnnotationImage(hydratedViewport, savedAnnotation);
+          : await jumpViewportToSavedAnnotationImage(hydratedViewport, savedAnnotation, requireExactSopFrame);
         if (!finalImage || !await waitForViewportImageReady(
           hydratedViewport, finalImage
         )) {

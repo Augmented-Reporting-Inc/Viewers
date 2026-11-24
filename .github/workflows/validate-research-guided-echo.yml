@@ -13,6 +13,7 @@ on:
       - feature/research-guided-echo-measurements-20261116
       - feature/research-quiz-style-read-20261116
       - port/3.11-custom
+      - integration/AR-1106-shared-research-education-20261124
       - AR-1106-shared-echo-ef-question-volume
       - fix/research-ef-contour-capture-and-length-20261123
       - refactor/shared-learning-research-question-panel-20261123

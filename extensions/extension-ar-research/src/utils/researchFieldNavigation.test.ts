@@ -10,6 +10,8 @@ import {
   getResearchIVCAnnotationSlot,
   isValidResearchIVCPhaseSource,
   getResearchCompatibleMeasurementCandidates,
+  isResearchLengthQuestion,
+  getResearchLengthSourceState,
 } from './researchFieldNavigation';
 
 describe('Research quiz-style field sources and navigation', () => {
@@ -350,5 +352,61 @@ describe('Research question-entry source frame navigation', () => {
     })).toEqual(source(9));
     expect(getResearchQuestionEntryTarget({ componentKey: 'ivcCollapsibility', config: {} }))
       .toBeNull();
+  });
+});
+
+describe('Research independent Length source restoration', () => {
+  const study = 'study-length';
+  const sop = 'sop-length';
+  const field = { key: 'lvidd|', componentKey: 'lvidd', kind: 'measurement', config: {
+    unit: 'mm', measurementLabels: ['LVIDd'], step: 0.01,
+    viewerTarget: { studyInstanceUID: study, sopInstanceUID: sop, frameNumber: 2 },
+  }};
+  const length = (id: string, frame = 2, studyId = study) => ({
+    annotationId: id, toolName: 'Length', label: 'LVIDd',
+    StudyInstanceUID: studyId, SeriesInstanceUID: 'series', SOPInstanceUID: sop,
+    frameNumber: 1, referencedImageId:
+      `wadors:/studies/${studyId}/series/series/instances/${sop}/frames/${frame}`,
+    points: [[0,0,0],[54.5,0,0]], measurements: { length: 54.5, unit: 'mm' },
+  });
+  const candidate = (id: string, unit = 'mm') => ({
+    source: 'viewer-measurement', sourceMeasurementKey: id, labels: ['LVIDd'], value: 54.5, unit,
+  });
+  const state = (source: any, annotations: any[], candidates: any[]) =>
+    getResearchLengthSourceState(field, source, annotations, candidates, study);
+  it('only uses compact layout for independent configured Echo Length', () => {
+    expect(isResearchLengthQuestion(field, 'echo')).toBe(true);
+    expect(isResearchLengthQuestion(field, 'bowel')).toBe(false);
+    expect(isResearchLengthQuestion({ ...field, componentKey: 'ivcCollapsibility' }, 'echo')).toBe(false);
+    expect(isResearchLengthQuestion({ ...field, config: { ...field.config, unit: 'cm' } }, 'echo')).toBe(false);
+  });
+  it('restores the linked caliper instead of guessing among candidates', () => {
+    const saved = length('a');
+    const result = state({ source: 'viewer-measurement', sourceMeasurementKey: 'a' },
+      [saved, length('b')], [candidate('a'), candidate('b')]);
+    expect(result.status).toBe('linked');
+    expect(result.selected?.annotation).toBe(saved);
+    expect(result.selected?.displayAnnotation.frameNumber).toBe(2);
+    expect(saved.frameNumber).toBe(1);
+    expect(result.eligible).toHaveLength(2);
+  });
+  it('rejects wrong study/frame/tool, invalid geometry, pixel units or missing linked source', () => {
+    const source = { source: 'viewer-measurement', sourceMeasurementKey: 'a' };
+    for (const annotation of [length('a', 20), length('a', 2, 'other-study'),
+      { ...length('a'), toolName: 'PlanarFreehandROI' },
+      { ...length('a'), points: [[0,0,0]] }]) {
+      expect(state(source, [annotation, length('b')], [candidate('a'), candidate('b')]).status).toBe('invalid');
+    }
+    expect(state(source, [length('a')], [candidate('a', 'px')]).status).toBe('invalid');
+    expect(state(source, [length('b')], [candidate('b')]).selected).toBeNull();
+  });
+  it('preserves manual answers and exposes ambiguity without selecting a caliper', () => {
+    const both = [length('a'), length('b')];
+    const candidates = [candidate('a'), candidate('b')];
+    expect(state({}, both, candidates).status).toBe('ambiguous');
+    expect(state({}, both, candidates).selected).toBeNull();
+    expect(state({ source: 'manual' }, both, candidates).status).toBe('manual');
+    expect(state({}, [both[0]], [candidates[0]]).status).toBe('unbound');
+    expect(state({}, [], []).status).toBe('none');
   });
 });
