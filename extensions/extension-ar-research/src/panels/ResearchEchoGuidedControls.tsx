@@ -39,7 +39,7 @@ export default function ResearchEchoGuidedControls({
   const kind = String(field?.componentKey || '');
   const phases = getResearchEchoPhases(field);
   const supported = ['lvEjectionFraction', 'laVolumeDisks', 'rvFac', 'ivcCollapsibility', 'trVmax'].includes(kind);
-  if (!supported || !commandsManager) return null;
+  if (!supported || (!commandsManager && kind !== 'lvEjectionFraction')) return null;
 
   const notifyError = (message: string) => onError?.(message);
   const command = async (name: string, payload: any = {}) => {
@@ -119,7 +119,7 @@ export default function ResearchEchoGuidedControls({
           onChange={onChangeEFValue || (() => {})}
           onDelete={onDeleteEFValue}
           unit={String(field?.config?.unit || '%')}
-          disabled={disabled || readOnly || hasIncompleteRequiredEF || !onChangeEFValue}
+          disabled={disabled || readOnly || hasIncompleteRequiredEF || !commandsManager || !onChangeEFValue}
           busy={busy === 'ef'}
           onOpen={() => void run('ef', async () => {
             if (hasIncompleteRequiredEF) {
