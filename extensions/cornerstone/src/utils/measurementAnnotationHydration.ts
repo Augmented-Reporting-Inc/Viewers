@@ -1,5 +1,6 @@
 import { getSavedSplineType } from './splinePersistence';
 import { getLVSimpsonContourViewportLines } from './lvSimpsonContourViewportText';
+import { installQuizContourTextRenderer } from './installQuizContourTextRenderer';
 import { metaData } from '@cornerstonejs/core';
 import { getSavedVolumeContourMetadata, getSavedLVSimpsonControlPoints, resolveSavedLVSimpsonHydrationImage } from './savedVolumeContourMetadata';
 import { annotation as csToolsAnnotation, ToolGroupManager } from '@cornerstonejs/tools';
@@ -15,7 +16,7 @@ import {
   buildSpectralDopplerDisplayText,
 } from './spectralDoppler';
 import { BOWEL_CURVED_LENGTH_MEASUREMENT_KIND } from '../../../extension-ar-measurements/src/utils/bowelMeasurementTargets';
-import { calculateCalibratedEchoAreaCM2, getSavedQuizEchoAreaDisplayInfo, getVerifiedReleasedLAGoldViewportLines, getVerifiedEFGoldContourViewportLines, getVerifiedEFLearnerContourViewportLines } from './quizEchoAreaCalibration';
+import { calculateCalibratedEchoAreaCM2, getSavedQuizEchoAreaDisplayInfo, getVerifiedReleasedLAGoldViewportLines } from './quizEchoAreaCalibration';
 import { getVerifiedLAVolumeContourAreaCM2 } from '../../../extension-ar-measurements/src/utils/laVolume';
 
 const CONTOUR_TOOL_NAMES = new Set(['SplineROI', 'PlanarFreehandROI', 'LivewireContour']);
@@ -911,15 +912,6 @@ function installSavedContourTextOverrideForViewport({ viewport, viewportId = '',
   }
 
   const toolGroup = getToolGroupForViewportSafe(viewport, viewportId);
-  const toolInstance = toolGroup?.getToolInstance?.(toolName);
-
-  if (!toolInstance ||
-      (toolInstance.configuration?.getTextLines as any)?.__arSavedContourTextOverride === true) {
-    return;
-  }
-
-  const previousGetTextLines = toolInstance.configuration?.getTextLines;
-
   const getOverrideText = (...args) => {
     for (const arg of args) {
       const candidates = [arg?.data, arg?.annotation?.data, arg?.annotationData, arg].filter(
@@ -933,18 +925,6 @@ function installSavedContourTextOverrideForViewport({ viewport, viewportId = '',
           candidate?.arVerifiedReleasedLAGoldArea
         );
         if (goldLAText) return goldLAText;
-        const goldEFText = getVerifiedEFGoldContourViewportLines(
-          candidate?.arVerifiedQuizEFGoldContour
-        );
-        if (goldEFText) return goldEFText;
-        // Only an exact submitted EF learner contour carries this marker.
-        // Its saved calibrated mL must supersede generic ROI area text.
-        const learnerEFText = getVerifiedEFLearnerContourViewportLines(
-          candidate?.arVerifiedQuizEFLearnerContour
-        );
-        if (learnerEFText) return learnerEFText;
-        const efText = getLVSimpsonContourViewportLines(candidate);
-        if (efText) return efText;
         const overrideText = candidate?.arSavedMeasurementDisplayText;
 
         if (Array.isArray(overrideText) && overrideText.length > 0) {
@@ -956,29 +936,11 @@ function installSavedContourTextOverrideForViewport({ viewport, viewportId = '',
     return null;
   };
 
-  const nextConfiguration = {
-    ...(toolInstance.configuration || {}),
-    getTextLines: function (...args) {
-      const overrideText = getOverrideText(...args);
-
-      if (overrideText) {
-        return overrideText;
-      }
-
-      if (typeof previousGetTextLines === 'function') {
-        return previousGetTextLines.call(this, ...args);
-      }
-
-      return [];
-    },
-  };
-
-  (nextConfiguration.getTextLines as any).__arSavedContourTextOverride = true;
-
-  // Set both. Some Cornerstone versions mutate through the tool group; others
-  // read directly from the existing tool instance.
-  toolInstance.configuration = nextConfiguration;
-  toolGroup?.setToolConfiguration?.(toolName, nextConfiguration, true);
+  installQuizContourTextRenderer({
+    toolGroup, toolName,
+    formatLVSimpsonContour: getLVSimpsonContourViewportLines,
+    formatSavedContour: getOverrideText,
+  });
 
 }
 
