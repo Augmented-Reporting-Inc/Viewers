@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 
 /**
  * Workflow-neutral numeric measurement answer and source-delete control.
@@ -13,6 +13,7 @@ export function SharedMeasurementValueInput({
   min,
   max,
   step = '0.01',
+  displayDecimalPlaces,
   placeholder = 'Measurement value',
   onDelete,
   deleteDisabled = false,
@@ -25,11 +26,17 @@ export function SharedMeasurementValueInput({
   min?: number | string;
   max?: number | string;
   step?: number | string;
+  displayDecimalPlaces?: number;
   placeholder?: string;
   onDelete?: () => void;
   deleteDisabled?: boolean;
   deleteLabel?: string;
 }) {
+  const [editing, setEditing] = useState(false);
+  const numericValue = Number(value);
+  const displayValue = !editing && displayDecimalPlaces !== undefined &&
+    value != null && String(value).trim() !== '' && Number.isFinite(numericValue)
+    ? numericValue.toFixed(displayDecimalPlaces) : (value ?? '');
   return (
     <div className="flex w-full min-w-0 max-w-full items-center gap-2 overflow-hidden">
       <div className="flex min-w-0 flex-1 items-center rounded border border-gray-700 bg-black">
@@ -40,7 +47,9 @@ export function SharedMeasurementValueInput({
           min={min}
           max={max}
           step={step}
-          value={value ?? ''}
+          value={displayValue}
+          onFocus={() => setEditing(true)}
+          onBlur={() => setEditing(false)}
           onChange={event => onChange(event.target.value)}
           disabled={disabled}
           placeholder={placeholder}

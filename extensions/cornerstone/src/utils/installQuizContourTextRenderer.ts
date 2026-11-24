@@ -22,6 +22,8 @@ type ToolGroup = {
 type QuizTextCallback = ((data: any, ...args: any[]) => any) & {
   __arQuizAreaRenderer?: true;
   __arQuizAreaFormatter?: Formatter;
+  __arLVSimpsonFormatter?: Formatter;
+  __arSavedContourFormatter?: Formatter;
   __arQuizFallbackSanitizer?: (lines: any) => any;
 };
 
@@ -29,11 +31,15 @@ export function installQuizContourTextRenderer({
   toolGroup,
   toolName,
   formatQuizContour,
-  sanitizeFallback = (lines: any) => lines,
+  formatLVSimpsonContour,
+  formatSavedContour,
+  sanitizeFallback,
 }: {
   toolGroup: ToolGroup | null | undefined;
   toolName: string;
-  formatQuizContour: Formatter;
+  formatQuizContour?: Formatter;
+  formatLVSimpsonContour?: Formatter;
+  formatSavedContour?: Formatter;
   sanitizeFallback?: (lines: any) => any;
 }): boolean {
   const instance = toolGroup?.getToolInstance?.(toolName);
@@ -43,8 +49,10 @@ export function installQuizContourTextRenderer({
   if (typeof existing === 'function' && existing.__arQuizAreaRenderer === true) {
     // Same tool group, a newly active viewport: update the formatter without
     // layering multiple stale callbacks over one another.
-    existing.__arQuizAreaFormatter = formatQuizContour;
-    existing.__arQuizFallbackSanitizer = sanitizeFallback;
+    if (formatQuizContour) existing.__arQuizAreaFormatter = formatQuizContour;
+    if (formatLVSimpsonContour) existing.__arLVSimpsonFormatter = formatLVSimpsonContour;
+    if (formatSavedContour) existing.__arSavedContourFormatter = formatSavedContour;
+    if (sanitizeFallback) existing.__arQuizFallbackSanitizer = sanitizeFallback;
     return true;
   }
 
@@ -52,14 +60,20 @@ export function installQuizContourTextRenderer({
     // Use exactly the same validated quantity as the Viewer panel. A recognized
     // quiz contour produces one physical-area line (or an explicit unavailable
     // status), never native mean/max/min/perimeter or a pixel-derived area.
+    const efLines = next.__arLVSimpsonFormatter?.(data, args[0]);
+    if (efLines !== null && efLines !== undefined) return efLines;
     const quizLines = next.__arQuizAreaFormatter?.(data, args[0]);
     if (quizLines !== null && quizLines !== undefined) return quizLines;
+    const savedLines = next.__arSavedContourFormatter?.(data, args[0]);
+    if (savedLines !== null && savedLines !== undefined) return savedLines;
     const originalLines = typeof existing === 'function'
       ? existing.call(this, data, ...args) : [];
     return next.__arQuizFallbackSanitizer?.(originalLines) ?? originalLines;
   };
   next.__arQuizAreaRenderer = true;
   next.__arQuizAreaFormatter = formatQuizContour;
+  next.__arLVSimpsonFormatter = formatLVSimpsonContour;
+  next.__arSavedContourFormatter = formatSavedContour;
   next.__arQuizFallbackSanitizer = sanitizeFallback;
 
   const configuration = { ...(instance.configuration || {}), getTextLines: next };

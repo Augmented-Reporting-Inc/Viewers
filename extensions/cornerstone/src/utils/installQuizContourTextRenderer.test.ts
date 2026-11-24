@@ -1,5 +1,6 @@
 import { installQuizContourTextRenderer } from './installQuizContourTextRenderer';
 import { getQuizCompositeContourViewportLines } from './quizEchoAreaCalibration';
+import { getLVSimpsonContourViewportLines } from './lvSimpsonContourViewportText';
 
 function makeGroup() {
   const toolInstance: any = {
@@ -98,6 +99,44 @@ describe('Cornerstone quiz contour text renderer', () => {
     const genericLabelOnly = { label: 'RVEDA' };
     expect(toolInstance.configuration.getTextLines(genericLabelOnly, 'imageId:source'))
       .toContain('Area: 19.3 mm²');
+  });
+
+  it('preserves verified EF volumes alongside LA/RV area, despite saved ROI area text and tool reconfiguration', () => {
+    const { toolInstance, group } = makeGroup();
+    const points = [[-20,0,0],[-40,20,0],[-20,60,0],[0,80,0],[20,60,0],[40,20,0],[20,0,0]];
+    const ef = {
+      lvSimpson: {
+        measurementKind: 'lvSimpsonSlot', slot: 'A4C_ED', axisPointIndex: 3,
+        originalContourPoints: points, calibratedContourPoints: points,
+        calibratedLongAxisLengthMM: 80,
+      },
+      handles: { points },
+      arSavedMeasurementDisplayText: ['Area: 123 cm²'],
+    };
+    const installArea = () => installQuizContourTextRenderer({
+      toolGroup: group, toolName: 'SplineROI', formatQuizContour: format({ RV_ED: 19.31 }),
+    });
+    const installEF = () => installQuizContourTextRenderer({
+      toolGroup: group, toolName: 'SplineROI', formatLVSimpsonContour: getLVSimpsonContourViewportLines,
+    });
+    installArea();
+    installEF();
+    const readEF = (data: any) => toolInstance.configuration.getTextLines(data, 'imageId:source');
+    const verified = readEF(ef);
+    expect(verified).toEqual([expect.stringMatching(/^A4C ED single-view LV volume: [\d.]+ mL$/)]);
+    expect(readEF(rvData)).toEqual(['RVEDA: 19.31 cm²']);
+    // Installing the LA/RV formatter after EF must not discard it.
+    installArea();
+    expect(readEF(ef)).toEqual(verified);
+    toolInstance.configuration = { getTextLines: () => ['Area: 123 cm²'] };
+    installEF();
+    expect(readEF(ef)).toEqual(verified);
+    installArea();
+    expect(readEF(rvData)).toEqual(['RVEDA: 19.31 cm²']);
+    const edited = { ...ef, handles: { points: points.map((p, i) =>
+      i === 1 ? [p[0] + 10, p[1], p[2]] : p) } };
+    expect(readEF(edited)).toEqual(['A4C ED single-view LV volume: unavailable']);
+    expect(readEF({ label: 'generic ROI' })).toEqual(['Area: 123 cm²']);
   });
 
   it('returns false when no Cornerstone ROI tool is installed', () => {

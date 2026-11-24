@@ -13,7 +13,13 @@ describe('Research source capture is opt-in without changing other viewer workfl
     // their own verified snapshot of the Research-owned contour sources.
     expect(optIns).toHaveLength(3);
     expect(panel).toContain('reconcileResearchEchoCompositeAnswers(');
-    expect(panel).toContain('buildViewerMeasurementValueCandidates(measurementAnnotations)');
+    expect(panel).toContain('buildViewerMeasurementValueCandidates(measurementAnnotations, { includeLVSimpson: false })');
+  });
+
+  it('reuses the verified Calculate EF snapshot and coalesces event bursts', () => {
+    expect(panel).toContain('refreshViewerMeasurementBindings({ serialized, efSnapshot: snapshot })');
+    expect(panel).toContain('if (running || refreshTimer !== undefined) return');
+    expect(panel).toContain('if (pending && !cancelled) refresh()');
   });
 
   it('allows verified Echo contours through research-only serialization while retaining normal filters', () => {
@@ -28,7 +34,9 @@ describe('Research source capture is opt-in without changing other viewer workfl
     const guided = fs.readFileSync(path.resolve(__dirname,
       '../panels/ResearchEchoGuidedControls.tsx'), 'utf8');
     expect(panel).toContain('efValue={calculatedReadState.values[selectedField.key]');
-    expect(panel).not.toContain('<EchoEFContourVolumes volumes={efVolumes}');
+    expect(panel).toContain('<EchoEFContourVolumes');
+    expect(panel).toContain("selectedField?.componentKey !== 'lvEjectionFraction' &&");
+    expect(panel).toContain('getLVSimpsonSourceVolumes(selected, { verifiedSavedSources: !!persistedEF })');
     expect(guided).toContain('<SharedEFQuestionAnswer');
     expect(guided).toContain('efContourTargets: field.config?.compositeFrameTargets');
     expect(guided).toContain('allowCanonicalFrameTargets: true');
@@ -49,6 +57,30 @@ describe('Research source capture is opt-in without changing other viewer workfl
     expect(panel).toContain('All four EF contour phases are present, but no protocol-verified EF answer');
     expect(viewerCommands).toContain('const assessmentOwned = Array.isArray(assessmentSavedEFAnnotations)');
     expect(viewerCommands).toContain('notifyAssessmentOnCalculate');
+    expect(viewerCommands).toContain('restoreSavedLVSimpsonSlots({');
+    expect(viewerCommands).toContain('pendingSavedEFRestoration');
+    expect(viewerCommands).toContain('Retry saved contours');
+    expect(guided).toContain('assessmentSavedEFResult');
+    expect(guided).toContain('deferSavedEFRestoration: true');
+    expect(viewerCommands).toContain('efSaved.length > 0 && !panelFirst');
+    expect(viewerCommands).toContain('restoreSources(savedSlot, cancelled, [slot])');
+    expect(viewerCommands).toContain('visible.filter(item => item.arSavedEFPanelSource), cancelled');
+    expect(panel).toContain('applyResearchSnapshotEvidence(');
+    expect(panel).toContain('withPersistedEF(liveVerifiedEchoEvidence.candidates, persistedEF)');
+    expect(panel).toContain('freshVerifiedEvidence, { verifiedEFOnly: true }');
+  });
+
+  it('uses a defined current shared EF snapshot for both drawing methods and preserves the partial panel', () => {
+    const start = viewerCommands.indexOf('startLVSimpsonEFWorkflow: async');
+    const end = viewerCommands.indexOf('startLAVolumeWorkflow: async', start);
+    expect(start).toBeGreaterThan(0);
+    expect(end).toBeGreaterThan(start);
+    const workflow = viewerCommands.slice(start, end);
+    expect(workflow).not.toMatch(/\b(?:liveMeasurements|sessionLVSimpsonMeasurements)\b/);
+    expect(workflow.match(/measurements: lvSimpsonPanelController\?\.getMeasurements\?\.\(\) \|\| \[\]/g)).toHaveLength(3);
+    expect(workflow).toContain('pendingSavedEFRestoration || slotCandidates.size > 0 || hasSavedPanelSources');
+    expect(workflow).toContain('cancelDrawingWithoutClosingPanel();\n            await actions.startLVSimpsonEFWorkflow');
+    expect(workflow).toContain('viewerMeasurementsDeletedInSession.has(getMeasurementAnnotationId(item))');
   });
 
   it('uses a source-safe delete x and activates Length from the selected question', () => {

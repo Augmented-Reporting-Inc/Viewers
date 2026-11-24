@@ -1,3 +1,4 @@
+import { hasMatchingLVSimpsonControlPoints } from '../../../extension-ar-measurements/src/utils/lvSimpson';
 import { buildViewerMeasurementValueCandidates } from '../../../extension-ar-measurements/src/utils/measurementValueCandidates';
 import { buildViewerMeasurementReadUpdates } from './readSchema';
 import {
@@ -22,6 +23,60 @@ export function dedupeResearchMeasurementCandidates(candidates: any[] = []) {
   ).values());
 }
 
+export function getResearchAnnotationKey(annotation: any = {}) {
+  return String(annotation?.annotationId || annotation?.annotationUID ||
+    annotation?.uid || annotation?.id || '').trim();
+}
+
+function isEFSource(annotation: any) {
+  return annotation?.measurementKind === 'lvSimpsonSlot' ||
+    annotation?.lvSimpson?.measurementKind === 'lvSimpsonSlot' ||
+    annotation?.measurements?.lvSimpson?.measurementKind === 'lvSimpsonSlot';
+}
+
+/** Keep immutable saved EF evidence through incomplete hydration. The
+ * shared viewer reports real editable-control revisions and deletions. */
+export function mergeResearchMeasurementAnnotations(
+  saved: any[] = [], live: any[] = [],
+  deletedIds: ReadonlySet<string> = new Set(),
+  invalidatedEFIds: ReadonlySet<string> = new Set()
+) {
+  const merged = new Map<string, any>();
+  for (const annotation of saved || []) {
+    const key = getResearchAnnotationKey(annotation);
+    if (key && !deletedIds.has(key)) merged.set(key, annotation);
+  }
+  const savedEFIds = new Set([...merged].filter(([, item]) => isEFSource(item))
+    .map(([key]) => key));
+  for (const annotation of live || []) {
+    const key = getResearchAnnotationKey(annotation);
+    if (!key || deletedIds.has(key)) continue;
+    if (savedEFIds.has(key) && !invalidatedEFIds.has(key)) continue;
+    merged.set(key, annotation);
+  }
+  return Array.from(merged.values());
+}
+
+export function applyResearchSnapshotEvidence(
+  serialized: any, deletedIds: Set<string>, invalidatedEFIds: Set<string>
+) {
+  const evidence = serialized?.researchEchoEvidence || {};
+  for (const id of Array.isArray(evidence.deletedAnnotationIds) ? evidence.deletedAnnotationIds : [])
+    deletedIds.add(id);
+  for (const id of Array.isArray(evidence.invalidatedEFSourceIds) ? evidence.invalidatedEFSourceIds : [])
+    invalidatedEFIds.add(id);
+  return evidence;
+}
+
+export function withPersistedResearchEF(candidates: any[], persisted: any) {
+  return dedupeResearchMeasurementCandidates([
+    ...(persisted && !candidates.some(item =>
+      String(item?.sourceMeasurementKey || '').startsWith('lv-simpson:'))
+      ? [persisted] : []),
+    ...candidates,
+  ]);
+}
+
 /**
  * Restore exactly the four source contours named by a previously verified
  * Research EF answer when still present on protocol frames. Keep every other
@@ -33,11 +88,7 @@ export function getResearchEFRestoreSources(
   savedAnnotations: any[] = [],
   savedSourceKey: unknown = ''
 ) {
-  const allEF = (Array.isArray(savedAnnotations) ? savedAnnotations : []).filter(
-    annotation => annotation?.measurementKind === 'lvSimpsonSlot' ||
-      annotation?.lvSimpson?.measurementKind === 'lvSimpsonSlot' ||
-      annotation?.measurements?.lvSimpson?.measurementKind === 'lvSimpsonSlot'
-  );
+  const allEF = (Array.isArray(savedAnnotations) ? savedAnnotations : []).filter(isEFSource);
   const key = String(savedSourceKey || '').trim();
   if (field?.componentKey !== 'lvEjectionFraction' ||
       !key.startsWith('lv-simpson:')) return allEF;
@@ -65,7 +116,10 @@ export function getVerifiedResearchEFResultCandidate(
 ) {
   if (field?.componentKey !== 'lvEjectionFraction' ||
       snapshot?.composite?.measurementKind !== 'lvSimpsonEF') return null;
-  const value = Number(snapshot?.composite?.value);
+  const rawValue = snapshot?.composite?.value;
+  if (rawValue == null || typeof rawValue === 'boolean' ||
+      String(rawValue).trim() === '' || !snapshot?.studyInstanceId) return null;
+  const value = Number(rawValue);
   if (!Number.isFinite(value) || value < 0 || value > 100) return null;
   const expected = ['A4C_ED', 'A4C_ES', 'A2C_ED', 'A2C_ES'];
   const components = snapshot?.composite?.components;
@@ -81,6 +135,15 @@ export function getVerifiedResearchEFResultCandidate(
   if (selected.some(item => !item) ||
       selected.some(item => String(item?.StudyInstanceUID || item?.referenceStudyUID || '') !==
         String(snapshot.studyInstanceId || ''))) return null;
+  // The set of configured frames alone cannot detect swapped ED/ES sources.
+  if (selected.some((item, index) => {
+    const slot = item?.lvSimpson?.slot || item?.measurements?.lvSimpson?.slot || item?.slot;
+    const target = field.config?.compositeFrameTargets?.[expected[index]];
+    return (!!slot && slot !== expected[index]) ||
+      (!!target && !isResearchCandidateOnProtocolFrames(
+        { config: { viewerTarget: target } }, { sourceMeasurementKey: ids[index] }, [item]
+      ));
+  })) return null;
   const candidate = {
     labels: ['LVEF', 'LV EF', 'EF'],
     value,
@@ -90,6 +153,76 @@ export function getVerifiedResearchEFResultCandidate(
   };
   return isResearchCandidateOnProtocolFrames(field, candidate, annotations)
     ? candidate : null;
+}
+
+/** A persisted answer is a display snapshot, not a new live calculation.
+ * Reuse the same source/phase checks as the Education calculation checkpoint.
+ * Do not use this adapter to authorize changed geometry or a new answer.
+ */
+export function getPersistedResearchEFCandidate(
+  field: any, value: any, source: any, annotations: any[], studyInstanceId: string,
+  currentAnnotations: any[] = annotations,
+  invalidatedSourceIds: ReadonlySet<string> = new Set()
+) {
+  const key = String(source?.sourceMeasurementKey || '');
+  if (source?.source !== 'viewer-derived' || !key.startsWith('lv-simpson:') ||
+      value == null || typeof value === 'boolean' || String(value).trim() === '' || !studyInstanceId) return null;
+  const ids = getResearchSourceAnnotationIds(key);
+  const slots = ['A4C_ED', 'A4C_ES', 'A2C_ED', 'A2C_ES'];
+  if (ids.length !== slots.length ||
+      key.slice('lv-simpson:'.length).split(',').length !== slots.length ||
+      ids.some(id => invalidatedSourceIds.has(id))) return null;
+  const annotationId = getResearchAnnotationKey;
+  const geometry = (item: any) => item?.lvSimpson || item?.measurements?.lvSimpson || {};
+  const components = ids.map(id => {
+    const annotation = annotations.find(item =>
+      String(item?.annotationId || item?.uid || item?.id || '') === id);
+    const slot = String(annotation?.lvSimpson?.slot ||
+      annotation?.measurements?.lvSimpson?.slot || annotation?.slot || '');
+    const kind = annotation?.measurementKind || annotation?.lvSimpson?.measurementKind ||
+      annotation?.measurements?.lvSimpson?.measurementKind;
+    const current = currentAnnotations.find(item => annotationId(item) === id);
+    if (!annotation || !current || kind !== 'lvSimpsonSlot' || !slots.includes(slot)) return null;
+    // Compare the editable controls, not OHIF's resampled display polyline.
+    // An absent live annotation is normal during hydration; the merge retains
+    // the original saved source. An edited live contour may retain the ID.
+    if (current !== annotation) {
+      const before = geometry(annotation).originalContourPoints || annotation.splineControlPoints;
+      const after = current.splineControlPoints || current.lvSimpsonControlPoints ||
+        geometry(current).originalContourPoints;
+      if (!hasMatchingLVSimpsonControlPoints(before, after)) return null;
+      // Recalibration can change a source without changing its ID.
+      if (geometry(annotation).calibratedLongAxisLengthMM !==
+          geometry(current).calibratedLongAxisLengthMM ||
+          JSON.stringify(geometry(annotation).calibratedContourPoints) !==
+          JSON.stringify(geometry(current).calibratedContourPoints)) return null;
+    }
+    return { annotationId: id, slot };
+  });
+  const validComponents = components.filter(Boolean) as { annotationId: string; slot: string }[];
+  if (validComponents.length !== slots.length ||
+      new Set(validComponents.map(component => component.slot)).size !== slots.length) return null;
+  const ordered = slots.map(slot => validComponents.find(component => component.slot === slot));
+  const verified = getVerifiedResearchEFResultCandidate(field, {
+    studyInstanceId,
+    composite: { measurementKind: 'lvSimpsonEF', value, components: ordered },
+  }, currentAnnotations);
+  // Older verified Reviews may have recorded the same four IDs in a
+  // different order. Preserve that saved source identity without guessing.
+  return verified ? { ...verified, sourceMeasurementKey: key } : null;
+}
+
+/** Load the saved answer from the Review, not mutable question inputs. */
+export function resolvePersistedResearchEF(
+  fields: any[], savedValues: Record<string, any>, savedSources: Record<string, any>,
+  savedAnnotations: any[], currentAnnotations: any[], studyInstanceId: string,
+  invalidatedSourceIds: ReadonlySet<string> = new Set()
+) {
+  const field = fields.find(item => item.componentKey === 'lvEjectionFraction');
+  return field ? getPersistedResearchEFCandidate(
+    field, savedValues[field.key], savedSources[field.key], savedAnnotations,
+    studyInstanceId, currentAnnotations, invalidatedSourceIds
+  ) : null;
 }
 
 const GUIDED_COMPOSITE_KINDS = new Set([
@@ -110,7 +243,8 @@ export function reconcileResearchEchoCompositeAnswers(
   values: Record<string, any> = {},
   sources: Record<string, any> = {},
   annotations: any[] = [],
-  verifiedLiveCandidates: any[] = []
+  verifiedLiveCandidates: any[] = [],
+  { verifiedEFOnly = false }: { verifiedEFOnly?: boolean } = {}
 ) {
   const nextValues = { ...values };
   const nextSources = { ...sources };
@@ -129,7 +263,7 @@ export function reconcileResearchEchoCompositeAnswers(
       return ids.length > 0 && ids.every(id => validIds.has(id));
     });
   const candidates = [
-    ...buildViewerMeasurementValueCandidates(annotations),
+    ...buildViewerMeasurementValueCandidates(annotations, { includeLVSimpson: !verifiedEFOnly }),
     ...verified,
   ];
   for (const field of fields) {

@@ -174,6 +174,16 @@ function describeFirstPolylineMismatch(source, target, tolerance) {
   return null;
 }
 
+export function hasMatchingLVSimpsonControlPoints(original, controlPoints) {
+  if (!Array.isArray(original) || !Array.isArray(controlPoints) ||
+      controlPoints.length !== original.length || controlPoints.length < 6) return false;
+  return original.every((point, index) => {
+    const before = getPoint(point);
+    const after = getPoint(controlPoints[index]);
+    return Boolean(before && after && length(subtract(before, after)) <= 0.00001);
+  });
+}
+
 function hasUnchangedWorldContour(measurement) {
   const geometry = getGeometry(measurement);
   const original = geometry.originalContourPoints;
@@ -183,13 +193,7 @@ function hasUnchangedWorldContour(measurement) {
   // when available, preserving the legacy fail-closed boundary check for
   // measurements without them.
   if (Array.isArray(controlPoints)) {
-    if (!Array.isArray(original) || controlPoints.length !== original.length ||
-        controlPoints.length < 6) return false;
-    return original.every((point, index) => {
-      const before = getPoint(point);
-      const after = getPoint(controlPoints[index]);
-      return Boolean(before && after && length(subtract(before, after)) <= 0.00001);
-    });
+    return hasMatchingLVSimpsonControlPoints(original, controlPoints);
   }
   const current = Array.isArray(measurement?.points) && measurement.points.length >= 6
     ? measurement.points : geometry.contourPoints;
@@ -663,7 +667,7 @@ function calculatePhaseVolume(slots, phase) {
   };
 }
 
-export function calculateLVSimpson(measurements = []) {
+export function calculateLVSimpson(measurements = [], { diagnostic = false } = {}) {
   const slots = {};
   let hasAnyLVSimpsonSlot = false;
 
@@ -686,7 +690,7 @@ export function calculateLVSimpson(measurements = []) {
     }
 
     hasAnyLVSimpsonSlot = true;
-    slots[slot] = buildSlotGeometry(measurement, slot);
+    slots[slot] = buildSlotGeometry(measurement, slot, { diagnostic });
   }
 
   // Do not show the LV Simpson summary before the LV contour workflow has

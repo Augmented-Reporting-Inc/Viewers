@@ -17,6 +17,7 @@ import {
 export default function ResearchEchoGuidedControls({
   field, commandsManager, disabled = false, readOnly = false, onError,
   sourceAnnotations = [], assessmentSavedEFAnnotations = null,
+  assessmentSavedEFResult = null,
   ivcMeasurementState = null, ivcReadValue = null,
   efValue = '', onChangeEFValue, onDeleteEFValue,
   onBeginIVCPhaseRedraw, onViewIVCSource, onDeleteIVCSource,
@@ -28,6 +29,7 @@ export default function ResearchEchoGuidedControls({
   onError?: (message: string) => void;
   sourceAnnotations?: any[];
   assessmentSavedEFAnnotations?: any[] | null;
+  assessmentSavedEFResult?: any;
   ivcMeasurementState?: any;
   ivcReadValue?: any;
   efValue?: string | number | null;
@@ -125,7 +127,7 @@ export default function ResearchEchoGuidedControls({
           unit={String(field?.config?.unit || '%')}
           min={field?.config?.min}
           max={field?.config?.max}
-          step={field?.config?.step || 'any'}
+          step="0.01"
           disabled={disabled || readOnly || !onChangeEFValue}
           openDisabled={hasIncompleteRequiredEF || !commandsManager}
           busy={busy === 'ef'}
@@ -151,6 +153,8 @@ export default function ResearchEchoGuidedControls({
               efContourTargets: field.config?.compositeFrameTargets || null,
               allowCanonicalFrameTargets: true,
               assessmentSavedEFAnnotations,
+              assessmentSavedEFResult,
+              deferSavedEFRestoration: true,
               notifyAssessmentOnCalculate: true,
               questionKey: field.key,
             });
