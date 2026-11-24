@@ -552,6 +552,57 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
     savedAnnotations,
   ]);
 
+  // Education already listens to this exact EF calculation/capture event.
+  // Research subscribes to the same checkpoint and supplies its own saved
+  // ReadSchema source/answer adapter; never trust the event value alone.
+  useEffect(() => {
+    if (!commandsManager || !context?.reviewKey ||
+        context.readOnly || context.preview) return;
+    const onCalculatedEF = (event: Event) => {
+      void (async () => {
+        const detail = (event as CustomEvent)?.detail || {};
+        const field = fields.find(item =>
+          item.componentKey === 'lvEjectionFraction' && item.key === selectedFieldKey
+        );
+        if (!field) return;
+        const snapshot = await commandsManager.runCommand('getViewerQuizLVSimpsonForActiveStudy');
+        if (!isMatchingQuizEFCompletion({
+          mode: String(detail.mode || ''),
+          authoringMode: false,
+          questionKind: 'lvSimpsonEF',
+          eventStudy: String(detail.studyInstanceId || ''),
+          activeStudy: String(snapshot?.studyInstanceId || ''),
+          eventValue: detail.value,
+          currentValue: snapshot?.composite?.value,
+        }) || String(snapshot?.studyInstanceId || '') !==
+          String(context.sourceStudyInstanceUID || '')) return;
+
+        const serialized = await commandsManager.runCommand('getSerializedViewerMeasurements', {
+          domain: 'echo', workflow: VIEWER_MEASUREMENTS_WORKFLOW,
+          includeResearchEchoContours: true,
+        });
+        const available = mergeMeasurementAnnotations(
+          savedAnnotations, Array.isArray(serialized?.annotations) ? serialized.annotations : [],
+          deletedAnnotationIdsRef.current
+        );
+        const verified = getVerifiedResearchEFResultCandidate(field, snapshot, available);
+        if (!verified) {
+          notify(servicesManager,
+            'EF calculated, but its four saved contours do not match the Research protocol frames. Review each source frame before saving.',
+            'warning');
+          return;
+        }
+        await refreshViewerMeasurementBindings();
+      })().catch(error =>
+        console.warn('[AR Research] verified EF capture refresh failed', error)
+      );
+    };
+    window.addEventListener('ar-measurements:lv-simpson-capture-requested', onCalculatedEF);
+    return () => window.removeEventListener('ar-measurements:lv-simpson-capture-requested', onCalculatedEF);
+  }, [commandsManager, context?.reviewKey, context?.readOnly, context?.preview,
+      context?.sourceStudyInstanceUID, fields, selectedFieldKey, savedAnnotations,
+      refreshViewerMeasurementBindings, servicesManager]);
+
   const removeResearchSourceIds = useCallback(async (ids: string[]) => {
     const unique = Array.from(new Set(ids.map(cleanString).filter(Boolean)));
     if (!unique.length) return;
