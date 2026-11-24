@@ -58,12 +58,12 @@ describe('Research source-backed composite answer capture', () => {
     const { field, candidate, annotations } = fixture(kind);
     mockCandidates.mockReturnValue([candidate]);
     const state = reconcileResearchEchoCompositeAnswers([field], {}, {}, annotations);
-    expect(state.values[field.key]).toBeCloseTo(62.4);
+    expect(state.values[field.key]).toBeCloseTo(kind === 'lvEjectionFraction' ? 62.37 : 62.4);
     expect(state.sources[field.key]).toEqual({
       source: 'viewer-derived', sourceMeasurementKey: candidate.sourceMeasurementKey,
     });
     expect(buildReadResultEntries([field], state.values, state.sources)).toMatchObject([{
-      componentKey: kind, value: 62.4, source: 'viewer-derived',
+      componentKey: kind, value: kind === 'lvEjectionFraction' ? 62.37 : 62.4, source: 'viewer-derived',
     }]);
   });
 
@@ -124,7 +124,7 @@ describe('Research source-backed composite answer capture', () => {
     const state = reconcileResearchEchoCompositeAnswers(
       [field], {}, {}, verifiedAnnotations, [candidate]
     );
-    expect(state.values[field.key]).toBeCloseTo(61.2);
+    expect(state.values[field.key]).toBeCloseTo(61.19);
     expect(buildReadResultEntries([field], state.values, state.sources))
       .toMatchObject([{ componentKey: 'lvEjectionFraction', source: 'viewer-derived' }]);
 
@@ -154,7 +154,7 @@ describe('Research source-backed composite answer capture', () => {
     const state = reconcileResearchEchoCompositeAnswers([field], {}, {}, annotations);
     const persisted = buildReadResultEntries([field], state.values, state.sources);
     const reopened = buildReadValueState({ entries: persisted });
-    expect(reopened.values[field.key]).toBe(61.2);
+    expect(reopened.values[field.key]).toBe(61.19);
     expect(reopened.sources[field.key]).toEqual({
       source: 'viewer-derived', sourceMeasurementKey: candidate.sourceMeasurementKey,
     });
@@ -168,7 +168,7 @@ describe('Research source-backed composite answer capture', () => {
     const state = reconcileResearchEchoCompositeAnswers(
       [field], {}, {}, annotations, [candidate]
     );
-    expect(state.values[field.key]).toBe(57.8);
+    expect(state.values[field.key]).toBe(57.83);
     expect(state.sources[field.key]).toEqual({
       source: 'viewer-derived', sourceMeasurementKey: candidate.sourceMeasurementKey,
     });
@@ -185,7 +185,7 @@ describe('Research source-backed composite answer capture', () => {
       { [field.key]: 44 },
       { [field.key]: { source: 'viewer-derived', sourceMeasurementKey: 'lv-simpson:old' } },
       annotations);
-    expect(state.values[field.key]).toBe(53.2);
+    expect(state.values[field.key]).toBe(53.24);
     expect(state.sources[field.key].sourceMeasurementKey).toBe(candidate.sourceMeasurementKey);
   });
 
