@@ -16,6 +16,12 @@ describe('Research source capture is opt-in without changing other viewer workfl
     expect(panel).toContain('buildViewerMeasurementValueCandidates(measurementAnnotations)');
   });
 
+  it('reuses the verified Calculate EF snapshot and coalesces event bursts', () => {
+    expect(panel).toContain('refreshViewerMeasurementBindings({ serialized, efSnapshot: snapshot })');
+    expect(panel).toContain('if (running || refreshTimer !== undefined) return');
+    expect(panel).toContain('if (pending && !cancelled) refresh()');
+  });
+
   it('allows verified Echo contours through research-only serialization while retaining normal filters', () => {
     expect(viewerCommands).toMatch(/getSerializedViewerMeasurements:\s*\(\{[\s\S]*?includeResearchEchoContours = false/);
     expect(viewerCommands).toMatch(/includeResearchEchoContours === true\s*&&\s*workflow === VIEWER_MEASUREMENTS_WORKFLOW\s*&&\s*domain === 'echo'/);
@@ -28,7 +34,9 @@ describe('Research source capture is opt-in without changing other viewer workfl
     const guided = fs.readFileSync(path.resolve(__dirname,
       '../panels/ResearchEchoGuidedControls.tsx'), 'utf8');
     expect(panel).toContain('efValue={calculatedReadState.values[selectedField.key]');
-    expect(panel).not.toContain('<EchoEFContourVolumes volumes={efVolumes}');
+    expect(panel).toContain('<EchoEFContourVolumes');
+    expect(panel).toContain("selectedField?.componentKey !== 'lvEjectionFraction' &&");
+    expect(panel).toContain('getLVSimpsonSourceVolumes(savedAnnotations)');
     expect(guided).toContain('<SharedEFQuestionAnswer');
     expect(guided).toContain('efContourTargets: field.config?.compositeFrameTargets');
     expect(guided).toContain('allowCanonicalFrameTargets: true');
