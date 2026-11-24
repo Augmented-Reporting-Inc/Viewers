@@ -17,6 +17,7 @@ on:
       - fix/research-ef-contour-capture-and-length-20261123
       - refactor/shared-learning-research-question-panel-20261123
       - refactor/shared-assessment-research-navigation-20261123
+      - refactor/shared-ef-question-answer-20261124
     paths:
       - 'extensions/extension-ar-research/src/**'
       - 'extensions/extension-ar-measurements/src/**'
@@ -43,6 +44,8 @@ jobs:
           node-version: '20'
           cache: yarn
       - run: yarn install --frozen-lockfile --non-interactive
+      - name: Verify cine pause and exact-frame EF navigation
+        run: node --test modes/mode-ar-learning/tests/ef-guided-cine-pause.test.cjs
       - name: Test Research Read workflows, binding, target sources and RAP
         run: |
           yarn jest --config extensions/extension-ar-research/jest.config.js --runInBand --coverage=false --runTestsByPath \
