@@ -15,6 +15,7 @@ import ResearchEchoGuidedControls from './ResearchEchoGuidedControls';
 import {
   reconcileResearchEchoCompositeAnswers,
   getVerifiedResearchEFResultCandidate,
+  dedupeResearchMeasurementCandidates,
 } from '../utils/researchEchoAnswerBinding';
 import { isMatchingQuizEFCompletion } from '../../../extension-ar-learning/src/utils/quizCompositeCaptureIntent';
 import { getResearchMeasurementToolForField } from '../utils/researchMeasurementTool';
@@ -467,11 +468,9 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
       // An explicit Calculate EF snapshot is the same trusted result the
       // Education capture command uses. Deduplicate by source identity:
       // repeated live/explicit candidates are not competing measurements.
-      const verifiedEvidence = Array.from(new Map(
-        [...liveVerified, ...(verifiedEF ? [verifiedEF] : [])].map(candidate =>
-          [candidate.source + ':' + candidate.sourceMeasurementKey, candidate]
-        )
-      ).values());
+      const verifiedEvidence = dedupeResearchMeasurementCandidates([
+        ...liveVerified, ...(verifiedEF ? [verifiedEF] : []),
+      ]);
       setLiveVerifiedEchoEvidence({
         candidates: verifiedEvidence,
         efVolumes: evidence.efVolumes || {},
@@ -480,9 +479,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
         ...buildViewerMeasurementValueCandidates(available),
         ...verifiedEvidence,
       ];
-      const candidates = Array.from(new Map(candidateList.map(candidate =>
-        [candidate.source + ':' + candidate.sourceMeasurementKey, candidate]
-      )).values());
+      const candidates = dedupeResearchMeasurementCandidates(candidateList);
       setViewerCandidates(candidates);
       const updates = fields.flatMap(field => {
         const compatible = getResearchCompatibleMeasurementCandidates(
@@ -845,18 +842,14 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
       const verifiedEF = efField
         ? getVerifiedResearchEFResultCandidate(efField, efSnapshot, measurementAnnotations)
         : null;
-      const freshVerifiedEvidence = Array.from(new Map(
-        [...freshVerified, ...(verifiedEF ? [verifiedEF] : [])].map(candidate =>
-          [candidate.source + ':' + candidate.sourceMeasurementKey, candidate]
-        )
-      ).values());
+      const freshVerifiedEvidence = dedupeResearchMeasurementCandidates([
+        ...freshVerified, ...(verifiedEF ? [verifiedEF] : []),
+      ]);
       const candidateList = [
         ...buildViewerMeasurementValueCandidates(measurementAnnotations),
         ...freshVerifiedEvidence,
       ];
-      const latestCandidates = Array.from(new Map(candidateList.map(candidate =>
-        [candidate.source + ':' + candidate.sourceMeasurementKey, candidate]
-      )).values());
+      const latestCandidates = dedupeResearchMeasurementCandidates(candidateList);
       // An explicitly calculated EF with contour evidence is never a
       // successful zero-result draft. Preserve the measurements and explain
       // the frame/source failure rather than silently saving an empty answer.
