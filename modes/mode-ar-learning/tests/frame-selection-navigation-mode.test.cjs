@@ -292,7 +292,17 @@ test('measurement label wraps and longitudinal caliper spacing uses learner cali
   assert.match(panelSource, /getBowelMeasurementSetMidpointSpacingMm\(bowelGeometryEntries\)/);
   assert.match(panelSource, /Caliper spacing \(centre-to-centre\):/);
   assert.match(panelSource, /informational; not an endpoint scoring tolerance/);
-  assert.match(panelSource, /whitespace-normal break-words text-xs text-gray-300/);
+  const sharedValueInput = fs.readFileSync(
+    path.join(__dirname, '..', '..', '..', 'extensions', 'extension-ar-measurements',
+      'src', 'components', 'SharedMeasurementValueInput.tsx'), 'utf8'
+  );
+  assert.match(panelSource, /<SharedMeasurementLabel label=\{cleanString\(\s*plainObject\(value\?\.reviewPayload\)\.label \|\|\s*value\?\.measurementLabel \|\|\s*value\?\.label/);
+  const labelStart = sharedValueInput.indexOf('export function SharedMeasurementLabel(');
+  assert.ok(labelStart >= 0);
+  const label = sharedValueInput.slice(labelStart);
+  assert.match(label, /min-w-0 whitespace-normal break-words text-xs text-gray-300/);
+  assert.match(label, /title=\{text\}/);
+  assert.match(label, /Measurement label: \{text\}/);
   assert.match(panelSource, /getLearnerBwtCaptureFailureMessage\(reason\)/);
 });
 
