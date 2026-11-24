@@ -10419,6 +10419,7 @@ function commandsModule({
           onCalculate: allEditable ? calculateEF : null,
           onCancel: hideLVSimpsonWorkflowPanel,
         });
+        openProfile?.finish('panel-only-ready');
         return { ok: true, panelOpened: true };
       }
       if (reviewExistingContours) {
