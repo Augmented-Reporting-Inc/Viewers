@@ -439,7 +439,8 @@ export function buildViewerMeasurementReadUpdates(
       continue;
     }
 
-    value = roundToConfiguredStep(value, field?.config?.step);
+    value = roundToConfiguredStep(value, field.componentKey === 'lvEjectionFraction' &&
+      matchedCandidate.source === 'viewer-derived' ? 0.01 : field?.config?.step);
 
     const min = Number(field?.config?.min);
     const max = Number(field?.config?.max);
