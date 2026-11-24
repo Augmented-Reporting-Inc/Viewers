@@ -189,7 +189,7 @@ describe('Research source-backed composite answer capture', () => {
     const persisted = resolvePersistedResearchEF(
       [field], savedValues, savedSources, savedAnnotations, savedAnnotations, 'study-a'
     );
-    expect(persisted).toEqual(candidate);
+    expect(persisted).toEqual({ ...candidate, labels: ['LVEF', 'LV EF', 'EF'] });
     const state = reconcileResearchEchoCompositeAnswers(
       [field], savedValues, savedSources, savedAnnotations,
       withPersistedResearchEF([], persisted), { verifiedEFOnly: true }
