@@ -121,6 +121,9 @@ export default function ResearchEchoGuidedControls({
             efValue !== undefined && String(efValue).trim() !== ''
               ? onDeleteEFValue : undefined}
           unit={String(field?.config?.unit || '%')}
+          min={field?.config?.min}
+          max={field?.config?.max}
+          step={field?.config?.step || 'any'}
           disabled={disabled || readOnly || !onChangeEFValue}
           openDisabled={hasIncompleteRequiredEF || !commandsManager}
           busy={busy === 'ef'}
