@@ -9894,6 +9894,8 @@ function commandsModule({
           const navigation = await actions.jumpToViewerQuizTarget({
             viewerTarget: initialTarget,
             questionKey,
+            pauseCineOnTarget: true,
+            requireExactSopFrame: true,
           });
           if (isWorkflowCancelled()) return null;
           if (!didNavigateToExactEFContourFrame(navigation, initialTarget)) {
@@ -9910,6 +9912,11 @@ function commandsModule({
           viewport = cornerstoneViewportService.getCornerstoneViewport(activeViewportId) || viewport;
         }
       }
+
+      // The active cine may already be displaying the correct image, in which
+      // case no navigation occurs. Still pause playback before starting a
+      // contour so a later cine tick cannot change its source frame.
+      if (!panelOnly) stopSourceCineForViewport(activeViewportId);
 
       // Suspend the previously active mouse tool once for the full four-slot
       // workflow. A later Continue may switch to a different viewport/group.
@@ -10066,6 +10073,8 @@ function commandsModule({
             try {
               navigation = await actions.jumpToViewerQuizTarget({
                 viewerTarget: target, questionKey,
+                pauseCineOnTarget: true,
+                requireExactSopFrame: true,
               });
             } catch (error) {
               console.warn('[LV EF] authored contour selection jump failed:', error);
@@ -10811,6 +10820,8 @@ function commandsModule({
               navigation = await actions.jumpToViewerQuizTarget({
                 viewerTarget: nextTarget,
                 questionKey,
+                pauseCineOnTarget: true,
+                requireExactSopFrame: true,
               });
             } catch (error) {
               console.warn('[LV EF] authored contour frame navigation failed:', error);
