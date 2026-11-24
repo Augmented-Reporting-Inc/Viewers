@@ -1,0 +1,32 @@
+name: AR-1107 Viewer Image Grant Validation
+
+on:
+  pull_request:
+    branches: [port/3.11-custom]
+    paths:
+      - 'platform/app/src/index.js'
+      - 'platform/app/src/utils/arImageReadGrant*'
+      - 'extensions/default/src/DicomWebDataSource/index.ts'
+      - 'extensions/cornerstone/src/initWADOImageLoader.js'
+      - '.github/workflows/ar-image-read-grants-pr-validation.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  viewer-grant-tests:
+    name: Validate window-scoped image grants and iUSCAN isolation
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: yarn
+      - name: Install locked dependencies
+        run: yarn install --frozen-lockfile --non-interactive
+      - name: Verify grant parser, expiry, data-source scope, and iUSCAN no-op
+        run: npx jest --config platform/app/jest.config.js --runInBand --coverage=false --runTestsByPath platform/app/src/utils/arImageReadGrant.test.js
+      - name: Validate application bundle without deployment
+        run: yarn workspace @ohif/app build
