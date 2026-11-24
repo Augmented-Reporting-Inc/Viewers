@@ -154,6 +154,7 @@ export default function ResearchEchoGuidedControls({
               allowCanonicalFrameTargets: true,
               assessmentSavedEFAnnotations,
               assessmentSavedEFResult,
+              deferSavedEFRestoration: true,
               notifyAssessmentOnCalculate: true,
               questionKey: field.key,
             });
