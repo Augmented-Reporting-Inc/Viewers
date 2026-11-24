@@ -1645,9 +1645,15 @@ function findImageIdIndexForSavedAnnotation(viewport, annotation) {
       ? `/instances/${String(sopInstanceId).toLowerCase()}/frames/${frameNumber}`
       : '';
 
-  let index = imageIds.findIndex(imageId =>
+  // EF frame identity must be exact: frame 2 is not frame 20.
+  if (isLVSimpsonMeasurement(annotation)) {
+    const index = imageIds.findIndex(imageId => isSavedLVSimpsonImageMatch(annotation, imageId));
+    return { index, imageId: index >= 0 ? imageIds[index] : '', imageIds };
+  }
+
+  let index = expectedInstanceFrame ? imageIds.findIndex(imageId =>
     normalizeImageIdForCompare(imageId).includes(expectedInstanceFrame)
-  );
+  ) : -1;
 
   if (index < 0 && savedReference) {
     index = imageIds.findIndex(imageId => {
@@ -9856,7 +9862,8 @@ function commandsModule({
       const slotCandidates = getLVSimpsonSlotCandidates(assessmentOwnedEF
         ? getCurrentViewerMeasurementSnapshot(measurementService).filter(item => {
             const sourceStudy = String(item?.referenceStudyUID || item?.StudyInstanceUID || '');
-            return !activeEFStudy || sourceStudy === activeEFStudy;
+            return (!activeEFStudy || sourceStudy === activeEFStudy) &&
+              !viewerMeasurementsDeletedInSession.has(getMeasurementAnnotationId(item));
           })
         : [...(measurementService.getMeasurements?.() || []), ...getLVSimpsonSessionMeasurements()]
       );
@@ -9866,7 +9873,8 @@ function commandsModule({
       // is a review action, not permission to overwrite A4C ED or restart
       // the 4-step guided drawing workflow.
       const reviewExistingContours = !requestedSessionId && !explicitSlot &&
-        (!nextMissingSlot || (assessmentOwnedEF && pendingSavedEFRestoration));
+        (!nextMissingSlot || (assessmentOwnedEF &&
+          (pendingSavedEFRestoration || slotCandidates.size > 0)));
 
       let slotSelection = explicitSlot ? buildLVSimpsonSlotSelection(explicitSlot) : null;
 
@@ -9985,6 +9993,7 @@ function commandsModule({
               if (!getLVSimpsonSlotFromMeasurement(entry)) return false;
               if (entry?.workflow === 'viewerQuizGoldDisplay') return false;
               const id = getMeasurementAnnotationId(entry);
+              if (viewerMeasurementsDeletedInSession.has(id)) return false;
               const source = id ? cornerstoneTools.annotation.state.getAnnotation?.(id) : null;
               if (source?.data?.arVerifiedQuizEFGoldContour?.origin === 'quiz-gold') return false;
               const entryStudy = String(entry?.referenceStudyUID || entry?.StudyInstanceUID || '').trim();
@@ -10129,19 +10138,26 @@ function commandsModule({
             if (goldAuthoringEditable) {
               await actions.clearViewerQuizMeasurementComparison();
             }
-            if (activeLVSimpsonWorkflowSessionId) {
-              clearLVSimpsonWorkflowIfCurrent(activeLVSimpsonWorkflowSessionId);
-            } else {
-              hideLVSimpsonWorkflowPanel();
-            }
-            void actions.startLVSimpsonEFWorkflow({
+            // Keep the four-row panel mounted while the selected source frame
+            // is prepared. A new workflow session replaces its controller.
+            cancelDrawingWithoutClosingPanel();
+            await actions.startLVSimpsonEFWorkflow({
               slot, singleSlot: true, efContourTargets: this.efContourTargets,
               allowCanonicalFrameTargets, questionKey, captureMethod: method,
               savedGoldMeasurement: this.savedGoldMeasurement,
               goldAuthoringEditable,
               assessmentSavedEFAnnotations, notifyAssessmentOnCalculate,
               viewportId: viewportGridService.getActiveViewportId(),
-            }).catch(error => console.warn('[LV EF] selected contour redraw failed:', error));
+            }).catch(error => {
+              console.warn('[LV EF] selected contour redraw failed:', error);
+              if (!isActiveStudy()) return;
+              activeLVSimpsonWorkflowSessionId = '';
+              cancelActiveLVSimpsonCapture();
+              lvSimpsonMouseTools.restore();
+              refreshLVSimpsonToolbarState();
+              lvSimpsonPanelController = this;
+              showRecovery('Could not start the selected contour. Select its drawing technique to retry.');
+            });
           },
           onDeleteSlot(slot: string, ids: string[]) {
             if (!LV_TRACE_REQUIRED_SLOTS.includes(slot) || !ids.length || !isActiveStudy()) return;
@@ -10434,7 +10450,7 @@ function commandsModule({
               ? 'Review the four contours and their volume measurements. Select Calculate EF to recalculate.'
               : pendingSavedEFRestoration
                 ? 'A saved contour is not yet available on its exact DICOM frame. Its saved evidence is preserved; retry restoration before drawing or recalculating.'
-                : 'Resolve missing or duplicate contour phases before recalculating EF.',
+                : 'Select the drawing technique for a missing contour, or resolve duplicate contours before calculating EF.',
             warnings: allRestored ? [] : [pendingSavedEFRestoration
               ? 'Saved contour restoration is incomplete.' : 'Four unique contours are required.'],
             onCalculate: allRestored ? calculateEF : null,
@@ -10876,10 +10892,8 @@ function commandsModule({
       if (lvSimpsonPanelController) {
         lvSimpsonPanelController.activeSlot = '';
       }
-      const currentLVSimpsonMeasurements = [
-        ...measurementService.getMeasurements?.(),
-        ...getLVSimpsonSessionMeasurements(),
-      ];
+      const currentLVSimpsonMeasurements = lvSimpsonPanelController?.getMeasurements?.() ||
+        getCurrentViewerMeasurementSnapshot(measurementService);
       const remainingSlotCandidates = getLVSimpsonSlotCandidates(
         currentLVSimpsonMeasurements
       );
