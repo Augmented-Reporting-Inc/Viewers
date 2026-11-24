@@ -65,7 +65,7 @@ import {
   hydrateMeasurementAnnotationsForActiveStudy as hydrateMeasurementAnnotationsForActiveStudyUtil,
 } from './utils/measurementAnnotationHydration';
 import { isSavedLVSimpsonImageMatch, getSavedLVSimpsonControlPoints } from './utils/savedVolumeContourMetadata';
-import { restoreSavedLVSimpsonSlots } from './utils/savedLVSimpsonRestoration';
+import { restoreSavedLVSimpsonSlots, mergeSavedLVSimpsonPanelSources } from './utils/savedLVSimpsonRestoration';
 import { getViewerQuizComparisonLabelCanvasPosition } from './utils/quizReviewLabelLayout';
 import { buildFormApiFetchOptions, buildFormApiUrl } from './utils/formApi';
 import { callMultilineTextDialog } from './utils/callMultilineTextDialog';
@@ -6574,7 +6574,8 @@ function renderLVSimpsonWorkflowPanel({
   }
   panel.replaceChildren();
   // Deleted contours must never reappear from a stale render argument.
-  const currentMeasurements = lvSimpsonPanelController?.getMeasurements?.() || measurements;
+  const currentMeasurements = lvSimpsonPanelController?.getPanelMeasurements?.() ||
+    lvSimpsonPanelController?.getMeasurements?.() || measurements;
   const slots = getLVSimpsonSlotCandidates(currentMeasurements);
   lvSimpsonPanelController?.setObservedIds?.(
     currentMeasurements.map(getMeasurementAnnotationId).filter(Boolean)
@@ -6595,7 +6596,9 @@ function renderLVSimpsonWorkflowPanel({
     // Reuse the same calibrated, validated single-contour calculator as
     // the viewport. Area and long axis remain preserved as source evidence.
     const volumeML = matching.length === 1
-      ? measureEFOpenStage('panel-volume', () => calculateLVSimpsonContourVolumeForMeasurement(measurement)) : null;
+      ? measureEFOpenStage('panel-volume', () => measurement?.arSavedEFPanelSource
+        ? getLVSimpsonSourceVolumes([measurement], { verifiedSavedSources: true })[slot] ?? null
+        : calculateLVSimpsonContourVolumeForMeasurement(measurement)) : null;
     const gold = lvSimpsonPanelController?.savedGoldMeasurement;
     const goldComponent = Array.isArray(gold?.compositeResult?.components)
       ? gold.compositeResult.components.find(item => item?.slot === slot) : null;
@@ -6607,7 +6610,7 @@ function renderLVSimpsonWorkflowPanel({
           ? goldVolume.toFixed(2) + ' mL' : 'volume unavailable'}`
       : '';
     const detail = !measurement ? goldDetail : volumeML !== null
-      ? `single-view volume ${volumeML.toFixed(2)} mL`
+      ? `single-view volume ${volumeML.toFixed(2)} mL${measurement?.arSavedEFPanelSource ? ' (saved)' : ''}`
       : 'single-view volume unavailable';
     const displayName = getLVSimpsonSlotDisplayName(slot);
     const row = document.createElement('div');
@@ -6615,7 +6618,7 @@ function renderLVSimpsonWorkflowPanel({
       display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '6px',
       padding: '6px 0', borderTop: '1px solid #334155',
     });
-    const canNavigateSlot = !!lvSimpsonPanelController?.canNavigateSlot?.(slot);
+    const canNavigateSlot = !!lvSimpsonPanelController?.canNavigateSlot?.(slot, currentMeasurements);
     const rowLabel = document.createElement(canNavigateSlot ? 'button' : 'span');
     rowLabel.textContent = `${measurement ? '✓' : goldComponent ? '◇' : '○'}  ${displayName}${detail ? ' — ' + detail : ''}`;
     rowLabel.dataset.lvSimpsonSlot = slot;
@@ -6628,6 +6631,7 @@ function renderLVSimpsonWorkflowPanel({
     }
     if (canNavigateSlot) {
       (rowLabel as HTMLButtonElement).type = 'button';
+      (rowLabel as HTMLButtonElement).disabled = !!lvSimpsonPanelController?.busy;
       rowLabel.setAttribute('aria-label', `Open educator-assigned image and frame for ${displayName}`);
       Object.assign(rowLabel.style, {
         textAlign: 'left', cursor: 'pointer', background: 'transparent',
@@ -6651,7 +6655,7 @@ function renderLVSimpsonWorkflowPanel({
       control.type = 'button';
       control.textContent = label;
       control.setAttribute('aria-label', title);
-      const disabled = (!!readOnly && !allowLocked) || requiresTarget;
+      const disabled = (!!readOnly && !allowLocked) || requiresTarget || !!lvSimpsonPanelController?.busy;
       control.disabled = disabled;
       Object.assign(control.style, {
         border: '1px solid #94a3b8', borderRadius: '6px', padding: '4px 8px',
@@ -6718,7 +6722,7 @@ function renderLVSimpsonWorkflowPanel({
     controls.appendChild(item);
   };
   if (onContinue) button(continueLabel || 'Continue', onContinue);
-  if (onCalculate) button('Calculate EF', onCalculate);
+  if (onCalculate && !lvSimpsonPanelController?.busy) button('Calculate EF', onCalculate);
   if (onCapture) button('Capture calculated measurement', onCapture, false);
   if (onCancel) button(resultText ? 'Close panel' : 'Cancel EF', onCancel);
   panel.appendChild(controls);
@@ -9724,6 +9728,7 @@ function commandsModule({
       // an unrelated clinical/learner AR Series for saved source evidence.
       assessmentSavedEFAnnotations = null,
       assessmentSavedEFResult = null,
+      deferSavedEFRestoration = false,
       notifyAssessmentOnCalculate = false,
       questionKey = '',
       viewportId: requestedViewportId = '',
@@ -9778,7 +9783,49 @@ function commandsModule({
       }
 
       const assessmentOwnedEF = Array.isArray(assessmentSavedEFAnnotations);
+      const panelFirst = assessmentOwnedEF && deferSavedEFRestoration &&
+        !requestedSlot && !requestedSessionId && !panelOnly;
       let pendingSavedEFRestoration = false;
+      const restoreSources = async (sources: any[], cancelled: () => boolean, slots: readonly string[] = LV_TRACE_REQUIRED_SLOTS) => {
+        const eligible = sources.filter(source =>
+          !viewerMeasurementsDeletedInSession.has(getMeasurementAnnotationId(source)));
+        const endRestoration = beginEFOpenStage('saved-source-restoration');
+        try {
+          return await restoreSavedLVSimpsonSlots({
+            slots, candidatesBySlot: getLVSimpsonSlotCandidates(eligible),
+            getId: getMeasurementAnnotationId,
+            getNativeAnnotation: id => cornerstoneTools.annotation.state.getAnnotation?.(id),
+            removeMisplacedAnnotation: id => {
+              suppressLVSimpsonRecoveryEvents += 1;
+              try { cornerstoneTools.annotation.state.removeAnnotation?.(id); }
+              finally { suppressLVSimpsonRecoveryEvents -= 1; }
+            },
+            hydrate: async source => {
+              const endAttempt = beginEFOpenStage('hydrate-attempt');
+              const slot = getLVSimpsonSlotFromMeasurement(source);
+              const endSlot = LV_TRACE_REQUIRED_SLOTS.includes(slot)
+                ? beginEFOpenStage(('hydrate-' + slot) as EFOpenStage) : () => {};
+              try {
+                return await actions.jumpToSavedViewerAnnotation({
+                  annotation: source, selectAnnotation: false,
+                  runDelayedDisplayRefresh: false, pauseCineOnSource: true,
+                  isCancelled: cancelled,
+                });
+              } finally { endSlot(); endAttempt(); }
+            },
+            getRestoredMeasurement: getCornerstoneVolumeMeasurementFallback,
+            getSlot: getLVSimpsonSlotFromMeasurement,
+            onRestored: (savedContour, measurement) => {
+              upsertLVSimpsonSessionMeasurement({
+                ...measurement, lvSimpson: measurement.lvSimpson,
+                referenceStudyUID: savedContour.StudyInstanceUID || measurement.referenceStudyUID,
+                referenceSeriesUID: savedContour.SeriesInstanceUID || measurement.referenceSeriesUID,
+              }, !assessmentOwnedEF);
+            },
+            isCancelled: cancelled,
+          });
+        } finally { endRestoration(); }
+      };
       // EF-specific, read-only persistence diagnostic. On reopen the normal
       // initial hydrate is panel-only, so restoredCount=0 says nothing about
       // whether source contours were saved. Query the learner Series itself.
@@ -9814,45 +9861,8 @@ function commandsModule({
           // question opening, recover each saved source on its own DICOM frame
           // via the existing saved-annotation navigation/hydration service.
           // Never mistake a persisted quiz answer for a persisted contour.
-          if (efSaved.length > 0) {
-            const endRestoration = beginEFOpenStage('saved-source-restoration');
-            const restored = await restoreSavedLVSimpsonSlots({
-              slots: LV_TRACE_REQUIRED_SLOTS,
-              candidatesBySlot: bySlot,
-              getId: getMeasurementAnnotationId,
-              getNativeAnnotation: id => cornerstoneTools.annotation.state.getAnnotation?.(id),
-              removeMisplacedAnnotation: id => {
-                // A wrong-frame hydration repair is not reader-requested deletion.
-                suppressLVSimpsonRecoveryEvents += 1;
-                try { cornerstoneTools.annotation.state.removeAnnotation?.(id); }
-                finally { suppressLVSimpsonRecoveryEvents -= 1; }
-              },
-              hydrate: async source => {
-                const endAttempt = beginEFOpenStage('hydrate-attempt');
-                const slot = getLVSimpsonSlotFromMeasurement(source);
-                const endSlot = LV_TRACE_REQUIRED_SLOTS.includes(slot)
-                  ? beginEFOpenStage(('hydrate-' + slot) as EFOpenStage) : () => {};
-                try {
-                  return await actions.jumpToSavedViewerAnnotation({
-                    annotation: source, selectAnnotation: false,
-                    runDelayedDisplayRefresh: false, pauseCineOnSource: true,
-                  });
-                } finally { endSlot(); endAttempt(); }
-              },
-              getRestoredMeasurement: getCornerstoneVolumeMeasurementFallback,
-              getSlot: getLVSimpsonSlotFromMeasurement,
-              onRestored: (savedContour, measurement) => {
-                upsertLVSimpsonSessionMeasurement({
-                  ...measurement,
-                  // Native geometry includes any intentional recalibration.
-                  lvSimpson: measurement.lvSimpson,
-                  referenceStudyUID: savedContour.StudyInstanceUID || measurement.referenceStudyUID,
-                  referenceSeriesUID: savedContour.SeriesInstanceUID || measurement.referenceSeriesUID,
-                }, !assessmentOwnedEF);
-              },
-              isCancelled: isWorkflowCancelled,
-            });
-            endRestoration();
+          if (efSaved.length > 0 && !panelFirst) {
+            const restored = await restoreSources(efSaved, isWorkflowCancelled);
             openProfile?.setRestoration({ savedSlots: efSaved.length,
               restoredSlots: restored.restoredCount, pending: restored.pending });
             if (assessmentOwnedEF && restored.restoredCount) {
@@ -9892,13 +9902,21 @@ function commandsModule({
         : [...(measurementService.getMeasurements?.() || []), ...getLVSimpsonSessionMeasurements()]
       );
       const explicitSlot = normalizeLVSimpsonSlot(requestedSlot);
+      const panelSources = (live: any[], studyInstanceId: string) => panelFirst
+        ? mergeSavedLVSimpsonPanelSources({
+            saved: assessmentSavedEFAnnotations, live, studyInstanceId,
+            getId: getMeasurementAnnotationId, getSlot: getLVSimpsonSlotFromMeasurement,
+            isDeleted: id => viewerMeasurementsDeletedInSession.has(id),
+            isChanged: source => getSavedLVSimpsonSourceRevisionState(source) === 'changed',
+          }) : live;
+      const hasSavedPanelSources = panelFirst && panelSources([], activeEFStudy).length > 0;
       const nextMissingSlot = getNextMissingLVSimpsonSlot(slotCandidates);
       // When every restored slot already exists, opening the EF quiz question
       // is a review action, not permission to overwrite A4C ED or restart
       // the 4-step guided drawing workflow.
       const reviewExistingContours = !requestedSessionId && !explicitSlot &&
         (!nextMissingSlot || (assessmentOwnedEF &&
-          (pendingSavedEFRestoration || slotCandidates.size > 0)));
+          (pendingSavedEFRestoration || slotCandidates.size > 0 || hasSavedPanelSources)));
 
       let slotSelection = explicitSlot ? buildLVSimpsonSlotSelection(explicitSlot) : null;
 
@@ -10024,6 +10042,7 @@ function commandsModule({
               return !efStudyInstanceId || !entryStudy || entryStudy === efStudyInstanceId;
             });
         };
+        const getPanelMeasurements = () => panelSources(getStudyMeasurements(), efStudyInstanceId);
         const cancelDrawingWithoutClosingPanel = () => {
           if (!activeLVSimpsonWorkflowSessionId) return;
           activeLVSimpsonWorkflowSessionId = '';
@@ -10032,7 +10051,7 @@ function commandsModule({
           refreshLVSimpsonToolbarState();
         };
         const showRecovery = (message: string) => {
-          const measurements = getStudyMeasurements();
+          const measurements = getPanelMeasurements();
           const missingSlot = getNextMissingLVSimpsonSlot(getLVSimpsonSlotCandidates(measurements));
           renderLVSimpsonWorkflowPanel({
             measurements,
@@ -10067,6 +10086,8 @@ function commandsModule({
               } : null,
           onCalculate: null,
           getMeasurements: getStudyMeasurements,
+          getPanelMeasurements,
+          busy: false,
           setObservedIds(ids: string[]) {
             observedIds.clear();
             ids.forEach(id => observedIds.add(id));
@@ -10075,8 +10096,8 @@ function commandsModule({
           // Guided targets are for acquiring a new contour and can differ
           // from historical gold. Never navigate every saved row via the
           // composite answer's last-used image.
-          getNavigationTarget(slot: string) {
-            const saved = getStudyMeasurements().filter(item =>
+          getNavigationTarget(slot: string, snapshot = getPanelMeasurements()) {
+            const saved = snapshot.filter(item =>
               getLVSimpsonSlotFromMeasurement(item) === slot
             );
             if (saved.length === 1) {
@@ -10104,14 +10125,41 @@ function commandsModule({
             // valid, but an ambiguous contour must not be guessed.
             return saved.length > 1 ? null : getEFContourFrameTarget(this.efContourTargets, slot, { allowCanonical: allowCanonicalFrameTargets });
           },
-          canNavigateSlot(slot: string) {
-            return isActiveStudy() && !!this.getNavigationTarget(slot);
+          canNavigateSlot(slot: string, snapshot?: any[]) {
+            return isActiveStudy() && !!this.getNavigationTarget(slot, snapshot);
           },
           async onNavigateSlot(slot: string) {
-            if (!isActiveStudy()) return;
+            if (!isActiveStudy() || this.busy) return;
             const target = this.getNavigationTarget(slot);
             if (!target) return;
             cancelDrawingWithoutClosingPanel();
+            const savedSlot = panelFirst ? getPanelMeasurements().filter(item =>
+              item.arSavedEFPanelSource && getLVSimpsonSlotFromMeasurement(item) === slot) : [];
+            if (savedSlot.length === 1) {
+              this.busy = true;
+              const cancelled = () => !isActiveStudy() || lvSimpsonPanelController !== this;
+              try {
+                const restored = await restoreSources(savedSlot, cancelled, [slot]);
+                if (cancelled()) return;
+                if (restored.restoredCount !== 1) {
+                  uiNotificationService.show({ title: 'LV EF', type: 'warning', duration: 5000,
+                    message: 'Saved contour could not be restored. Select its row to retry.' });
+                  return;
+                }
+                const id = getMeasurementAnnotationId(savedSlot[0]);
+                const revision = getLVSimpsonAnnotationRevision(id);
+                if (revision && this.savedAssessmentEFDisplay &&
+                    getSavedLVSimpsonSourceRevisionState(savedSlot[0]) === 'unchanged') {
+                  this.savedAssessmentEFDisplay.contourRevisions.set(id, revision);
+                }
+                dispatchLVSimpsonSessionMeasurements({ reason: 'lv-simpson-saved-restored' });
+              } catch (error) {
+                if (!cancelled()) uiNotificationService.show({ title: 'LV EF', type: 'warning',
+                  message: 'Saved contour restoration failed. Select its row to retry.', duration: 5000 });
+                return;
+              } finally { this.busy = false; }
+              if (cancelled()) return;
+            }
             const hasLive = getStudyMeasurements().some(item =>
               getLVSimpsonSlotFromMeasurement(item) === slot);
             if (!hasLive && this.savedGoldMeasurement?.compositeResult?.components
@@ -10150,7 +10198,7 @@ function commandsModule({
           },
           async onDrawSlot(slot: string, method: string = 'freehand') {
             if (!LV_TRACE_REQUIRED_SLOTS.includes(slot) || !isActiveStudy() ||
-                this.canEdit === false) return;
+                this.canEdit === false || this.busy) return;
             if (this.needsConfiguredTarget(slot)) {
               uiNotificationService.show({
                 title: 'EF authoring', type: 'warning', duration: 5000,
@@ -10184,8 +10232,8 @@ function commandsModule({
             });
           },
           onDeleteSlot(slot: string, ids: string[]) {
-            if (!LV_TRACE_REQUIRED_SLOTS.includes(slot) || !ids.length || !isActiveStudy()) return;
-            const currentItems = getStudyMeasurements()
+            if (!LV_TRACE_REQUIRED_SLOTS.includes(slot) || !ids.length || !isActiveStudy() || this.busy) return;
+            const currentItems = getPanelMeasurements()
               .filter(item => getLVSimpsonSlotFromMeasurement(item) === slot);
             if (currentItems.some(item => {
               const id = getMeasurementAnnotationId(item);
@@ -10234,7 +10282,7 @@ function commandsModule({
         currentStudyDisplaySet?.StudyInstanceUID || currentStudyDisplaySet?.studyInstanceUID || ''
       ).trim();
 
-      const calculateEF = () => {
+      const calculateEFCore = () => {
         // EF-only live geometry gate. Session fallbacks may retain the original
         // capture points after Cornerstone edits its annotation; reconcile with
         // the actual editable handles immediately before calculation.
@@ -10400,6 +10448,56 @@ function commandsModule({
           onCancel: hideLVSimpsonWorkflowPanel,
         });
       };
+      const calculateEF = () => {
+        if (!panelFirst) return calculateEFCore();
+        const controller = lvSimpsonPanelController;
+        if (!controller || controller.busy) return;
+        const cancelled = () => {
+          const displaySet = getActiveViewportDisplaySet({
+            viewportGridService, displaySetService,
+            viewportId: viewportGridService.getActiveViewportId(),
+          });
+          return lvSimpsonPanelController !== controller ||
+            String(displaySet?.StudyInstanceUID || displaySet?.studyInstanceUID || '') !== currentStudyId;
+        };
+        const visible = controller.getPanelMeasurements();
+        const slots = getLVSimpsonSlotCandidates(visible);
+        if (!LV_TRACE_REQUIRED_SLOTS.every(slot => slots.get(slot)?.length === 1)) return;
+        controller.busy = true;
+        renderLVSimpsonWorkflowPanel({
+          instruction: 'Restoring and verifying the four source contours before calculating EF…',
+          onCancel: hideLVSimpsonWorkflowPanel,
+        });
+        void (async () => {
+          try {
+            const restored = await restoreSources(
+              visible.filter(item => item.arSavedEFPanelSource), cancelled
+            );
+            if (cancelled()) return;
+            controller.busy = false;
+            const actual = getLVSimpsonSlotCandidates(controller.getMeasurements());
+            if (restored.pending || !LV_TRACE_REQUIRED_SLOTS.every(slot =>
+                actual.get(slot)?.length === 1 &&
+                !!getLVSimpsonAnnotationRevision(getMeasurementAnnotationId(actual.get(slot)[0])))) {
+              renderLVSimpsonWorkflowPanel({
+                instruction: 'Some saved source contours could not be verified. Select their rows to retry or calculate again.',
+                onCalculate: calculateEF, onCancel: hideLVSimpsonWorkflowPanel,
+              });
+              return;
+            }
+            dispatchLVSimpsonSessionMeasurements({ reason: 'lv-simpson-saved-restored' });
+            calculateEFCore();
+          } catch (error) {
+            if (!cancelled()) {
+              controller.busy = false;
+              renderLVSimpsonWorkflowPanel({
+                instruction: 'Unable to restore the source contours. Retry Calculate EF.',
+                onCalculate: calculateEF, onCancel: hideLVSimpsonWorkflowPanel,
+              });
+            }
+          } finally { controller.busy = false; }
+        })();
+      };
       if (panelOnly) {
         // Educator authoring uses the same four-slot panel without starting a
         // drawing session. Choosing Freehand/Axis+Apex explicitly starts one.
@@ -10434,7 +10532,7 @@ function commandsModule({
           lvSimpsonPanelController.onCalculate = calculateEF;
         }
         if (assessmentOwnedEF) {
-          const currentMeasurements = lvSimpsonPanelController?.getMeasurements?.() || [];
+          const currentMeasurements = lvSimpsonPanelController?.getPanelMeasurements?.() || [];
           const currentSlots = getLVSimpsonSlotCandidates(currentMeasurements);
           const allRestored = !pendingSavedEFRestoration &&
             LV_TRACE_REQUIRED_SLOTS.every(slot => currentSlots.get(slot)?.length === 1);
@@ -10472,7 +10570,9 @@ function commandsModule({
             measurements: currentMeasurements,
             resultText,
             instruction: allRestored
-              ? 'Review the four contours and their volume measurements. Select Calculate EF to recalculate.'
+              ? panelFirst
+                ? 'Select a saved contour to open its exact image and frame. Calculate EF restores and verifies all remaining sources.'
+                : 'Review the four contours and their volume measurements. Select Calculate EF to recalculate.'
               : pendingSavedEFRestoration
                 ? 'A saved contour is not yet available on its exact DICOM frame. Its saved evidence is preserved; retry restoration before drawing or recalculating.'
                 : 'Select the drawing technique for a missing contour, or resolve duplicate contours before calculating EF.',
