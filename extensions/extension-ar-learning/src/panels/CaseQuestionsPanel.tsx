@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState, useRef } from 'react';
 import { EchoEFContourVolumes } from '../../../extension-ar-measurements/src/components/EchoEFContourVolumes';
 import { EchoCompositeResultStatus } from '../../../extension-ar-measurements/src/components/EchoCompositeResultStatus';
 import { SharedQuestionSelector, SharedQuestionStepNavigation } from '../../../extension-ar-measurements/src/components/SharedQuestionNavigation';
-import { SharedMeasurementValueInput } from '../../../extension-ar-measurements/src/components/SharedMeasurementValueInput';
+import { SharedMeasurementValueInput, SharedMeasurementLabel } from '../../../extension-ar-measurements/src/components/SharedMeasurementValueInput';
 import { SharedQuestionCard } from '../../../extension-ar-measurements/src/components/SharedQuestionCard';
 import { LearningEchoAcquisitionControls } from '../components/LearningEchoAcquisitionControls';
 import { SharedEFQuestionAnswer } from '../components/SharedEFQuestionAnswer';
@@ -6861,23 +6861,11 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
             return <EchoEFContourVolumes volumes={volumes} status={hasLive ? 'Current' : 'Saved'} />;
           })() : null}
 
-          {cleanString(
+          <SharedMeasurementLabel label={cleanString(
             plainObject(value?.reviewPayload).label ||
             value?.measurementLabel ||
             value?.label
-          ) ? (
-            <div className="min-w-0 whitespace-normal break-words text-xs text-gray-300" title={cleanString(
-              plainObject(value?.reviewPayload).label ||
-              value?.measurementLabel ||
-              value?.label
-            )}>
-              Measurement label: {cleanString(
-                plainObject(value?.reviewPayload).label ||
-                value?.measurementLabel ||
-                value?.label
-              )}
-            </div>
-          ) : null}
+          )} />
 
           {(value?.value === null ||
           typeof value?.value === 'undefined' ||

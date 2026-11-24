@@ -3,6 +3,8 @@ import {
   isIVCDiameterMeasurement,
 } from '../../../extension-ar-measurements/src/utils/rightHeartMeasurements';
 import { buildViewerMeasurementValueCandidates } from '../../../extension-ar-measurements/src/utils/measurementValueCandidates';
+import { getResearchMeasurementToolForField } from './researchMeasurementTool';
+import { buildViewerMeasurementReadUpdates } from './readSchema';
 
 /**
  * Reuse existing OHIF viewer navigation commands rather than duplicating image
@@ -212,6 +214,65 @@ export function getResearchProtocolCompatibleCandidates(
   return candidates.filter(candidate =>
     isResearchCandidateOnProtocolFrames(field, candidate, annotations)
   );
+}
+
+/** The compact question layout is only for independent Echo Length fields. */
+export function isResearchLengthQuestion(field: any, domain: string) {
+  return getResearchMeasurementToolForField(field, domain) === 'Length' &&
+    !['lvEjectionFraction', 'laVolumeDisks', 'rvFac', 'ivcCollapsibility', 'trVmax', 'rap', 'rvsp']
+      .includes(cleanString(field?.componentKey)) &&
+    !field?.config?.calculation && !field?.config?.options?.length &&
+    !Object.keys(field?.config?.compositeFrameTargets || {}).length;
+}
+
+/** Use only Review-owned, compatible Length sources on the configured study
+ * and any pinned frame. A linked source is authoritative; do not guess a
+ * replacement or change manual answers. Normalize a display copy only. */
+export function getResearchLengthSourceState(
+  field: any, fieldSource: any, annotations: any[] = [],
+  candidates: any[] = [], studyInstanceId: unknown = ''
+) {
+  const study = cleanString(studyInstanceId);
+  const eligible = getResearchCompatibleMeasurementCandidates(field, candidates, annotations)
+    .filter(candidate => candidate?.source === 'viewer-measurement' &&
+      Number.isFinite(Number(candidate.value)) && Number(candidate.value) > 0 &&
+      buildViewerMeasurementReadUpdates([field], [candidate], {}).length === 1)
+    .flatMap(candidate => {
+      const matches = getResearchFieldSourceAnnotations(
+        { sourceMeasurementKey: candidate.sourceMeasurementKey }, annotations);
+      if (matches.length !== 1) return [];
+      const annotation = matches[0];
+      const frame = getAnnotationSourceFrame(annotation);
+      const reference = cleanString(annotation?.referencedImageId ||
+        annotation?.metadata?.referencedImageId);
+      const imageStudy = reference.match(/\/studies\/([^/?#]+)/i)?.[1];
+      const imageSeries = reference.match(/\/series\/([^/?#]+)/i)?.[1];
+      // Contradictory DICOM identifiers must never authorize restoration.
+      try {
+        if ((imageStudy && decodeURIComponent(imageStudy) !== study) ||
+            (imageSeries && frame.series && decodeURIComponent(imageSeries) !== frame.series)) return [];
+      } catch { return []; }
+      if (annotation.toolName !== 'Length' || !study || frame.study !== study ||
+          !frame.sop || !Number.isInteger(frame.frame) || frame.frame < 1 ||
+          !Array.isArray(annotation.points) || annotation.points.length !== 2 ||
+          !annotation.points.every(point => Array.isArray(point) && point.length >= 3 &&
+            point.slice(0, 3).every(Number.isFinite))) return [];
+      return [{ candidate, annotation, displayAnnotation: {
+        ...annotation, StudyInstanceUID: frame.study, SeriesInstanceUID: frame.series,
+        SOPInstanceUID: frame.sop, frameNumber: frame.frame,
+      } }];
+    });
+  const unique = Array.from(new Map(eligible.map(item =>
+    [cleanString(item.candidate.sourceMeasurementKey), item])).values());
+  const linkedKey = cleanString(fieldSource?.sourceMeasurementKey);
+  const kind = cleanString(fieldSource?.source);
+  const selected = kind === 'viewer-measurement' && linkedKey
+    ? unique.find(item => cleanString(item.candidate.sourceMeasurementKey) === linkedKey) || null
+    : null;
+  const status = selected ? 'linked' : linkedKey || kind === 'viewer-derived'
+    ? 'invalid' : kind === 'manual' ? 'manual'
+      : unique.length > 1 ? 'ambiguous' : unique.length === 1 ? 'unbound' : 'none';
+  return { status, selected, eligible: unique };
 }
 
 /** Echo IVC label identity is shared by the calculator, redraw flow and UI. */

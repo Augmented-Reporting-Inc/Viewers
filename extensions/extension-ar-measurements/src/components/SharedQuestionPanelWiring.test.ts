@@ -25,6 +25,8 @@ describe('Education and Research share the same question presentation implementa
     }
     expect(learning).toContain('<SharedMeasurementValueInput');
     expect(research).toContain('<SharedMeasurementValueInput');
+    expect(learning).toContain('<SharedMeasurementLabel');
+    expect(research).toContain('<SharedMeasurementLabel');
   });
 
   it('keeps workflow-specific answer ownership instead of routing Research through quiz scoring', () => {
