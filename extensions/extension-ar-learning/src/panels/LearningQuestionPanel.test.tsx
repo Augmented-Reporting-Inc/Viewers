@@ -79,6 +79,16 @@ describe('Education and Research use Learning question renderer', () => {
     }));
     expect(complete.some(node => typeof node === 'string' &&
       node.includes('Complete four LV contours'))).toBe(false);
+
+    const noFrame = nodes(SharedEFQuestionAnswer({
+      value: 58, onChange: () => {}, onOpen: () => {},
+      openDisabled: true,
+    }));
+    const numeric = noFrame.find(node => node.type === 'input' &&
+      node.props.type === 'number');
+    expect(numeric.props.disabled).toBe(false);
+    expect(noFrame.find(node => node.type === 'button' &&
+      node.props.children === 'Open EF panel').props.disabled).toBe(true);
   });
 
   it('uses the shared EF renderer in both controllers without mixing answer APIs', () => {
