@@ -6722,7 +6722,7 @@ function renderLVSimpsonWorkflowPanel({
     controls.appendChild(item);
   };
   if (onContinue) button(continueLabel || 'Continue', onContinue);
-  if (onCalculate && !lvSimpsonPanelController?.busy) button('Calculate EF', onCalculate);
+  if (onCalculate && !lvSimpsonPanelController?.busy) button('Calculate EF', onCalculate, false);
   if (onCapture) button('Capture calculated measurement', onCapture, false);
   if (onCancel) button(resultText ? 'Close panel' : 'Cancel EF', onCancel);
   panel.appendChild(controls);
@@ -10159,6 +10159,14 @@ function commandsModule({
                 return;
               } finally { this.busy = false; }
               if (cancelled()) return;
+              // Restoration already navigated and checked the source image.
+              const currentViewport = cornerstoneViewportService.getCornerstoneViewport(
+                viewportGridService.getActiveViewportId());
+              if (isSavedLVSimpsonImageMatch(savedSlot[0], currentViewport?.getCurrentImageId?.())) {
+                this.activeSlot = slot;
+                updateLVSimpsonCurrentSlotLabel(slot);
+                return;
+              }
             }
             const hasLive = getStudyMeasurements().some(item =>
               getLVSimpsonSlotFromMeasurement(item) === slot);
@@ -10218,7 +10226,7 @@ function commandsModule({
               allowCanonicalFrameTargets, questionKey, captureMethod: method,
               savedGoldMeasurement: this.savedGoldMeasurement,
               goldAuthoringEditable,
-              assessmentSavedEFAnnotations, notifyAssessmentOnCalculate,
+              assessmentSavedEFAnnotations, assessmentSavedEFResult, notifyAssessmentOnCalculate,
               viewportId: viewportGridService.getActiveViewportId(),
             }).catch(error => {
               console.warn('[LV EF] selected contour redraw failed:', error);
@@ -15863,7 +15871,10 @@ function commandsModule({
       selectAnnotation = true,
       runDelayedDisplayRefresh = true,
       pauseCineOnSource = false,
+      isCancelled = () => false,
     } = {}) => {
+      const cancelledResult = { ok: false, reason: 'cancelled' };
+      if (isCancelled()) return cancelledResult;
       const annotationId = getAnnotationId(savedAnnotation);
 
       if (!annotationId) {
@@ -15888,6 +15899,7 @@ function commandsModule({
       });
 
       endDisplaySet();
+      if (isCancelled()) return cancelledResult;
       if (!displaySet) {
         console.warn('[MeasurementAnnotations] no displaySet for saved annotation', {
           annotationId,
@@ -15950,6 +15962,7 @@ function commandsModule({
       });
 
       endViewportReady();
+      if (isCancelled()) return cancelledResult;
       if (!viewport) {
         console.warn(
           '[MeasurementAnnotations] target saved image not ready after displaySet update',
@@ -15978,6 +15991,7 @@ function commandsModule({
       );
 
       endFrameJump();
+      if (isCancelled()) return cancelledResult;
       if (!actualReferencedImageId) {
         return {
           ok: false,
@@ -15995,6 +16009,7 @@ function commandsModule({
       );
 
       endFrameReady();
+      if (isCancelled()) return cancelledResult;
       if (!readyReferencedImageId) {
         return {
           ok: false,
@@ -16009,6 +16024,7 @@ function commandsModule({
       const endSettle = beginEFOpenStage('settle-delay');
       await sleep(50);
       endSettle();
+      if (isCancelled()) return cancelledResult;
 
       const hydratedViewport =
         cornerstoneViewportService.getCornerstoneViewport(targetViewportId) ||
@@ -16170,6 +16186,7 @@ function commandsModule({
 
       hydratedViewport.render?.();
       endViewportRender();
+      if (isCancelled()) return cancelledResult;
 
       if (isUltrasoundDirectionalViewerMeasurement(savedAnnotation)) {
         for (const delayMs of [50, 150, 300]) {
@@ -16224,6 +16241,7 @@ function commandsModule({
       if (pauseCineOnSource) {
         const endFinalFrameCheck = beginEFOpenStage('final-frame-check');
         const sourceViewportId = hydratedViewport.id || targetViewportId;
+        if (isCancelled()) return cancelledResult;
         stopSourceCineForViewport(sourceViewportId);
         const finalImage = await jumpViewportToSavedAnnotationImage(
           hydratedViewport, savedAnnotation
@@ -16235,6 +16253,7 @@ function commandsModule({
           return { ok: false, reason: 'saved-source-frame-not-ready-after-cine-stop',
             annotationId, viewportId: sourceViewportId };
         }
+        if (isCancelled()) return cancelledResult;
         hydratedViewport.render?.();
         endFinalFrameCheck();
       }
