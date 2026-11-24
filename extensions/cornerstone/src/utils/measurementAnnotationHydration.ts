@@ -1,4 +1,5 @@
 import { getSavedSplineType } from './splinePersistence';
+import { getLVSimpsonContourViewportLines } from './lvSimpsonContourViewportText';
 import { metaData } from '@cornerstonejs/core';
 import { getSavedVolumeContourMetadata, getSavedLVSimpsonControlPoints, resolveSavedLVSimpsonHydrationImage } from './savedVolumeContourMetadata';
 import { annotation as csToolsAnnotation, ToolGroupManager } from '@cornerstonejs/tools';
@@ -865,13 +866,17 @@ function getSavedContourDisplayText(savedAnnotation, referencedImageId = '') {
     return length == null ? [] : [`${length >= 100 ? length.toFixed(0) : length >= 10 ? length.toFixed(1) : length.toFixed(2)} mm`];
   }
 
+  const volume = getSavedVolumeContourMetadata(savedAnnotation);
+  if (volume.measurementKind === 'lvSimpsonSlot') {
+    // Use the same editable controls restored by the shared EF hydrator,
+    // not the stored ROI area or the sampled display polyline.
+    return getLVSimpsonContourViewportLines({
+      lvSimpson: volume.lvSimpson,
+      handles: { points: getSavedLVSimpsonControlPoints(savedAnnotation) },
+    }) || [];
+  }
   if (isSavedQuizAreaContour(savedAnnotation)) {
     const areaCM2 = getSavedQuizAreaCM2(savedAnnotation);
-    const volume = getSavedVolumeContourMetadata(savedAnnotation);
-    if (volume.measurementKind === 'lvSimpsonSlot') {
-      const slot = String(volume.lvSimpson?.slot || 'EF contour').replace('_', ' ');
-      return [areaCM2 == null ? `${slot}: area unavailable` : `${slot}: ${areaCM2.toFixed(2)} cm²`];
-    }
     return areaCM2 == null ? [] : [`${areaCM2.toFixed(2)} cm²`];
   }
 
@@ -890,7 +895,7 @@ function getToolGroupForViewportSafe(viewport, viewportId = '') {
     return ToolGroupManager.getToolGroupForViewport?.(
       resolvedViewportId,
       viewport?.renderingEngineId
-    );
+    ) || ToolGroupManager.getToolGroupForViewport?.(resolvedViewportId);
   } catch {
     try {
       return ToolGroupManager.getToolGroupForViewport?.(resolvedViewportId);
@@ -938,6 +943,8 @@ function installSavedContourTextOverrideForViewport({ viewport, viewportId = '',
           candidate?.arVerifiedQuizEFLearnerContour
         );
         if (learnerEFText) return learnerEFText;
+        const efText = getLVSimpsonContourViewportLines(candidate);
+        if (efText) return efText;
         const overrideText = candidate?.arSavedMeasurementDisplayText;
 
         if (Array.isArray(overrideText) && overrideText.length > 0) {
@@ -1039,6 +1046,11 @@ function repatchSavedContourStatsAfterCornerstoneRecalc({
   if (!annotationUID || !CONTOUR_TOOL_NAMES.has(inferToolName(savedAnnotation))) {
     return;
   }
+
+  // EF's live/saved text is calculated from calibrated source controls.
+  // Reapplying generic ROI area caches seven times per restored EF contour
+  // adds render bursts and can overwrite an annotation being edited.
+  if (getSavedVolumeContourMetadata(savedAnnotation).measurementKind === 'lvSimpsonSlot') return;
 
   const patchOnce = delayMs => {
     window.setTimeout(() => {
