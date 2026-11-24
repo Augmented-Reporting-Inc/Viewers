@@ -145,6 +145,7 @@ import { createGuidedMouseToolOwnership } from './utils/guidedMouseToolOwnership
 import { calibrateUSContourPoints, worldToImageIndex } from './utils/usRegionLengthCalibration';
 import { getQuizEchoAreaSourceMetadata, calculateCalibratedEchoAreaCM2, getSavedQuizEchoAreaDisplayInfo, getQuizCompositeContourViewportLines, getQuizCompositeGoldContourSlotMetadata, getVerifiedReleasedLAGoldViewportLines, getVerifiedEFGoldContourViewportLines, getVerifiedEFLearnerContourViewportLines } from './utils/quizEchoAreaCalibration';
 import { installQuizContourTextRenderer } from './utils/installQuizContourTextRenderer';
+import { getLVSimpsonContourViewportLines } from './utils/lvSimpsonContourViewportText';
 import { consumeViewerLengthFirstLabelMode } from './utils/viewerLengthLabelMode';
 import { getViewerQuizRouteMeasurementDomain } from '../../extension-ar-learning/src/utils/viewerQuizMeasurementDomain';
 import { resolveViewerQuizGoldAreaBackfill, resolveSavedEFGoldContourAreas, resolveVerifiedEFGoldContourAreasFromDicom } from '../../extension-ar-measurements/src/utils/quizGoldAreaBackfill';
@@ -5842,6 +5843,7 @@ function installQuizCompositeContourTextOverrideForViewport({
   ])) {
     const installed = installQuizContourTextRenderer({
       toolGroup, toolName, formatQuizContour,
+      formatLVSimpsonContour: getLVSimpsonContourViewportLines,
       sanitizeFallback: sanitizeContourTextLines,
     });
     if (!installed) {
@@ -5851,65 +5853,20 @@ function installQuizCompositeContourTextOverrideForViewport({
 }
 
 function installLVSimpsonContourTextCleanupForViewport({ viewport, viewportId = '', toolName }) {
-  if (!viewport || !toolName) {
-    return;
-  }
-
+  if (!viewport || !toolName) return;
   let toolGroup = null;
-
   try {
-    toolGroup =
-      ToolGroupManager.getToolGroupForViewport?.(
-        viewport.id || viewportId,
-        viewport.renderingEngineId
-      ) || ToolGroupManager.getToolGroupForViewport?.(viewport.id || viewportId);
-  } catch {
-    toolGroup = null;
-  }
-
-  const toolInstance = toolGroup?.getToolInstance?.(toolName);
-
-  if (!toolInstance || toolInstance.__arLVSimpsonTextCleanupInstalled) {
-    return;
-  }
-
-  const previousGetTextLines = toolInstance.configuration?.getTextLines;
-
-  const nextConfiguration = {
-    ...(toolInstance.configuration || {}),
-    getTextLines: function (...args) {
-      const raw = args[0];
-      const data = raw?.annotation?.data || raw?.data || raw;
-      // Verified scored-review values take precedence over any generic ROI
-      // cachedStats or saved measurement text, without recalculation.
-      const goldEFText = getVerifiedEFGoldContourViewportLines(
-        data?.arVerifiedQuizEFGoldContour
-      );
-      if (goldEFText) return goldEFText;
-      const learnerEFText = getVerifiedEFLearnerContourViewportLines(
-        data?.arVerifiedQuizEFLearnerContour
-      );
-      if (learnerEFText) return learnerEFText;
-      const lines =
-        typeof previousGetTextLines === 'function' ? previousGetTextLines.call(this, ...args) : [];
-      const lv = data?.lvSimpson || {};
-      const slot = String(lv.slot || '');
-      if (['A4C_ED', 'A4C_ES', 'A2C_ED', 'A2C_ES'].includes(slot)) {
-        // Cornerstone invokes getTextLines with annotation data, not a stable
-        // MeasurementService record. Match the volume to THIS annotation's
-        // calibrated geometry and editable handles, independent of active frame
-        // and any subsequent EF contour creation or deletion.
-        const volume = calculateLVSimpsonContourVolumeForAnnotationData(raw);
-        return [slot.replace('_', ' ') + ' single-view LV volume: ' +
-          (volume !== null ? volume.toFixed(2) + ' mL' : 'unavailable')];
-      }
-      return sanitizeContourTextLines(lines);
-    },
-  };
-
-  toolInstance.configuration = nextConfiguration;
-  toolGroup?.setToolConfiguration?.(toolName, nextConfiguration, true);
-  toolInstance.__arLVSimpsonTextCleanupInstalled = true;
+    toolGroup = ToolGroupManager.getToolGroupForViewport?.(
+      viewport.id || viewportId, viewport.renderingEngineId
+    ) || ToolGroupManager.getToolGroupForViewport?.(viewport.id || viewportId);
+  } catch {}
+  // Install against the ACTIVE callback, not a permanent tool-instance flag.
+  // Hydration/viewport changes can replace configuration.getTextLines.
+  installQuizContourTextRenderer({
+    toolGroup, toolName,
+    formatLVSimpsonContour: getLVSimpsonContourViewportLines,
+    sanitizeFallback: sanitizeContourTextLines,
+  });
 }
 
 
@@ -10559,7 +10516,7 @@ function commandsModule({
           onCancel: () => clearLVSimpsonWorkflowIfCurrent(workflowSessionId),
         });
         const points = await captureViewerClickTrace({
-          viewport, previewLabel: slotDisplayName + ' LA volume',
+          viewport, previewLabel: slotDisplayName + ' LV volume',
           isCancelled: isWorkflowCancelled,
           setCancelHandler: cancel => {
             if (activeLVSimpsonWorkflowSessionId === workflowSessionId) {
