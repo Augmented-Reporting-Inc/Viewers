@@ -59,10 +59,48 @@ export function attachArImageReadHeaders(config, getHeaders, origin) {
   }
   const candidates = Array.isArray(config.dataSources) ? config.dataSources : [];
   const targets = candidates.filter(source => isOrthancDataSource(source, origin));
-  if (targets.length !== 1) {
-    throw new Error('ar_image_read_secure_orthanc_source_required');
+  if (targets.length > 1) {
+    throw new Error('ar_image_read_secure_orthanc_source_ambiguous');
   }
-  targets[0].configuration.getAdditionalRequestHeaders = getHeaders;
+  // Many AR production builds contain only CloudFront/localhost examples.
+  // Never fall back to any of those for a protected reader. A protected
+  // launch uses a single, hardcoded same-origin Orthanc DICOMweb source and
+  // removes every other datasource from its own window. Ordinary /bviewer,
+  // clinical and unprotected windows retain their original configurations.
+  const trusted = {
+    namespace: '@ohif/extension-default.dataSourcesModule.dicomweb',
+    sourceName: 'dicomweb',
+    configuration: {
+      friendlyName: 'AR Protected Orthanc',
+      name: 'ar-protected-orthanc',
+      wadoUriRoot: origin + '/orthanc/wado',
+      qidoRoot: origin + '/orthanc/dicom-web',
+      wadoRoot: origin + '/orthanc/dicom-web',
+      staticWado: false,
+      qidoSupportsIncludeField: false,
+      supportsReject: false,
+      supportsFuzzyMatching: false,
+      supportsWildcard: false,
+      imageRendering: 'wadors',
+      thumbnailRendering: 'wadors',
+      enableStudyLazyLoad: true,
+      singlepart: 'thumbnail,bulkdata',
+      bulkDataURI: { enabled: true, relativeResolution: 'studies' },
+      omitQuotationForMultipartRequest: true,
+      acceptHeader: [
+        'multipart/related; type=application/octet-stream; transfer-syntax=*',
+      ],
+      getAdditionalRequestHeaders: getHeaders,
+    },
+  };
+  // Reuse only the verified Orthanc source's non-security rendering settings
+  // when it already exists; never inherit a dynamic root/redirect/source ID.
+  if (targets.length === 1 && targets[0]?.configuration?.singlepart) {
+    trusted.configuration.singlepart = targets[0].configuration.singlepart;
+  }
+  config.dataSources = [trusted];
+  config.defaultDataSourceName = 'dicomweb';
+  config.showStudyList = false;
   config.getArImageReadHeaders = getHeaders;
   return config;
 }
