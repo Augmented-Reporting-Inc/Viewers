@@ -46,6 +46,7 @@ describe('Research source capture is opt-in without changing other viewer workfl
     expect(panel).toContain('getVerifiedResearchEFResultCandidate(');
     expect(panel).toContain('ar-measurements:lv-simpson-capture-requested');
     expect(panel).toContain('Calculated EF cannot be saved:');
+    expect(panel).toContain('All four EF contour phases are present, but no protocol-verified EF answer');
     expect(viewerCommands).toContain('const assessmentOwned = Array.isArray(assessmentSavedEFAnnotations)');
     expect(viewerCommands).toContain('notifyAssessmentOnCalculate');
   });
