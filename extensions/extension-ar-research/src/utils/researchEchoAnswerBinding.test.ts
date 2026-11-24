@@ -3,6 +3,7 @@ import {
   reconcileResearchEchoCompositeAnswers,
   getVerifiedResearchEFResultCandidate,
   dedupeResearchMeasurementCandidates,
+  getResearchEFRestoreSources,
 } from './researchEchoAnswerBinding';
 import { buildReadFields, buildReadResultEntries, buildReadValueState } from './readSchema';
 
@@ -64,6 +65,24 @@ describe('Research source-backed composite answer capture', () => {
     expect(buildReadResultEntries([field], state.values, state.sources)).toMatchObject([{
       componentKey: kind, value: 62.4, source: 'viewer-derived',
     }]);
+  });
+
+  it('restores the four saved EF answer sources while retaining older conflicting records', () => {
+    const { field, candidate, annotations } = fixture('lvEjectionFraction');
+    const verified = annotations.map(item => ({
+      ...item, measurementKind: 'lvSimpsonSlot',
+    }));
+    const oldConflict = {
+      ...verified[2], annotationId: 'old-A2C-ED', frameNumber: 27,
+    };
+    const all = [...verified, oldConflict];
+    expect(getResearchEFRestoreSources(
+      field, all, candidate.sourceMeasurementKey
+    )).toEqual(verified);
+    expect(getResearchEFRestoreSources(field, all, '')).toEqual(all);
+    expect(getResearchEFRestoreSources(
+      field, all, 'lv-simpson:source-A4C_ED,source-A4C_ES,old-A2C-ED,source-A2C_ES'
+    )).toEqual(all);
   });
 
   it('does not mistake the live and explicit copy of one EF source as competing answers', () => {
