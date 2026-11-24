@@ -70,6 +70,26 @@ export function assertTrustedArFrameImageId(imageId, origin, studyInstanceUID) {
   return true;
 }
 
+export function assertTrustedArBulkDataUri(raw, origin, studyInstanceUID) {
+  if (typeof raw !== 'string' || !raw || raw.length > 4096 ||
+      !DICOM_ID.test(studyInstanceUID) || /%(?:2f|5c|25)/i.test(raw)) {
+    throw new Error('ar_image_read_bulk_uri_invalid');
+  }
+  let target;
+  try {
+    const base = origin + '/orthanc/dicom-web/';
+    target = new URL(raw.replace(/^wadors:/, ''), base);
+  } catch { throw new Error('ar_image_read_bulk_uri_invalid'); }
+  if (target.origin !== origin ||
+      target.username || target.password ||
+      !target.pathname.startsWith(
+        '/orthanc/dicom-web/studies/' + studyInstanceUID + '/'
+      )) {
+    throw new Error('ar_image_read_bulk_origin_not_allowed');
+  }
+  return true;
+}
+
 /** Attach a function, not a token, to the verified same-origin Orthanc
  * datasource and frame loader. Never forward the grant to a CDN/other origin.
  */
@@ -124,6 +144,8 @@ export function attachArImageReadHeaders(config, getHeaders, origin, studyInstan
   config.getArImageReadHeaders = getHeaders;
   config.assertArImageReadImageId = imageId =>
     assertTrustedArFrameImageId(imageId, origin, studyInstanceUID);
+  trusted.configuration.assertArImageReadBulkDataUri = raw =>
+    assertTrustedArBulkDataUri(raw, origin, studyInstanceUID);
   return config;
 }
 
