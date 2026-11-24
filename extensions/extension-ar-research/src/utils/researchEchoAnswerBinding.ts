@@ -4,7 +4,48 @@ import {
   getResearchBindingSources,
   getResearchCompatibleMeasurementCandidates,
   getResearchProtocolViewerTargets,
+  isResearchCandidateOnProtocolFrames,
 } from './researchFieldNavigation';
+
+/**
+ * Adapt the already-calculated, active-study EF snapshot used by Education
+ * to Research's source-linked ReadSchema. This does NOT recalculate EF.
+ * Every one of its four named sources must be in the current Review snapshot
+ * and must match the Research protocol's exact DICOM SOP and frame.
+ */
+export function getVerifiedResearchEFResultCandidate(
+  field: any,
+  snapshot: any,
+  annotations: any[] = []
+) {
+  if (field?.componentKey !== 'lvEjectionFraction' ||
+      snapshot?.composite?.measurementKind !== 'lvSimpsonEF') return null;
+  const value = Number(snapshot?.composite?.value);
+  if (!Number.isFinite(value) || value < 0 || value > 100) return null;
+  const expected = ['A4C_ED', 'A4C_ES', 'A2C_ED', 'A2C_ES'];
+  const components = snapshot?.composite?.components;
+  if (!Array.isArray(components) || components.length !== expected.length ||
+      components.some((entry: any, index: number) =>
+        String(entry?.slot || '') !== expected[index] ||
+        !String(entry?.annotationId || '').trim())) return null;
+  const ids = components.map((entry: any) => String(entry.annotationId).trim());
+  if (new Set(ids).size !== expected.length) return null;
+  const selected = ids.map(id => annotations.find(item =>
+    String(item?.annotationId || item?.uid || item?.id || '') === id
+  ));
+  if (selected.some(item => !item) ||
+      selected.some(item => String(item?.StudyInstanceUID || item?.referenceStudyUID || '') !==
+        String(snapshot.studyInstanceId || ''))) return null;
+  const candidate = {
+    labels: ['LVEF', 'LV EF', 'EF'],
+    value,
+    unit: '%',
+    source: 'viewer-derived',
+    sourceMeasurementKey: 'lv-simpson:' + ids.join(','),
+  };
+  return isResearchCandidateOnProtocolFrames(field, candidate, annotations)
+    ? candidate : null;
+}
 
 const GUIDED_COMPOSITE_KINDS = new Set([
   'lvEjectionFraction', 'laVolumeDisks', 'rvFac', 'ivcCollapsibility',
