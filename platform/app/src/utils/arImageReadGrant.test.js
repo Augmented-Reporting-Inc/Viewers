@@ -3,6 +3,7 @@ import {
   attachArImageReadHeaders,
   createArImageReadGrantSession,
   assertTrustedArFrameImageId,
+  assertTrustedArBulkDataUri,
 } from './arImageReadGrant';
 
 const origin = 'https://dragonfoot.futurepacs.com';
@@ -194,4 +195,23 @@ test('frame loader cannot attach grant to another Study, CDN, or WADO-URI', () =
   ]) {
     expect(()=>protectedConfig.assertArImageReadImageId(invalid)).toThrow(/ar_image_read_frame_/);
   }
+});
+
+test('DICOM BulkDataURI must refer to the same Orthanc Study before sending grant', () => {
+  const source=attachArImageReadHeaders({
+    dataSources:[cdn(),orthanc()],
+  },()=>({ 'X-AR-Image-Grant':token }),origin,study);
+  const policy=source.dataSources[0].configuration.assertArImageReadBulkDataUri;
+  const resource='/orthanc/dicom-web/studies/'+study+
+    '/series/1.2.3/instances/1.2.4/bulk/00420011';
+  expect(policy(origin+resource)).toBe(true);
+  expect(policy(resource)).toBe(true);
+  expect(assertTrustedArBulkDataUri('studies/'+study+
+    '/series/1.2.3/instances/1.2.4/bulk/00420011',origin,study)).toBe(true);
+  for(const bad of [
+    'https://cdn.example.test'+resource,
+    origin+resource.replace(study,'1.2.840.999'),
+    '/orthanc/instances/123/file',
+    origin+resource.replace('/studies/','/studies%2f'),
+  ]) expect(()=>policy(bad)).toThrow(/ar_image_read_bulk_/);
 });
