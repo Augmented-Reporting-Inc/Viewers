@@ -2,6 +2,7 @@ import {
   parseArImageReadScope,
   attachArImageReadHeaders,
   createArImageReadGrantSession,
+  assertTrustedArFrameImageId,
 } from './arImageReadGrant';
 
 const origin = 'https://dragonfoot.futurepacs.com';
@@ -149,7 +150,7 @@ test('protected window uses only same-origin Orthanc even when default is CDN', 
   const getHeaders = () => ({ 'X-AR-Image-Grant': token });
   for(const sources of [[cdn(),orthanc()],[cdn()],[orthanc()]]) {
     const config = { dataSources: sources, defaultDataSourceName:'dicomweb' };
-    const result = attachArImageReadHeaders(config,getHeaders,origin);
+    const result = attachArImageReadHeaders(config,getHeaders,origin,study);
     expect(result.dataSources).toHaveLength(1);
     expect(result.defaultDataSourceName).toBe('dicomweb');
     expect(result.showStudyList).toBe(false);
@@ -161,7 +162,7 @@ test('protected window uses only same-origin Orthanc even when default is CDN', 
     expect(JSON.stringify(result.dataSources)).not.toContain('cdn.example.test');
   }
   expect(() => attachArImageReadHeaders(
-    { dataSources: [orthanc(),orthanc()] },getHeaders,origin
+    { dataSources: [orthanc(),orthanc()] },getHeaders,origin,study
   )).toThrow('ar_image_read_secure_orthanc_source_ambiguous');
 });
 
@@ -174,4 +175,23 @@ test('iUSCAN /bviewer config remains byte-for-byte unchanged by grant scope chec
   });
   expect(await session.initialize()).toBe(false);
   expect(original).toEqual(JSON.parse(before));
+});
+
+test('frame loader cannot attach grant to another Study, CDN, or WADO-URI', () => {
+  const frameId = 'wadors:' + origin + '/orthanc/dicom-web/studies/' +
+    study + '/series/1.2.3/instances/1.2.4/frames/2';
+  expect(assertTrustedArFrameImageId(frameId,origin,study)).toBe(true);
+  const protectedConfig=attachArImageReadHeaders(
+    { dataSources:[cdn(),orthanc()] },()=>({'X-AR-Image-Grant':token}),origin,study
+  );
+  expect(protectedConfig.assertArImageReadImageId(frameId)).toBe(true);
+  for(const invalid of [
+    frameId.replace(study,'1.2.840.999'),
+    frameId.replace(origin,'https://cdn.example.test'),
+    frameId.replace('/orthanc/dicom-web/','/ortho/'),
+    frameId.replace('wadors:','wadouri:'),
+    frameId.replace('/frames/2','/preview'),
+  ]) {
+    expect(()=>protectedConfig.assertArImageReadImageId(invalid)).toThrow(/ar_image_read_frame_/);
+  }
 });
