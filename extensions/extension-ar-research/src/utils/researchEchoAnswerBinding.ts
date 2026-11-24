@@ -23,6 +23,60 @@ export function dedupeResearchMeasurementCandidates(candidates: any[] = []) {
   ).values());
 }
 
+export function getResearchAnnotationKey(annotation: any = {}) {
+  return String(annotation?.annotationId || annotation?.annotationUID ||
+    annotation?.uid || annotation?.id || '').trim();
+}
+
+function isEFSource(annotation: any) {
+  return annotation?.measurementKind === 'lvSimpsonSlot' ||
+    annotation?.lvSimpson?.measurementKind === 'lvSimpsonSlot' ||
+    annotation?.measurements?.lvSimpson?.measurementKind === 'lvSimpsonSlot';
+}
+
+/** Keep immutable saved EF evidence through incomplete hydration. The
+ * shared viewer reports real editable-control revisions and deletions. */
+export function mergeResearchMeasurementAnnotations(
+  saved: any[] = [], live: any[] = [],
+  deletedIds: ReadonlySet<string> = new Set(),
+  invalidatedEFIds: ReadonlySet<string> = new Set()
+) {
+  const merged = new Map<string, any>();
+  for (const annotation of saved || []) {
+    const key = getResearchAnnotationKey(annotation);
+    if (key && !deletedIds.has(key)) merged.set(key, annotation);
+  }
+  const savedEFIds = new Set([...merged].filter(([, item]) => isEFSource(item))
+    .map(([key]) => key));
+  for (const annotation of live || []) {
+    const key = getResearchAnnotationKey(annotation);
+    if (!key || deletedIds.has(key)) continue;
+    if (savedEFIds.has(key) && !invalidatedEFIds.has(key)) continue;
+    merged.set(key, annotation);
+  }
+  return Array.from(merged.values());
+}
+
+export function applyResearchSnapshotEvidence(
+  serialized: any, deletedIds: Set<string>, invalidatedEFIds: Set<string>
+) {
+  const evidence = serialized?.researchEchoEvidence || {};
+  for (const id of Array.isArray(evidence.deletedAnnotationIds) ? evidence.deletedAnnotationIds : [])
+    deletedIds.add(id);
+  for (const id of Array.isArray(evidence.invalidatedEFSourceIds) ? evidence.invalidatedEFSourceIds : [])
+    invalidatedEFIds.add(id);
+  return evidence;
+}
+
+export function withPersistedResearchEF(candidates: any[], persisted: any) {
+  return dedupeResearchMeasurementCandidates([
+    ...(persisted && !candidates.some(item =>
+      String(item?.sourceMeasurementKey || '').startsWith('lv-simpson:'))
+      ? [persisted] : []),
+    ...candidates,
+  ]);
+}
+
 /**
  * Restore exactly the four source contours named by a previously verified
  * Research EF answer when still present on protocol frames. Keep every other
@@ -34,11 +88,7 @@ export function getResearchEFRestoreSources(
   savedAnnotations: any[] = [],
   savedSourceKey: unknown = ''
 ) {
-  const allEF = (Array.isArray(savedAnnotations) ? savedAnnotations : []).filter(
-    annotation => annotation?.measurementKind === 'lvSimpsonSlot' ||
-      annotation?.lvSimpson?.measurementKind === 'lvSimpsonSlot' ||
-      annotation?.measurements?.lvSimpson?.measurementKind === 'lvSimpsonSlot'
-  );
+  const allEF = (Array.isArray(savedAnnotations) ? savedAnnotations : []).filter(isEFSource);
   const key = String(savedSourceKey || '').trim();
   if (field?.componentKey !== 'lvEjectionFraction' ||
       !key.startsWith('lv-simpson:')) return allEF;
@@ -122,8 +172,7 @@ export function getPersistedResearchEFCandidate(
   if (ids.length !== slots.length ||
       key.slice('lv-simpson:'.length).split(',').length !== slots.length ||
       ids.some(id => invalidatedSourceIds.has(id))) return null;
-  const annotationId = (item: any) =>
-    String(item?.annotationId || item?.uid || item?.id || '');
+  const annotationId = getResearchAnnotationKey;
   const geometry = (item: any) => item?.lvSimpson || item?.measurements?.lvSimpson || {};
   const components = ids.map(id => {
     const annotation = annotations.find(item =>
@@ -150,9 +199,10 @@ export function getPersistedResearchEFCandidate(
     }
     return { annotationId: id, slot };
   });
-  if (components.some(component => !component) ||
-      new Set(components.map(component => component.slot)).size !== slots.length) return null;
-  const ordered = slots.map(slot => components.find(component => component.slot === slot));
+  const validComponents = components.filter(Boolean) as { annotationId: string; slot: string }[];
+  if (validComponents.length !== slots.length ||
+      new Set(validComponents.map(component => component.slot)).size !== slots.length) return null;
+  const ordered = slots.map(slot => validComponents.find(component => component.slot === slot));
   const verified = getVerifiedResearchEFResultCandidate(field, {
     studyInstanceId,
     composite: { measurementKind: 'lvSimpsonEF', value, components: ordered },
