@@ -1,3 +1,4 @@
+import { hasMatchingLVSimpsonControlPoints } from '../../../extension-ar-measurements/src/utils/lvSimpson';
 import { buildViewerMeasurementValueCandidates } from '../../../extension-ar-measurements/src/utils/measurementValueCandidates';
 import { buildViewerMeasurementReadUpdates } from './readSchema';
 import {
@@ -65,7 +66,10 @@ export function getVerifiedResearchEFResultCandidate(
 ) {
   if (field?.componentKey !== 'lvEjectionFraction' ||
       snapshot?.composite?.measurementKind !== 'lvSimpsonEF') return null;
-  const value = Number(snapshot?.composite?.value);
+  const rawValue = snapshot?.composite?.value;
+  if (rawValue == null || typeof rawValue === 'boolean' ||
+      String(rawValue).trim() === '' || !snapshot?.studyInstanceId) return null;
+  const value = Number(rawValue);
   if (!Number.isFinite(value) || value < 0 || value > 100) return null;
   const expected = ['A4C_ED', 'A4C_ES', 'A2C_ED', 'A2C_ES'];
   const components = snapshot?.composite?.components;
@@ -81,6 +85,15 @@ export function getVerifiedResearchEFResultCandidate(
   if (selected.some(item => !item) ||
       selected.some(item => String(item?.StudyInstanceUID || item?.referenceStudyUID || '') !==
         String(snapshot.studyInstanceId || ''))) return null;
+  // The set of configured frames alone cannot detect swapped ED/ES sources.
+  if (selected.some((item, index) => {
+    const slot = item?.lvSimpson?.slot || item?.measurements?.lvSimpson?.slot || item?.slot;
+    const target = field.config?.compositeFrameTargets?.[expected[index]];
+    return (!!slot && slot !== expected[index]) ||
+      (!!target && !isResearchCandidateOnProtocolFrames(
+        { config: { viewerTarget: target } }, { sourceMeasurementKey: ids[index] }, [item]
+      ));
+  })) return null;
   const candidate = {
     labels: ['LVEF', 'LV EF', 'EF'],
     value,
@@ -103,7 +116,7 @@ export function getPersistedResearchEFCandidate(
 ) {
   const key = String(source?.sourceMeasurementKey || '');
   if (source?.source !== 'viewer-derived' || !key.startsWith('lv-simpson:') ||
-      value == null || value === '' || !studyInstanceId) return null;
+      value == null || typeof value === 'boolean' || String(value).trim() === '' || !studyInstanceId) return null;
   const ids = getResearchSourceAnnotationIds(key);
   const slots = ['A4C_ED', 'A4C_ES', 'A2C_ED', 'A2C_ES'];
   if (ids.length !== slots.length ||
@@ -112,7 +125,7 @@ export function getPersistedResearchEFCandidate(
   const annotationId = (item: any) =>
     String(item?.annotationId || item?.uid || item?.id || '');
   const geometry = (item: any) => item?.lvSimpson || item?.measurements?.lvSimpson || {};
-  const components = ids.map((id, index) => {
+  const components = ids.map(id => {
     const annotation = annotations.find(item =>
       String(item?.annotationId || item?.uid || item?.id || '') === id);
     const slot = String(annotation?.lvSimpson?.slot ||
@@ -120,7 +133,7 @@ export function getPersistedResearchEFCandidate(
     const kind = annotation?.measurementKind || annotation?.lvSimpson?.measurementKind ||
       annotation?.measurements?.lvSimpson?.measurementKind;
     const current = currentAnnotations.find(item => annotationId(item) === id);
-    if (!annotation || !current || kind !== 'lvSimpsonSlot' || slot !== slots[index]) return null;
+    if (!annotation || !current || kind !== 'lvSimpsonSlot' || !slots.includes(slot)) return null;
     // Compare the editable controls, not OHIF's resampled display polyline.
     // An absent live annotation is normal during hydration; the merge retains
     // the original saved source. An edited live contour may retain the ID.
@@ -128,13 +141,7 @@ export function getPersistedResearchEFCandidate(
       const before = geometry(annotation).originalContourPoints || annotation.splineControlPoints;
       const after = current.splineControlPoints || current.lvSimpsonControlPoints ||
         geometry(current).originalContourPoints;
-      if (!Array.isArray(before) || !Array.isArray(after) || before.length < 6 ||
-          before.length !== after.length || !before.every((point, i) =>
-            Array.isArray(point) && Array.isArray(after[i]) &&
-            point.length >= 3 && after[i].length >= 3 &&
-            point.slice(0, 3).every((v, j) => Number.isFinite(v) &&
-              Number.isFinite(after[i][j]) && Math.abs(v - after[i][j]) <= 0.00001)
-          )) return null;
+      if (!hasMatchingLVSimpsonControlPoints(before, after)) return null;
       // Recalibration can change a source without changing its ID.
       if (geometry(annotation).calibratedLongAxisLengthMM !==
           geometry(current).calibratedLongAxisLengthMM ||
@@ -143,11 +150,16 @@ export function getPersistedResearchEFCandidate(
     }
     return { annotationId: id, slot };
   });
-  if (components.some(component => !component)) return null;
-  return getVerifiedResearchEFResultCandidate(field, {
+  if (components.some(component => !component) ||
+      new Set(components.map(component => component.slot)).size !== slots.length) return null;
+  const ordered = slots.map(slot => components.find(component => component.slot === slot));
+  const verified = getVerifiedResearchEFResultCandidate(field, {
     studyInstanceId,
-    composite: { measurementKind: 'lvSimpsonEF', value, components },
+    composite: { measurementKind: 'lvSimpsonEF', value, components: ordered },
   }, currentAnnotations);
+  // Older verified Reviews may have recorded the same four IDs in a
+  // different order. Preserve that saved source identity without guessing.
+  return verified ? { ...verified, sourceMeasurementKey: key } : null;
 }
 
 /** Load the saved answer from the Review, not mutable question inputs. */
