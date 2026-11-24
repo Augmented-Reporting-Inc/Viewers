@@ -16,6 +16,7 @@ on:
       - AR-1106-shared-echo-ef-question-volume
       - fix/research-ef-contour-capture-and-length-20261123
       - refactor/shared-learning-research-question-panel-20261123
+      - refactor/shared-assessment-research-navigation-20261123
     paths:
       - 'extensions/extension-ar-research/src/**'
       - 'extensions/extension-ar-measurements/src/**'
@@ -80,6 +81,7 @@ jobs:
             'extensions/extension-ar-learning/src/panels/LearningQuestionPanel.tsx',
             'extensions/extension-ar-learning/src/components/LearningEchoAcquisitionControls.tsx',
             'extensions/extension-ar-learning/src/components/LearningEFPanelLauncher.tsx',
+            'extensions/extension-ar-learning/src/components/SharedEFQuestionAnswer.tsx',
             'extensions/extension-ar-learning/src/components/LearningSingleChoiceAnswer.tsx',
             'extensions/extension-ar-measurements/src/utils/echoCompositeAcquisition.ts',
             'extensions/extension-ar-learning/src/panels/CaseQuestionsPanel.tsx',
