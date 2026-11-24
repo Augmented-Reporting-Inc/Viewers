@@ -117,6 +117,10 @@ export function normalizeReadSchema(readSchema: any = {}) {
     schemaVersion: cleanString(schema.schemaVersion),
     domain: cleanString(schema.domain).toLowerCase(),
     compatibilitySource: cleanString(schema.compatibilitySource),
+    // The authored question-list contract belongs to the persisted schema,
+    // not to viewer heuristics. Preserve its explicit navigation policy.
+    config: schema.config && typeof schema.config === 'object' &&
+      !Array.isArray(schema.config) ? { ...schema.config } : {},
     segments: (Array.isArray(schema.segments) ? schema.segments : [])
       .map(segment => {
         const key = cleanKey(typeof segment === 'string' ? segment : segment?.key);
