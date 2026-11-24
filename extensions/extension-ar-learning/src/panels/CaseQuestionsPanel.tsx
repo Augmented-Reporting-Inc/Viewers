@@ -5,7 +5,7 @@ import { SharedQuestionSelector, SharedQuestionStepNavigation } from '../../../e
 import { SharedMeasurementValueInput } from '../../../extension-ar-measurements/src/components/SharedMeasurementValueInput';
 import { SharedQuestionCard } from '../../../extension-ar-measurements/src/components/SharedQuestionCard';
 import { LearningEchoAcquisitionControls } from '../components/LearningEchoAcquisitionControls';
-import { LearningEFPanelLauncher } from '../components/LearningEFPanelLauncher';
+import { SharedEFQuestionAnswer } from '../components/SharedEFQuestionAnswer';
 import { LearningSingleChoiceAnswer } from '../components/LearningSingleChoiceAnswer';
 import LearningQuestionPanel from './LearningQuestionPanel';
 import { getEchoCompositeAcquisitionSteps } from '../../../extension-ar-measurements/src/utils/echoCompositeAcquisition';
@@ -6766,6 +6766,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
               'ivcCollapsibility'].includes(
               cleanString(plainObject(question.answerConfig).measurementKind)
             ) ? null : cleanString(plainObject(question.answerConfig).measurementKind) === 'trVmax'
+              ? null : cleanString(plainObject(question.answerConfig).measurementKind) === 'lvSimpsonEF'
               ? null : (
                         <SharedMeasurementValueInput
                           value={numberOrEmpty(value?.value)}
@@ -6791,13 +6792,34 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
 
 
           {!bowelSet && cleanString(plainObject(question.answerConfig).measurementKind) === 'lvSimpsonEF' ? (
-            <LearningEFPanelLauncher
+            <SharedEFQuestionAnswer
+              value={numberOrEmpty(value?.value)}
+              unit={value?.unit || question?.answerConfig?.unit || '%'}
               disabled={disabled || captureInProgress}
+              busy={captureInProgress}
+              onChange={nextValue =>
+                setAnswer(
+                  quiz.quizKey,
+                  question,
+                  setObjectAnswerPart(value, {
+                    value: nextValue,
+                    measurementType: value?.measurementType || question?.answerConfig?.measurementType || '',
+                    unit: value?.unit || question?.answerConfig?.unit || '%',
+                  })
+                )
+              }
+              onDelete={cleanString(value?.sourceAnnotationId) ? () =>
+                void deleteLearnerQuizSourceMeasurement(quiz, question, value) : undefined}
               onOpen={() => void runViewerCommand(commandsManager, 'activateViewerQuizMeasurementTool', {
                 measurementKind: 'lvSimpsonEF',
                 questionKey: question.questionKey,
                 efContourTargets: getCompleteEFContourFrameTargets(question.answerConfig),
               })}
+              showInstructions={
+                value?.value === null ||
+                typeof value?.value === 'undefined' ||
+                cleanString(value?.value) === ''
+              }
             />
           ) : null}
 
@@ -6857,13 +6879,12 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
             </div>
           ) : null}
 
-          {value?.value === null ||
+          {(value?.value === null ||
           typeof value?.value === 'undefined' ||
-          cleanString(value?.value) === '' ? (
+          cleanString(value?.value) === '') &&
+          cleanString(plainObject(question.answerConfig).measurementKind) !== 'lvSimpsonEF' ? (
             <div className="text-xs text-gray-400">
-              {cleanString(plainObject(question.answerConfig).measurementKind) === 'lvSimpsonEF'
-                ? 'Complete four LV contours, select Calculate EF in the EF panel, then capture the calculated result.'
-                : cleanString(plainObject(question.answerConfig).measurementKind) === 'laVolumeBiplane'
+              {cleanString(plainObject(question.answerConfig).measurementKind) === 'laVolumeBiplane'
                   ? 'Complete both LA contours, then capture the calculated volume.'
                   : cleanString(plainObject(question.answerConfig).measurementKind) === 'trVmax'
                     ? 'Complete a calibrated TR spectral peak measurement; the quiz will capture its velocity and DICOM source automatically.'
