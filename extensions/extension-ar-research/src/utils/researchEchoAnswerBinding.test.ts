@@ -2,6 +2,7 @@ import { buildViewerMeasurementValueCandidates } from '../../../extension-ar-mea
 import {
   reconcileResearchEchoCompositeAnswers,
   getVerifiedResearchEFResultCandidate,
+  dedupeResearchMeasurementCandidates,
 } from './researchEchoAnswerBinding';
 import { buildReadFields, buildReadResultEntries, buildReadValueState } from './readSchema';
 
@@ -63,6 +64,18 @@ describe('Research source-backed composite answer capture', () => {
     expect(buildReadResultEntries([field], state.values, state.sources)).toMatchObject([{
       componentKey: kind, value: 62.4, source: 'viewer-derived',
     }]);
+  });
+
+  it('does not mistake the live and explicit copy of one EF source as competing answers', () => {
+    const live = {
+      source: 'viewer-derived', sourceMeasurementKey: 'lv-simpson:id1,id2,id3,id4',
+      labels: ['LVEF'], value: 54.1, unit: '%',
+    };
+    const explicitlyReviewed = { ...live, value: 54.2 };
+    const other = { ...live, sourceMeasurementKey: 'lv-simpson:other-id' };
+    expect(dedupeResearchMeasurementCandidates([
+      live, other, explicitlyReviewed,
+    ])).toEqual([explicitlyReviewed, other]);
   });
 
   it('adapts the Education EF checkpoint to the exact Research frames without recalculating EF', () => {
