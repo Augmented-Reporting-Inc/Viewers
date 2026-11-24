@@ -16,6 +16,7 @@ import {
   reconcileResearchEchoCompositeAnswers,
   getVerifiedResearchEFResultCandidate,
   dedupeResearchMeasurementCandidates,
+  getResearchEFRestoreSources,
 } from '../utils/researchEchoAnswerBinding';
 import { isMatchingQuizEFCompletion } from '../../../extension-ar-learning/src/utils/quizCompositeCaptureIntent';
 import { getResearchMeasurementToolForField } from '../utils/researchMeasurementTool';
@@ -1433,11 +1434,13 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
               commandsManager={commandsManager}
               sourceAnnotations={selectedSources}
               assessmentSavedEFAnnotations={selectedField?.componentKey === 'lvEjectionFraction'
-                ? savedAnnotations.filter(annotation =>
-                    (annotation?.measurementKind === 'lvSimpsonSlot' ||
-                     annotation?.lvSimpson?.measurementKind === 'lvSimpsonSlot') &&
-                    String(annotation?.StudyInstanceUID || annotation?.referenceStudyUID || '') ===
-                      String(context?.sourceStudyInstanceUID || '')
+                ? getResearchEFRestoreSources(
+                    selectedField,
+                    savedAnnotations.filter(annotation =>
+                      String(annotation?.StudyInstanceUID || annotation?.referenceStudyUID || '') ===
+                        String(context?.sourceStudyInstanceUID || '')
+                    ),
+                    valueSources[selectedField.key]?.sourceMeasurementKey
                   )
                 : null}
               ivcMeasurementState={ivcMeasurementState}
