@@ -42,6 +42,12 @@ export default function initWADOImageLoader(
       if (headers) {
         Object.assign(xhrRequestHeaders, headers);
       }
+      // AR-1107: pixel/frame requests use the same per-window grant as QIDO
+      // and metadata. Ordinary, clinical and iUSCAN bviewer sessions do not
+      // have this function and preserve their existing session auth.
+      if (typeof appConfig.getArImageReadHeaders === 'function') {
+        Object.assign(xhrRequestHeaders, appConfig.getArImageReadHeaders());
+      }
 
       return xhrRequestHeaders;
     },
