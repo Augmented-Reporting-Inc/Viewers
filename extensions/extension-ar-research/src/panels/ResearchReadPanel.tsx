@@ -5,6 +5,7 @@ import React, {
   useRef,
   useState,
 } from 'react';
+import { beginEFOpenStage, measureEFOpenStage } from '../../../extension-ar-measurements/src/utils/efPanelOpenProfile';
 import { buildViewerMeasurementValueCandidates } from '../../../extension-ar-measurements/src/utils/measurementValueCandidates';
 import { EchoEFContourVolumes, getLVSimpsonSourceVolumes } from '../../../extension-ar-measurements/src/components/EchoEFContourVolumes';
 import { EchoCompositeResultStatus } from '../../../extension-ar-measurements/src/components/EchoCompositeResultStatus';
@@ -376,7 +377,8 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
       return !deletedAnnotationIdsRef.current.has(id) &&
         !invalidatedEFSourceIdsRef.current.has(id);
     });
-    return getLVSimpsonSourceVolumes(selected, { verifiedSavedSources: !!persistedEF });
+    return measureEFOpenStage('research-saved-volumes', () =>
+      getLVSimpsonSourceVolumes(selected, { verifiedSavedSources: !!persistedEF }));
   }, [fields, savedAnnotations, persistedReadState, allAnnotations, persistedEF]);
   const displayedEFVolumes = {
     ...liveVerifiedEchoEvidence.efVolumes,
@@ -437,6 +439,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
       return;
     }
 
+    const endBinding = beginEFOpenStage('research-binding');
     try {
       const serialized = prepared?.serialized ?? await commandsManager.runCommand(
         'getSerializedViewerMeasurements',
@@ -562,7 +565,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
         '[AR Research] viewer measurement binding refresh failed',
         bindingError
       );
-    }
+    } finally { endBinding(); }
   }, [
     commandsManager,
     context?.preview,
