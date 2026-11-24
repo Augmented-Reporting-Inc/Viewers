@@ -1,4 +1,6 @@
 import React from 'react';
+import { createRoot } from 'react-dom/client';
+import { act } from 'react-dom/test-utils';
 import {
   SharedQuestionSelector,
   SharedQuestionStepNavigation,
@@ -52,20 +54,30 @@ describe('shared Learning/Research question UI', () => {
   it('keeps deletion delegated to owning Learning or Research workflow', () => {
     let deleted = 0;
     let newValue = '';
-    const nodes = flatten(SharedMeasurementValueInput({
-      value: 2.8, unit: 'mm', onChange: value => { newValue = value; },
-      onDelete: () => { deleted++; },
-    }));
-    const input = nodes.find(item => item.type === 'input');
-    const deleteButton = nodes.find(item => item.type === 'button');
-    expect(input.props.value).toBe(2.8);
-    input.props.onChange({ target: { value: '3.2' } });
-    expect(newValue).toBe('3.2');
-    deleteButton.props.onClick({ preventDefault: () => {}, stopPropagation: () => {} });
-    expect(deleted).toBe(1);
-    const withoutDelete = flatten(SharedMeasurementValueInput({
-      value: '', onChange: () => {}, disabled: true,
-    }));
-    expect(withoutDelete.some(item => item.type === 'button')).toBe(false);
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    const prior = (globalThis as any).IS_REACT_ACT_ENVIRONMENT;
+    (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+    try {
+      act(() => root.render(<SharedMeasurementValueInput
+        value={2.8} unit="mm" onChange={value => { newValue = value; }}
+        onDelete={() => { deleted++; }} />));
+      const input = container.querySelector('input')!;
+      expect(input.value).toBe('2.8');
+      act(() => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, '3.2');
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+      expect(newValue).toBe('3.2');
+      act(() => container.querySelector('button')!.click());
+      expect(deleted).toBe(1);
+      act(() => root.render(<SharedMeasurementValueInput value="" onChange={() => {}} disabled />));
+      expect(container.querySelector('button')).toBeNull();
+    } finally {
+      act(() => root.unmount());
+      container.remove();
+      (globalThis as any).IS_REACT_ACT_ENVIRONMENT = prior;
+    }
   });
 });
