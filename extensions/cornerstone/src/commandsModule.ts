@@ -9701,6 +9701,7 @@ function commandsModule({
       // Optional assessment-owned EF contours. When provided, do not query
       // an unrelated clinical/learner AR Series for saved source evidence.
       assessmentSavedEFAnnotations = null,
+      assessmentSavedEFResult = null,
       notifyAssessmentOnCalculate = false,
       questionKey = '',
       viewportId: requestedViewportId = '',
@@ -9716,7 +9717,9 @@ function commandsModule({
       if (!requestedSessionId) {
         // Opening the educator authoring panel is not a new contour/EF
         // calculation: do not invalidate a previously reviewed value.
-        if (!panelOnly) {
+        // Reopening an assessment-owned result is not a geometry mutation.
+        // The existing contour edit/delete guard invalidates the checkpoint.
+        if (!panelOnly && (!Array.isArray(assessmentSavedEFAnnotations) || requestedSlot)) {
           explicitLVSimpsonResult = null;
           reviewedLVSimpsonEF = null;
         }
@@ -9747,6 +9750,8 @@ function commandsModule({
         return null;
       }
 
+      const assessmentOwnedEF = Array.isArray(assessmentSavedEFAnnotations);
+      let pendingSavedEFRestoration = false;
       // EF-specific, read-only persistence diagnostic. On reopen the normal
       // initial hydrate is panel-only, so restoredCount=0 says nothing about
       // whether source contours were saved. Query the learner Series itself.
@@ -9800,7 +9805,10 @@ function commandsModule({
                   !isSavedLVSimpsonImageMatch(savedContour, existing?.metadata?.referencedImageId)) {
                 // Remove misplaced legacy state; the authoritative source is
                 // the saved SOP/frame, not the image currently shown.
-                cornerstoneTools.annotation.state.removeAnnotation?.(savedId);
+                // Internal rehydration is not a reader-requested deletion.
+                suppressLVSimpsonRecoveryEvents += 1;
+                try { cornerstoneTools.annotation.state.removeAnnotation?.(savedId); }
+                finally { suppressLVSimpsonRecoveryEvents -= 1; }
               }
               if (!cornerstoneTools.annotation.state.getAnnotation?.(savedId)) {
                 let outcome = await actions.jumpToSavedViewerAnnotation({
@@ -9811,7 +9819,9 @@ function commandsModule({
                 });
                 // Use the existing exact-image readiness checks for a
                 // transient viewport transition, not a second panel opening.
-                if (outcome?.retryable && !isWorkflowCancelled()) {
+                if ((outcome?.retryable ||
+                    outcome?.reason === 'annotation-hydration-failed' ||
+                    outcome?.reason === 'display-set-not-found') && !isWorkflowCancelled()) {
                   outcome = await actions.jumpToSavedViewerAnnotation({
                     annotation: savedContour,
                     selectAnnotation: false,
@@ -9821,6 +9831,7 @@ function commandsModule({
                 }
                 if (isWorkflowCancelled()) return null;
                 if (outcome?.ok !== true) {
+                  pendingSavedEFRestoration = true;
                   slotRestoration[slot] = outcome?.reason || 'hydration-failed';
                   continue;
                 }
@@ -9830,16 +9841,20 @@ function commandsModule({
               // A live state hit is not sufficient: verify SOP and frame before
               // trusting saved EF geometry for review or recalculation.
               if (restored && !isSavedLVSimpsonImageMatch(savedContour, restored.referencedImageId)) {
+                pendingSavedEFRestoration = true;
                 slotRestoration[slot] = 'image-frame-mismatch';
                 continue;
               }
               if (!restored?.lvSimpson || getLVSimpsonSlotFromMeasurement(restored) !== slot) {
+                pendingSavedEFRestoration = true;
                 slotRestoration[slot] = 'missing-live-geometry';
                 continue;
               }
               upsertLVSimpsonSessionMeasurement({
                 ...restored,
-                lvSimpson: savedContour.lvSimpson || savedContour.measurements?.lvSimpson,
+                // A previously edited/recalibrated native contour is already
+                // authoritative. Do not replace it with stale saved metadata.
+                lvSimpson: restored.lvSimpson,
                 referenceStudyUID: savedContour.StudyInstanceUID || restored.referenceStudyUID,
                 referenceSeriesUID: savedContour.SeriesInstanceUID || restored.referenceSeriesUID,
               });
@@ -9851,27 +9866,37 @@ function commandsModule({
             });
           }
         } catch (error) {
+          if (assessmentOwnedEF && assessmentSavedEFAnnotations.length) pendingSavedEFRestoration = true;
           console.warn('[LV EF saved-slot audit] read failed', {
             errorType: error?.name || 'Error',
             status: Number(error?.response?.status || error?.status || 0) || null,
           });
         }
         if (isWorkflowCancelled()) return null;
+        // Exact-frame hydration can change the active viewport. Use the
+        // resulting viewport, not the pre-hydration enabled element.
+        activeViewportId = viewportGridService.getActiveViewportId() || activeViewportId;
+        viewport = cornerstoneViewportService.getCornerstoneViewport(activeViewportId) || viewport;
       }
 
-      const liveMeasurements = measurementService.getMeasurements?.() || [];
-      const sessionLVSimpsonMeasurements = getLVSimpsonSessionMeasurements();
-
-      const slotCandidates = getLVSimpsonSlotCandidates([
-        ...liveMeasurements,
-        ...sessionLVSimpsonMeasurements,
-      ]);
+      const activeEFDisplaySet = getActiveViewportDisplaySet({
+        viewportGridService, displaySetService, viewportId: activeViewportId,
+      });
+      const activeEFStudy = String(activeEFDisplaySet?.StudyInstanceUID ||
+        activeEFDisplaySet?.studyInstanceUID || '');
+      const slotCandidates = getLVSimpsonSlotCandidates(
+        getCurrentViewerMeasurementSnapshot(measurementService).filter(item => {
+          const sourceStudy = String(item?.referenceStudyUID || item?.StudyInstanceUID || '');
+          return !activeEFStudy || sourceStudy === activeEFStudy;
+        })
+      );
       const explicitSlot = normalizeLVSimpsonSlot(requestedSlot);
       const nextMissingSlot = getNextMissingLVSimpsonSlot(slotCandidates);
       // When every restored slot already exists, opening the EF quiz question
       // is a review action, not permission to overwrite A4C ED or restart
       // the 4-step guided drawing workflow.
-      const reviewExistingContours = !requestedSessionId && !explicitSlot && !nextMissingSlot;
+      const reviewExistingContours = !requestedSessionId && !explicitSlot &&
+        (!nextMissingSlot || (assessmentOwnedEF && pendingSavedEFRestoration));
 
       let slotSelection = explicitSlot ? buildLVSimpsonSlotSelection(explicitSlot) : null;
 
@@ -10392,9 +10417,57 @@ function commandsModule({
           lvSimpsonPanelController.activeSlot = '';
           lvSimpsonPanelController.onCalculate = calculateEF;
         }
-        // Revalidate restored live geometry before displaying calculated
-        // volumes. This never writes/overwrites the saved quiz EF answer.
-        calculateEF();
+        if (assessmentOwnedEF) {
+          const currentMeasurements = lvSimpsonPanelController?.getMeasurements?.() || [];
+          const currentSlots = getLVSimpsonSlotCandidates(currentMeasurements);
+          const allRestored = !pendingSavedEFRestoration &&
+            LV_TRACE_REQUIRED_SLOTS.every(slot => currentSlots.get(slot)?.length === 1);
+          const explicit = getExplicitLVSimpsonResult(currentStudyId);
+          const sourceIds = String(assessmentSavedEFResult?.sourceMeasurementKey || '')
+            .replace(/^lv-simpson:/, '').split(',').filter(Boolean);
+          const expectedSavedIds = new Set(assessmentSavedEFAnnotations.map(getMeasurementAnnotationId));
+          const currentIds = new Set(currentMeasurements.map(getMeasurementAnnotationId));
+          const savedValue = Number(assessmentSavedEFResult?.value);
+          const savedVerified = assessmentSavedEFResult?.source === 'viewer-derived' &&
+            String(assessmentSavedEFResult?.sourceMeasurementKey || '').startsWith('lv-simpson:') &&
+            sourceIds.length === 4 && new Set(sourceIds).size === 4 &&
+            sourceIds.every(id => expectedSavedIds.has(id) &&
+              !viewerMeasurementsDeletedInSession.has(id)) &&
+            Number.isFinite(savedValue) && savedValue >= 0 && savedValue <= 100;
+          const explicitVerified = explicit?.composite?.components?.length === 4 &&
+            explicit.composite.components.every(component =>
+              currentIds.has(String(component.annotationId)) &&
+              !viewerMeasurementsDeletedInSession.has(String(component.annotationId)));
+          const resultText = explicitVerified
+            ? `Calculated LVEF: ${roundQuizMeasurementValue(explicit.composite.value, 2).toFixed(2)}%`
+            : savedVerified
+              ? `Saved LVEF: ${roundQuizMeasurementValue(savedValue, 2).toFixed(2)}%`
+              : '';
+          lvSimpsonPanelController.onCalculate = allRestored ? calculateEF : null;
+          // A saved contour that cannot be restored is not a missing drawing.
+          // Never automatically activate a replacement tool over that slot.
+          renderLVSimpsonWorkflowPanel({
+            measurements: currentMeasurements,
+            resultText,
+            instruction: allRestored
+              ? 'Review the four contours and their volume measurements. Select Calculate EF to recalculate.'
+              : 'A saved contour is not yet available on its exact DICOM frame. Its saved evidence is preserved; retry restoration before drawing or recalculating.',
+            warnings: allRestored ? [] : ['Saved contour restoration is incomplete.'],
+            onCalculate: allRestored ? calculateEF : null,
+            continueLabel: allRestored ? '' : 'Retry saved contours',
+            onContinue: allRestored ? null : () => {
+              void actions.startLVSimpsonEFWorkflow({
+                assessmentSavedEFAnnotations, assessmentSavedEFResult, notifyAssessmentOnCalculate,
+                efContourTargets, allowCanonicalFrameTargets, questionKey,
+              });
+            },
+            onCancel: hideLVSimpsonWorkflowPanel,
+          });
+        } else {
+          // Education/clinical behavior is unchanged: verify the restored
+          // live geometry before displaying calculated volumes.
+          calculateEF();
+        }
         return null;
       }
 
