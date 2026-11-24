@@ -33,6 +33,8 @@ describe('shared Learning/Research question UI', () => {
     expect(options.map(item => item.props.value)).toEqual(['', 'quiz:ef', 'quiz:lvidd']);
     expect(nodes.some(item => item.type === 'optgroup')).toBe(true);
     expect(selector.props.value).toBe('quiz:ef');
+    expect(options[1].props.children).toBe('1. ✓ EF');
+    expect(options[2].props.children).toBe('2. LVIDd');
     selector.props.onChange({ target: { value: 'quiz:lvidd' } });
     expect(selected).toEqual(['quiz:lvidd']);
   });

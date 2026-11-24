@@ -31,6 +31,10 @@ describe('Education and Research use Learning question renderer', () => {
     }));
     const select = tree.find(element => element.type === 'select');
     expect(select).toBeTruthy();
+    expect(select.props.value).toBe('ef|');
+    expect(tree.filter(element => element.type === 'div' && element.props['data-question-key'])
+      .map(element => element.props['data-question-key'])).toEqual(['ef|']);
+    expect(tree).toContain('Active Question');
     select.props.onChange({ target: { value: 'lvidd|' } });
     expect(navigated).toBe('lvidd|');
     expect(tree.some(element => element.type === 'div' &&
@@ -52,7 +56,11 @@ describe('Education and Research use Learning question renderer', () => {
     }));
     const button = ivc.find(node => node.type === 'button');
     button.props.onClick({ preventDefault() {}, stopPropagation() {} });
-    expect(chosen).toEqual(['IVC_EXP']);
+    const inspiration = ivc.find(node => node.type === 'button' &&
+      node.props.children === 'Measure inspiration (IVCinsp)');
+    expect(inspiration).toBeTruthy();
+    inspiration.props.onClick({ preventDefault() {}, stopPropagation() {} });
+    expect(chosen).toEqual(['IVC_EXP', 'IVC_INSP']);
   });
 
   it('shares EF answer, launcher and guidance without owning persistence', () => {
