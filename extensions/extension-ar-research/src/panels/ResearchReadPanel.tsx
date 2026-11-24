@@ -18,6 +18,7 @@ import {
   getVerifiedResearchEFResultCandidate,
   dedupeResearchMeasurementCandidates,
   getResearchEFRestoreSources,
+  resolvePersistedResearchEF,
 } from '../utils/researchEchoAnswerBinding';
 import { isMatchingQuizEFCompletion } from '../../../extension-ar-learning/src/utils/quizCompositeCaptureIntent';
 import { getResearchMeasurementToolForField } from '../utils/researchMeasurementTool';
@@ -76,20 +77,50 @@ function getAnnotationKey(annotation: any = {}) {
   );
 }
 
+function isEFSource(annotation: any) {
+  return annotation?.measurementKind === 'lvSimpsonSlot' ||
+    annotation?.lvSimpson?.measurementKind === 'lvSimpsonSlot' ||
+    annotation?.measurements?.lvSimpson?.measurementKind === 'lvSimpsonSlot';
+}
+
 function mergeMeasurementAnnotations(
   saved: any[] = [], live: any[] = [],
-  deletedIds: Set<string> = new Set()
+  deletedIds: Set<string> = new Set(),
+  invalidatedEFIds: ReadonlySet<string> = new Set()
 ) {
   const merged = new Map<string, any>();
-
-  for (const annotation of [...(saved || []), ...(live || [])]) {
+  for (const annotation of saved || []) {
     const key = getAnnotationKey(annotation);
-    if (key && !deletedIds.has(key)) {
-      merged.set(key, annotation);
-    }
+    if (key && !deletedIds.has(key)) merged.set(key, annotation);
   }
-
+  for (const annotation of live || []) {
+    const key = getAnnotationKey(annotation);
+    if (!key || deletedIds.has(key)) continue;
+    // A partial/normalized hydration snapshot cannot overwrite the unchanged
+    // saved EF source. The shared viewer explicitly reports geometry revisions.
+    if (isEFSource(merged.get(key)) && !invalidatedEFIds.has(key)) continue;
+    merged.set(key, annotation);
+  }
   return Array.from(merged.values());
+}
+
+function applyResearchSnapshotEvidence(
+  serialized: any, deletedIds: Set<string>, invalidatedEFIds: Set<string>
+) {
+  const evidence = serialized?.researchEchoEvidence || {};
+  for (const id of evidence.deletedAnnotationIds || []) deletedIds.add(id);
+  for (const id of evidence.invalidatedEFSourceIds || []) invalidatedEFIds.add(id);
+  return evidence;
+}
+
+function withPersistedEF(candidates: any[], persisted: any) {
+  // A freshly verified Calculate EF checkpoint supersedes the saved answer.
+  return dedupeResearchMeasurementCandidates([
+    ...(persisted && !candidates.some(item =>
+      String(item?.sourceMeasurementKey || '').startsWith('lv-simpson:'))
+      ? [persisted] : []),
+    ...candidates,
+  ]);
 }
 
 function getAnnotationLabel(annotation: any = {}) {
@@ -272,6 +303,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
   // Explicit research-source deletion is carried through Save even if
   // legacy clinical Series hydration is unavailable for this research case.
   const deletedAnnotationIdsRef = useRef<Set<string>>(new Set());
+  const invalidatedEFSourceIdsRef = useRef<Set<string>>(new Set());
   // Redraw is transactional in the local draft: retain the old source until
   // a NEW calibrated, correctly labelled annotation lands on the pinned SOP/
   // frame. Closing the viewer without completing does not delete old evidence.
@@ -319,10 +351,11 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
       const persistedAnnotations = Array.isArray(next?.review?.measurementAnnotations)
         ? next.review.measurementAnnotations : [];
       deletedAnnotationIdsRef.current = new Set();
+      invalidatedEFSourceIdsRef.current = new Set();
       pendingIVCReplacementRef.current = null;
       setLiveAnnotations([]);
       setLiveVerifiedEchoEvidence({ candidates: [], efVolumes: {} });
-      setViewerCandidates(buildViewerMeasurementValueCandidates(persistedAnnotations));
+      setViewerCandidates(buildViewerMeasurementValueCandidates(persistedAnnotations, { includeLVSimpson: false }));
       setSavedAnnotations(persistedAnnotations);
     } catch (loadError) {
       console.error('[AR Research] unable to load Research Read context', loadError);
@@ -371,12 +404,37 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
 
   const allAnnotations = useMemo(
     () => mergeMeasurementAnnotations(
-      savedAnnotations, liveAnnotations, deletedAnnotationIdsRef.current
+      savedAnnotations, liveAnnotations, deletedAnnotationIdsRef.current,
+      invalidatedEFSourceIdsRef.current
     ),
     [savedAnnotations, liveAnnotations]
   );
-
-  const savedEFVolumes = useMemo(() => getLVSimpsonSourceVolumes(savedAnnotations), [savedAnnotations]);
+  const persistedReadState = useMemo(
+    () => buildReadValueState(context?.review?.readResults || {}),
+    [context?.review?.readResults]
+  );
+  const persistedEF = useMemo(() => resolvePersistedResearchEF(
+    fields, persistedReadState.values, persistedReadState.sources,
+    savedAnnotations, allAnnotations, context?.sourceStudyInstanceUID,
+    invalidatedEFSourceIdsRef.current
+  ), [fields, persistedReadState, savedAnnotations, allAnnotations, context?.sourceStudyInstanceUID]);
+  const savedEFVolumes = useMemo(() => {
+    const efField = fields.find(field => field.componentKey === 'lvEjectionFraction');
+    const selected = getResearchEFRestoreSources(
+      efField, savedAnnotations, persistedReadState.sources[efField?.key]?.sourceMeasurementKey
+    ).filter(annotation => {
+      const id = getAnnotationKey(annotation);
+      return !deletedAnnotationIdsRef.current.has(id) &&
+        !invalidatedEFSourceIdsRef.current.has(id);
+    });
+    return getLVSimpsonSourceVolumes(selected);
+  }, [fields, savedAnnotations, persistedReadState, allAnnotations]);
+  const displayedEFVolumes = {
+    ...savedEFVolumes,
+    ...Object.fromEntries(Object.entries(liveVerifiedEchoEvidence.efVolumes).filter(
+      ([slot, volume]) => volume != null || savedEFVolumes[slot] == null
+    )),
+  };
   const calculatedReadState = useMemo(() => {
     if (context?.readOnly || context?.preview) {
       return { values, sources: valueSources };
@@ -386,13 +444,14 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
     // engines; Research retains its own ReadSchema values and ownership.
     const reconciled = reconcileResearchEchoCompositeAnswers(
       fields, values, valueSources, allAnnotations,
-      liveVerifiedEchoEvidence.candidates
+      withPersistedEF(liveVerifiedEchoEvidence.candidates, persistedEF),
+      { verifiedEFOnly: true }
     );
     return buildCalculatedReadState(
       fields, reconciled.values, reconciled.sources, viewerCandidates
     );
   }, [context?.readOnly, context?.preview, fields, values, valueSources,
-      viewerCandidates, allAnnotations, liveVerifiedEchoEvidence.candidates]);
+      viewerCandidates, allAnnotations, liveVerifiedEchoEvidence.candidates, persistedEF]);
   const missingRequired = useMemo(
     () => getMissingRequiredReadFields(fields, calculatedReadState.values),
     [fields, calculatedReadState.values]
@@ -436,7 +495,11 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
           domain: cleanString(context?.readSchema?.domain) || 'generic',
           workflow: VIEWER_MEASUREMENTS_WORKFLOW,
           includeResearchEchoContours: true,
+          researchSavedAnnotations: savedAnnotations,
         }
+      );
+      const evidence = applyResearchSnapshotEvidence(
+        serialized, deletedAnnotationIdsRef.current, invalidatedEFSourceIdsRef.current
       );
 
       const snapshot = (Array.isArray(serialized?.annotations)
@@ -451,9 +514,9 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
       // candidate creation; otherwise a replaced IVC phase is still counted
       // twice until the next React render.
       const available = mergeMeasurementAnnotations(
-        savedAnnotations, snapshot, deletedAnnotationIdsRef.current
+        savedAnnotations, snapshot, deletedAnnotationIdsRef.current,
+        invalidatedEFSourceIdsRef.current
       );
-      const evidence = serialized?.researchEchoEvidence || {};
       const liveVerified = (Array.isArray(evidence.candidates)
         ? evidence.candidates : []).filter(candidate =>
         getResearchSourceAnnotationIds(candidate?.sourceMeasurementKey).every(id =>
@@ -478,9 +541,14 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
         candidates: verifiedEvidence,
         efVolumes: evidence.efVolumes || {},
       });
+      const savedEF = resolvePersistedResearchEF(
+        fields, persistedReadState.values, persistedReadState.sources,
+        savedAnnotations, available, context?.sourceStudyInstanceUID,
+        invalidatedEFSourceIdsRef.current
+      );
       const candidateList = [
-        ...buildViewerMeasurementValueCandidates(available),
-        ...verifiedEvidence,
+        ...buildViewerMeasurementValueCandidates(available, { includeLVSimpson: false }),
+        ...withPersistedEF(verifiedEvidence, savedEF),
       ];
       const candidates = dedupeResearchMeasurementCandidates(candidateList);
       setViewerCandidates(candidates);
@@ -550,8 +618,10 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
     context?.preview,
     context?.readOnly,
     context?.readSchema?.domain,
+    context?.sourceStudyInstanceUID,
     fields,
     savedAnnotations,
+    persistedReadState,
   ]);
 
   // Education already listens to this exact EF calculation/capture event.
@@ -582,10 +652,14 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
         const serialized = await commandsManager.runCommand('getSerializedViewerMeasurements', {
           domain: 'echo', workflow: VIEWER_MEASUREMENTS_WORKFLOW,
           includeResearchEchoContours: true,
+          researchSavedAnnotations: savedAnnotations,
         });
+        applyResearchSnapshotEvidence(
+          serialized, deletedAnnotationIdsRef.current, invalidatedEFSourceIdsRef.current
+        );
         const available = mergeMeasurementAnnotations(
           savedAnnotations, Array.isArray(serialized?.annotations) ? serialized.annotations : [],
-          deletedAnnotationIdsRef.current
+          deletedAnnotationIdsRef.current, invalidatedEFSourceIdsRef.current
         );
         const verified = getVerifiedResearchEFResultCandidate(field, snapshot, available);
         if (!verified) {
@@ -809,20 +883,30 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
           domain: cleanString(context?.readSchema?.domain) || 'generic',
           workflow: VIEWER_MEASUREMENTS_WORKFLOW,
           includeResearchEchoContours: true,
+          researchSavedAnnotations: savedAnnotations,
         }
       );
       if (!Array.isArray(serialized?.annotations)) {
         throw new Error('Viewer measurement snapshot is unavailable');
       }
 
+      const evidence = applyResearchSnapshotEvidence(
+        serialized, deletedAnnotationIdsRef.current, invalidatedEFSourceIdsRef.current
+      );
+      const liveIds = new Set(serialized.annotations.map(getAnnotationKey));
+      // Never save stale geometry after a genuine edit if that source is
+      // temporarily unavailable. Unchanged saved sources need no hydration.
+      if (savedAnnotations.some(annotation => {
+        const id = getAnnotationKey(annotation);
+        return invalidatedEFSourceIdsRef.current.has(id) &&
+          !deletedAnnotationIdsRef.current.has(id) && !liveIds.has(id);
+      })) throw new Error('An edited EF contour is not available. Restore its frame before saving.');
       return {
         annotations: mergeMeasurementAnnotations(
-          savedAnnotations,
-          Array.isArray(serialized?.annotations) ? serialized.annotations : [],
-          deletedAnnotationIdsRef.current
+          savedAnnotations, serialized.annotations, deletedAnnotationIdsRef.current,
+          invalidatedEFSourceIdsRef.current
         ),
-        verifiedCandidates: Array.isArray(serialized?.researchEchoEvidence?.candidates)
-          ? serialized.researchEchoEvidence.candidates : [],
+        verifiedCandidates: Array.isArray(evidence.candidates) ? evidence.candidates : [],
       };
     } catch (captureError) {
       console.warn(
@@ -860,11 +944,16 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
       const verifiedEF = efField
         ? getVerifiedResearchEFResultCandidate(efField, efSnapshot, measurementAnnotations)
         : null;
-      const freshVerifiedEvidence = dedupeResearchMeasurementCandidates([
+      const savedEF = resolvePersistedResearchEF(
+        fields, persistedReadState.values, persistedReadState.sources,
+        savedAnnotations, measurementAnnotations, context?.sourceStudyInstanceUID,
+        invalidatedEFSourceIdsRef.current
+      );
+      const freshVerifiedEvidence = withPersistedEF([
         ...freshVerified, ...(verifiedEF ? [verifiedEF] : []),
-      ]);
+      ], savedEF);
       const candidateList = [
-        ...buildViewerMeasurementValueCandidates(measurementAnnotations),
+        ...buildViewerMeasurementValueCandidates(measurementAnnotations, { includeLVSimpson: false }),
         ...freshVerifiedEvidence,
       ];
       const latestCandidates = dedupeResearchMeasurementCandidates(candidateList);
@@ -892,7 +981,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
       // even if the last MeasurementService event has not yet been delivered.
       const reconciled = reconcileResearchEchoCompositeAnswers(
         fields, values, valueSourcesRef.current, measurementAnnotations,
-        freshVerifiedEvidence
+        freshVerifiedEvidence, { verifiedEFOnly: true }
       );
       const latestValues = { ...reconciled.values };
       const latestSources = { ...reconciled.sources };
@@ -998,6 +1087,10 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
           : measurementAnnotations
       );
       deletedAnnotationIdsRef.current = new Set();
+      invalidatedEFSourceIdsRef.current = new Set();
+      setLiveAnnotations([]);
+      setLiveVerifiedEchoEvidence({ candidates: [], efVolumes: {} });
+      setViewerCandidates(latestCandidates);
       notify(
         servicesManager,
         `Research Read saved (${readResults.entries.length} structured result${
@@ -1021,6 +1114,9 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
     servicesManager,
     calculatedReadState,
     values,
+    persistedReadState,
+    savedAnnotations,
+    commandsManager,
   ]);
 
   const complete = useCallback(async () => {
@@ -1474,13 +1570,17 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
               assessmentSavedEFAnnotations={selectedField?.componentKey === 'lvEjectionFraction'
                 ? getResearchEFRestoreSources(
                     selectedField,
-                    savedAnnotations.filter(annotation =>
+                    allAnnotations.filter(annotation =>
                       String(annotation?.StudyInstanceUID || annotation?.referenceStudyUID || '') ===
-                        String(context?.sourceStudyInstanceUID || '')
+                        String(context?.sourceStudyInstanceUID || '') &&
+                      (!invalidatedEFSourceIdsRef.current.has(getAnnotationKey(annotation)) ||
+                        liveAnnotations.some(item => getAnnotationKey(item) === getAnnotationKey(annotation)))
                     ),
-                    valueSources[selectedField.key]?.sourceMeasurementKey
+                    calculatedReadState.sources[selectedField.key]?.sourceMeasurementKey
                   )
                 : null}
+              assessmentSavedEFResult={selectedField?.componentKey === 'lvEjectionFraction'
+                ? persistedEF : null}
               ivcMeasurementState={ivcMeasurementState}
               ivcReadValue={guidedIVCValue}
               efValue={calculatedReadState.values[selectedField.key] ?? ''}
@@ -1509,8 +1609,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
           ) : null}
           {selectedField?.componentKey === 'lvEjectionFraction' && (
             <EchoEFContourVolumes
-              volumes={Object.keys(liveVerifiedEchoEvidence.efVolumes).length
-                ? liveVerifiedEchoEvidence.efVolumes : savedEFVolumes}
+              volumes={displayedEFVolumes}
               status={Object.keys(liveVerifiedEchoEvidence.efVolumes).length ? 'Current' : 'Saved'}
             />
           )}
