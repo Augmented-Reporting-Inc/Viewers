@@ -456,10 +456,6 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
           available.some(item => getAnnotationKey(item) === id)
         )
       );
-      setLiveVerifiedEchoEvidence({
-        candidates: liveVerified,
-        efVolumes: evidence.efVolumes || {},
-      });
       const efField = fields.find(field => field.componentKey === 'lvEjectionFraction');
       let verifiedEF: any = null;
       if (efField) {
@@ -468,6 +464,10 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
           efField, reviewedEF, available
         );
       }
+      setLiveVerifiedEchoEvidence({
+        candidates: [...liveVerified, ...(verifiedEF ? [verifiedEF] : [])],
+        efVolumes: evidence.efVolumes || {},
+      });
       // A verified explicit EF checkpoint is authoritative over an
       // independently derived candidate with the same four source IDs.
       const candidateList = [
@@ -827,7 +827,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
       // even if the last MeasurementService event has not yet been delivered.
       const reconciled = reconcileResearchEchoCompositeAnswers(
         fields, values, valueSourcesRef.current, measurementAnnotations,
-        freshVerified
+        [...freshVerified, ...(verifiedEF ? [verifiedEF] : [])]
       );
       const latestValues = { ...reconciled.values };
       const latestSources = { ...reconciled.sources };
