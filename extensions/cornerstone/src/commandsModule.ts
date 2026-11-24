@@ -9698,6 +9698,10 @@ function commandsModule({
       singleSlot = false,
       efContourTargets = null,
       allowCanonicalFrameTargets = false,
+      // Optional assessment-owned EF contours. When provided, do not query
+      // an unrelated clinical/learner AR Series for saved source evidence.
+      assessmentSavedEFAnnotations = null,
+      notifyAssessmentOnCalculate = false,
       questionKey = '',
       viewportId: requestedViewportId = '',
       captureMethod = 'axisApex',
@@ -9748,11 +9752,15 @@ function commandsModule({
       // whether source contours were saved. Query the learner Series itself.
       if (!requestedSessionId && !panelOnly) {
         try {
-          const stored = await actions.getViewerMeasurementAnnotationsForActiveStudy({
-            workflows: ['viewerMeasurements'],
-            includeRepeated: false,
-          });
-          const saved = Array.isArray(stored?.annotations) ? stored.annotations : [];
+          const assessmentOwned = Array.isArray(assessmentSavedEFAnnotations);
+          const stored = assessmentOwned ? null :
+            await actions.getViewerMeasurementAnnotationsForActiveStudy({
+              workflows: ['viewerMeasurements'],
+              includeRepeated: false,
+            });
+          const saved = assessmentOwned
+            ? assessmentSavedEFAnnotations
+            : (Array.isArray(stored?.annotations) ? stored.annotations : []);
           const efSaved = saved.filter(entry => Boolean(getLVSimpsonSlotFromMeasurement(entry)));
           const bySlot = getLVSimpsonSlotCandidates(efSaved);
           console.info('[LV EF saved-slot audit]', {
@@ -9763,6 +9771,7 @@ function commandsModule({
             ),
             allEFSlotsPresent: LV_TRACE_REQUIRED_SLOTS.every(slot => bySlot.get(slot)?.length === 1),
             saveTargetPresent: Boolean(stored?.saveTarget),
+            assessmentOwned,
           });
           // Initial study hydration is deliberately panel-only. On explicit EF
           // question opening, recover each saved source on its own DICOM frame
@@ -10118,6 +10127,7 @@ function commandsModule({
               allowCanonicalFrameTargets, questionKey, captureMethod: method,
               savedGoldMeasurement: this.savedGoldMeasurement,
               goldAuthoringEditable,
+              assessmentSavedEFAnnotations, notifyAssessmentOnCalculate,
               viewportId: viewportGridService.getActiveViewportId(),
             }).catch(error => console.warn('[LV EF] selected contour redraw failed:', error));
           },
@@ -10312,6 +10322,13 @@ function commandsModule({
           contourRevisions,
         };
         reviewedLVSimpsonEF = { studyInstanceId: currentStudyId, value: resolved.composite.value };
+        // Reuse the Education capture event and its active-study checkpoint.
+        // Only opted-in assessment owners receive automatic calculated EF.
+        if (notifyAssessmentOnCalculate) {
+          requestLVSimpsonQuizCapture({
+            studyInstanceId: currentStudyId, value: resolved.composite.value, mode: 'completed',
+          });
+        }
         renderLVSimpsonWorkflowPanel({
           measurements: measurementsForCalculation,
           resultText: `Calculated LVEF: ${roundQuizMeasurementValue(resolved.composite.value, 2).toFixed(2)}%`,
@@ -10399,6 +10416,7 @@ function commandsModule({
             captureMethod,
             efContourTargets,
             allowCanonicalFrameTargets,
+            assessmentSavedEFAnnotations, notifyAssessmentOnCalculate,
             questionKey,
             viewportId: activeViewportId,
           });
@@ -10849,6 +10867,7 @@ function commandsModule({
             captureMethod,
             efContourTargets,
             allowCanonicalFrameTargets,
+            assessmentSavedEFAnnotations, notifyAssessmentOnCalculate,
             questionKey,
             viewportId: nextViewportId,
           }).catch(error => {
