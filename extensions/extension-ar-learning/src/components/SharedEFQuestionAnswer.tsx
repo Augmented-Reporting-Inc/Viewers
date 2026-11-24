@@ -48,6 +48,7 @@ export function SharedEFQuestionAnswer({
         min={min}
         max={max}
         step={step}
+        displayDecimalPlaces={2}
         disabled={disabled}
         onDelete={onDelete}
         deleteDisabled={deleteDisabled || busy}
