@@ -6,7 +6,6 @@ import React, {
   useState,
 } from 'react';
 import { buildViewerMeasurementValueCandidates } from '../../../extension-ar-measurements/src/utils/measurementValueCandidates';
-import { EchoEFContourVolumes, getLVSimpsonSourceVolumes } from '../../../extension-ar-measurements/src/components/EchoEFContourVolumes';
 import { EchoCompositeResultStatus } from '../../../extension-ar-measurements/src/components/EchoCompositeResultStatus';
 import { SharedQuestionSelector, SharedQuestionStepNavigation } from '../../../extension-ar-measurements/src/components/SharedQuestionNavigation';
 import { SharedMeasurementValueInput } from '../../../extension-ar-measurements/src/components/SharedMeasurementValueInput';
@@ -1163,11 +1162,6 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
   // Research review annotations are already review-scoped. Use the same
   // verified single-view calculator and display component as Education.
   // This is presentation only; Research ReadSchema owns the numeric answer.
-  const efVolumes = selectedField?.componentKey === 'lvEjectionFraction'
-    ? {
-        ...getLVSimpsonSourceVolumes(allAnnotations),
-        ...liveVerifiedEchoEvidence.efVolumes,
-      } : {};
   const protocolTargets = selectedField ? getResearchProtocolViewerTargets(selectedField) : [];
   const guidedOwnsProtocolFrames = readDomain === 'echo' &&
     ['trVmax', 'lvEjectionFraction', 'laVolumeDisks', 'rvFac', 'ivcCollapsibility']
@@ -1290,7 +1284,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
       }
       questionContent={
         <>
-          {!showGuidedIVCValue ? (
+          {!showGuidedIVCValue && selectedField?.componentKey !== 'lvEjectionFraction' ? (
             <ReadField
               key={selectedField.key}
               field={selectedField}
@@ -1316,7 +1310,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
               }}
             />
           ) : null}
-          {['lvEjectionFraction', 'laVolumeDisks', 'rvFac'].includes(
+          {['laVolumeDisks', 'rvFac'].includes(
             cleanString(selectedField?.componentKey)
           ) ? (
             <div className="rounded border border-gray-700 bg-gray-950 p-2 text-xs">
@@ -1328,9 +1322,6 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
                 unavailableMessage="Complete the calibrated contours on their protocol-selected frames."
               />
             </div>
-          ) : null}
-          {selectedField?.componentKey === 'lvEjectionFraction' ? (
-            <EchoEFContourVolumes volumes={efVolumes} status={context.readOnly ? "Saved" : "Current"} />
           ) : null}
           {!isIVCRapRVSPQuestion ? groupedFields.map(companionField => (
             <ReadField
@@ -1350,6 +1341,22 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
               sourceAnnotations={selectedSources}
               ivcMeasurementState={ivcMeasurementState}
               ivcReadValue={guidedIVCValue}
+              efValue={calculatedReadState.values[selectedField.key] ?? ''}
+              onChangeEFValue={nextValue => updateValue(selectedField.key, nextValue)}
+              onDeleteEFValue={() => {
+                const source = calculatedReadState.sources[selectedField.key];
+                if (['viewer-derived', 'viewer-measurement'].includes(source?.source)) {
+                  if (selectedSources.length === 1) {
+                    void deleteResearchAnnotation(selectedSources[0]);
+                  } else {
+                    notify(servicesManager,
+                      'Select the exact EF measurement source to delete; multiple sources are linked.',
+                      'warning');
+                  }
+                } else {
+                  updateValue(selectedField.key, '');
+                }
+              }}
               onBeginIVCPhaseRedraw={beginIVCPhaseRedraw}
               onViewIVCSource={annotation => void jumpToAnnotation(annotation)}
               onDeleteIVCSource={annotation => void deleteResearchAnnotation(annotation)}
@@ -1358,7 +1365,8 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
               onError={message => notify(servicesManager, message, 'warning')}
             />
           ) : null}
-          {!showInlineIVCSources && (isSelectedMeasurement || genericProtocolTargets.length > 0) ? (
+          {!showInlineIVCSources && selectedField?.componentKey !== 'lvEjectionFraction' &&
+            (isSelectedMeasurement || genericProtocolTargets.length > 0) ? (
             <div className="rounded border border-gray-700 bg-gray-950 p-3 text-xs">
               <div className="font-semibold text-gray-100">Measurement sources</div>
               {genericProtocolTargets.length ? (
