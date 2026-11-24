@@ -13,7 +13,7 @@ describe('Research source capture is opt-in without changing other viewer workfl
     // their own verified snapshot of the Research-owned contour sources.
     expect(optIns).toHaveLength(3);
     expect(panel).toContain('reconcileResearchEchoCompositeAnswers(');
-    expect(panel).toContain('buildViewerMeasurementValueCandidates(measurementAnnotations)');
+    expect(panel).toContain('buildViewerMeasurementValueCandidates(measurementAnnotations, { includeLVSimpson: false })');
   });
 
   it('reuses the verified Calculate EF snapshot and coalesces event bursts', () => {
@@ -36,7 +36,7 @@ describe('Research source capture is opt-in without changing other viewer workfl
     expect(panel).toContain('efValue={calculatedReadState.values[selectedField.key]');
     expect(panel).toContain('<EchoEFContourVolumes');
     expect(panel).toContain("selectedField?.componentKey !== 'lvEjectionFraction' &&");
-    expect(panel).toContain('getLVSimpsonSourceVolumes(savedAnnotations)');
+    expect(panel).toContain('getLVSimpsonSourceVolumes(selected, { verifiedSavedSources: !!persistedEF })');
     expect(guided).toContain('<SharedEFQuestionAnswer');
     expect(guided).toContain('efContourTargets: field.config?.compositeFrameTargets');
     expect(guided).toContain('allowCanonicalFrameTargets: true');
@@ -57,6 +57,13 @@ describe('Research source capture is opt-in without changing other viewer workfl
     expect(panel).toContain('All four EF contour phases are present, but no protocol-verified EF answer');
     expect(viewerCommands).toContain('const assessmentOwned = Array.isArray(assessmentSavedEFAnnotations)');
     expect(viewerCommands).toContain('notifyAssessmentOnCalculate');
+    expect(viewerCommands).toContain('restoreSavedLVSimpsonSlots({');
+    expect(viewerCommands).toContain('pendingSavedEFRestoration');
+    expect(viewerCommands).toContain('Retry saved contours');
+    expect(guided).toContain('assessmentSavedEFResult');
+    expect(panel).toContain('applyResearchSnapshotEvidence(');
+    expect(panel).toContain('withPersistedEF(liveVerifiedEchoEvidence.candidates, persistedEF)');
+    expect(panel).toContain('freshVerifiedEvidence, { verifiedEFOnly: true }');
   });
 
   it('uses a source-safe delete x and activates Length from the selected question', () => {
