@@ -10554,7 +10554,7 @@ function commandsModule({
       let capturedFreehandAnnotationId = '';
       if (captureMethod === 'freehand') {
         renderLVSimpsonWorkflowPanel({
-          measurements: [...liveMeasurements, ...sessionLVSimpsonMeasurements],
+          measurements: lvSimpsonPanelController?.getMeasurements?.() || [],
           instruction: `Step ${stepNumber}/4: Click at one mitral hinge to start, move around the apex without holding the mouse button, then click the opposite hinge to finish. Esc cancels.`,
           onCancel: () => clearLVSimpsonWorkflowIfCurrent(workflowSessionId),
         });
@@ -10584,7 +10584,7 @@ function commandsModule({
       const overlay = createLVSimpsonPreviewOverlay(viewport.element);
 
       renderLVSimpsonWorkflowPanel({
-        measurements: [...liveMeasurements, ...sessionLVSimpsonMeasurements],
+        measurements: lvSimpsonPanelController?.getMeasurements?.() || [],
         instruction: `Step ${stepNumber}/4: On the correct ${slotDisplayName} frame, draw hinge-to-hinge across the mitral annulus.`,
         onCancel: () => clearLVSimpsonWorkflowIfCurrent(workflowSessionId),
       });
@@ -10626,7 +10626,7 @@ function commandsModule({
       });
 
       renderLVSimpsonWorkflowPanel({
-        measurements: [...liveMeasurements, ...sessionLVSimpsonMeasurements],
+        measurements: lvSimpsonPanelController?.getMeasurements?.() || [],
         instruction: `Step ${stepNumber}/4: Drag from the hinge midpoint to the true LV apex for ${slotDisplayName}.`,
         onCancel: () => clearLVSimpsonWorkflowIfCurrent(workflowSessionId),
       });
