@@ -936,6 +936,27 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
           latestReadState.sources
         ),
       };
+      // A complete EF contour set without a valid structured EF answer is
+      // not a successful assessment save. Partial drafts remain saveable.
+      // Do not silently overwrite a previously saved Research EF with zero.
+      const efSlots = new Set(measurementAnnotations
+        .filter(annotation =>
+          annotation?.measurementKind === 'lvSimpsonSlot' ||
+          annotation?.lvSimpson?.measurementKind === 'lvSimpsonSlot' ||
+          annotation?.measurements?.lvSimpson?.measurementKind === 'lvSimpsonSlot'
+        )
+        .map(annotation => String(annotation?.slot ||
+          annotation?.lvSimpson?.slot || annotation?.measurements?.lvSimpson?.slot || ''))
+        .filter(Boolean));
+      if (efField &&
+          ['A4C_ED', 'A4C_ES', 'A2C_ED', 'A2C_ES'].every(slot => efSlots.has(slot)) &&
+          !readResults.entries.some(entry => entry.componentKey === 'lvEjectionFraction')) {
+        throw new Error(
+          'All four EF contour phases are present, but no protocol-verified EF answer ' +
+          'could be captured. Research Read was not saved; check duplicate contours ' +
+          'and exact frame targets in the EF panel.'
+        );
+      }
       const saved = await saveResearchReadReview({
         reviewKey: context.reviewKey,
         readResults,
