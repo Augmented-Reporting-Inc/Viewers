@@ -11,6 +11,7 @@ type RestorationDeps = {
   getSlot: (measurement: any) => string;
   onRestored: (source: any, measurement: any) => void;
   isCancelled: () => boolean;
+  isSourceDeleted?: (id: string) => boolean;
 };
 
 const RETRYABLE_RESTORATION_REASONS = new Set([
@@ -31,6 +32,7 @@ export async function restoreSavedLVSimpsonSlots(deps: RestorationDeps) {
   const {
     slots, candidatesBySlot, getId, getNativeAnnotation, removeMisplacedAnnotation,
     hydrate, getRestoredMeasurement, getSlot, onRestored, isCancelled,
+    isSourceDeleted = () => false,
   } = deps;
   const status: Record<string, string> = {};
   const retry: Array<{ slot: string; source: any }> = [];
@@ -51,6 +53,7 @@ export async function restoreSavedLVSimpsonSlots(deps: RestorationDeps) {
     if (isCancelled()) return { reason: 'cancelled', retryable: false };
     const id = getId(source);
     if (!id) return { reason: 'missing-id', retryable: false };
+    if (isSourceDeleted(id)) return { reason: 'deleted', retryable: false };
     const native = getNativeAnnotation(id);
     if (native && !isSavedLVSimpsonImageMatch(source, native?.metadata?.referencedImageId)) {
       removeMisplacedAnnotation(id);
@@ -59,6 +62,7 @@ export async function restoreSavedLVSimpsonSlots(deps: RestorationDeps) {
     if (!inspected.measurement) {
       const outcome = await hydrate(source);
       if (isCancelled()) return { reason: 'cancelled', retryable: false };
+      if (isSourceDeleted(id)) return { reason: 'deleted', retryable: false };
       inspected = inspect(slot, source, id);
       if (!inspected.measurement) {
         const reason = outcome?.ok === true
@@ -66,6 +70,7 @@ export async function restoreSavedLVSimpsonSlots(deps: RestorationDeps) {
         return { reason, retryable: !!outcome?.retryable || RETRYABLE_RESTORATION_REASONS.has(reason) };
       }
     }
+    if (isSourceDeleted(id)) return { reason: 'deleted', retryable: false };
     onRestored(source, inspected.measurement);
     return { reason: 'restored', retryable: false };
   };
