@@ -66,6 +66,7 @@ jobs:
             extensions/extension-ar-measurements/src/components/EchoCompositeResultStatus.test.ts \
             extensions/extension-ar-measurements/src/utils/echoCompositeAcquisition.test.ts \
             extensions/extension-ar-measurements/src/components/EchoContourTechniqueButtons.test.ts \
+            extensions/extension-ar-measurements/src/utils/efPanelOpenProfile.test.ts \
             extensions/extension-ar-measurements/src/components/SharedMeasurementValueInput.test.ts \
             extensions/extension-ar-measurements/src/components/SharedQuestionPanelWiring.test.ts
       - name: Test shared measurement and Learning TSX question components
@@ -101,6 +102,7 @@ jobs:
             'extensions/cornerstone/src/commandsModule.ts',
             'extensions/cornerstone/src/utils/measurementAnnotationHydration.ts',
             'extensions/cornerstone/src/utils/lvSimpsonContourViewportText.ts',
+            'extensions/extension-ar-measurements/src/utils/efPanelOpenProfile.ts',
             'extensions/cornerstone/src/utils/installQuizContourTextRenderer.ts',
             'extensions/cornerstone/src/initCornerstoneTools.js',
             'extensions/cornerstone/src/utils/createCalibratedLengthTextLines.ts',
