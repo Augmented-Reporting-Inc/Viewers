@@ -10566,7 +10566,7 @@ function commandsModule({
         if (assessmentOwnedEF) {
           const currentMeasurements = lvSimpsonPanelController?.getPanelMeasurements?.() || [];
           const currentSlots = getLVSimpsonSlotCandidates(currentMeasurements);
-          const allRestored = !pendingSavedEFRestoration &&
+          const allAvailable = !pendingSavedEFRestoration &&
             LV_TRACE_REQUIRED_SLOTS.every(slot => currentSlots.get(slot)?.length === 1);
           const explicit = getExplicitLVSimpsonResult(currentStudyId);
           const sourceIds = String(assessmentSavedEFResult?.sourceMeasurementKey || '')
@@ -10576,9 +10576,12 @@ function commandsModule({
           const currentIds = new Set(currentMeasurements.map(getMeasurementAnnotationId));
           const savedValue = Number(assessmentSavedEFResult?.value);
           const savedVerified = assessmentSavedEFResult?.source === 'viewer-derived' &&
+            assessmentSavedEFResult?.value != null &&
+            String(assessmentSavedEFResult.value).trim() !== '' &&
             String(assessmentSavedEFResult?.sourceMeasurementKey || '').startsWith('lv-simpson:') &&
             sourceIds.length === 4 && new Set(sourceIds).size === 4 &&
             sourceIds.every(id => expectedSavedSources.has(id) &&
+              currentIds.has(id) &&
               !viewerMeasurementsDeletedInSession.has(id) &&
               getSavedLVSimpsonSourceRevisionState(expectedSavedSources.get(id)) !== 'changed') &&
             Number.isFinite(savedValue) && savedValue >= 0 && savedValue <= 100;
@@ -10591,7 +10594,7 @@ function commandsModule({
             : savedVerified
               ? `Saved LVEF: ${roundQuizMeasurementValue(savedValue, 2).toFixed(2)}%`
               : '';
-          lvSimpsonPanelController.onCalculate = allRestored ? calculateEF : null;
+          lvSimpsonPanelController.onCalculate = allAvailable ? calculateEF : null;
           lvSimpsonPanelController.savedAssessmentEFDisplay = savedVerified && !explicitVerified
             ? { contourRevisions: new Map(sourceIds.map(id =>
                 [id, getLVSimpsonAnnotationRevision(id)]).filter(([, revision]) => !!revision)) }
@@ -10601,16 +10604,16 @@ function commandsModule({
           renderLVSimpsonWorkflowPanel({
             measurements: currentMeasurements,
             resultText,
-            instruction: allRestored
+            instruction: allAvailable
               ? panelFirst
                 ? 'Select a saved contour to open its exact image and frame. Calculate EF restores and verifies all remaining sources.'
                 : 'Review the four contours and their volume measurements. Select Calculate EF to recalculate.'
               : pendingSavedEFRestoration
                 ? 'A saved contour is not yet available on its exact DICOM frame. Its saved evidence is preserved; retry restoration before drawing or recalculating.'
                 : 'Select the drawing technique for a missing contour, or resolve duplicate contours before calculating EF.',
-            warnings: allRestored ? [] : [pendingSavedEFRestoration
+            warnings: allAvailable ? [] : [pendingSavedEFRestoration
               ? 'Saved contour restoration is incomplete.' : 'Four unique contours are required.'],
-            onCalculate: allRestored ? calculateEF : null,
+            onCalculate: allAvailable ? calculateEF : null,
             continueLabel: pendingSavedEFRestoration ? 'Retry saved contours' : '',
             onContinue: !pendingSavedEFRestoration ? null : () => {
               void actions.startLVSimpsonEFWorkflow({
@@ -16267,9 +16270,14 @@ function commandsModule({
         const sourceViewportId = hydratedViewport.id || targetViewportId;
         if (isCancelled()) return cancelledResult;
         stopSourceCineForViewport(sourceViewportId);
-        const finalImage = await jumpViewportToSavedAnnotationImage(
-          hydratedViewport, savedAnnotation
-        );
+        // A second stack load is not needed when the cine is stopped and
+        // the exact saved EF image is still current and ready.
+        const currentImage = String(hydratedViewport.getCurrentImageId?.() || '');
+        const finalImage = isLVSimpsonMeasurement(savedAnnotation) &&
+          isSavedLVSimpsonImageMatch(savedAnnotation, currentImage) &&
+          hydratedViewport.getImageData?.()
+          ? currentImage
+          : await jumpViewportToSavedAnnotationImage(hydratedViewport, savedAnnotation);
         if (!finalImage || !await waitForViewportImageReady(
           hydratedViewport, finalImage
         )) {
