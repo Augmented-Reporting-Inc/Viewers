@@ -97,14 +97,21 @@ export function getVerifiedResearchEFResultCandidate(
  * Do not use this adapter to authorize changed geometry or a new answer.
  */
 export function getPersistedResearchEFCandidate(
-  field: any, value: any, source: any, annotations: any[], studyInstanceId: string
+  field: any, value: any, source: any, annotations: any[], studyInstanceId: string,
+  currentAnnotations: any[] = annotations,
+  invalidatedSourceIds: ReadonlySet<string> = new Set()
 ) {
   const key = String(source?.sourceMeasurementKey || '');
   if (source?.source !== 'viewer-derived' || !key.startsWith('lv-simpson:') ||
       value == null || value === '' || !studyInstanceId) return null;
   const ids = getResearchSourceAnnotationIds(key);
   const slots = ['A4C_ED', 'A4C_ES', 'A2C_ED', 'A2C_ES'];
-  if (ids.length !== slots.length || new Set(ids).size !== slots.length) return null;
+  if (ids.length !== slots.length ||
+      key.slice('lv-simpson:'.length).split(',').length !== slots.length ||
+      ids.some(id => invalidatedSourceIds.has(id))) return null;
+  const annotationId = (item: any) =>
+    String(item?.annotationId || item?.uid || item?.id || '');
+  const geometry = (item: any) => item?.lvSimpson || item?.measurements?.lvSimpson || {};
   const components = ids.map((id, index) => {
     const annotation = annotations.find(item =>
       String(item?.annotationId || item?.uid || item?.id || '') === id);
@@ -112,14 +119,48 @@ export function getPersistedResearchEFCandidate(
       annotation?.measurements?.lvSimpson?.slot || annotation?.slot || '');
     const kind = annotation?.measurementKind || annotation?.lvSimpson?.measurementKind ||
       annotation?.measurements?.lvSimpson?.measurementKind;
-    return kind === 'lvSimpsonSlot' && slot === slots[index]
-      ? { annotationId: id, slot } : null;
+    const current = currentAnnotations.find(item => annotationId(item) === id);
+    if (!annotation || !current || kind !== 'lvSimpsonSlot' || slot !== slots[index]) return null;
+    // Compare the editable controls, not OHIF's resampled display polyline.
+    // An absent live annotation is normal during hydration; the merge retains
+    // the original saved source. An edited live contour may retain the ID.
+    if (current !== annotation) {
+      const before = geometry(annotation).originalContourPoints || annotation.splineControlPoints;
+      const after = current.splineControlPoints || current.lvSimpsonControlPoints ||
+        geometry(current).originalContourPoints;
+      if (!Array.isArray(before) || !Array.isArray(after) || before.length < 6 ||
+          before.length !== after.length || !before.every((point, i) =>
+            Array.isArray(point) && Array.isArray(after[i]) &&
+            point.length >= 3 && after[i].length >= 3 &&
+            point.slice(0, 3).every((v, j) => Number.isFinite(v) &&
+              Number.isFinite(after[i][j]) && Math.abs(v - after[i][j]) <= 0.00001)
+          )) return null;
+      // Recalibration can change a source without changing its ID.
+      if (geometry(annotation).calibratedLongAxisLengthMM !==
+          geometry(current).calibratedLongAxisLengthMM ||
+          JSON.stringify(geometry(annotation).calibratedContourPoints) !==
+          JSON.stringify(geometry(current).calibratedContourPoints)) return null;
+    }
+    return { annotationId: id, slot };
   });
   if (components.some(component => !component)) return null;
   return getVerifiedResearchEFResultCandidate(field, {
     studyInstanceId,
     composite: { measurementKind: 'lvSimpsonEF', value, components },
-  }, annotations);
+  }, currentAnnotations);
+}
+
+/** Load the saved answer from the Review, not mutable question inputs. */
+export function resolvePersistedResearchEF(
+  fields: any[], savedValues: Record<string, any>, savedSources: Record<string, any>,
+  savedAnnotations: any[], currentAnnotations: any[], studyInstanceId: string,
+  invalidatedSourceIds: ReadonlySet<string> = new Set()
+) {
+  const field = fields.find(item => item.componentKey === 'lvEjectionFraction');
+  return field ? getPersistedResearchEFCandidate(
+    field, savedValues[field.key], savedSources[field.key], savedAnnotations,
+    studyInstanceId, currentAnnotations, invalidatedSourceIds
+  ) : null;
 }
 
 const GUIDED_COMPOSITE_KINDS = new Set([
@@ -140,7 +181,8 @@ export function reconcileResearchEchoCompositeAnswers(
   values: Record<string, any> = {},
   sources: Record<string, any> = {},
   annotations: any[] = [],
-  verifiedLiveCandidates: any[] = []
+  verifiedLiveCandidates: any[] = [],
+  { verifiedEFOnly = false }: { verifiedEFOnly?: boolean } = {}
 ) {
   const nextValues = { ...values };
   const nextSources = { ...sources };
@@ -159,7 +201,7 @@ export function reconcileResearchEchoCompositeAnswers(
       return ids.length > 0 && ids.every(id => validIds.has(id));
     });
   const candidates = [
-    ...buildViewerMeasurementValueCandidates(annotations),
+    ...buildViewerMeasurementValueCandidates(annotations, { includeLVSimpson: !verifiedEFOnly }),
     ...verified,
   ];
   for (const field of fields) {
