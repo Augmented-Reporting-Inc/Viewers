@@ -5,6 +5,7 @@ import {
   getResearchCompatibleMeasurementCandidates,
   getResearchProtocolViewerTargets,
   isResearchCandidateOnProtocolFrames,
+  getResearchSourceAnnotationIds,
 } from './researchFieldNavigation';
 
 /**
@@ -19,6 +20,36 @@ export function dedupeResearchMeasurementCandidates(candidates: any[] = []) {
         String(candidate?.sourceMeasurementKey || ''), candidate]
     )
   ).values());
+}
+
+/**
+ * Restore exactly the four source contours named by a previously verified
+ * Research EF answer when still present on protocol frames. Keep every other
+ * persisted annotation untouched. An unbound/ambiguous old draft cannot
+ * choose among duplicates and is returned intact for guarded review.
+ */
+export function getResearchEFRestoreSources(
+  field: any,
+  savedAnnotations: any[] = [],
+  savedSourceKey: unknown = ''
+) {
+  const allEF = (Array.isArray(savedAnnotations) ? savedAnnotations : []).filter(
+    annotation => annotation?.measurementKind === 'lvSimpsonSlot' ||
+      annotation?.lvSimpson?.measurementKind === 'lvSimpsonSlot' ||
+      annotation?.measurements?.lvSimpson?.measurementKind === 'lvSimpsonSlot'
+  );
+  const key = String(savedSourceKey || '').trim();
+  if (field?.componentKey !== 'lvEjectionFraction' ||
+      !key.startsWith('lv-simpson:')) return allEF;
+  const ids = getResearchSourceAnnotationIds(key);
+  if (ids.length !== 4) return allEF;
+  const selected = ids.map(id => allEF.find(item =>
+    String(item?.annotationId || item?.uid || item?.id || '') === id
+  ));
+  if (selected.some(item => !item)) return allEF;
+  return isResearchCandidateOnProtocolFrames(
+    field, { sourceMeasurementKey: key }, selected
+  ) ? selected : allEF;
 }
 
 /**
