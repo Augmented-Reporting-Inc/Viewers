@@ -92,6 +92,36 @@ export function getVerifiedResearchEFResultCandidate(
     ? candidate : null;
 }
 
+/** A persisted answer is a display snapshot, not a new live calculation.
+ * Reuse the same source/phase checks as the Education calculation checkpoint.
+ * Do not use this adapter to authorize changed geometry or a new answer.
+ */
+export function getPersistedResearchEFCandidate(
+  field: any, value: any, source: any, annotations: any[], studyInstanceId: string
+) {
+  const key = String(source?.sourceMeasurementKey || '');
+  if (source?.source !== 'viewer-derived' || !key.startsWith('lv-simpson:') ||
+      value == null || value === '' || !studyInstanceId) return null;
+  const ids = getResearchSourceAnnotationIds(key);
+  const slots = ['A4C_ED', 'A4C_ES', 'A2C_ED', 'A2C_ES'];
+  if (ids.length !== slots.length || new Set(ids).size !== slots.length) return null;
+  const components = ids.map((id, index) => {
+    const annotation = annotations.find(item =>
+      String(item?.annotationId || item?.uid || item?.id || '') === id);
+    const slot = String(annotation?.lvSimpson?.slot ||
+      annotation?.measurements?.lvSimpson?.slot || annotation?.slot || '');
+    const kind = annotation?.measurementKind || annotation?.lvSimpson?.measurementKind ||
+      annotation?.measurements?.lvSimpson?.measurementKind;
+    return kind === 'lvSimpsonSlot' && slot === slots[index]
+      ? { annotationId: id, slot } : null;
+  });
+  if (components.some(component => !component)) return null;
+  return getVerifiedResearchEFResultCandidate(field, {
+    studyInstanceId,
+    composite: { measurementKind: 'lvSimpsonEF', value, components },
+  }, annotations);
+}
+
 const GUIDED_COMPOSITE_KINDS = new Set([
   'lvEjectionFraction', 'laVolumeDisks', 'rvFac', 'ivcCollapsibility',
 ]);
