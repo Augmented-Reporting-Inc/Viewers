@@ -9815,7 +9815,7 @@ function commandsModule({
                 return await actions.jumpToSavedViewerAnnotation({
                   annotation: source, selectAnnotation: false,
                   runDelayedDisplayRefresh: false, pauseCineOnSource: true,
-                  isCancelled: cancelled,
+                  isCancelled: () => cancelled() || viewerMeasurementsDeletedInSession.has(getMeasurementAnnotationId(source)),
                 });
               } finally { endSlot(); endAttempt(); }
             },
@@ -9829,6 +9829,7 @@ function commandsModule({
               }, !assessmentOwnedEF);
             },
             isCancelled: cancelled,
+            isSourceDeleted: id => viewerMeasurementsDeletedInSession.has(id),
           });
         } finally { endRestoration(); }
       };
