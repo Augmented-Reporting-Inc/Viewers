@@ -6376,6 +6376,26 @@ function getLVSimpsonAnnotationRevision(annotationId: string): string | null {
   return JSON.stringify(points);
 }
 
+// Compare a persisted Review's source against the actual native controls.
+// An unavailable native record is an incomplete hydration, not a mutation.
+function getSavedLVSimpsonSourceRevisionState(savedSource: any) {
+  const id = getMeasurementAnnotationId(savedSource);
+  if (!id) return 'unavailable';
+  const native = cornerstoneTools.annotation.state.getAnnotation?.(id);
+  if (!native || !isSavedLVSimpsonImageMatch(savedSource, native?.metadata?.referencedImageId) ||
+      !getLVSimpsonAnnotationRevision(id)) return 'unavailable';
+  const savedControls = getSavedLVSimpsonControlPoints(savedSource);
+  if (!hasMatchingLVSimpsonControlPoints(
+    savedControls, native.data?.handles?.points || native.data?.contour?.polyline
+  )) return 'changed';
+  const before = getLVSimpsonGeometry(savedSource);
+  const after = native.data?.lvSimpson;
+  return after?.calibratedContourPoints &&
+    (before?.calibratedLongAxisLengthMM !== after.calibratedLongAxisLengthMM ||
+      JSON.stringify(before?.calibratedContourPoints) !== JSON.stringify(after.calibratedContourPoints))
+    ? 'changed' : 'unchanged';
+}
+
 function getCompletedLVSimpsonResult(studyInstanceId: string) {
   const saved = completedLVSimpsonResult;
   if (!saved || saved.studyInstanceId !== studyInstanceId) return null;
@@ -6443,20 +6463,40 @@ function invalidateExplicitLVSimpsonAfterAnnotationChange(event: Event) {
   if (!annotationId) return;
 
   const result = explicitLVSimpsonResult;
-  if (result?.composite?.components?.some((component: any) =>
+  const explicitSource = result?.composite?.components?.some((component: any) =>
     String(component.annotationId) === annotationId
-  )) {
+  );
+  const savedDisplay = lvSimpsonPanelController?.savedAssessmentEFDisplay;
+  const savedSource = savedDisplay?.contourRevisions?.has(annotationId);
+  // The saved display is not a new capturable result. Nevertheless it must
+  // use the same shared editable-handle invalidation when the reader edits it.
+  // Internal hydration removals are handled by the controller's existing
+  // observed-ID/suppression guard below.
+  if (event.type === Enums.Events.ANNOTATION_REMOVED && savedSource && !explicitSource) {
+    lvSimpsonPanelController?.onAnnotationRemoved?.(annotationId);
+    return;
+  }
+  if (explicitSource || savedSource) {
     // SplineROI sends ANNOTATION_MODIFIED during routine cached-stat
     // recalculation and rendering. Only revoke EF if an editable handle
     // actually changed or the source annotation was removed.
-    const revision = result.contourRevisions?.get(annotationId);
+    const revision = explicitSource
+      ? result.contourRevisions?.get(annotationId)
+      : savedDisplay.contourRevisions.get(annotationId);
     if (event.type !== Enums.Events.ANNOTATION_REMOVED &&
         revision && getLVSimpsonAnnotationRevision(annotationId) === revision) {
       return;
     }
-    // A changed or removed source contour must never leave a capturable EF.
-    explicitLVSimpsonResult = null;
-    reviewedLVSimpsonEF = null;
+    // A changed or removed source contour must never leave a capturable EF
+    // or an outdated saved value in the open shared EF panel.
+    if (explicitSource) {
+      explicitLVSimpsonResult = null;
+      reviewedLVSimpsonEF = null;
+    }
+    if (savedSource && lvSimpsonPanelController) {
+      lvSimpsonPanelController.savedAssessmentEFDisplay = null;
+    }
+    dispatchLVSimpsonSessionMeasurements({ reason: 'lv-simpson-source-invalidated', uid: annotationId });
     if (typeof document !== 'undefined' &&
         document.getElementById(LV_SIMPSON_PROGRESS_PANEL_ID)) {
       const currentMeasurements = lvSimpsonPanelController?.getMeasurements?.() || [];
@@ -9733,7 +9773,7 @@ function commandsModule({
         // calculation: do not invalidate a previously reviewed value.
         // Reopening an assessment-owned result is not a geometry mutation.
         // The existing contour edit/delete guard invalidates the checkpoint.
-        if (!panelOnly && (!Array.isArray(assessmentSavedEFAnnotations) || requestedSlot)) {
+        if (!panelOnly && !Array.isArray(assessmentSavedEFAnnotations)) {
           explicitLVSimpsonResult = null;
           reviewedLVSimpsonEF = null;
         }
@@ -10024,6 +10064,7 @@ function commandsModule({
           questionKey,
           savedGoldMeasurement,
           efContourTargets,
+          savedAssessmentEFDisplay: null,
           needsConfiguredTarget(slot: string) {
             return !!(goldAuthoringEditable && this.efContourTargets &&
               !getEFContourFrameTarget(this.efContourTargets, slot));
@@ -10161,6 +10202,7 @@ function commandsModule({
             cancelDrawingWithoutClosingPanel();
             this.onCalculate = null;
             this.activeSlot = '';
+            this.savedAssessmentEFDisplay = null;
             explicitLVSimpsonResult = null;
             reviewedLVSimpsonEF = null;
             actions.removeMeasurement({ uid: targets });
@@ -10172,6 +10214,7 @@ function commandsModule({
             // and Cornerstone can each emit a removal event for the same ID.
             observedIds.delete(annotationId);
             cancelDrawingWithoutClosingPanel();
+            this.savedAssessmentEFDisplay = null;
             this.onCalculate = null;
             this.activeSlot = '';
             // A direct Cornerstone deletion can leave a live service record.
@@ -10336,6 +10379,7 @@ function commandsModule({
           contourRevisions,
         };
         reviewedLVSimpsonEF = { studyInstanceId: currentStudyId, value: resolved.composite.value };
+        if (lvSimpsonPanelController) lvSimpsonPanelController.savedAssessmentEFDisplay = null;
         // Reuse the Education capture event and its active-study checkpoint.
         // Only opted-in assessment owners receive automatic calculated EF.
         if (notifyAssessmentOnCalculate) {
@@ -10399,14 +10443,16 @@ function commandsModule({
           const explicit = getExplicitLVSimpsonResult(currentStudyId);
           const sourceIds = String(assessmentSavedEFResult?.sourceMeasurementKey || '')
             .replace(/^lv-simpson:/, '').split(',').filter(Boolean);
-          const expectedSavedIds = new Set(assessmentSavedEFAnnotations.map(getMeasurementAnnotationId));
+          const expectedSavedSources = new Map(assessmentSavedEFAnnotations.map(source =>
+            [getMeasurementAnnotationId(source), source]));
           const currentIds = new Set(currentMeasurements.map(getMeasurementAnnotationId));
           const savedValue = Number(assessmentSavedEFResult?.value);
           const savedVerified = assessmentSavedEFResult?.source === 'viewer-derived' &&
             String(assessmentSavedEFResult?.sourceMeasurementKey || '').startsWith('lv-simpson:') &&
             sourceIds.length === 4 && new Set(sourceIds).size === 4 &&
-            sourceIds.every(id => expectedSavedIds.has(id) &&
-              !viewerMeasurementsDeletedInSession.has(id)) &&
+            sourceIds.every(id => expectedSavedSources.has(id) &&
+              !viewerMeasurementsDeletedInSession.has(id) &&
+              getSavedLVSimpsonSourceRevisionState(expectedSavedSources.get(id)) !== 'changed') &&
             Number.isFinite(savedValue) && savedValue >= 0 && savedValue <= 100;
           const explicitVerified = explicit?.composite?.components?.length === 4 &&
             explicit.composite.components.every(component =>
@@ -10418,6 +10464,10 @@ function commandsModule({
               ? `Saved LVEF: ${roundQuizMeasurementValue(savedValue, 2).toFixed(2)}%`
               : '';
           lvSimpsonPanelController.onCalculate = allRestored ? calculateEF : null;
+          lvSimpsonPanelController.savedAssessmentEFDisplay = savedVerified && !explicitVerified
+            ? { contourRevisions: new Map(sourceIds.map(id =>
+                [id, getLVSimpsonAnnotationRevision(id)]).filter(([, revision]) => !!revision)) }
+            : null;
           // A saved contour that cannot be restored is not a missing drawing.
           // Never automatically activate a replacement tool over that slot.
           renderLVSimpsonWorkflowPanel({
@@ -15485,22 +15535,7 @@ function commandsModule({
             const id = getMeasurementAnnotationId(savedSource);
             if (!id) return false;
             if (viewerMeasurementsDeletedInSession.has(id)) return true;
-            const native = cornerstoneTools.annotation.state.getAnnotation?.(id);
-            if (!native || !isSavedLVSimpsonImageMatch(
-              savedSource, native?.metadata?.referencedImageId
-            )) return false;
-            const savedControls = getSavedLVSimpsonControlPoints(savedSource);
-            const revision = getLVSimpsonAnnotationRevision(id);
-            if (!revision) return false;
-            if (!hasMatchingLVSimpsonControlPoints(
-              savedControls, native.data?.handles?.points || native.data?.contour?.polyline
-            )) return true;
-            const before = getLVSimpsonGeometry(savedSource);
-            const after = native.data?.lvSimpson;
-            return !!after?.calibratedContourPoints &&
-              (before?.calibratedLongAxisLengthMM !== after.calibratedLongAxisLengthMM ||
-                JSON.stringify(before?.calibratedContourPoints) !==
-                JSON.stringify(after.calibratedContourPoints));
+            return getSavedLVSimpsonSourceRevisionState(savedSource) === 'changed';
           }).map(getMeasurementAnnotationId);
         return {
           domain, workflow, annotations,
