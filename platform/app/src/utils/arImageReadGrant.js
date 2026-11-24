@@ -50,10 +50,30 @@ function isOrthancDataSource(source, viewerOrigin) {
   });
 }
 
+export function assertTrustedArFrameImageId(imageId, origin, studyInstanceUID) {
+  if (typeof imageId !== 'string' || !imageId.startsWith('wadors:')) {
+    throw new Error('ar_image_read_frame_scheme_not_allowed');
+  }
+  let url;
+  try { url = new URL(imageId.slice('wadors:'.length)); }
+  catch { throw new Error('ar_image_read_frame_url_invalid'); }
+  // Validate the exact source Study, not merely the host. The per-window
+  // HMAC grant must never accompany CDN, other-tenant or other-study pixels.
+  const prefix = '/orthanc/dicom-web/studies/' + studyInstanceUID + '/';
+  if (url.origin !== origin || !DICOM_ID.test(studyInstanceUID) ||
+      !url.pathname.startsWith(prefix) ||
+      !/\/series\/[0-9.]+\/instances\/[0-9.]+\/frames\/[1-9][0-9]*(?:$|\/)/.test(
+        url.pathname.slice(prefix.length - 1)
+      )) {
+    throw new Error('ar_image_read_frame_target_not_allowed');
+  }
+  return true;
+}
+
 /** Attach a function, not a token, to the verified same-origin Orthanc
  * datasource and frame loader. Never forward the grant to a CDN/other origin.
  */
-export function attachArImageReadHeaders(config, getHeaders, origin) {
+export function attachArImageReadHeaders(config, getHeaders, origin, studyInstanceUID) {
   if (!config || typeof config !== 'object') {
     throw new Error('ar_image_read_viewer_config_invalid');
   }
@@ -102,6 +122,8 @@ export function attachArImageReadHeaders(config, getHeaders, origin) {
   config.defaultDataSourceName = 'dicomweb';
   config.showStudyList = false;
   config.getArImageReadHeaders = getHeaders;
+  config.assertArImageReadImageId = imageId =>
+    assertTrustedArFrameImageId(imageId, origin, studyInstanceUID);
   return config;
 }
 
