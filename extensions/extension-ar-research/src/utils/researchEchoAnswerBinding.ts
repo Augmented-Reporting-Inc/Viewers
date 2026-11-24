@@ -8,6 +8,20 @@ import {
 } from './researchFieldNavigation';
 
 /**
+ * Research composites can arrive from both the live annotation calculator
+ * and the explicit Calculate EF checkpoint. They identify the same evidence,
+ * not two competing answers. Keep the last (explicit) source-backed result.
+ */
+export function dedupeResearchMeasurementCandidates(candidates: any[] = []) {
+  return Array.from(new Map(
+    (Array.isArray(candidates) ? candidates : []).map(candidate =>
+      [String(candidate?.source || '') + ':' +
+        String(candidate?.sourceMeasurementKey || ''), candidate]
+    )
+  ).values());
+}
+
+/**
  * Adapt the already-calculated, active-study EF snapshot used by Education
  * to Research's source-linked ReadSchema. This does NOT recalculate EF.
  * Every one of its four named sources must be in the current Review snapshot
