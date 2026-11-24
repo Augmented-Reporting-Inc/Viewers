@@ -8,7 +8,10 @@ import {
  * Shared by Research display, Education presentation, and viewer capture.
  * No raw ROI areas or unverified display strings are accepted.
  */
-export function getLVSimpsonSourceVolumes(annotations: any[] = []) {
+export function getLVSimpsonSourceVolumes(
+  annotations: any[] = [],
+  { verifiedSavedSources = false }: { verifiedSavedSources?: boolean } = {}
+) {
   const bySlot: Record<string, number | null> = {};
   const counts: Record<string, number> = {};
   for (const annotation of annotations) {
@@ -26,7 +29,14 @@ export function getLVSimpsonSourceVolumes(annotations: any[] = []) {
       ...annotation,
       ...(Array.isArray(annotation?.lvSimpsonControlPoints) ? {} :
         Array.isArray(annotation?.splineControlPoints)
-          ? { lvSimpsonControlPoints: annotation.splineControlPoints } : {}),
+          ? { lvSimpsonControlPoints: annotation.splineControlPoints }
+          : verifiedSavedSources ? {
+              // Legacy compact verified Review sources may lack a separate
+              // spline-control field. Use the original calibrated trace that
+              // the shared saved-annotation hydrator restores.
+              lvSimpsonControlPoints: (annotation?.lvSimpson ||
+                annotation?.measurements?.lvSimpson)?.originalContourPoints,
+            } : {}),
     });
     bySlot[slot] = volume != null && Number.isFinite(volume) && volume > 0
       ? volume : null;
