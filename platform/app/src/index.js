@@ -40,11 +40,13 @@ loadDynamicConfig(window.config).then(async config_json => {
         attachArImageReadHeaders(
           await priorConfig(...args),
           imageGrant.getHeaders,
-          window.location.origin
+          window.location.origin,
+          imageGrant.target.studyInstanceUID
         );
     } else {
       attachArImageReadHeaders(
-        window.config, imageGrant.getHeaders, window.location.origin
+        window.config, imageGrant.getHeaders, window.location.origin,
+        imageGrant.target.studyInstanceUID
       );
     }
     window.addEventListener('pagehide', imageGrant.dispose, { once: true });
