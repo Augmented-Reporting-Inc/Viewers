@@ -131,13 +131,11 @@ export function createArImageReadGrantSession({
     // rejects expired grants and no new pixel data will be fetched.
     const refreshMs = Math.max(1000, Math.min(2147483647,
       expiry * 1000 - now() - 60000));
-    refreshHandle = schedule(() => {
-      acquire().catch(() => {
-        activeToken = '';
-        expiresAt = 0;
-        resetTimer();
-      });
-    }, refreshMs);
+    refreshHandle = schedule(() => acquire().catch(() => {
+      activeToken = '';
+      expiresAt = 0;
+      resetTimer();
+    }), refreshMs);
     return true;
   }
 
