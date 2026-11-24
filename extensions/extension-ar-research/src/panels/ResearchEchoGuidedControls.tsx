@@ -117,7 +117,9 @@ export default function ResearchEchoGuidedControls({
         <SharedEFQuestionAnswer
           value={efValue}
           onChange={onChangeEFValue || (() => {})}
-          onDelete={onDeleteEFValue}
+          onDelete={!disabled && !readOnly && efValue !== null &&
+            efValue !== undefined && String(efValue).trim() !== ''
+              ? onDeleteEFValue : undefined}
           unit={String(field?.config?.unit || '%')}
           disabled={disabled || readOnly || hasIncompleteRequiredEF || !commandsManager || !onChangeEFValue}
           busy={busy === 'ef'}
