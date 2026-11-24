@@ -61,6 +61,10 @@ describe('Research source capture is opt-in without changing other viewer workfl
     expect(viewerCommands).toContain('pendingSavedEFRestoration');
     expect(viewerCommands).toContain('Retry saved contours');
     expect(guided).toContain('assessmentSavedEFResult');
+    expect(guided).toContain('deferSavedEFRestoration: true');
+    expect(viewerCommands).toContain('efSaved.length > 0 && !panelFirst');
+    expect(viewerCommands).toContain('restoreSources(savedSlot, cancelled, [slot])');
+    expect(viewerCommands).toContain('visible.filter(item => item.arSavedEFPanelSource), cancelled');
     expect(panel).toContain('applyResearchSnapshotEvidence(');
     expect(panel).toContain('withPersistedEF(liveVerifiedEchoEvidence.candidates, persistedEF)');
     expect(panel).toContain('freshVerifiedEvidence, { verifiedEFOnly: true }');
@@ -74,7 +78,7 @@ describe('Research source capture is opt-in without changing other viewer workfl
     const workflow = viewerCommands.slice(start, end);
     expect(workflow).not.toMatch(/\b(?:liveMeasurements|sessionLVSimpsonMeasurements)\b/);
     expect(workflow.match(/measurements: lvSimpsonPanelController\?\.getMeasurements\?\.\(\) \|\| \[\]/g)).toHaveLength(3);
-    expect(workflow).toContain('pendingSavedEFRestoration || slotCandidates.size > 0');
+    expect(workflow).toContain('pendingSavedEFRestoration || slotCandidates.size > 0 || hasSavedPanelSources');
     expect(workflow).toContain('cancelDrawingWithoutClosingPanel();\n            await actions.startLVSimpsonEFWorkflow');
     expect(workflow).toContain('viewerMeasurementsDeletedInSession.has(getMeasurementAnnotationId(item))');
   });
