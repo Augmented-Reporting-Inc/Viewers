@@ -1271,6 +1271,18 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
     }
   };
 
+  // A deleted source must not be restored by queued navigation. Reuse this
+  // same guarded display path for automatic selection and explicit resolution.
+  const restoreLengthSource = (item: any, isCancelled: () => boolean) => {
+    const sourceId = getAnnotationKey(item.annotation);
+    const cancelled = () => isCancelled() || !sourceId ||
+      deletedAnnotationIdsRef.current.has(sourceId);
+    return jumpToAnnotation({
+      ...item.displayAnnotation,
+      ...(context?.readOnly || context?.preview ? { isLocked: true } : {}),
+    }, { requireExactSopFrame: true, isCancelled: cancelled });
+  };
+
   const navigateToField = async (field: any, isCancelled: () => boolean) => {
     if (isCancelled()) return false;
     if (isResearchLengthQuestion(field, readDomain)) {
@@ -1279,12 +1291,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
         viewerCandidates || [], context?.sourceStudyInstanceUID);
       const source = state.selected || (state.status === 'unbound' &&
         !context?.readOnly && !context?.preview ? state.eligible[0] : null);
-      if (source) {
-        return jumpToAnnotation({
-          ...source.displayAnnotation,
-          ...(context?.readOnly || context?.preview ? { isLocked: true } : {}),
-        }, { requireExactSopFrame: true, isCancelled });
-      }
+      if (source) return restoreLengthSource(source, isCancelled);
       if (state.status === 'invalid' || state.status === 'ambiguous') {
         notify(servicesManager, 'Choose or resolve the exact Length measurement source before continuing.', 'warning');
         return false;
@@ -1314,6 +1321,9 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
   const selectionGenerationRef = useRef(0);
   const selectionQueueRef = useRef<Promise<void>>(Promise.resolve());
   const initializedReviewRef = useRef('');
+  const editingAllowedRef = useRef(false);
+  editingAllowedRef.current = !!context && !context.readOnly && !context.preview &&
+    !saving && !completing;
   // Serialize navigation and invalidate stale work, including A -> B -> A.
   const queueNavigation = (work: (isCancelled: () => boolean) => Promise<void>) => {
     const generation = ++selectionGenerationRef.current;
@@ -1327,8 +1337,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
   };
   const runFieldSelection = (field: any) => queueNavigation(async isCancelled => {
     const navigated = await navigateToField(field, isCancelled);
-    if (!navigated || isCancelled() ||
-        context?.readOnly || context?.preview || saving || completing) return;
+    if (!navigated || isCancelled() || !editingAllowedRef.current) return;
     const toolName = getResearchMeasurementToolForField(field, readDomain);
     if (toolName) {
       await commandsManager?.runCommand('activateViewerMeasurementTool', {
@@ -1356,7 +1365,8 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
     if (isResearchLengthQuestion(field, readDomain)) runFieldSelection(field);
   }, [loading, commandsManager, context?.reviewKey, context?.preview,
     selectedFieldKey, visibleFields, readDomain]);
-  useEffect(() => () => { ++selectionGenerationRef.current; }, [context?.reviewKey]);
+  useEffect(() => () => { ++selectionGenerationRef.current; },
+    [context?.reviewKey, context?.readOnly, context?.preview]);
 
   const selectSourceCandidate = (field: any, candidate: any) => {
     const updates = buildViewerMeasurementReadUpdates([field], [candidate], {});
@@ -1430,14 +1440,12 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
   const showLengthSourceResolution = !!lengthState &&
     (lengthState.status === 'invalid' || lengthState.status === 'ambiguous' ||
       lengthState.eligible.length > 1 ||
-      (lengthState.status === 'manual' && lengthState.eligible.length > 0));
+      (lengthState.status === 'manual' && lengthState.eligible.length > 0) ||
+      (lengthState.status === 'unbound' && (context.readOnly || context.preview)));
   const sourceResolutionCandidates = lengthState
     ? lengthState.eligible.map(item => item.candidate) : selectedCandidates;
   const viewLengthSource = (item: any) => queueNavigation(async isCancelled => {
-    await jumpToAnnotation({
-      ...item.displayAnnotation,
-      ...(context.readOnly || context.preview ? { isLocked: true } : {}),
-    }, { requireExactSopFrame: true, isCancelled });
+    await restoreLengthSource(item, isCancelled);
   });
   // Research review annotations are already review-scoped. Use the same
   // verified single-view calculator and display component as Education.

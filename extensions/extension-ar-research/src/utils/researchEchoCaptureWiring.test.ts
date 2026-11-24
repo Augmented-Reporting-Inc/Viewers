@@ -97,10 +97,13 @@ describe('Research Length selection uses shared restoration and permissions', ()
     const end = panel.indexOf('const selectionGenerationRef', start);
     const navigation = panel.slice(start, end);
     expect(navigation).toContain('getResearchLengthSourceState(');
-    expect(navigation).toContain('requireExactSopFrame: true, isCancelled');
-    expect(navigation.indexOf('return jumpToAnnotation({')).toBeLessThan(
+    const restoreStart = panel.indexOf('const restoreLengthSource =');
+    const restore = panel.slice(restoreStart, start);
+    expect(restore).toContain('requireExactSopFrame: true, isCancelled: cancelled');
+    expect(restore).toContain('deletedAnnotationIdsRef.current.has(sourceId)');
+    expect(navigation.indexOf('return restoreLengthSource(source, isCancelled)')).toBeLessThan(
       navigation.indexOf('const target = getResearchQuestionEntryTarget(field)'));
-    expect(navigation).toContain('isLocked: true');
+    expect(restore).toContain('isLocked: true');
     expect(navigation).toContain("state.status === 'invalid' || state.status === 'ambiguous'");
     expect(panel).toContain('selectionQueueRef.current.then(run, run)');
     expect(panel).toContain('initializedReviewRef.current === reviewKey');

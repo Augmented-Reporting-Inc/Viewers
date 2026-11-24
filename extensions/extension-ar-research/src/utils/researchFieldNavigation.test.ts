@@ -394,6 +394,7 @@ describe('Research independent Length source restoration', () => {
     const source = { source: 'viewer-measurement', sourceMeasurementKey: 'a' };
     for (const annotation of [length('a', 20), length('a', 2, 'other-study'),
       { ...length('a'), toolName: 'PlanarFreehandROI' },
+      { ...length('a'), referencedImageId: length('a', 2, 'other-study').referencedImageId },
       { ...length('a'), points: [[0,0,0]] }]) {
       expect(state(source, [annotation, length('b')], [candidate('a'), candidate('b')]).status).toBe('invalid');
     }

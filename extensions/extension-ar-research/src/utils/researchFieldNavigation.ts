@@ -243,6 +243,15 @@ export function getResearchLengthSourceState(
       if (matches.length !== 1) return [];
       const annotation = matches[0];
       const frame = getAnnotationSourceFrame(annotation);
+      const reference = cleanString(annotation?.referencedImageId ||
+        annotation?.metadata?.referencedImageId);
+      const imageStudy = reference.match(/\/studies\/([^/?#]+)/i)?.[1];
+      const imageSeries = reference.match(/\/series\/([^/?#]+)/i)?.[1];
+      // Contradictory DICOM identifiers must never authorize restoration.
+      try {
+        if ((imageStudy && decodeURIComponent(imageStudy) !== study) ||
+            (imageSeries && frame.series && decodeURIComponent(imageSeries) !== frame.series)) return [];
+      } catch { return []; }
       if (annotation.toolName !== 'Length' || !study || frame.study !== study ||
           !frame.sop || !Number.isInteger(frame.frame) || frame.frame < 1 ||
           !Array.isArray(annotation.points) || annotation.points.length !== 2 ||
