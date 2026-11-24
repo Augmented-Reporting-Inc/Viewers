@@ -82,6 +82,26 @@ describe('shared saved LV Simpson restoration', () => {
     expect(deps.onRestored).toHaveBeenCalledTimes(4);
   });
 
+  it('restores only a selected slot, then resolves remaining sources on calculate without rehydrating that slot', async () => {
+    const { sources, deps, native } = setup();
+    const initial = mergeSavedLVSimpsonPanelSources({
+      saved: sources.map(item => ({ ...item, StudyInstanceUID: 'study-a' })),
+      live: [], studyInstanceId: 'study-a', getId: deps.getId, getSlot: deps.getSlot,
+      isDeleted: () => false, isChanged: () => false,
+    });
+    expect(initial).toHaveLength(4);
+    expect(deps.hydrate).not.toHaveBeenCalled();
+    expect(native.size).toBe(0);
+    const selected = await restoreSavedLVSimpsonSlots({ ...deps, slots: [slots[2]] });
+    expect(selected.restoredCount).toBe(1);
+    expect(deps.hydrate.mock.calls.map(([item]) => item.annotationId)).toEqual([sources[2].annotationId]);
+    const complete = await restoreSavedLVSimpsonSlots(deps);
+    expect(complete.pending).toBe(false);
+    expect(complete.restoredCount).toBe(4);
+    expect(deps.hydrate.mock.calls.map(([item]) => item.annotationId))
+      .toEqual([sources[2], sources[0], sources[1], sources[3]].map(item => item.annotationId));
+  });
+
   it('hydrates a present but incomplete native record, and corrects misplaced saved state', async () => {
     const { sources, deps, native, add } = setup();
     add(sources[0]);
