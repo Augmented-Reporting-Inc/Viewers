@@ -349,9 +349,11 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
     if (!visibleFields.length) return;
     setSelectedFieldKey(current =>
       visibleFields.some(field => field.key === current) ? current :
-      (visibleFields.find(field => field.required)?.key || visibleFields[0].key)
+      (questionNavigationMode === 'authored'
+        ? visibleFields[0].key
+        : (visibleFields.find(field => field.required)?.key || visibleFields[0].key))
     );
-  }, [visibleFields]);
+  }, [visibleFields, questionNavigationMode]);
 
   useEffect(() => {
     if (!protocolFramePickerIntent || !visibleFields.length) return;
