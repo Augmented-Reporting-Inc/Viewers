@@ -11,6 +11,9 @@ export function SharedEFQuestionAnswer({
   value,
   onChange,
   unit = '%',
+  min,
+  max,
+  step = '0.01',
   disabled = false,
   openDisabled = false,
   busy = false,
@@ -22,6 +25,9 @@ export function SharedEFQuestionAnswer({
   value: number | string | null | undefined;
   onChange: (value: string) => void;
   unit?: string;
+  min?: number | string;
+  max?: number | string;
+  step?: number | string;
   disabled?: boolean;
   openDisabled?: boolean;
   busy?: boolean;
@@ -39,6 +45,9 @@ export function SharedEFQuestionAnswer({
         value={value}
         onChange={onChange}
         unit={unit}
+        min={min}
+        max={max}
+        step={step}
         disabled={disabled}
         onDelete={onDelete}
         deleteDisabled={deleteDisabled || busy}
