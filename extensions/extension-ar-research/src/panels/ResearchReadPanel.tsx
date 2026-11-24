@@ -19,6 +19,10 @@ import {
   dedupeResearchMeasurementCandidates,
   getResearchEFRestoreSources,
   resolvePersistedResearchEF,
+  getResearchAnnotationKey as getAnnotationKey,
+  mergeResearchMeasurementAnnotations as mergeMeasurementAnnotations,
+  applyResearchSnapshotEvidence,
+  withPersistedResearchEF as withPersistedEF,
 } from '../utils/researchEchoAnswerBinding';
 import { isMatchingQuizEFCompletion } from '../../../extension-ar-learning/src/utils/quizCompositeCaptureIntent';
 import { getResearchMeasurementToolForField } from '../utils/researchMeasurementTool';
@@ -66,61 +70,6 @@ const VIEWER_MEASUREMENTS_WORKFLOW = 'viewerMeasurements';
 
 function cleanString(value: unknown) {
   return String(value || '').trim();
-}
-
-function getAnnotationKey(annotation: any = {}) {
-  return cleanString(
-    annotation?.annotationId ||
-      annotation?.annotationUID ||
-      annotation?.uid ||
-      annotation?.id
-  );
-}
-
-function isEFSource(annotation: any) {
-  return annotation?.measurementKind === 'lvSimpsonSlot' ||
-    annotation?.lvSimpson?.measurementKind === 'lvSimpsonSlot' ||
-    annotation?.measurements?.lvSimpson?.measurementKind === 'lvSimpsonSlot';
-}
-
-function mergeMeasurementAnnotations(
-  saved: any[] = [], live: any[] = [],
-  deletedIds: Set<string> = new Set(),
-  invalidatedEFIds: ReadonlySet<string> = new Set()
-) {
-  const merged = new Map<string, any>();
-  for (const annotation of saved || []) {
-    const key = getAnnotationKey(annotation);
-    if (key && !deletedIds.has(key)) merged.set(key, annotation);
-  }
-  for (const annotation of live || []) {
-    const key = getAnnotationKey(annotation);
-    if (!key || deletedIds.has(key)) continue;
-    // A partial/normalized hydration snapshot cannot overwrite the unchanged
-    // saved EF source. The shared viewer explicitly reports geometry revisions.
-    if (isEFSource(merged.get(key)) && !invalidatedEFIds.has(key)) continue;
-    merged.set(key, annotation);
-  }
-  return Array.from(merged.values());
-}
-
-function applyResearchSnapshotEvidence(
-  serialized: any, deletedIds: Set<string>, invalidatedEFIds: Set<string>
-) {
-  const evidence = serialized?.researchEchoEvidence || {};
-  for (const id of evidence.deletedAnnotationIds || []) deletedIds.add(id);
-  for (const id of evidence.invalidatedEFSourceIds || []) invalidatedEFIds.add(id);
-  return evidence;
-}
-
-function withPersistedEF(candidates: any[], persisted: any) {
-  // A freshly verified Calculate EF checkpoint supersedes the saved answer.
-  return dedupeResearchMeasurementCandidates([
-    ...(persisted && !candidates.some(item =>
-      String(item?.sourceMeasurementKey || '').startsWith('lv-simpson:'))
-      ? [persisted] : []),
-    ...candidates,
-  ]);
 }
 
 function getAnnotationLabel(annotation: any = {}) {
@@ -427,12 +376,12 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
       return !deletedAnnotationIdsRef.current.has(id) &&
         !invalidatedEFSourceIdsRef.current.has(id);
     });
-    return getLVSimpsonSourceVolumes(selected);
-  }, [fields, savedAnnotations, persistedReadState, allAnnotations]);
+    return getLVSimpsonSourceVolumes(selected, { verifiedSavedSources: !!persistedEF });
+  }, [fields, savedAnnotations, persistedReadState, allAnnotations, persistedEF]);
   const displayedEFVolumes = {
-    ...savedEFVolumes,
-    ...Object.fromEntries(Object.entries(liveVerifiedEchoEvidence.efVolumes).filter(
-      ([slot, volume]) => volume != null || savedEFVolumes[slot] == null
+    ...liveVerifiedEchoEvidence.efVolumes,
+    ...Object.fromEntries(Object.entries(savedEFVolumes).filter(
+      ([slot, volume]) => volume != null || liveVerifiedEchoEvidence.efVolumes[slot] == null
     )),
   };
   const calculatedReadState = useMemo(() => {
@@ -1610,7 +1559,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
           {selectedField?.componentKey === 'lvEjectionFraction' && (
             <EchoEFContourVolumes
               volumes={displayedEFVolumes}
-              status={Object.keys(liveVerifiedEchoEvidence.efVolumes).length ? 'Current' : 'Saved'}
+              status={persistedEF ? 'Saved' : Object.keys(liveVerifiedEchoEvidence.efVolumes).length ? 'Current' : 'Saved'}
             />
           )}
           {!showInlineIVCSources &&
