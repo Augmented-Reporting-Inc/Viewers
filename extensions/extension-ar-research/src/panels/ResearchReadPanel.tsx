@@ -464,23 +464,25 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
           efField, reviewedEF, available
         );
       }
+      // An explicit Calculate EF snapshot is the same trusted result the
+      // Education capture command uses. Deduplicate by source identity:
+      // repeated live/explicit candidates are not competing measurements.
+      const verifiedEvidence = Array.from(new Map(
+        [...liveVerified, ...(verifiedEF ? [verifiedEF] : [])].map(candidate =>
+          [candidate.source + ':' + candidate.sourceMeasurementKey, candidate]
+        )
+      ).values());
       setLiveVerifiedEchoEvidence({
-        candidates: [...liveVerified, ...(verifiedEF ? [verifiedEF] : [])],
+        candidates: verifiedEvidence,
         efVolumes: evidence.efVolumes || {},
       });
-      // A verified explicit EF checkpoint is authoritative over an
-      // independently derived candidate with the same four source IDs.
       const candidateList = [
         ...buildViewerMeasurementValueCandidates(available),
-        ...liveVerified,
-        ...(verifiedEF ? [verifiedEF] : []),
+        ...verifiedEvidence,
       ];
-      const candidates = candidateList.filter((candidate, index) =>
-        candidateList.findIndex(item =>
-          item.source === candidate.source &&
-          item.sourceMeasurementKey === candidate.sourceMeasurementKey
-        ) === index
-      );
+      const candidates = Array.from(new Map(candidateList.map(candidate =>
+        [candidate.source + ':' + candidate.sourceMeasurementKey, candidate]
+      )).values());
       setViewerCandidates(candidates);
       const updates = fields.flatMap(field => {
         const compatible = getResearchCompatibleMeasurementCandidates(
@@ -843,17 +845,18 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
       const verifiedEF = efField
         ? getVerifiedResearchEFResultCandidate(efField, efSnapshot, measurementAnnotations)
         : null;
+      const freshVerifiedEvidence = Array.from(new Map(
+        [...freshVerified, ...(verifiedEF ? [verifiedEF] : [])].map(candidate =>
+          [candidate.source + ':' + candidate.sourceMeasurementKey, candidate]
+        )
+      ).values());
       const candidateList = [
         ...buildViewerMeasurementValueCandidates(measurementAnnotations),
-        ...freshVerified,
-        ...(verifiedEF ? [verifiedEF] : []),
+        ...freshVerifiedEvidence,
       ];
-      const latestCandidates = candidateList.filter((candidate, index) =>
-        candidateList.findIndex(item =>
-          item.source === candidate.source &&
-          item.sourceMeasurementKey === candidate.sourceMeasurementKey
-        ) === index
-      );
+      const latestCandidates = Array.from(new Map(candidateList.map(candidate =>
+        [candidate.source + ':' + candidate.sourceMeasurementKey, candidate]
+      )).values());
       // An explicitly calculated EF with contour evidence is never a
       // successful zero-result draft. Preserve the measurements and explain
       // the frame/source failure rather than silently saving an empty answer.
@@ -878,7 +881,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
       // even if the last MeasurementService event has not yet been delivered.
       const reconciled = reconcileResearchEchoCompositeAnswers(
         fields, values, valueSourcesRef.current, measurementAnnotations,
-        [...freshVerified, ...(verifiedEF ? [verifiedEF] : [])]
+        freshVerifiedEvidence
       );
       const latestValues = { ...reconciled.values };
       const latestSources = { ...reconciled.sources };
