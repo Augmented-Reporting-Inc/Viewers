@@ -34,6 +34,20 @@ describe('Research source capture is opt-in without changing other viewer workfl
     expect(panel).not.toContain('Other viewer annotations (');
   });
 
+  it('reuses Education EF capture and restores Research-owned contours without querying AR Series', () => {
+    const guided = fs.readFileSync(path.resolve(__dirname,
+      '../panels/ResearchEchoGuidedControls.tsx'), 'utf8');
+    expect(guided).toContain('assessmentSavedEFAnnotations');
+    expect(guided).toContain('notifyAssessmentOnCalculate: true');
+    expect(panel).toContain('getViewerQuizLVSimpsonForActiveStudy');
+    expect(panel).toContain('isMatchingQuizEFCompletion(');
+    expect(panel).toContain('getVerifiedResearchEFResultCandidate(');
+    expect(panel).toContain('ar-measurements:lv-simpson-capture-requested');
+    expect(panel).toContain('Calculated EF cannot be saved:');
+    expect(viewerCommands).toContain('const assessmentOwned = Array.isArray(assessmentSavedEFAnnotations)');
+    expect(viewerCommands).toContain('notifyAssessmentOnCalculate');
+  });
+
   it('uses a source-safe delete x and activates Length from the selected question', () => {
     expect(panel).toContain('getResearchMeasurementToolForField(field, readDomain)');
     expect(panel).toContain('activateViewerMeasurementTool');
