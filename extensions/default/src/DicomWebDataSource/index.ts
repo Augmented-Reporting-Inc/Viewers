@@ -71,6 +71,7 @@ export type DicomWebConfig = {
   onConfiguration: (config: DicomWebConfig, params) => DicomWebConfig;
   /** Per-window AR image grant headers; absent in iUSCAN/clinical viewers. */
   getAdditionalRequestHeaders?: () => Record<string, string>;
+  assertArImageReadBulkDataUri?: (url: string) => boolean;
   /** Whether to use the static WADO client */
   staticWado?: boolean;
   /** User authentication service */
@@ -323,6 +324,9 @@ function createDicomWebApi(dicomWebConfig: DicomWebConfig, servicesManager) {
       getWadoDicomWebClient: () => wadoDicomWebClient,
 
       bulkDataURI: async ({ StudyInstanceUID, BulkDataURI }) => {
+        if (typeof dicomWebConfig.assertArImageReadBulkDataUri === 'function') {
+          dicomWebConfig.assertArImageReadBulkDataUri(BulkDataURI);
+        }
         qidoDicomWebClient.headers = getAuthorizationHeader();
         const options = {
           multipart: false,
@@ -529,7 +533,12 @@ function createDicomWebApi(dicomWebConfig: DicomWebConfig, servicesManager) {
             // handle the scenarios where bulkDataURI is relative path
             fixBulkDataURI(value, instance, dicomWebConfig);
             // Provide a method to fetch bulkdata
-            value.retrieveBulkData = retrieveBulkData.bind(qidoDicomWebClient, value);
+            value.retrieveBulkData = options => {
+              if (typeof dicomWebConfig.assertArImageReadBulkDataUri === 'function') {
+                dicomWebConfig.assertArImageReadBulkDataUri(value.BulkDataURI);
+              }
+              return retrieveBulkData.call(qidoDicomWebClient, value, options);
+            };
           }
         }
         return naturalized;
