@@ -121,7 +121,8 @@ export default function ResearchEchoGuidedControls({
             efValue !== undefined && String(efValue).trim() !== ''
               ? onDeleteEFValue : undefined}
           unit={String(field?.config?.unit || '%')}
-          disabled={disabled || readOnly || hasIncompleteRequiredEF || !commandsManager || !onChangeEFValue}
+          disabled={disabled || readOnly || !onChangeEFValue}
+          openDisabled={hasIncompleteRequiredEF || !commandsManager}
           busy={busy === 'ef'}
           onOpen={() => void run('ef', async () => {
             if (hasIncompleteRequiredEF) {
