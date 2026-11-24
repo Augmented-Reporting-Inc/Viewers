@@ -69,6 +69,8 @@ export type DicomWebConfig = {
   bulkDataURI?: BulkDataURIConfig;
   /** Function that is called after the configuration is initialized */
   onConfiguration: (config: DicomWebConfig, params) => DicomWebConfig;
+  /** Per-window AR image grant headers; absent in iUSCAN/clinical viewers. */
+  getAdditionalRequestHeaders?: () => Record<string, string>;
   /** Whether to use the static WADO client */
   staticWado?: boolean;
   /** User authentication service */
@@ -132,6 +134,12 @@ function createDicomWebApi(dicomWebConfig: DicomWebConfig, servicesManager) {
         const authHeaders = userAuthenticationService.getAuthorizationHeader();
         if (authHeaders && authHeaders.Authorization) {
           xhrRequestHeaders.Authorization = authHeaders.Authorization;
+        }
+        // Only the bound, same-origin Orthanc source receives this function.
+        // Fetch a fresh window-scoped grant for each QIDO/WADO metadata call;
+        // do not embed it in image IDs or global authentication state.
+        if (typeof dicomWebConfig.getAdditionalRequestHeaders === 'function') {
+          Object.assign(xhrRequestHeaders, dicomWebConfig.getAdditionalRequestHeaders());
         }
         return xhrRequestHeaders;
       };
