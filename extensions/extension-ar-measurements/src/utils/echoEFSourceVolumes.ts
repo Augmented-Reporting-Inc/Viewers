@@ -20,7 +20,14 @@ export function getLVSimpsonSourceVolumes(annotations: any[] = []) {
       annotation?.measurements?.measurementKind || '').trim();
     if (kind !== 'lvSimpsonSlot' || !LV_SIMPSON_SLOT_ORDER.includes(slot)) continue;
     counts[slot] = (counts[slot] || 0) + 1;
-    const volume = calculateLVSimpsonContourVolumeForMeasurement(annotation);
+    // Saved SplineROI controls are the actual editable trace; the sampled
+    // polyline is display geometry and can differ without a user edit.
+    const volume = calculateLVSimpsonContourVolumeForMeasurement({
+      ...annotation,
+      ...(Array.isArray(annotation?.lvSimpsonControlPoints) ? {} :
+        Array.isArray(annotation?.splineControlPoints)
+          ? { lvSimpsonControlPoints: annotation.splineControlPoints } : {}),
+    });
     bySlot[slot] = volume != null && Number.isFinite(volume) && volume > 0
       ? volume : null;
   }
