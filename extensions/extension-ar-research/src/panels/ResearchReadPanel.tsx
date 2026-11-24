@@ -6,6 +6,7 @@ import React, {
   useState,
 } from 'react';
 import { buildViewerMeasurementValueCandidates } from '../../../extension-ar-measurements/src/utils/measurementValueCandidates';
+import { EchoEFContourVolumes, getLVSimpsonSourceVolumes } from '../../../extension-ar-measurements/src/components/EchoEFContourVolumes';
 import { EchoCompositeResultStatus } from '../../../extension-ar-measurements/src/components/EchoCompositeResultStatus';
 import { SharedQuestionSelector, SharedQuestionStepNavigation } from '../../../extension-ar-measurements/src/components/SharedQuestionNavigation';
 import { SharedMeasurementValueInput } from '../../../extension-ar-measurements/src/components/SharedMeasurementValueInput';
@@ -375,6 +376,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
     [savedAnnotations, liveAnnotations]
   );
 
+  const savedEFVolumes = useMemo(() => getLVSimpsonSourceVolumes(savedAnnotations), [savedAnnotations]);
   const calculatedReadState = useMemo(() => {
     if (context?.readOnly || context?.preview) {
       return { values, sources: valueSources };
@@ -416,7 +418,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
     });
   }, []);
 
-  const refreshViewerMeasurementBindings = useCallback(async () => {
+  const refreshViewerMeasurementBindings = useCallback(async (prepared?: { serialized: any; efSnapshot: any }) => {
     if (
       !commandsManager ||
       !fields.length ||
@@ -428,7 +430,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
     }
 
     try {
-      const serialized = await commandsManager.runCommand(
+      const serialized = prepared?.serialized ?? await commandsManager.runCommand(
         'getSerializedViewerMeasurements',
         {
           domain: cleanString(context?.readSchema?.domain) || 'generic',
@@ -461,7 +463,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
       const efField = fields.find(field => field.componentKey === 'lvEjectionFraction');
       let verifiedEF: any = null;
       if (efField) {
-        const reviewedEF = await commandsManager.runCommand('getViewerQuizLVSimpsonForActiveStudy');
+        const reviewedEF = prepared?.efSnapshot ?? await commandsManager.runCommand('getViewerQuizLVSimpsonForActiveStudy');
         verifiedEF = getVerifiedResearchEFResultCandidate(
           efField, reviewedEF, available
         );
@@ -592,7 +594,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
             'warning');
           return;
         }
-        await refreshViewerMeasurementBindings();
+        await refreshViewerMeasurementBindings({ serialized, efSnapshot: snapshot });
       })().catch(error =>
         console.warn('[AR Research] verified EF capture refresh failed', error)
       );
@@ -719,10 +721,24 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
 
     let cancelled = false;
 
+    let refreshTimer: number | undefined;
+    let running = false;
+    let pending = false;
     const refresh = () => {
-      if (!cancelled) {
-        void refreshViewerMeasurementBindings();
-      }
+      if (cancelled) return;
+      pending = true;
+      if (running || refreshTimer !== undefined) return;
+      refreshTimer = window.setTimeout(async () => {
+        refreshTimer = undefined;
+        if (cancelled) return;
+        running = true;
+        pending = false;
+        try { await refreshViewerMeasurementBindings(); }
+        finally {
+          running = false;
+          if (pending && !cancelled) refresh();
+        }
+      }, 50);
     };
 
     const events = measurementService.EVENTS || {};
@@ -761,6 +777,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
 
     return () => {
       cancelled = true;
+      if (refreshTimer !== undefined) window.clearTimeout(refreshTimer);
 
       subscriptions.forEach(subscription =>
         subscription?.unsubscribe?.()
@@ -1475,7 +1492,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
                     void deleteResearchAnnotation(selectedSources[0]);
                   } else {
                     notify(servicesManager,
-                      'Select the exact EF measurement source to delete; multiple sources are linked.',
+                      'Open the EF panel to manage the linked contours.',
                       'warning');
                   }
                 } else {
@@ -1490,8 +1507,15 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
               onError={message => notify(servicesManager, message, 'warning')}
             />
           ) : null}
+          {selectedField?.componentKey === 'lvEjectionFraction' && (
+            <EchoEFContourVolumes
+              volumes={Object.keys(liveVerifiedEchoEvidence.efVolumes).length
+                ? liveVerifiedEchoEvidence.efVolumes : savedEFVolumes}
+              status={Object.keys(liveVerifiedEchoEvidence.efVolumes).length ? 'Current' : 'Saved'}
+            />
+          )}
           {!showInlineIVCSources &&
-            (selectedField?.componentKey !== 'lvEjectionFraction' || selectedSources.length > 1) &&
+            selectedField?.componentKey !== 'lvEjectionFraction' &&
             (isSelectedMeasurement || genericProtocolTargets.length > 0) ? (
             <div className="rounded border border-gray-700 bg-gray-950 p-3 text-xs">
               <div className="font-semibold text-gray-100">Measurement sources</div>
