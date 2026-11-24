@@ -9800,11 +9800,23 @@ function commandsModule({
                 cornerstoneTools.annotation.state.removeAnnotation?.(savedId);
               }
               if (!cornerstoneTools.annotation.state.getAnnotation?.(savedId)) {
-                const outcome = await actions.jumpToSavedViewerAnnotation({
+                let outcome = await actions.jumpToSavedViewerAnnotation({
                   annotation: savedContour,
                   selectAnnotation: false,
                   runDelayedDisplayRefresh: false,
+                  pauseCineOnSource: true,
                 });
+                // Use the existing exact-image readiness checks for a
+                // transient viewport transition, not a second panel opening.
+                if (outcome?.retryable && !isWorkflowCancelled()) {
+                  outcome = await actions.jumpToSavedViewerAnnotation({
+                    annotation: savedContour,
+                    selectAnnotation: false,
+                    runDelayedDisplayRefresh: false,
+                    pauseCineOnSource: true,
+                  });
+                }
+                if (isWorkflowCancelled()) return null;
                 if (outcome?.ok !== true) {
                   slotRestoration[slot] = outcome?.reason || 'hydration-failed';
                   continue;
