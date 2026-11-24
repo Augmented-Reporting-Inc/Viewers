@@ -82,11 +82,12 @@ describe('Education and Research use Learning question renderer', () => {
 
     const noFrame = nodes(SharedEFQuestionAnswer({
       value: 58, onChange: () => {}, onOpen: () => {},
-      openDisabled: true,
+      openDisabled: true, min: 0, max: 100, step: 1,
     }));
     const numeric = noFrame.find(node => node.type === 'input' &&
       node.props.type === 'number');
     expect(numeric.props.disabled).toBe(false);
+    expect([numeric.props.min, numeric.props.max, numeric.props.step]).toEqual([0, 100, 1]);
     expect(noFrame.find(node => node.type === 'button' &&
       node.props.children === 'Open EF panel').props.disabled).toBe(true);
   });
