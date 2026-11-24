@@ -130,6 +130,26 @@ describe('shared saved LV Simpson restoration', () => {
     expect(deps.onRestored).not.toHaveBeenCalled();
   });
 
+  it('does not hydrate a deleted source or publish a source deleted during async hydration', async () => {
+    const { sources, deps, add } = setup();
+    const deleted = new Set([sources[0].annotationId]);
+    deps.hydrate.mockImplementation(async item => {
+      if (item === sources[1]) deleted.add(item.annotationId);
+      else add(item);
+      return { ok: true };
+    });
+    const result = await restoreSavedLVSimpsonSlots({
+      ...deps, isSourceDeleted: id => deleted.has(id),
+    });
+    expect(result.pending).toBe(true);
+    expect(result.slots[slots[0]]).toBe('deleted');
+    expect(result.slots[slots[1]]).toBe('deleted');
+    expect(deps.hydrate.mock.calls.map(([item]) => item.annotationId))
+      .toEqual(sources.slice(1).map(item => item.annotationId));
+    expect(deps.onRestored.mock.calls.map(([item]) => item.annotationId))
+      .toEqual(sources.slice(2).map(item => item.annotationId));
+  });
+
   it('stops after a cancelled async hydration and never publishes its result', async () => {
     const { deps, add } = setup();
     let cancelled = false;
