@@ -133,6 +133,7 @@ import {
 import {
   calculateLVSimpson, calculateLVSimpsonContourVolumeForMeasurement,
   calculateLVSimpsonContourVolumeForAnnotationData, isVerifiedLVSimpsonSessionReplacement,
+  hasMatchingLVSimpsonControlPoints,
 } from '../../extension-ar-measurements/src/utils/lvSimpson';
 import { getVerifiedLAVolumeContourAreaCM2 } from '../../extension-ar-measurements/src/utils/laVolume';
 import { getEchoAreaSlot, calculateRVFACFromMeasurements } from '../../extension-ar-measurements/src/utils/echoAreaMeasurements';
@@ -6416,7 +6417,19 @@ function retainCompletedLVSimpsonResult(studyInstanceId: string, composite: any,
 
 let explicitLVSimpsonResult: { studyInstanceId: string; composite: any; result: any; contourRevisions: Map<string, string> } | null = null;
 function getExplicitLVSimpsonResult(studyInstanceId: string) {
-  return explicitLVSimpsonResult?.studyInstanceId === studyInstanceId ? explicitLVSimpsonResult : null;
+  const result = explicitLVSimpsonResult;
+  if (!result || result.studyInstanceId !== studyInstanceId) return null;
+  // A pending viewport transition may temporarily hide a source. A present
+  // source with a different editable revision is an actual invalidation.
+  for (const [id, revision] of result.contourRevisions) {
+    const current = getLVSimpsonAnnotationRevision(id);
+    if (current && current !== revision) {
+      explicitLVSimpsonResult = null;
+      reviewedLVSimpsonEF = null;
+      return null;
+    }
+  }
+  return result;
 }
 // Direct edits and deletions after Calculate EF invalidate the only quiz result.
 // This also fails closed if Cornerstone emits a late normalization change.
@@ -9884,11 +9897,12 @@ function commandsModule({
       });
       const activeEFStudy = String(activeEFDisplaySet?.StudyInstanceUID ||
         activeEFDisplaySet?.studyInstanceUID || '');
-      const slotCandidates = getLVSimpsonSlotCandidates(
-        getCurrentViewerMeasurementSnapshot(measurementService).filter(item => {
-          const sourceStudy = String(item?.referenceStudyUID || item?.StudyInstanceUID || '');
-          return !activeEFStudy || sourceStudy === activeEFStudy;
-        })
+      const slotCandidates = getLVSimpsonSlotCandidates(assessmentOwnedEF
+        ? getCurrentViewerMeasurementSnapshot(measurementService).filter(item => {
+            const sourceStudy = String(item?.referenceStudyUID || item?.StudyInstanceUID || '');
+            return !activeEFStudy || sourceStudy === activeEFStudy;
+          })
+        : [...(measurementService.getMeasurements?.() || []), ...getLVSimpsonSessionMeasurements()]
       );
       const explicitSlot = normalizeLVSimpsonSlot(requestedSlot);
       const nextMissingSlot = getNextMissingLVSimpsonSlot(slotCandidates);
@@ -10046,7 +10060,8 @@ function commandsModule({
         };
         lvSimpsonPanelController = {
           activeSlot: (reviewExistingContours || panelOnly) ? '' : slotInfo.slot,
-          canEdit: !panelOnly || goldAuthoringEditable,
+          canEdit: ( !panelOnly || goldAuthoringEditable) &&
+            !(assessmentOwnedEF && pendingSavedEFRestoration),
           questionKey,
           savedGoldMeasurement,
           efContourTargets,
@@ -10451,11 +10466,14 @@ function commandsModule({
             resultText,
             instruction: allRestored
               ? 'Review the four contours and their volume measurements. Select Calculate EF to recalculate.'
-              : 'A saved contour is not yet available on its exact DICOM frame. Its saved evidence is preserved; retry restoration before drawing or recalculating.',
-            warnings: allRestored ? [] : ['Saved contour restoration is incomplete.'],
+              : pendingSavedEFRestoration
+                ? 'A saved contour is not yet available on its exact DICOM frame. Its saved evidence is preserved; retry restoration before drawing or recalculating.'
+                : 'Resolve missing or duplicate contour phases before recalculating EF.',
+            warnings: allRestored ? [] : [pendingSavedEFRestoration
+              ? 'Saved contour restoration is incomplete.' : 'Four unique contours are required.'],
             onCalculate: allRestored ? calculateEF : null,
-            continueLabel: allRestored ? '' : 'Retry saved contours',
-            onContinue: allRestored ? null : () => {
+            continueLabel: pendingSavedEFRestoration ? 'Retry saved contours' : '',
+            onContinue: !pendingSavedEFRestoration ? null : () => {
               void actions.startLVSimpsonEFWorkflow({
                 assessmentSavedEFAnnotations, assessmentSavedEFResult, notifyAssessmentOnCalculate,
                 efContourTargets, allowCanonicalFrameTargets, questionKey,
@@ -15509,7 +15527,9 @@ function commandsModule({
             const savedControls = getSavedLVSimpsonControlPoints(savedSource);
             const revision = getLVSimpsonAnnotationRevision(id);
             if (!revision) return false;
-            if (!savedControls || revision !== JSON.stringify(savedControls)) return true;
+            if (!hasMatchingLVSimpsonControlPoints(
+              savedControls, native.data?.handles?.points || native.data?.contour?.polyline
+            )) return true;
             const before = getLVSimpsonGeometry(savedSource);
             const after = native.data?.lvSimpson;
             return !!after?.calibratedContourPoints &&
