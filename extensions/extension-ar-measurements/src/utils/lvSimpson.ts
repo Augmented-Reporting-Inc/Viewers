@@ -663,7 +663,7 @@ function calculatePhaseVolume(slots, phase) {
   };
 }
 
-export function calculateLVSimpson(measurements = []) {
+export function calculateLVSimpson(measurements = [], { diagnostic = false } = {}) {
   const slots = {};
   let hasAnyLVSimpsonSlot = false;
 
@@ -686,7 +686,7 @@ export function calculateLVSimpson(measurements = []) {
     }
 
     hasAnyLVSimpsonSlot = true;
-    slots[slot] = buildSlotGeometry(measurement, slot);
+    slots[slot] = buildSlotGeometry(measurement, slot, { diagnostic });
   }
 
   // Do not show the LV Simpson summary before the LV contour workflow has
