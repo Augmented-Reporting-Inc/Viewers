@@ -10,7 +10,6 @@ describe('Research source capture is opt-in without changing other viewer workfl
   it('requests complete guided Echo contours for both live binding and Save', () => {
     const optIns = panel.match(/includeResearchEchoContours: true/g) || [];
     expect(optIns).toHaveLength(2);
-    expect(panel).toContain('getLVSimpsonSourceVolumes(allAnnotations)');
     expect(panel).toContain('reconcileResearchEchoCompositeAnswers(');
     expect(panel).toContain('buildViewerMeasurementValueCandidates(measurementAnnotations)');
   });
@@ -23,9 +22,15 @@ describe('Research source capture is opt-in without changing other viewer workfl
     expect(viewerCommands).toContain('!!getEchoAreaSlot(measurement)');
   });
 
-  it('shows missing and acquired EF phase volume slots and no unrelated-annotation accordion', () => {
-    expect(panel).toContain('selectedField?.componentKey === \'lvEjectionFraction\'');
-    expect(panel).toContain('<EchoEFContourVolumes volumes={efVolumes}');
+  it('delegates EF presentation to the shared Learning component with no second Research EF UI', () => {
+    const guided = fs.readFileSync(path.resolve(__dirname,
+      '../panels/ResearchEchoGuidedControls.tsx'), 'utf8');
+    expect(panel).toContain('efValue={calculatedReadState.values[selectedField.key]');
+    expect(panel).not.toContain('<EchoEFContourVolumes volumes={efVolumes}');
+    expect(guided).toContain('<SharedEFQuestionAnswer');
+    expect(guided).toContain('efContourTargets: field.config?.compositeFrameTargets');
+    expect(guided).toContain('allowCanonicalFrameTargets: true');
+    expect(guided).toContain('jumpToSavedViewerAnnotation');
     expect(panel).not.toContain('Other viewer annotations (');
   });
 
