@@ -114,7 +114,7 @@ export function LearningQuestionPanel({
                   {description}
                 </div>
               ) : null}
-              {instructions ? (
+              {instructions && !selectedQuestion ? (
                 <div className="bg-blue-950/30 mt-3 min-w-0 max-w-full rounded border border-blue-700 p-2 text-xs text-blue-100">
                   {instructions}
                 </div>
