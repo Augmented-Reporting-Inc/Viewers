@@ -12952,6 +12952,12 @@ function commandsModule({
       notify = false,
     } = {}) => {
       const saveTarget = getArViewerSaveTargetFromUrl();
+      // Research Review initialization owns its source annotations. Never
+      // fall through to a clinical Series lookup for a Research launch.
+      if (saveTarget.launchSource === 'research') {
+        return { seriesDoc: null, restoredCount: 0, skippedCount: 0,
+          restoredAnnotations: [], processedAnnotations: [] };
+      }
       let targetSeriesDoc = seriesDoc;
 
       if (!targetSeriesDoc && isLearnerCopyOnSaveTarget(saveTarget)) {
@@ -15533,6 +15539,9 @@ function commandsModule({
       );
     },
     getViewerMeasurementDomainForActiveStudy: async ({ domain: explicitDomain } = {}) => {
+      if (getArViewerSaveTargetFromUrl().launchSource === 'research') {
+        return inferDomainWithoutSeriesDoc(explicitDomain);
+      }
       try {
         const seriesDoc = await resolveViewerReadSeriesDoc(servicesManager, {
           allowBaseFallback: false,
