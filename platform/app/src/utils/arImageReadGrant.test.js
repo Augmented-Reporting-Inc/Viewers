@@ -145,14 +145,33 @@ test('grant expiry refreshes in the same window, and expired grants fail closed'
   expect(session.getHeaders()).toEqual({});
 });
 
-test('only same-origin Orthanc data source can carry the signed image grant', () => {
-  const config = { dataSources: [cdn(), orthanc()] };
+test('protected window uses only same-origin Orthanc even when default is CDN', () => {
   const getHeaders = () => ({ 'X-AR-Image-Grant': token });
-  const result = attachArImageReadHeaders(config,getHeaders,origin);
-  expect(result.dataSources[0].configuration.getAdditionalRequestHeaders).toBeUndefined();
-  expect(result.dataSources[1].configuration.getAdditionalRequestHeaders()).toEqual(getHeaders());
-  expect(result.getArImageReadHeaders()).toEqual(getHeaders());
+  for(const sources of [[cdn(),orthanc()],[cdn()],[orthanc()]]) {
+    const config = { dataSources: sources, defaultDataSourceName:'dicomweb' };
+    const result = attachArImageReadHeaders(config,getHeaders,origin);
+    expect(result.dataSources).toHaveLength(1);
+    expect(result.defaultDataSourceName).toBe('dicomweb');
+    expect(result.showStudyList).toBe(false);
+    expect(result.dataSources[0].configuration.qidoRoot).toBe(origin+'/orthanc/dicom-web');
+    expect(result.dataSources[0].configuration.wadoRoot).toBe(origin+'/orthanc/dicom-web');
+    expect(result.dataSources[0].configuration.staticWado).toBe(false);
+    expect(result.dataSources[0].configuration.getAdditionalRequestHeaders()).toEqual(getHeaders());
+    expect(result.getArImageReadHeaders()).toEqual(getHeaders());
+    expect(JSON.stringify(result.dataSources)).not.toContain('cdn.example.test');
+  }
   expect(() => attachArImageReadHeaders(
-    { dataSources: [cdn()] },getHeaders,origin
-  )).toThrow('ar_image_read_secure_orthanc_source_required');
+    { dataSources: [orthanc(),orthanc()] },getHeaders,origin
+  )).toThrow('ar_image_read_secure_orthanc_source_ambiguous');
+});
+
+test('iUSCAN /bviewer config remains byte-for-byte unchanged by grant scope check',async()=>{
+  const original={dataSources:[cdn(),orthanc()],defaultDataSourceName:'dicomweb'};
+  const before=JSON.stringify(original);
+  const session=createArImageReadGrantSession({
+    href:href('/bviewer/viewer','arIntegration=iuscan&arLearnerSeriesId='+attempt),
+    fetchImpl:async()=>{throw new Error('iUSCAN grant request forbidden');},
+  });
+  expect(await session.initialize()).toBe(false);
+  expect(original).toEqual(JSON.parse(before));
 });
