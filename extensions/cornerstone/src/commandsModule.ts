@@ -64,7 +64,7 @@ import {
   hydrateSavedViewerAnnotationForViewport,
   hydrateMeasurementAnnotationsForActiveStudy as hydrateMeasurementAnnotationsForActiveStudyUtil,
 } from './utils/measurementAnnotationHydration';
-import { isSavedLVSimpsonImageMatch } from './utils/savedVolumeContourMetadata';
+import { isSavedLVSimpsonImageMatch, getSavedLVSimpsonControlPoints } from './utils/savedVolumeContourMetadata';
 import { getViewerQuizComparisonLabelCanvasPosition } from './utils/quizReviewLabelLayout';
 import { buildFormApiFetchOptions, buildFormApiUrl } from './utils/formApi';
 import { callMultilineTextDialog } from './utils/callMultilineTextDialog';
@@ -9761,7 +9761,10 @@ function commandsModule({
           const saved = assessmentOwned
             ? assessmentSavedEFAnnotations
             : (Array.isArray(stored?.annotations) ? stored.annotations : []);
-          const efSaved = saved.filter(entry => Boolean(getLVSimpsonSlotFromMeasurement(entry)));
+          const efSaved = saved.filter(entry =>
+            Boolean(getLVSimpsonSlotFromMeasurement(entry)) &&
+            !viewerMeasurementsDeletedInSession.has(getMeasurementAnnotationId(entry))
+          );
           const bySlot = getLVSimpsonSlotCandidates(efSaved);
           console.info('[LV EF saved-slot audit]', {
             persistedAnnotationCount: saved.length,
@@ -15345,6 +15348,7 @@ function commandsModule({
       workflow = VIEWER_MEASUREMENTS_WORKFLOW,
       measurementIds = null,
       includeResearchEchoContours = false,
+      researchSavedAnnotations = [],
     } = {}) => {
       const domain = String(explicitDomain || '').trim() || inferDomainWithoutSeriesDoc('');
       const restrictMeasurementIds = Array.isArray(measurementIds);
@@ -15357,9 +15361,16 @@ function commandsModule({
         getCornerstoneUltrasoundDirectionalMeasurementFallbacks({
           excludedMeasurementIds: viewerMeasurementsDeletedInSession,
         });
+      const researchEcho = includeResearchEchoContours === true &&
+        workflow === VIEWER_MEASUREMENTS_WORKFLOW && domain === 'echo';
       const measurements = getCurrentViewerMeasurementSnapshot(
         measurementService,
-        cornerstoneFallbackMeasurements
+        researchEcho ? [
+          ...cornerstoneFallbackMeasurements,
+          ...getCornerstoneVolumeMeasurementFallbacks({
+            excludedMeasurementIds: viewerMeasurementsDeletedInSession,
+          }).filter(isLVSimpsonMeasurement),
+        ] : cornerstoneFallbackMeasurements
       );
 
       const annotations = measurements
@@ -15403,12 +15414,47 @@ function commandsModule({
         const includedLiveMeasurements = measurements.filter(measurement =>
           serializedIds.has(getMeasurementAnnotationId(measurement))
         );
+        // The saved Review is the assessment's immutable baseline until Save.
+        // Missing native state is normal during hydration. Use the same editable
+        // handle revision as the shared Calculate EF checkpoint, not a generic
+        // MeasurementService update or dense spline display revision.
+        const savedSources = Array.isArray(researchSavedAnnotations)
+          ? researchSavedAnnotations : [];
+        const deletedAnnotationIds = savedSources
+          .map(getMeasurementAnnotationId)
+          .filter(id => id && viewerMeasurementsDeletedInSession.has(id));
+        const invalidatedEFSourceIds = savedSources
+          .filter(isLVSimpsonMeasurement)
+          .filter(savedSource => {
+            const id = getMeasurementAnnotationId(savedSource);
+            if (!id) return false;
+            if (viewerMeasurementsDeletedInSession.has(id)) return true;
+            const native = cornerstoneTools.annotation.state.getAnnotation?.(id);
+            if (!native || !isSavedLVSimpsonImageMatch(
+              savedSource, native?.metadata?.referencedImageId
+            )) return false;
+            const savedControls = getSavedLVSimpsonControlPoints(savedSource);
+            const revision = getLVSimpsonAnnotationRevision(id);
+            if (!revision) return false;
+            if (!savedControls || revision !== JSON.stringify(savedControls)) return true;
+            const before = getLVSimpsonGeometry(savedSource);
+            const after = native.data?.lvSimpson;
+            return !!after?.calibratedContourPoints &&
+              (before?.calibratedLongAxisLengthMM !== after.calibratedLongAxisLengthMM ||
+                JSON.stringify(before?.calibratedContourPoints) !==
+                JSON.stringify(after.calibratedContourPoints));
+          }).map(getMeasurementAnnotationId);
         return {
           domain, workflow, annotations,
           researchEchoEvidence: {
-            candidates: buildViewerMeasurementValueCandidates(includedLiveMeasurements)
+            // EF comes only from the explicit shared checkpoint or an
+            // unchanged saved Review; other guided calculations are unchanged.
+            candidates: buildViewerMeasurementValueCandidates(includedLiveMeasurements,
+              { includeLVSimpson: false })
               .filter(candidate => candidate?.source === 'viewer-derived'),
             efVolumes: getLVSimpsonSourceVolumes(includedLiveMeasurements),
+            deletedAnnotationIds,
+            invalidatedEFSourceIds,
           },
         };
       }
