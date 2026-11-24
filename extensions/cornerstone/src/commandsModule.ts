@@ -9787,8 +9787,14 @@ function commandsModule({
         !requestedSlot && !requestedSessionId && !panelOnly;
       let pendingSavedEFRestoration = false;
       const restoreSources = async (sources: any[], cancelled: () => boolean, slots: readonly string[] = LV_TRACE_REQUIRED_SLOTS) => {
+        const activeSet = getActiveViewportDisplaySet({
+          viewportGridService, displaySetService, viewportId: viewportGridService.getActiveViewportId(),
+        });
+        const study = String(activeSet?.StudyInstanceUID || activeSet?.studyInstanceUID || '').trim();
         const eligible = sources.filter(source =>
-          !viewerMeasurementsDeletedInSession.has(getMeasurementAnnotationId(source)));
+          !viewerMeasurementsDeletedInSession.has(getMeasurementAnnotationId(source)) &&
+          (!assessmentOwnedEF || (!!study &&
+            String(source?.StudyInstanceUID || source?.referenceStudyUID || '').trim() === study)));
         const endRestoration = beginEFOpenStage('saved-source-restoration');
         try {
           return await restoreSavedLVSimpsonSlots({
@@ -10501,7 +10507,10 @@ function commandsModule({
             const actual = getLVSimpsonSlotCandidates(controller.getMeasurements());
             if (restored.pending || !LV_TRACE_REQUIRED_SLOTS.every(slot =>
                 actual.get(slot)?.length === 1 &&
-                !!getLVSimpsonAnnotationRevision(getMeasurementAnnotationId(actual.get(slot)[0])))) {
+                !!getLVSimpsonAnnotationRevision(getMeasurementAnnotationId(actual.get(slot)[0])) &&
+                isSavedLVSimpsonImageMatch(actual.get(slot)[0],
+                  cornerstoneTools.annotation.state.getAnnotation?.(
+                    getMeasurementAnnotationId(actual.get(slot)[0]))?.metadata?.referencedImageId))) {
               renderLVSimpsonWorkflowPanel({
                 instruction: 'Some saved source contours could not be verified. Select their rows to retry or calculate again.',
                 onCalculate: calculateEF, onCancel: hideLVSimpsonWorkflowPanel,
