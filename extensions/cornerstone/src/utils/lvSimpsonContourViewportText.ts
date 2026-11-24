@@ -1,3 +1,4 @@
+import { measureEFOpenStage } from '../../../extension-ar-measurements/src/utils/efPanelOpenProfile';
 import { calculateLVSimpsonContourVolumeForAnnotationData } from '../../../extension-ar-measurements/src/utils/lvSimpson';
 import { getVerifiedEFGoldContourViewportLines, getVerifiedEFLearnerContourViewportLines } from './quizEchoAreaCalibration';
 
@@ -11,7 +12,8 @@ export function getLVSimpsonContourViewportLines(raw: any): string[] | null {
   if (learner) return learner;
   const slot = String(data?.lvSimpson?.slot || '');
   if (!['A4C_ED', 'A4C_ES', 'A2C_ED', 'A2C_ES'].includes(slot)) return null;
-  const volume = calculateLVSimpsonContourVolumeForAnnotationData(data);
+  const volume = measureEFOpenStage('viewport-volume', () =>
+    calculateLVSimpsonContourVolumeForAnnotationData(data));
   return [slot.replace('_', ' ') + ' single-view LV volume: ' +
     (volume !== null ? volume.toFixed(2) + ' mL' : 'unavailable')];
 }
