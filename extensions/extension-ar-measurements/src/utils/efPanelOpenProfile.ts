@@ -18,7 +18,18 @@ type Restoration = { savedSlots: number; restoredSlots: number; pending: boolean
 const now = () => typeof performance !== 'undefined' ? performance.now() : Date.now();
 const rounded = (value: number) => Math.round(value * 10) / 10;
 const noop = () => {};
-let active: ReturnType<typeof createEFOpenProfile> | null = null;
+// Each viewer extension can be bundled independently. A tab-local Symbol
+// gives Research and Cornerstone the same diagnostic collector without
+// importing each other's runtime or transmitting data.
+const activeKey = Symbol.for('ar.efPanelOpenProfile');
+type Profile = ReturnType<typeof createEFOpenProfile>;
+const getActive = (): Profile | null =>
+  typeof window !== 'undefined' ? (window as any)[activeKey] || null : null;
+const setActive = (profile: Profile | null) => {
+  if (typeof window === 'undefined') return;
+  if (profile) (window as any)[activeKey] = profile;
+  else delete (window as any)[activeKey];
+};
 
 export function createEFOpenProfile(
   mode: Mode,
@@ -72,20 +83,20 @@ export function startEFOpenProfile(mode: Mode) {
     if (typeof window === 'undefined' ||
       window.localStorage?.getItem('AR_EF_OPEN_PROFILE') !== '1') return null;
   } catch { return null; }
-  active?.finish('superseded');
+  getActive()?.finish('superseded');
   const profile = createEFOpenProfile(mode);
-  active = profile;
+  setActive(profile);
   return {
     setRestoration: profile.setRestoration,
     finish(outcome: Outcome) {
-      if (active === profile) active = null;
+      if (getActive() === profile) setActive(null);
       profile.finish(outcome);
     },
   };
 }
 
 export function beginEFOpenStage(stage: EFOpenStage) {
-  return active?.begin(stage) || noop;
+  return getActive()?.begin(stage) || noop;
 }
 
 export function measureEFOpenStage<T>(stage: EFOpenStage, work: () => T): T {
