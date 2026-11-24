@@ -16,7 +16,8 @@ import {
  */
 export default function ResearchEchoGuidedControls({
   field, commandsManager, disabled = false, readOnly = false, onError,
-  sourceAnnotations = [], ivcMeasurementState = null, ivcReadValue = null,
+  sourceAnnotations = [], assessmentSavedEFAnnotations = null,
+  ivcMeasurementState = null, ivcReadValue = null,
   efValue = '', onChangeEFValue, onDeleteEFValue,
   onBeginIVCPhaseRedraw, onViewIVCSource, onDeleteIVCSource,
 }: {
@@ -26,6 +27,7 @@ export default function ResearchEchoGuidedControls({
   readOnly?: boolean;
   onError?: (message: string) => void;
   sourceAnnotations?: any[];
+  assessmentSavedEFAnnotations?: any[] | null;
   ivcMeasurementState?: any;
   ivcReadValue?: any;
   efValue?: string | number | null;
@@ -145,6 +147,8 @@ export default function ResearchEchoGuidedControls({
             return command('startLVSimpsonEFWorkflow', {
               efContourTargets: field.config?.compositeFrameTargets || null,
               allowCanonicalFrameTargets: true,
+              assessmentSavedEFAnnotations,
+              notifyAssessmentOnCalculate: true,
               questionKey: field.key,
             });
           })}
