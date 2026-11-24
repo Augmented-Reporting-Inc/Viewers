@@ -146,6 +146,7 @@ import { calibrateUSContourPoints, worldToImageIndex } from './utils/usRegionLen
 import { getQuizEchoAreaSourceMetadata, calculateCalibratedEchoAreaCM2, getSavedQuizEchoAreaDisplayInfo, getQuizCompositeContourViewportLines, getQuizCompositeGoldContourSlotMetadata, getVerifiedReleasedLAGoldViewportLines, getVerifiedEFGoldContourViewportLines, getVerifiedEFLearnerContourViewportLines } from './utils/quizEchoAreaCalibration';
 import { installQuizContourTextRenderer } from './utils/installQuizContourTextRenderer';
 import { getLVSimpsonContourViewportLines } from './utils/lvSimpsonContourViewportText';
+import { beginEFOpenStage, measureEFOpenStage, startEFOpenProfile, type EFOpenStage } from '../../extension-ar-measurements/src/utils/efPanelOpenProfile';
 import { consumeViewerLengthFirstLabelMode } from './utils/viewerLengthLabelMode';
 import { getViewerQuizRouteMeasurementDomain } from '../../extension-ar-learning/src/utils/viewerQuizMeasurementDomain';
 import { resolveViewerQuizGoldAreaBackfill, resolveSavedEFGoldContourAreas, resolveVerifiedEFGoldContourAreasFromDicom } from '../../extension-ar-measurements/src/utils/quizGoldAreaBackfill';
@@ -587,6 +588,8 @@ function getCurrentViewerMeasurementSnapshot(
   measurementService: any,
   cornerstoneFallbackMeasurements: any[] = []
 ) {
+  const endSnapshotProfile = beginEFOpenStage('measurement-snapshot');
+  try {
   const rawLiveMeasurements = measurementService?.getMeasurements?.() || [];
   const liveMeasurements = rawLiveMeasurements.filter(
     measurement => !isUltrasoundDirectionalViewerMeasurement(measurement)
@@ -795,10 +798,9 @@ function getCurrentViewerMeasurementSnapshot(
   );
 
   return restoredMeasurements;
+  } finally { endSnapshotProfile(); }
 }
 
-/** Guided RV/RA acquisition can precede the OHIF adapter's first entry.
- * Read only explicitly tagged native contours, as for LV/LA and Doppler. */
 function getCornerstoneEchoAreaMeasurementFallback(stateAnnotation: any = {}) {
   const source = getQuizEchoAreaSourceMetadata(stateAnnotation.data);
   if (!source.measurementKind) return null;
@@ -6545,6 +6547,8 @@ function renderLVSimpsonWorkflowPanel({
   warnings?: string[];
 } = {}) {
   if (typeof document === 'undefined') return;
+  const endPanelProfile = beginEFOpenStage('panel-render');
+  try {
 
   let panel = document.getElementById(LV_SIMPSON_PROGRESS_PANEL_ID);
   if (!panel) {
@@ -6591,7 +6595,7 @@ function renderLVSimpsonWorkflowPanel({
     // Reuse the same calibrated, validated single-contour calculator as
     // the viewport. Area and long axis remain preserved as source evidence.
     const volumeML = matching.length === 1
-      ? calculateLVSimpsonContourVolumeForMeasurement(measurement) : null;
+      ? measureEFOpenStage('panel-volume', () => calculateLVSimpsonContourVolumeForMeasurement(measurement)) : null;
     const gold = lvSimpsonPanelController?.savedGoldMeasurement;
     const goldComponent = Array.isArray(gold?.compositeResult?.components)
       ? gold.compositeResult.components.find(item => item?.slot === slot) : null;
@@ -6718,6 +6722,7 @@ function renderLVSimpsonWorkflowPanel({
   if (onCapture) button('Capture calculated measurement', onCapture, false);
   if (onCancel) button(resultText ? 'Close panel' : 'Cancel EF', onCancel);
   panel.appendChild(controls);
+  } finally { endPanelProfile(); }
 }
 
 function getLVSimpsonStepNumber(slot = '') {
@@ -9727,6 +9732,11 @@ function commandsModule({
       savedGoldMeasurement = null,
       goldAuthoringEditable = false,
     } = {}) => {
+      const openProfile = !requestedSessionId && !requestedSlot
+        ? startEFOpenProfile(panelOnly ? 'panel-only' :
+            Array.isArray(assessmentSavedEFAnnotations) ? 'assessment-owned' : 'education-or-clinical')
+        : null;
+      try {
       clearUltrasoundDirectionalWorkflowListeners();
       const isClinicalReportWorkflow = isClinicalReportMeasurementsSaveTarget(getArViewerSaveTargetFromUrl());
       const workflowSessionId = requestedSessionId || `${csUtils.uuidv4()}`;
@@ -9775,11 +9785,13 @@ function commandsModule({
       if (!requestedSessionId && !panelOnly) {
         try {
           const assessmentOwned = Array.isArray(assessmentSavedEFAnnotations);
+          const endSourceFetch = beginEFOpenStage('saved-source-fetch');
           const stored = assessmentOwned ? null :
             await actions.getViewerMeasurementAnnotationsForActiveStudy({
               workflows: ['viewerMeasurements'],
               includeRepeated: false,
             });
+          endSourceFetch();
           const saved = assessmentOwned
             ? assessmentSavedEFAnnotations
             : (Array.isArray(stored?.annotations) ? stored.annotations : []);
@@ -9803,6 +9815,7 @@ function commandsModule({
           // via the existing saved-annotation navigation/hydration service.
           // Never mistake a persisted quiz answer for a persisted contour.
           if (efSaved.length > 0) {
+            const endRestoration = beginEFOpenStage('saved-source-restoration');
             const restored = await restoreSavedLVSimpsonSlots({
               slots: LV_TRACE_REQUIRED_SLOTS,
               candidatesBySlot: bySlot,
@@ -9814,10 +9827,18 @@ function commandsModule({
                 try { cornerstoneTools.annotation.state.removeAnnotation?.(id); }
                 finally { suppressLVSimpsonRecoveryEvents -= 1; }
               },
-              hydrate: source => actions.jumpToSavedViewerAnnotation({
-                annotation: source, selectAnnotation: false,
-                runDelayedDisplayRefresh: false, pauseCineOnSource: true,
-              }),
+              hydrate: async source => {
+                const endAttempt = beginEFOpenStage('hydrate-attempt');
+                const slot = getLVSimpsonSlotFromMeasurement(source);
+                const endSlot = LV_TRACE_REQUIRED_SLOTS.includes(slot)
+                  ? beginEFOpenStage(('hydrate-' + slot) as EFOpenStage) : () => {};
+                try {
+                  return await actions.jumpToSavedViewerAnnotation({
+                    annotation: source, selectAnnotation: false,
+                    runDelayedDisplayRefresh: false, pauseCineOnSource: true,
+                  });
+                } finally { endSlot(); endAttempt(); }
+              },
               getRestoredMeasurement: getCornerstoneVolumeMeasurementFallback,
               getSlot: getLVSimpsonSlotFromMeasurement,
               onRestored: (savedContour, measurement) => {
@@ -9831,6 +9852,9 @@ function commandsModule({
               },
               isCancelled: isWorkflowCancelled,
             });
+            endRestoration();
+            openProfile?.setRestoration({ savedSlots: efSaved.length,
+              restoredSlots: restored.restoredCount, pending: restored.pending });
             if (assessmentOwnedEF && restored.restoredCount) {
               dispatchLVSimpsonSessionMeasurements({ reason: 'lv-simpson-saved-restored' });
             }
@@ -10466,11 +10490,13 @@ function commandsModule({
         } else {
           // Education/clinical behavior is unchanged: verify the restored
           // live geometry before displaying calculated volumes.
-          calculateEF();
+          measureEFOpenStage('review-calculation', calculateEF);
         }
+        openProfile?.finish('review-ready');
         return null;
       }
 
+      openProfile?.finish('drawing-ready');
       const existingSlotMeasurements = slotCandidates.get(slotInfo.slot) || [];
       const existingSlotMeasurementIds =
         getLVSimpsonExistingMeasurementIds(existingSlotMeasurements);
@@ -11027,6 +11053,7 @@ function commandsModule({
       });
 
       return measurement;
+      } finally { openProfile?.finish('returned'); }
     },
     startLAVolumeWorkflow: async ({
       slot: requestedSlot = '',
@@ -15422,6 +15449,8 @@ function commandsModule({
       researchSavedAnnotations = [],
       researchStudyInstanceId = '',
     } = {}) => {
+      const endSerialization = beginEFOpenStage('research-serialization');
+      try {
       const domain = String(explicitDomain || '').trim() || inferDomainWithoutSeriesDoc('');
       const restrictMeasurementIds = Array.isArray(measurementIds);
       const requestedMeasurementIds = new Set(
@@ -15516,13 +15545,14 @@ function commandsModule({
             candidates: buildViewerMeasurementValueCandidates(includedLiveMeasurements,
               { includeLVSimpson: false })
               .filter(candidate => candidate?.source === 'viewer-derived'),
-            efVolumes: getLVSimpsonSourceVolumes(includedLiveMeasurements),
+            efVolumes: measureEFOpenStage('research-live-volumes', () => getLVSimpsonSourceVolumes(includedLiveMeasurements)),
             deletedAnnotationIds,
             invalidatedEFSourceIds,
           },
         };
       }
       return { domain, workflow, annotations };
+      } finally { endSerialization(); }
     },
     // Learner quiz correction must only remove an annotation proven to belong
     // to this learner's Series (or created in this viewer session). The ordinary
@@ -15749,12 +15779,14 @@ function commandsModule({
       const seriesInstanceId =
         savedAnnotation.SeriesInstanceUID || savedAnnotation.referenceSeriesUID;
 
+      const endDisplaySet = beginEFOpenStage('display-set-lookup');
       const { activeDisplaySet, displaySet } = await waitForDisplaySetForSavedAnnotation({
         displaySetService,
         viewportGridService,
         annotation: savedAnnotation,
       });
 
+      endDisplaySet();
       if (!displaySet) {
         console.warn('[MeasurementAnnotations] no displaySet for saved annotation', {
           annotationId,
@@ -15778,6 +15810,7 @@ function commandsModule({
           displaySet.images?.length || displaySet.instances?.length || displaySet.numImageFrames,
       });
 
+      const endViewportSetup = beginEFOpenStage('viewport-setup');
       const activeDisplaySetAlreadyMatches =
         activeDisplaySet?.displaySetInstanceUID === displaySet.displaySetInstanceUID;
 
@@ -15806,6 +15839,8 @@ function commandsModule({
         }
       }
 
+      endViewportSetup();
+      const endViewportReady = beginEFOpenStage('viewport-ready');
       const viewport = await waitForCurrentSavedAnnotationViewport({
         cornerstoneViewportService,
         viewportGridService,
@@ -15813,6 +15848,7 @@ function commandsModule({
         annotation: savedAnnotation,
       });
 
+      endViewportReady();
       if (!viewport) {
         console.warn(
           '[MeasurementAnnotations] target saved image not ready after displaySet update',
@@ -15834,11 +15870,13 @@ function commandsModule({
         };
       }
 
+      const endFrameJump = beginEFOpenStage('frame-jump');
       const actualReferencedImageId = await jumpViewportToSavedAnnotationImage(
         viewport,
         savedAnnotation
       );
 
+      endFrameJump();
       if (!actualReferencedImageId) {
         return {
           ok: false,
@@ -15849,11 +15887,13 @@ function commandsModule({
         };
       }
 
+      const endFrameReady = beginEFOpenStage('frame-ready');
       const readyReferencedImageId = await waitForViewportImageReady(
         viewport,
         actualReferencedImageId
       );
 
+      endFrameReady();
       if (!readyReferencedImageId) {
         return {
           ok: false,
@@ -15865,7 +15905,9 @@ function commandsModule({
         };
       }
 
+      const endSettle = beginEFOpenStage('settle-delay');
       await sleep(50);
+      endSettle();
 
       const hydratedViewport =
         cornerstoneViewportService.getCornerstoneViewport(targetViewportId) ||
@@ -15890,6 +15932,7 @@ function commandsModule({
         };
       }
 
+      const endHydration = beginEFOpenStage('annotation-hydration');
       const hydratedAnnotation = isUltrasoundDirectionalViewerMeasurement(savedAnnotation)
         ? hydrateSavedUltrasoundDirectionalForViewport({
             savedAnnotation,
@@ -15921,6 +15964,7 @@ function commandsModule({
               selectAnnotation,
             });
 
+      endHydration();
       if (!hydratedAnnotation) {
         console.warn('[MeasurementAnnotations] saved annotation hydration failed', {
           annotationId,
@@ -15972,6 +16016,7 @@ function commandsModule({
         });
       }
 
+      const endRegistration = beginEFOpenStage('display-registration');
       // Reattach the renderer override on restored quiz contours as well as
       // newly drawn ones. Saved display text metadata does not itself alter
       // Cornerstone's native getTextLines output.
@@ -16010,6 +16055,8 @@ function commandsModule({
         });
       }
 
+      endRegistration();
+      const endViewportRender = beginEFOpenStage('viewport-render');
       try {
         const { triggerAnnotationRenderForViewportIds } = await import(
           '@cornerstonejs/tools/utilities'
@@ -16021,6 +16068,7 @@ function commandsModule({
       }
 
       hydratedViewport.render?.();
+      endViewportRender();
 
       if (isUltrasoundDirectionalViewerMeasurement(savedAnnotation)) {
         for (const delayMs of [50, 150, 300]) {
@@ -16073,6 +16121,7 @@ function commandsModule({
       }
 
       if (pauseCineOnSource) {
+        const endFinalFrameCheck = beginEFOpenStage('final-frame-check');
         const sourceViewportId = hydratedViewport.id || targetViewportId;
         stopSourceCineForViewport(sourceViewportId);
         const finalImage = await jumpViewportToSavedAnnotationImage(
@@ -16081,10 +16130,12 @@ function commandsModule({
         if (!finalImage || !await waitForViewportImageReady(
           hydratedViewport, finalImage
         )) {
+          endFinalFrameCheck();
           return { ok: false, reason: 'saved-source-frame-not-ready-after-cine-stop',
             annotationId, viewportId: sourceViewportId };
         }
         hydratedViewport.render?.();
+        endFinalFrameCheck();
       }
 
       return {
