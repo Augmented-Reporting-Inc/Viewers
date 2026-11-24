@@ -445,6 +445,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
           workflow: VIEWER_MEASUREMENTS_WORKFLOW,
           includeResearchEchoContours: true,
           researchSavedAnnotations: savedAnnotations,
+          researchStudyInstanceId: context?.sourceStudyInstanceUID,
         }
       );
       const evidence = applyResearchSnapshotEvidence(
@@ -476,9 +477,9 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
       let verifiedEF: any = null;
       if (efField) {
         const reviewedEF = prepared?.efSnapshot ?? await commandsManager.runCommand('getViewerQuizLVSimpsonForActiveStudy');
-        verifiedEF = getVerifiedResearchEFResultCandidate(
-          efField, reviewedEF, available
-        );
+        verifiedEF = String(reviewedEF?.studyInstanceId || '') ===
+          String(context?.sourceStudyInstanceUID || '')
+          ? getVerifiedResearchEFResultCandidate(efField, reviewedEF, available) : null;
       }
       // An explicit Calculate EF snapshot is the same trusted result the
       // Education capture command uses. Deduplicate by source identity:
@@ -602,6 +603,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
           domain: 'echo', workflow: VIEWER_MEASUREMENTS_WORKFLOW,
           includeResearchEchoContours: true,
           researchSavedAnnotations: savedAnnotations,
+          researchStudyInstanceId: context?.sourceStudyInstanceUID,
         });
         applyResearchSnapshotEvidence(
           serialized, deletedAnnotationIdsRef.current, invalidatedEFSourceIdsRef.current
@@ -833,6 +835,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
           workflow: VIEWER_MEASUREMENTS_WORKFLOW,
           includeResearchEchoContours: true,
           researchSavedAnnotations: savedAnnotations,
+          researchStudyInstanceId: context?.sourceStudyInstanceUID,
         }
       );
       if (!Array.isArray(serialized?.annotations)) {
@@ -864,7 +867,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
       );
       throw new Error('Could not capture current viewer annotations. Research Read was not saved.');
     }
-  }, [commandsManager, context?.readSchema?.domain, savedAnnotations]);
+  }, [commandsManager, context?.readSchema?.domain, context?.sourceStudyInstanceUID, savedAnnotations]);
 
   const save = useCallback(async () => {
     if (!context?.reviewKey || context?.readOnly || context?.preview) {
@@ -890,7 +893,8 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
       const efSnapshot = efField
         ? await commandsManager.runCommand('getViewerQuizLVSimpsonForActiveStudy')
         : null;
-      const verifiedEF = efField
+      const verifiedEF = efField && String(efSnapshot?.studyInstanceId || '') ===
+        String(context?.sourceStudyInstanceUID || '')
         ? getVerifiedResearchEFResultCandidate(efField, efSnapshot, measurementAnnotations)
         : null;
       const savedEF = resolvePersistedResearchEF(
