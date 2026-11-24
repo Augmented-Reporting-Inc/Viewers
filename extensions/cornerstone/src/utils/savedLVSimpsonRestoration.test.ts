@@ -1,4 +1,4 @@
-import { restoreSavedLVSimpsonSlots } from './savedLVSimpsonRestoration';
+import { restoreSavedLVSimpsonSlots, mergeSavedLVSimpsonPanelSources } from './savedLVSimpsonRestoration';
 
 const slots = ['A4C_ED', 'A4C_ES', 'A2C_ED', 'A2C_ES'];
 const image = (slot: string, frame = 2) =>
@@ -29,6 +29,36 @@ function setup() {
   };
   return { sources, deps, native, add };
 }
+
+describe('panel-only saved source display', () => {
+  const saved = slots.map(slot => ({ ...source(slot), StudyInstanceUID: 'study-a' }));
+  const merge = (live: any[] = [], deleted = new Set<string>(), changed = new Set<string>()) =>
+    mergeSavedLVSimpsonPanelSources({
+      saved, live, studyInstanceId: 'study-a',
+      getId: item => item.annotationId, getSlot: item => item.lvSimpson?.slot || '',
+      isDeleted: id => deleted.has(id), isChanged: item => changed.has(item.annotationId),
+    });
+
+  it('shows all four saved source rows without hydrating or modifying the baseline', () => {
+    const displayed = merge();
+    expect(displayed).toHaveLength(4);
+    expect(displayed.every(item => item.arSavedEFPanelSource)).toBe(true);
+    expect(saved.every(item => !('arSavedEFPanelSource' in item))).toBe(true);
+    expect(displayed.map(item => item.annotationId)).toEqual(saved.map(item => item.annotationId));
+  });
+
+  it('prefers an existing live source and never resurrects deleted or changed evidence', () => {
+    const live = { ...saved[0], points: [[1,2,3]] };
+    const deleted = new Set([saved[1].annotationId]);
+    const changed = new Set([saved[2].annotationId]);
+    const result = merge([live, saved[1], { ...saved[3], annotationId: 'other-study', StudyInstanceUID: 'study-b' }],
+      deleted, changed);
+    expect(result).toHaveLength(2);
+    expect(result[0]).toBe(live);
+    expect(result[1].annotationId).toBe(saved[3].annotationId);
+    expect(result[1].arSavedEFPanelSource).toBe(true);
+  });
+});
 
 describe('shared saved LV Simpson restoration', () => {
   it('recovers all four slots in the first opening, retrying only the transient failure', async () => {
