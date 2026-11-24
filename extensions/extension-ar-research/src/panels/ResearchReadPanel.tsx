@@ -1365,7 +1365,8 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
               onError={message => notify(servicesManager, message, 'warning')}
             />
           ) : null}
-          {!showInlineIVCSources && selectedField?.componentKey !== 'lvEjectionFraction' &&
+          {!showInlineIVCSources &&
+            (selectedField?.componentKey !== 'lvEjectionFraction' || selectedSources.length > 1) &&
             (isSelectedMeasurement || genericProtocolTargets.length > 0) ? (
             <div className="rounded border border-gray-700 bg-gray-950 p-3 text-xs">
               <div className="font-semibold text-gray-100">Measurement sources</div>
