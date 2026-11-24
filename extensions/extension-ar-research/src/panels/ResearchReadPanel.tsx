@@ -12,7 +12,11 @@ import { SharedMeasurementValueInput } from '../../../extension-ar-measurements/
 import LearningQuestionPanel from '../../../extension-ar-learning/src/panels/LearningQuestionPanel';
 import { LearningSingleChoiceAnswer } from '../../../extension-ar-learning/src/components/LearningSingleChoiceAnswer';
 import ResearchEchoGuidedControls from './ResearchEchoGuidedControls';
-import { reconcileResearchEchoCompositeAnswers } from '../utils/researchEchoAnswerBinding';
+import {
+  reconcileResearchEchoCompositeAnswers,
+  getVerifiedResearchEFResultCandidate,
+} from '../utils/researchEchoAnswerBinding';
+import { isMatchingQuizEFCompletion } from '../../../extension-ar-learning/src/utils/quizCompositeCaptureIntent';
 import { getResearchMeasurementToolForField } from '../utils/researchMeasurementTool';
 import {
   getResearchFramePickerIntent,
@@ -456,10 +460,27 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
         candidates: liveVerified,
         efVolumes: evidence.efVolumes || {},
       });
-      const candidates = [
+      const efField = fields.find(field => field.componentKey === 'lvEjectionFraction');
+      let verifiedEF: any = null;
+      if (efField) {
+        const reviewedEF = await commandsManager.runCommand('getViewerQuizLVSimpsonForActiveStudy');
+        verifiedEF = getVerifiedResearchEFResultCandidate(
+          efField, reviewedEF, available
+        );
+      }
+      // A verified explicit EF checkpoint is authoritative over an
+      // independently derived candidate with the same four source IDs.
+      const candidateList = [
         ...buildViewerMeasurementValueCandidates(available),
         ...liveVerified,
+        ...(verifiedEF ? [verifiedEF] : []),
       ];
+      const candidates = candidateList.filter((candidate, index) =>
+        candidateList.findIndex(item =>
+          item.source === candidate.source &&
+          item.sourceMeasurementKey === candidate.sourceMeasurementKey
+        ) === index
+      );
       setViewerCandidates(candidates);
       const updates = fields.flatMap(field => {
         const compatible = getResearchCompatibleMeasurementCandidates(
@@ -764,10 +785,35 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
           validCapturedIds.has(id)
         )
       );
-      const latestCandidates = [
+      const efField = fields.find(field => field.componentKey === 'lvEjectionFraction');
+      const efSnapshot = efField
+        ? await commandsManager.runCommand('getViewerQuizLVSimpsonForActiveStudy')
+        : null;
+      const verifiedEF = efField
+        ? getVerifiedResearchEFResultCandidate(efField, efSnapshot, measurementAnnotations)
+        : null;
+      const candidateList = [
         ...buildViewerMeasurementValueCandidates(measurementAnnotations),
         ...freshVerified,
+        ...(verifiedEF ? [verifiedEF] : []),
       ];
+      const latestCandidates = candidateList.filter((candidate, index) =>
+        candidateList.findIndex(item =>
+          item.source === candidate.source &&
+          item.sourceMeasurementKey === candidate.sourceMeasurementKey
+        ) === index
+      );
+      // An explicitly calculated EF with contour evidence is never a
+      // successful zero-result draft. Preserve the measurements and explain
+      // the frame/source failure rather than silently saving an empty answer.
+      if (efField && efSnapshot?.composite?.measurementKind === 'lvSimpsonEF' &&
+          !verifiedEF) {
+        throw new Error(
+          'Calculated EF cannot be saved: its four contours do not match the ' +
+          'Research protocol DICOM frames or contain duplicate/invalid source IDs. ' +
+          'Review each EF frame; existing annotations were not overwritten.'
+        );
+      }
       const freshUpdates = fields.flatMap(field => {
         const compatible = getResearchCompatibleMeasurementCandidates(
           field, latestCandidates, measurementAnnotations
@@ -1339,6 +1385,14 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
               field={selectedField}
               commandsManager={commandsManager}
               sourceAnnotations={selectedSources}
+              assessmentSavedEFAnnotations={selectedField?.componentKey === 'lvEjectionFraction'
+                ? savedAnnotations.filter(annotation =>
+                    (annotation?.measurementKind === 'lvSimpsonSlot' ||
+                     annotation?.lvSimpson?.measurementKind === 'lvSimpsonSlot') &&
+                    String(annotation?.StudyInstanceUID || annotation?.referenceStudyUID || '') ===
+                      String(context?.sourceStudyInstanceUID || '')
+                  )
+                : null}
               ivcMeasurementState={ivcMeasurementState}
               ivcReadValue={guidedIVCValue}
               efValue={calculatedReadState.values[selectedField.key] ?? ''}
