@@ -9,7 +9,9 @@ const viewerCommands = fs.readFileSync(
 describe('Research source capture is opt-in without changing other viewer workflows', () => {
   it('requests complete guided Echo contours for both live binding and Save', () => {
     const optIns = panel.match(/includeResearchEchoContours: true/g) || [];
-    expect(optIns).toHaveLength(2);
+    // Live binding, explicit Calculate EF event, and Save each require
+    // their own verified snapshot of the Research-owned contour sources.
+    expect(optIns).toHaveLength(3);
     expect(panel).toContain('reconcileResearchEchoCompositeAnswers(');
     expect(panel).toContain('buildViewerMeasurementValueCandidates(measurementAnnotations)');
   });
