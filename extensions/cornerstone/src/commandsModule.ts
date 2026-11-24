@@ -15399,6 +15399,7 @@ function commandsModule({
       measurementIds = null,
       includeResearchEchoContours = false,
       researchSavedAnnotations = [],
+      researchStudyInstanceId = '',
     } = {}) => {
       const domain = String(explicitDomain || '').trim() || inferDomainWithoutSeriesDoc('');
       const restrictMeasurementIds = Array.isArray(measurementIds);
@@ -15413,13 +15414,17 @@ function commandsModule({
         });
       const researchEcho = includeResearchEchoContours === true &&
         workflow === VIEWER_MEASUREMENTS_WORKFLOW && domain === 'echo';
+      const researchStudy = String(researchStudyInstanceId || '').trim();
       const measurements = getCurrentViewerMeasurementSnapshot(
         measurementService,
         researchEcho ? [
           ...cornerstoneFallbackMeasurements,
-          ...getCornerstoneVolumeMeasurementFallbacks({
+          ...(researchStudy ? getCornerstoneVolumeMeasurementFallbacks({
+            studyInstanceUID: researchStudy,
             excludedMeasurementIds: viewerMeasurementsDeletedInSession,
-          }).filter(isLVSimpsonMeasurement),
+          }).filter(item => isLVSimpsonMeasurement(item) &&
+            String(item?.referenceStudyUID || item?.StudyInstanceUID || '') === researchStudy
+          ) : []),
         ] : cornerstoneFallbackMeasurements
       ).filter(measurement => !researchEcho ||
         !viewerMeasurementsDeletedInSession.has(getMeasurementAnnotationId(measurement)));
