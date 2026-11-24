@@ -136,7 +136,10 @@ export default function ResearchEchoGuidedControls({
             // Preserve Research-owned source evidence. The existing EF panel
             // remains responsible for contours, volumes, DICOM targets, and EF.
             const seen = new Set<string>();
-            for (const annotation of sourceAnnotations) {
+            // Shared EF owns Review-provided restoration. Do not navigate/
+            // hydrate those same annotations twice in the Research wrapper.
+            for (const annotation of Array.isArray(assessmentSavedEFAnnotations)
+              ? [] : sourceAnnotations) {
               const id = String(annotation?.annotationId || annotation?.uid || annotation?.id || '');
               if (!id || seen.has(id)) continue;
               seen.add(id);
