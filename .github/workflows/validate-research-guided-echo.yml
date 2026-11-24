@@ -18,6 +18,7 @@ on:
       - refactor/shared-learning-research-question-panel-20261123
       - refactor/shared-assessment-research-navigation-20261123
       - refactor/shared-ef-question-answer-20261124
+      - fix/research-ef-cine-pause-and-capture-diagnostics-20261124
     paths:
       - 'extensions/extension-ar-research/src/**'
       - 'extensions/extension-ar-measurements/src/**'
