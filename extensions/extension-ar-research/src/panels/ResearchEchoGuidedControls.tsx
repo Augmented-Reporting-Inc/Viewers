@@ -125,7 +125,7 @@ export default function ResearchEchoGuidedControls({
           unit={String(field?.config?.unit || '%')}
           min={field?.config?.min}
           max={field?.config?.max}
-          step={field?.config?.step || 'any'}
+          step="0.01"
           disabled={disabled || readOnly || !onChangeEFValue}
           openDisabled={hasIncompleteRequiredEF || !commandsManager}
           busy={busy === 'ef'}
