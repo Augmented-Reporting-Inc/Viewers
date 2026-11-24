@@ -4,6 +4,11 @@ import {
   getVerifiedResearchEFResultCandidate,
   dedupeResearchMeasurementCandidates,
   getResearchEFRestoreSources,
+  getPersistedResearchEFCandidate,
+  resolvePersistedResearchEF,
+  mergeResearchMeasurementAnnotations,
+  applyResearchSnapshotEvidence,
+  withPersistedResearchEF,
 } from './researchEchoAnswerBinding';
 import { buildReadFields, buildReadResultEntries, buildReadValueState } from './readSchema';
 
@@ -158,6 +163,110 @@ describe('Research source-backed composite answer capture', () => {
     expect(reopened.sources[field.key]).toEqual({
       source: 'viewer-derived', sourceMeasurementKey: candidate.sourceMeasurementKey,
     });
+  });
+
+  function savedEFFixture() {
+    const { field, candidate, annotations } = fixture('lvEjectionFraction', 61.19);
+    const controls = [[-1,0,0],[-2,1,0],[-1,3,0],[0,4,0],[1,3,0],[2,1,0],[1,0,0]];
+    const savedAnnotations = annotations.map((a, index) => ({
+      ...a, StudyInstanceUID: 'study-a', measurementKind: 'lvSimpsonSlot',
+      lvSimpson: {
+        measurementKind: 'lvSimpsonSlot', slot: slots.lvEjectionFraction[index],
+        originalContourPoints: controls.map(p => [...p]),
+        calibratedContourPoints: controls.map(p => [...p]), calibratedLongAxisLengthMM: 4,
+      },
+      splineControlPoints: controls.map(p => [...p]),
+    }));
+    const source = { source: 'viewer-derived', sourceMeasurementKey: candidate.sourceMeasurementKey };
+    return { field, candidate, savedAnnotations, source };
+  }
+
+  it('immediately restores a verified saved EF and serializes an unchanged read without live hydration', () => {
+    const { field, candidate, savedAnnotations, source } = savedEFFixture();
+    mockCandidates.mockReturnValue([]);
+    const savedValues = { [field.key]: 61.19 };
+    const savedSources = { [field.key]: source };
+    const persisted = resolvePersistedResearchEF(
+      [field], savedValues, savedSources, savedAnnotations, savedAnnotations, 'study-a'
+    );
+    expect(persisted).toEqual(candidate);
+    const state = reconcileResearchEchoCompositeAnswers(
+      [field], savedValues, savedSources, savedAnnotations,
+      withPersistedResearchEF([], persisted), { verifiedEFOnly: true }
+    );
+    expect(state.values[field.key]).toBe(61.19);
+    expect(state.sources[field.key]).toEqual(source);
+    expect(buildReadResultEntries([field], state.values, state.sources))
+      .toMatchObject([{ componentKey: 'lvEjectionFraction', value: 61.19, ...source }]);
+    expect(mockCandidates).toHaveBeenCalledWith(savedAnnotations, { includeLVSimpson: false });
+  });
+
+  it('keeps immutable source geometry during partial normalized hydration', () => {
+    const { field, savedAnnotations, source } = savedEFFixture();
+    const partial = [{ annotationId: savedAnnotations[0].annotationId, points: [[0,0,0]] }];
+    const merged = mergeResearchMeasurementAnnotations(savedAnnotations, partial);
+    expect(merged).toEqual(savedAnnotations);
+    expect(merged[0]).toBe(savedAnnotations[0]);
+    expect(getPersistedResearchEFCandidate(
+      field, 61.19, source, savedAnnotations, 'study-a', merged
+    )?.value).toBe(61.19);
+  });
+
+  it('invalidates a genuinely edited same-ID contour and never resurrects deleted evidence', () => {
+    const { field, savedAnnotations, source } = savedEFFixture();
+    const changed = {
+      ...savedAnnotations[0], splineControlPoints: savedAnnotations[0].splineControlPoints
+        .map((p, i) => i === 0 ? [p[0] + 1, p[1], p[2]] : p),
+    };
+    const removed = savedAnnotations[2].annotationId;
+    const deletedIds = new Set<string>(), invalidated = new Set<string>();
+    applyResearchSnapshotEvidence({ researchEchoEvidence: {
+      deletedAnnotationIds: [removed], invalidatedEFSourceIds: [changed.annotationId, removed],
+    } }, deletedIds, invalidated);
+    // Even a late live update carrying the deleted source cannot bring it back.
+    const merged = mergeResearchMeasurementAnnotations(
+      savedAnnotations, [changed, savedAnnotations[2]], deletedIds, invalidated
+    );
+    expect(merged).toContain(changed);
+    expect(merged).not.toContain(savedAnnotations[2]);
+    expect(getPersistedResearchEFCandidate(
+      field, 61.19, source, savedAnnotations, 'study-a', merged, invalidated
+    )).toBeNull();
+    expect(getPersistedResearchEFCandidate(
+      field, 61.19, source, savedAnnotations, 'study-a',
+      [changed, ...savedAnnotations.slice(1)]
+    )).toBeNull();
+    mockCandidates.mockReturnValue([]);
+    const state = reconcileResearchEchoCompositeAnswers([field], { [field.key]: 61.19 },
+      { [field.key]: source }, merged, [], { verifiedEFOnly: true });
+    expect(state.values).not.toHaveProperty(field.key);
+    expect(state.sources).not.toHaveProperty(field.key);
+  });
+
+  it('prioritizes a verified new calculation over an intact older saved EF', () => {
+    const { candidate } = savedEFFixture();
+    const fresh = { ...candidate, value: 48.92 };
+    expect(withPersistedResearchEF([fresh], candidate)).toEqual([fresh]);
+  });
+
+  it('requires the correct study, unique slot identity and exact phase frame; zero EF is valid', () => {
+    const { field, savedAnnotations, source } = savedEFFixture();
+    const resolve = (value: any, current = savedAnnotations, selectedSource = source, study = 'study-a') =>
+      getPersistedResearchEFCandidate(field, value, selectedSource, savedAnnotations, study, current);
+    expect(resolve(0)?.value).toBe(0);
+    for (const value of ['', ' ', null, false, -1, 101, NaN]) expect(resolve(value)).toBeNull();
+    expect(resolve(61.19, savedAnnotations, source, 'other-study')).toBeNull();
+    expect(resolve(61.19, savedAnnotations.slice(1))).toBeNull();
+    const wrongFrame = savedAnnotations.map((a, i) => i === 1 ? { ...a, frameNumber: 99 } : a);
+    expect(resolve(61.19, wrongFrame)).toBeNull();
+    const swapped = savedAnnotations.map((a, i) => i < 2
+      ? { ...a, SOPInstanceUID: savedAnnotations[1-i].SOPInstanceUID } : a);
+    expect(resolve(61.19, swapped)).toBeNull();
+    const ids = savedAnnotations.map(a => a.annotationId);
+    const duplicate = { ...source, sourceMeasurementKey: 'lv-simpson:' + [...ids.slice(0,3), ids[0]].join(',') };
+    expect(resolve(61.19, savedAnnotations, duplicate)).toBeNull();
+    const reversed = { ...source, sourceMeasurementKey: 'lv-simpson:' + [...ids].reverse().join(',') };
+    expect(resolve(61.19, savedAnnotations, reversed)?.sourceMeasurementKey).toBe(reversed.sourceMeasurementKey);
   });
 
   it('uses live verified EF result when persisted contour metadata is compacted', () => {
