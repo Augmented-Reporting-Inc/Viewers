@@ -1,6 +1,7 @@
 import React from 'react';
 import LearningQuestionPanel from './LearningQuestionPanel';
 import { LearningEchoAcquisitionControls } from '../components/LearningEchoAcquisitionControls';
+import { SharedEFQuestionAnswer } from '../components/SharedEFQuestionAnswer';
 import fs from 'fs';
 import path from 'path';
 
@@ -50,6 +51,50 @@ describe('Education and Research use Learning question renderer', () => {
     const button = ivc.find(node => node.type === 'button');
     button.props.onClick({ preventDefault() {}, stopPropagation() {} });
     expect(chosen).toEqual(['IVC_EXP']);
+  });
+
+  it('shares EF answer, launcher and guidance without owning persistence', () => {
+    let changed = '';
+    let opened = 0;
+    const tree = nodes(SharedEFQuestionAnswer({
+      value: '',
+      onChange: value => { changed = value; },
+      onOpen: () => { opened += 1; },
+    }));
+    const input = tree.find(node => node.type === 'input' &&
+      node.props.type === 'number');
+    expect(input).toBeTruthy();
+    input.props.onChange({ target: { value: '58' } });
+    expect(changed).toBe('58');
+    const launcher = tree.find(node => node.type === 'button' &&
+      node.props.children === 'Open EF panel');
+    expect(launcher).toBeTruthy();
+    launcher.props.onClick({ preventDefault() {}, stopPropagation() {} });
+    expect(opened).toBe(1);
+    expect(tree.some(node => typeof node === 'string' &&
+      node.includes('Complete four LV contours'))).toBe(true);
+
+    const complete = nodes(SharedEFQuestionAnswer({
+      value: 58, onChange: () => {}, onOpen: () => {},
+    }));
+    expect(complete.some(node => typeof node === 'string' &&
+      node.includes('Complete four LV contours'))).toBe(false);
+  });
+
+  it('uses the shared EF renderer in both controllers without mixing answer APIs', () => {
+    const learning = fs.readFileSync(
+      path.resolve(__dirname, './CaseQuestionsPanel.tsx'), 'utf8'
+    );
+    const research = fs.readFileSync(
+      path.resolve(__dirname, '../../../extension-ar-research/src/panels/ResearchEchoGuidedControls.tsx'), 'utf8'
+    );
+    expect(learning).toContain('<SharedEFQuestionAnswer');
+    expect(research).toContain('<SharedEFQuestionAnswer');
+    expect(research).toContain('startLVSimpsonEFWorkflow');
+    expect(research).toContain('allowCanonicalFrameTargets: true');
+    expect(learning).toContain('getCompleteEFContourFrameTargets(question.answerConfig)');
+    expect(learning).toContain('setAnswer(');
+    expect(research).not.toContain('saveViewerQuizResponseForActiveStudy');
   });
 
   it('wires both controllers to the actual Learning renderer and leaves Research APIs isolated', () => {
