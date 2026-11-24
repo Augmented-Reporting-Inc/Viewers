@@ -1,5 +1,8 @@
 import { buildViewerMeasurementValueCandidates } from '../../../extension-ar-measurements/src/utils/measurementValueCandidates';
-import { reconcileResearchEchoCompositeAnswers } from './researchEchoAnswerBinding';
+import {
+  reconcileResearchEchoCompositeAnswers,
+  getVerifiedResearchEFResultCandidate,
+} from './researchEchoAnswerBinding';
 import { buildReadFields, buildReadResultEntries, buildReadValueState } from './readSchema';
 
 jest.mock('../../../extension-ar-measurements/src/utils/measurementValueCandidates', () => ({
@@ -60,6 +63,57 @@ describe('Research source-backed composite answer capture', () => {
     expect(buildReadResultEntries([field], state.values, state.sources)).toMatchObject([{
       componentKey: kind, value: 62.4, source: 'viewer-derived',
     }]);
+  });
+
+  it('adapts the Education EF checkpoint to the exact Research frames without recalculating EF', () => {
+    const { field, annotations } = fixture('lvEjectionFraction', 61.19);
+    const result = {
+      studyInstanceId: 'study-a',
+      composite: {
+        measurementKind: 'lvSimpsonEF',
+        value: 61.19,
+        components: slots.lvEjectionFraction.map(slot => ({
+          slot, annotationId: 'source-' + slot,
+        })),
+      },
+    };
+    const verifiedAnnotations = annotations.map(a => ({
+      ...a, StudyInstanceUID: 'study-a',
+    }));
+    const candidate = getVerifiedResearchEFResultCandidate(
+      field, result, verifiedAnnotations
+    );
+    expect(candidate).toMatchObject({
+      value: 61.19, unit: '%', source: 'viewer-derived',
+      sourceMeasurementKey: 'lv-simpson:' +
+        slots.lvEjectionFraction.map(slot => 'source-' + slot).join(','),
+    });
+    mockCandidates.mockReturnValue([]);
+    const state = reconcileResearchEchoCompositeAnswers(
+      [field], {}, {}, verifiedAnnotations, [candidate]
+    );
+    expect(state.values[field.key]).toBeCloseTo(61.2);
+    expect(buildReadResultEntries([field], state.values, state.sources))
+      .toMatchObject([{ componentKey: 'lvEjectionFraction', source: 'viewer-derived' }]);
+
+    expect(getVerifiedResearchEFResultCandidate(
+      field, result,
+      verifiedAnnotations.map(a => a.annotationId === 'source-A2C_ED'
+        ? { ...a, frameNumber: 27 } : a)
+    )).toBeNull();
+    expect(getVerifiedResearchEFResultCandidate(
+      field, { ...result, composite: {
+        ...result.composite,
+        components: [...result.composite.components.slice(0, 3),
+          result.composite.components[0]],
+      } }, verifiedAnnotations
+    )).toBeNull();
+    expect(getVerifiedResearchEFResultCandidate(
+      field, result, verifiedAnnotations.slice(1)
+    )).toBeNull();
+    expect(getVerifiedResearchEFResultCandidate(
+      field, { ...result, studyInstanceId: 'different-study' }, verifiedAnnotations
+    )).toBeNull();
   });
 
   it('keeps exact value and source identity across Research Read result serialization/reopen', () => {
