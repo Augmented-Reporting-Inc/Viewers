@@ -5,6 +5,8 @@ import {
 import { buildViewerMeasurementValueCandidates } from '../../../extension-ar-measurements/src/utils/measurementValueCandidates';
 import { getResearchMeasurementToolForField } from './researchMeasurementTool';
 import { buildViewerMeasurementReadUpdates } from './readSchema';
+import { getLAVolumeContourSlot, getVerifiedLAVolumeContourAreaCM2 } from '../../../extension-ar-measurements/src/utils/laVolume';
+import { getResearchEchoPhaseTarget, isRequiredResearchPhaseMissing } from './researchEchoWorkflow';
 
 /**
  * Reuse existing OHIF viewer navigation commands rather than duplicating image
@@ -216,6 +218,24 @@ export function getResearchProtocolCompatibleCandidates(
   );
 }
 
+/** Verify the identity of Review-owned source evidence, not the current image.
+ * A display copy normalizes a stale frameNumber without rewriting stored data. */
+function getResearchOwnedSourceDisplay(annotation: any, study: string) {
+  const frame = getAnnotationSourceFrame(annotation);
+  const reference = cleanString(annotation?.referencedImageId ||
+    annotation?.metadata?.referencedImageId);
+  const imageStudy = reference.match(/\/studies\/([^/?#]+)/i)?.[1];
+  const imageSeries = reference.match(/\/series\/([^/?#]+)/i)?.[1];
+  try {
+    if ((imageStudy && decodeURIComponent(imageStudy) !== study) ||
+        (imageSeries && frame.series && decodeURIComponent(imageSeries) !== frame.series)) return null;
+  } catch { return null; }
+  if (!study || frame.study !== study || !frame.sop ||
+      !Number.isInteger(frame.frame) || frame.frame < 1) return null;
+  return { ...annotation, StudyInstanceUID: frame.study, SeriesInstanceUID: frame.series,
+    SOPInstanceUID: frame.sop, frameNumber: frame.frame };
+}
+
 /** The compact question layout is only for independent Echo Length fields. */
 export function isResearchLengthQuestion(field: any, domain: string) {
   return getResearchMeasurementToolForField(field, domain) === 'Length' &&
@@ -242,25 +262,12 @@ export function getResearchLengthSourceState(
         { sourceMeasurementKey: candidate.sourceMeasurementKey }, annotations);
       if (matches.length !== 1) return [];
       const annotation = matches[0];
-      const frame = getAnnotationSourceFrame(annotation);
-      const reference = cleanString(annotation?.referencedImageId ||
-        annotation?.metadata?.referencedImageId);
-      const imageStudy = reference.match(/\/studies\/([^/?#]+)/i)?.[1];
-      const imageSeries = reference.match(/\/series\/([^/?#]+)/i)?.[1];
-      // Contradictory DICOM identifiers must never authorize restoration.
-      try {
-        if ((imageStudy && decodeURIComponent(imageStudy) !== study) ||
-            (imageSeries && frame.series && decodeURIComponent(imageSeries) !== frame.series)) return [];
-      } catch { return []; }
-      if (annotation.toolName !== 'Length' || !study || frame.study !== study ||
-          !frame.sop || !Number.isInteger(frame.frame) || frame.frame < 1 ||
+      const displayAnnotation = getResearchOwnedSourceDisplay(annotation, study);
+      if (!displayAnnotation || annotation.toolName !== 'Length' ||
           !Array.isArray(annotation.points) || annotation.points.length !== 2 ||
           !annotation.points.every(point => Array.isArray(point) && point.length >= 3 &&
             point.slice(0, 3).every(Number.isFinite))) return [];
-      return [{ candidate, annotation, displayAnnotation: {
-        ...annotation, StudyInstanceUID: frame.study, SeriesInstanceUID: frame.series,
-        SOPInstanceUID: frame.sop, frameNumber: frame.frame,
-      } }];
+      return [{ candidate, annotation, displayAnnotation }];
     });
   const unique = Array.from(new Map(eligible.map(item =>
     [cleanString(item.candidate.sourceMeasurementKey), item])).values());
@@ -273,6 +280,47 @@ export function getResearchLengthSourceState(
     ? 'invalid' : kind === 'manual' ? 'manual'
       : unique.length > 1 ? 'ambiguous' : unique.length === 1 ? 'unbound' : 'none';
   return { status, selected, eligible: unique };
+}
+
+/** LA phase display uses only Review-owned explicit LA contour evidence.
+ * The area is the Education calculator's calibrated cm², never an ROI label
+ * or the combined biplane volume. Retain off-protocol/invalid sources for
+ * explicit inspection/deletion rather than silently picking another contour. */
+export function getResearchLAPhaseSources(
+  field: any, annotations: any[] = [], studyInstanceId: unknown = ''
+) {
+  const study = cleanString(studyInstanceId);
+  const phaseSources: Record<string, Array<{
+    annotation: any; displayAnnotation: any; areaCM2: number | null; matchesTarget: boolean;
+  }>> = { A4C: [], A2C: [] };
+  let unresolvedCount = 0;
+  if (field?.componentKey !== 'laVolumeDisks') return { phaseSources, unresolvedCount };
+  const seen = new Set<string>();
+  for (const annotation of annotations) {
+    const geometry = annotation?.laVolume || annotation?.measurements?.laVolume;
+    if (geometry?.measurementKind !== 'laVolumeSlot' &&
+        annotation?.measurementKind !== 'laVolumeSlot' &&
+        annotation?.measurements?.measurementKind !== 'laVolumeSlot') continue;
+    const slot = getLAVolumeContourSlot(annotation);
+    const id = cleanString(annotation?.annotationId || annotation?.annotationUID ||
+      annotation?.uid || annotation?.id);
+    if (seen.has(id)) continue;
+    const displayAnnotation = getResearchOwnedSourceDisplay(annotation, study);
+    if (!id || !phaseSources[slot] || !displayAnnotation ||
+        !['SplineROI', 'PlanarFreehandROI', 'FreehandROI'].includes(cleanString(annotation.toolName))) {
+      unresolvedCount++;
+      continue;
+    }
+    seen.add(id);
+    const target = getResearchEchoPhaseTarget(field, slot);
+    const matchesTarget = !isRequiredResearchPhaseMissing(field, slot) &&
+      (!target || annotationMatchesTarget(annotation, target));
+    const areaCM2 = getVerifiedLAVolumeContourAreaCM2({
+      ...annotation, measurementKind: 'laVolumeSlot',
+    });
+    phaseSources[slot].push({ annotation, displayAnnotation, areaCM2, matchesTarget });
+  }
+  return { phaseSources, unresolvedCount };
 }
 
 /** Echo IVC label identity is shared by the calculator, redraw flow and UI. */

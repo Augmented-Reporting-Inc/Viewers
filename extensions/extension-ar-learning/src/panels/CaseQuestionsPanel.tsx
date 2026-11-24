@@ -1,10 +1,10 @@
 import React, { useEffect, useMemo, useState, useRef } from 'react';
 import { EchoEFContourVolumes } from '../../../extension-ar-measurements/src/components/EchoEFContourVolumes';
-import { EchoCompositeResultStatus } from '../../../extension-ar-measurements/src/components/EchoCompositeResultStatus';
+import { EchoCompositeResultStatus, EchoCompositeResultCard } from '../../../extension-ar-measurements/src/components/EchoCompositeResultStatus';
 import { SharedQuestionSelector, SharedQuestionStepNavigation } from '../../../extension-ar-measurements/src/components/SharedQuestionNavigation';
 import { SharedMeasurementValueInput, SharedMeasurementLabel } from '../../../extension-ar-measurements/src/components/SharedMeasurementValueInput';
 import { SharedQuestionCard } from '../../../extension-ar-measurements/src/components/SharedQuestionCard';
-import { LearningEchoAcquisitionControls } from '../components/LearningEchoAcquisitionControls';
+import { LearningEchoAcquisitionControls, SharedEchoPhaseStatus, SharedEchoRecalculateButton } from '../components/LearningEchoAcquisitionControls';
 import { SharedEFQuestionAnswer } from '../components/SharedEFQuestionAnswer';
 import { LearningSingleChoiceAnswer } from '../components/LearningSingleChoiceAnswer';
 import LearningQuestionPanel from './LearningQuestionPanel';
@@ -2893,9 +2893,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     const qualityWarnings = Array.isArray(rawWarnings)
       ? rawWarnings.map(cleanString).filter(Boolean) : [];
     return (
-      <div className={needsLearnerRAP
-        ? "mt-2 rounded border border-amber-700/70 bg-amber-950/10 px-2 py-2 text-xs"
-        : "mt-2 rounded border border-emerald-700/60 bg-emerald-950/10 px-2 py-2 text-xs"}>
+      <EchoCompositeResultCard warning={needsLearnerRAP}>
         <EchoCompositeResultStatus
           value={hasLive ? status.value : hasGold ? gold.value : null}
           unit={unit}
@@ -2942,7 +2940,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                 : 'Checking saved DICOM contour calibration…'}
           </div>
         ) : null}
-      </div>
+      </EchoCompositeResultCard>
     );
   }
 
@@ -2969,105 +2967,72 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
       Number(liveArea) > 0 ? Number(liveArea) : null;
     const phaseValue = liveValue ?? savedValue;
     const units = kind === 'ivcCollapsibility' || kind === 'ivcRapRvsp' ? 'mm' : 'cm²';
-    const displayValue = phaseValue != null && Number.isFinite(Number(phaseValue)) && Number(phaseValue) > 0
-      ? Number(phaseValue).toFixed(2) + ' ' + units : 'Not measured';
+    const savedNavigation = hasSaved && targetHasNavigationIdentity(saved?.target);
+    const onNavigate = savedNavigation ? () => {
+    void (async () => {
+      const answer = authoringMode
+        ? plainObject(plainObject(question.answerConfig).goldMeasurement)
+        : plainObject(answersByQuizKey?.[quiz.quizKey]?.[question.questionKey]);
+      // Learner phase overlays are reconstructed ONLY from learner
+      // evidence, never the educator's gold/teaching source.
+      const learner = !authoringMode;
+      const displayAnswer = kind === 'ivcRapRvsp'
+        ? plainObject(plainObject(answer.compositeResult).ivc)
+        : answer;
+      const result = learner
+        ? await runViewerCommand(
+            commandsManager, 'showViewerQuizLearnerCompositeMeasurement', {
+              learnerMeasurement: displayAnswer,
+              viewerTarget: saved.target,
+              questionKey: question.questionKey,
+            })
+        : await runViewerCommand(
+            commandsManager, 'showViewerQuizMeasurementComparison', {
+              rubricMeasurement: displayAnswer,
+              viewerTarget: saved.target,
+              focusedCompositeSlot: slot,
+              questionKey: question.questionKey,
+              endpointToleranceMM:
+                ['ivcCollapsibility', 'ivcRapRvsp'].includes(kind)
+                  ? plainObject(question.scoringConfig).caliperEndpointToleranceMM ?? 5
+                  : null,
+              ivcEndpointToleranceEnabled:
+                ['ivcCollapsibility', 'ivcRapRvsp'].includes(kind) &&
+                plainObject(question.scoringConfig).caliperEndpointToleranceEnabled !== false,
+            });
+      if ((learner ? result?.learnerRendered : result?.rubricRendered) !== true) {
+        uiNotificationService.show({
+          title: 'Saved contour', type: 'warning', duration: 5000,
+          message: 'Saved source could not be displayed: ' +
+            cleanString(result?.reason || 'source unavailable'),
+        });
+      }
+    })().catch(error => console.warn(
+      '[CaseQuestionsPanel] composite gold phase navigation failed', error
+    ));
+    } : !hasSaved && targetHasNavigationIdentity(navigationTarget) ? () => {
+    void (async () => {
+      const jumped = await runViewerCommand(commandsManager, 'jumpToViewerQuizTarget', {
+        viewerTarget: navigationTarget, questionKey: question.questionKey,
+      });
+      if (jumped?.ok && cleanString(jumped.viewportId)) {
+        await runViewerCommand(commandsManager, 'setViewportActive', {
+          viewportId: jumped.viewportId,
+        });
+      }
+    })().catch(error => console.warn(
+      '[CaseQuestionsPanel] composite source jump failed', error
+    ));
+    } : undefined;
     return (
-      <>
-        {hasSaved && targetHasNavigationIdentity(saved?.target) ? (
-          <button
-            type="button"
-            className="min-w-0 text-left font-medium text-cyan-100 hover:underline" data-quiz-review-action="navigation" aria-label={`Jump to ${label} saved source`}
-            onClick={event => {
-              event.preventDefault();
-              event.stopPropagation();
-              void (async () => {
-                const answer = authoringMode
-                  ? plainObject(plainObject(question.answerConfig).goldMeasurement)
-                  : plainObject(answersByQuizKey?.[quiz.quizKey]?.[question.questionKey]);
-                // Learner phase overlays are reconstructed ONLY from learner
-                // evidence, never the educator's gold/teaching source.
-                const learner = !authoringMode;
-                const displayAnswer = kind === 'ivcRapRvsp'
-                  ? plainObject(plainObject(answer.compositeResult).ivc)
-                  : answer;
-                const result = learner
-                  ? await runViewerCommand(
-                      commandsManager, 'showViewerQuizLearnerCompositeMeasurement', {
-                        learnerMeasurement: displayAnswer,
-                        viewerTarget: saved.target,
-                        questionKey: question.questionKey,
-                      })
-                  : await runViewerCommand(
-                      commandsManager, 'showViewerQuizMeasurementComparison', {
-                        rubricMeasurement: displayAnswer,
-                        viewerTarget: saved.target,
-                        focusedCompositeSlot: slot,
-                        questionKey: question.questionKey,
-                        endpointToleranceMM:
-                          ['ivcCollapsibility', 'ivcRapRvsp'].includes(kind)
-                            ? plainObject(question.scoringConfig).caliperEndpointToleranceMM ?? 5
-                            : null,
-                        ivcEndpointToleranceEnabled:
-                          ['ivcCollapsibility', 'ivcRapRvsp'].includes(kind) &&
-                          plainObject(question.scoringConfig).caliperEndpointToleranceEnabled !== false,
-                      });
-                if ((learner ? result?.learnerRendered : result?.rubricRendered) !== true) {
-                  uiNotificationService.show({
-                    title: 'Saved contour', type: 'warning', duration: 5000,
-                    message: 'Saved source could not be displayed: ' +
-                      cleanString(result?.reason || 'source unavailable'),
-                  });
-                }
-              })().catch(error => console.warn(
-                '[CaseQuestionsPanel] composite gold phase navigation failed', error
-              ));
-            }}
-          >{label}</button>
-        ) : null}
-        {!hasSaved && targetHasNavigationIdentity(navigationTarget) ? (
-          <button type="button" data-quiz-review-action="navigation"
-            aria-label={`Jump to ${label} source`}
-            className="min-w-0 text-left font-medium text-cyan-100 hover:underline"
-            onClick={event => {
-              event.preventDefault(); event.stopPropagation();
-              void (async () => {
-                const jumped = await runViewerCommand(commandsManager, 'jumpToViewerQuizTarget', {
-                  viewerTarget: navigationTarget, questionKey: question.questionKey,
-                });
-                if (jumped?.ok && cleanString(jumped.viewportId)) {
-                  await runViewerCommand(commandsManager, 'setViewportActive', {
-                    viewportId: jumped.viewportId,
-                  });
-                }
-              })().catch(error => console.warn(
-                '[CaseQuestionsPanel] composite source jump failed', error
-              ));
-            }}
-          >{label}</button>
-        ) : (!hasSaved || !targetHasNavigationIdentity(saved?.target))
-          ? <span className="text-gray-300">{label}</span> : null}
-        <div className="inline-flex max-w-full items-center rounded border border-gray-600 bg-black text-xs">
-          <input type="text" readOnly aria-label={`${label} measured value`}
-            value={displayValue}
-            className="w-28 min-w-0 bg-transparent px-2 py-1 text-emerald-200"
-          />
-          {(getCompositePhaseMeasurementId(live) || hasSaved) ? (
-            <button
-              type="button"
-              data-quiz-review-action="delete"
-              aria-label={`Delete ${slot} measurement`}
-              title={`Delete ${slot} measurement`}
-              className="shrink-0 border-l border-gray-600 px-2 py-1 font-bold text-red-200 hover:bg-red-950 disabled:opacity-40"
-              disabled={disabled}
-              onClick={event => {
-                event.preventDefault();
-                event.stopPropagation();
-                void deleteCompositePhaseMeasurement(quiz, question, slot, phaseSource);
-              }}
-            >×</button>
-          ) : null}
-        </div>
-      </>
+      <SharedEchoPhaseStatus
+        slot={slot} label={label} value={phaseValue} unit={units}
+        hasSavedSource={savedNavigation} onNavigate={onNavigate}
+        disabled={disabled}
+        onDelete={(getCompositePhaseMeasurementId(live) || hasSaved)
+          ? () => void deleteCompositePhaseMeasurement(quiz, question, slot, phaseSource)
+          : undefined}
+      />
     );
   }
 
@@ -6827,20 +6792,12 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
             'laVolumeBiplaneDisks'].includes(
               cleanString(plainObject(question.answerConfig).measurementKind)
             )) ? (
-            <button
-              type="button"
-              className="rounded border border-gray-600 px-2 py-1 text-[11px] text-gray-300 hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-50"
-              disabled={disabled || captureInProgress}
-              onClick={event => {
-                event.preventDefault();
-                event.stopPropagation();
-                void captureSelectedMeasurementAnswer(quiz, question);
-              }}
-            >
-              {captureInProgress ? 'Capturing…'
-                : linkedRVSP ? 'Accept IVC / RAP / RVSP measurement'
+            <SharedEchoRecalculateButton
+              disabled={disabled} busy={captureInProgress}
+              onRecalculate={() => void captureSelectedMeasurementAnswer(quiz, question)}
+              label={linkedRVSP ? 'Accept IVC / RAP / RVSP measurement'
                 : 'Recalculate from measured contours'}
-            </button>
+            />
           ) : null}
 
           {cleanString(plainObject(question.answerConfig).measurementKind) === 'lvSimpsonEF' ? (() => {

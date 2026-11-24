@@ -97,11 +97,11 @@ describe('Research Length selection uses shared restoration and permissions', ()
     const end = panel.indexOf('const selectionGenerationRef', start);
     const navigation = panel.slice(start, end);
     expect(navigation).toContain('getResearchLengthSourceState(');
-    const restoreStart = panel.indexOf('const restoreLengthSource =');
+    const restoreStart = panel.indexOf('const restoreResearchAnnotationSource =');
     const restore = panel.slice(restoreStart, start);
     expect(restore).toContain('requireExactSopFrame: true, isCancelled: cancelled');
     expect(restore).toContain('deletedAnnotationIdsRef.current.has(sourceId)');
-    expect(navigation.indexOf('return restoreLengthSource(source, isCancelled)')).toBeLessThan(
+    expect(navigation.indexOf('return restoreResearchAnnotationSource(source, isCancelled)')).toBeLessThan(
       navigation.indexOf('const target = getResearchQuestionEntryTarget(field)'));
     expect(restore).toContain('isLocked: true');
     expect(navigation).toContain("state.status === 'invalid' || state.status === 'ambiguous'");
@@ -110,5 +110,34 @@ describe('Research Length selection uses shared restoration and permissions', ()
     expect(panel).toContain('selectedLength ? showLengthSourceResolution');
     expect(viewerCommands).toContain('findImageIdIndexForSavedAnnotation(latestViewport, annotation, requireExactSopFrame)');
     expect(viewerCommands).toContain('saved-source-frame-changed-before-hydration');
+  });
+});
+
+describe('Research LAV uses shared Education phase rows and calculation controls', () => {
+  it('has one LAV panel, uses Review-owned sources and never imports quiz answer persistence', () => {
+    const guided = fs.readFileSync(path.resolve(__dirname,
+      '../panels/ResearchEchoGuidedControls.tsx'), 'utf8');
+    const start = guided.indexOf("if (kind === 'laVolumeDisks')");
+    const end = guided.indexOf('Guided Echo measurement', start);
+    expect(start).toBeGreaterThan(0);
+    expect(end).toBeGreaterThan(start);
+    const la = guided.slice(start, end);
+    for (const component of ['LearningEchoAcquisitionControls', 'SharedEchoPhaseStatus',
+      'SharedEchoRecalculateButton', 'EchoCompositeResultStatus', 'EchoCompositeResultCard']) {
+      expect(la).toContain('<' + component);
+    }
+    expect(la).toContain("await runCompositeSteps('laVolumeDisks', slot");
+    expect(la).toContain('await openPhase(slot)');
+    expect(la).toContain('item.matchesTarget ? item.areaCM2 : null');
+    expect(la).toContain('onDelete={!readOnly && onDeleteLASource');
+    expect(la).toContain('Multiple contours for this phase');
+    expect(panel).toContain('!selectedLA && !showInlineIVCSources');
+    expect(panel).toContain('!selectedLA && !showGuidedIVCValue');
+    expect(panel).toContain('getResearchLAPhaseSources(');
+    expect(panel).toContain('restoreResearchAnnotationSource(item, isCancelled)');
+    expect(panel).toContain('onDeleteLASource={annotation => void deleteResearchAnnotation(annotation)}');
+    expect(panel).toContain('refreshViewerMeasurementBindings(undefined, selectedField.key)');
+    expect(panel).toContain("field.key === explicitLAFieldKey && field.componentKey === 'laVolumeDisks'");
+    expect(panel).not.toContain('saveViewerQuizResponseForActiveStudy');
   });
 });

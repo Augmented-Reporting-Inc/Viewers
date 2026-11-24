@@ -35,6 +35,7 @@ import {
 import {
   getResearchRapChoices,
   getResearchEchoPhases,
+  getResearchEchoPhaseTarget,
   getResearchGroupedFields,
   getResearchQuestionLabel,
   isResearchQuestionAnswered,
@@ -52,6 +53,7 @@ import {
   getResearchFieldMeasurementCandidates,
   isResearchLengthQuestion,
   getResearchLengthSourceState,
+  getResearchLAPhaseSources,
   getResearchFieldSourceAnnotations,
   getResearchProtocolViewerTargets,
   getResearchSourceAnnotationIds,
@@ -454,7 +456,9 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
     });
   }, []);
 
-  const refreshViewerMeasurementBindings = useCallback(async (prepared?: { serialized: any; efSnapshot: any }) => {
+  const refreshViewerMeasurementBindings = useCallback(async (
+    prepared?: { serialized: any; efSnapshot: any }, explicitLAFieldKey = ''
+  ) => {
     if (
       !commandsManager ||
       !fields.length ||
@@ -535,12 +539,30 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
         const compatible = getResearchCompatibleMeasurementCandidates(
           field, candidates, available
         );
+        if (field.key === explicitLAFieldKey && field.componentKey === 'laVolumeDisks') {
+          // Explicit recalculation may replace a legacy manual answer, but
+          // only from the two unambiguous, calibrated and verified sources.
+          const phases = getResearchLAPhaseSources(field, available, context.sourceStudyInstanceUID);
+          const rows = ['A4C', 'A2C'].map(slot => phases.phaseSources[slot]);
+          if (phases.unresolvedCount || rows.some(items => items.length !== 1 ||
+              !items[0].matchesTarget || items[0].areaCM2 == null)) return [];
+          const ids = rows.map(items => getAnnotationKey(items[0].annotation));
+          const derived = compatible.filter(candidate =>
+            candidate.source === 'viewer-derived' &&
+            cleanString(candidate.sourceMeasurementKey).startsWith('la-disks:') &&
+            getResearchSourceAnnotationIds(candidate.sourceMeasurementKey).length === 2 &&
+            ids.every(id => getResearchSourceAnnotationIds(candidate.sourceMeasurementKey).includes(id)));
+          return buildViewerMeasurementReadUpdates([field], derived, {});
+        }
         return buildViewerMeasurementReadUpdates(
           [field], compatible,
           getResearchBindingSources(field, valueSourcesRef.current, compatible)
         );
       });
 
+      if (explicitLAFieldKey && !updates.some(update => update.fieldKey === explicitLAFieldKey)) {
+        notify(servicesManager, 'LA volume could not be recalculated from two verified calibrated contours.', 'warning');
+      }
       if (!updates.length) {
         return;
       }
@@ -591,6 +613,9 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
         '[AR Research] viewer measurement binding refresh failed',
         bindingError
       );
+      if (explicitLAFieldKey) {
+        notify(servicesManager, 'Unable to recalculate LA volume. Existing saved evidence was not changed.', 'warning');
+      }
     } finally { endBinding(); }
   }, [
     commandsManager,
@@ -601,6 +626,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
     fields,
     savedAnnotations,
     persistedReadState,
+    servicesManager,
   ]);
 
   // Education already listens to this exact EF calculation/capture event.
@@ -1273,7 +1299,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
 
   // A deleted source must not be restored by queued navigation. Reuse this
   // same guarded display path for automatic selection and explicit resolution.
-  const restoreLengthSource = (item: any, isCancelled: () => boolean) => {
+  const restoreResearchAnnotationSource = (item: any, isCancelled: () => boolean) => {
     const sourceId = getAnnotationKey(item.annotation);
     const cancelled = () => isCancelled() || !sourceId ||
       deletedAnnotationIdsRef.current.has(sourceId);
@@ -1291,7 +1317,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
         viewerCandidates || [], context?.sourceStudyInstanceUID);
       const source = state.selected || (state.status === 'unbound' &&
         !context?.readOnly && !context?.preview ? state.eligible[0] : null);
-      if (source) return restoreLengthSource(source, isCancelled);
+      if (source) return restoreResearchAnnotationSource(source, isCancelled);
       if (state.status === 'invalid' || state.status === 'ambiguous') {
         notify(servicesManager, 'Choose or resolve the exact Length measurement source before continuing.', 'warning');
         return false;
@@ -1428,6 +1454,14 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
     ? getResearchCompatibleMeasurementCandidates(
         selectedField, viewerCandidates || [], allAnnotations
       ) : [];
+  const selectedLA = readDomain === 'echo' && selectedField?.componentKey === 'laVolumeDisks';
+  const laPhaseState = selectedLA ? getResearchLAPhaseSources(
+    selectedField, allAnnotations, context?.sourceStudyInstanceUID
+  ) : null;
+  const laValue = selectedLA && calculatedReadState.sources[selectedField.key]?.source === 'viewer-derived'
+    ? calculatedReadState.values[selectedField.key] : null;
+  const laManualValue = selectedLA && calculatedReadState.sources[selectedField.key]?.source === 'manual'
+    ? calculatedReadState.values[selectedField.key] : null;
   const selectedLength = isResearchLengthQuestion(selectedField, readDomain);
   const lengthState = selectedLength ? getResearchLengthSourceState(
     selectedField, calculatedReadState.sources[selectedField.key], allAnnotations,
@@ -1445,7 +1479,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
   const sourceResolutionCandidates = lengthState
     ? lengthState.eligible.map(item => item.candidate) : selectedCandidates;
   const viewLengthSource = (item: any) => queueNavigation(async isCancelled => {
-    await restoreLengthSource(item, isCancelled);
+    await restoreResearchAnnotationSource(item, isCancelled);
   });
   // Research review annotations are already review-scoped. Use the same
   // verified single-view calculator and display component as Education.
@@ -1572,7 +1606,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
       }
       questionContent={
         <>
-          {!showGuidedIVCValue && selectedField?.componentKey !== 'lvEjectionFraction' ? (
+          {!selectedLA && !showGuidedIVCValue && selectedField?.componentKey !== 'lvEjectionFraction' ? (
             <ReadField
               key={selectedField.key}
               field={selectedField}
@@ -1607,9 +1641,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
               }}
             />
           ) : null}
-          {['laVolumeDisks', 'rvFac'].includes(
-            cleanString(selectedField?.componentKey)
-          ) ? (
+          {selectedField?.componentKey === 'rvFac' ? (
             <div className="rounded border border-gray-700 bg-gray-950 p-2 text-xs">
               <EchoCompositeResultStatus
                 value={calculatedReadState.sources[selectedField.key]?.source === 'viewer-derived'
@@ -1652,6 +1684,19 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
                 ? persistedEF : null}
               ivcMeasurementState={ivcMeasurementState}
               ivcReadValue={guidedIVCValue}
+              laPhaseState={laPhaseState}
+              laValue={laValue}
+              laManualValue={laManualValue}
+              onClearLAManualValue={() => updateValue(selectedField.key, '')}
+              onViewLASource={item => queueNavigation(async isCancelled => {
+                await restoreResearchAnnotationSource(item, isCancelled);
+              })}
+              onDeleteLASource={annotation => void deleteResearchAnnotation(annotation)}
+              onViewLAProtocolTarget={slot => queueNavigation(async isCancelled => {
+                if (!isCancelled()) await jumpToProtocolTarget(
+                  getResearchEchoPhaseTarget(selectedField, slot), selectedField.key);
+              })}
+              onRecalculateLA={() => refreshViewerMeasurementBindings(undefined, selectedField.key)}
               efValue={calculatedReadState.values[selectedField.key] ?? ''}
               onChangeEFValue={nextValue => updateValue(selectedField.key, nextValue)}
               onDeleteEFValue={() => {
@@ -1682,7 +1727,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
               status={persistedEF ? 'Saved' : Object.keys(liveVerifiedEchoEvidence.efVolumes).length ? 'Current' : 'Saved'}
             />
           )}
-          {!showInlineIVCSources &&
+          {!selectedLA && !showInlineIVCSources &&
             selectedField?.componentKey !== 'lvEjectionFraction' &&
             (selectedLength ? showLengthSourceResolution :
               (isSelectedMeasurement || genericProtocolTargets.length > 0)) ? (

@@ -80,6 +80,9 @@ function getSlot(measurement) {
   return match ? match[1] : '';
 }
 
+// Expose the existing slot resolver for workflow-owned phase presentation.
+export { getSlot as getLAVolumeContourSlot };
+
 function getContourPoints(measurement) {
   const geometry = getGeometry(measurement);
   const livePoints = Array.isArray(measurement?.points) ? measurement.points : [];

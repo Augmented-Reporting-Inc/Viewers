@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { getEchoCompositeAcquisitionSteps } from '../../../extension-ar-measurements/src/utils/echoCompositeAcquisition';
-import { LearningEchoAcquisitionControls } from '../../../extension-ar-learning/src/components/LearningEchoAcquisitionControls';
+import { LearningEchoAcquisitionControls, SharedEchoPhaseStatus, SharedEchoRecalculateButton } from '../../../extension-ar-learning/src/components/LearningEchoAcquisitionControls';
+import { EchoCompositeResultStatus, EchoCompositeResultCard } from '../../../extension-ar-measurements/src/components/EchoCompositeResultStatus';
 import { SharedEFQuestionAnswer } from '../../../extension-ar-learning/src/components/SharedEFQuestionAnswer';
 import {
   getResearchEchoPhases,
@@ -21,6 +22,9 @@ export default function ResearchEchoGuidedControls({
   ivcMeasurementState = null, ivcReadValue = null,
   efValue = '', onChangeEFValue, onDeleteEFValue,
   onBeginIVCPhaseRedraw, onViewIVCSource, onDeleteIVCSource,
+  laPhaseState = null, laValue = null, laManualValue = null, onClearLAManualValue,
+  onViewLASource, onDeleteLASource,
+  onViewLAProtocolTarget, onRecalculateLA,
 }: {
   field: any;
   commandsManager: any;
@@ -38,6 +42,14 @@ export default function ResearchEchoGuidedControls({
   onBeginIVCPhaseRedraw?: (field: any, slot: string, existing: any[]) => void;
   onViewIVCSource?: (annotation: any) => void;
   onDeleteIVCSource?: (annotation: any) => void;
+  laPhaseState?: any;
+  laValue?: number | string | null;
+  laManualValue?: number | string | null;
+  onClearLAManualValue?: () => void;
+  onViewLASource?: (item: any) => void;
+  onDeleteLASource?: (annotation: any) => void;
+  onViewLAProtocolTarget?: (slot: string) => void;
+  onRecalculateLA?: () => Promise<any>;
 }) {
   const [busy, setBusy] = useState('');
   const kind = String(field?.componentKey || '');
@@ -170,6 +182,94 @@ export default function ResearchEchoGuidedControls({
     );
   }
 
+  if (kind === 'laVolumeDisks') {
+    return (
+      <div className="mt-2 w-full min-w-0 max-w-full space-y-2 overflow-hidden">
+        <LearningEchoAcquisitionControls
+          kind="laVolumeDisks"
+          disabled={disabled || readOnly || !!busy}
+          isPhaseBlocked={slot => isRequiredResearchPhaseMissing(field, slot)}
+          onAcquire={(slot, technique) => void run(slot + ':' + technique, async () => {
+            await openPhase(slot);
+            await runCompositeSteps('laVolumeDisks', slot, technique || 'freehand');
+          })}
+          renderPhaseStatus={(slot, label) => {
+            const sources = laPhaseState?.phaseSources?.[slot] || [];
+            const target = getResearchEchoPhaseTarget(field, slot);
+            if (!sources.length) return (
+              <SharedEchoPhaseStatus slot={slot} label={label} value={null}
+                disabled={disabled || readOnly}
+                onNavigate={target && isUsableResearchTarget(target) && onViewLAProtocolTarget
+                  ? () => onViewLAProtocolTarget(slot) : undefined} />
+            );
+            return sources.map((item: any, index: number) => (
+              <React.Fragment key={String(item.annotation.annotationId ||
+                item.annotation.annotationUID || item.annotation.uid || item.annotation.id)}>
+                <SharedEchoPhaseStatus slot={slot}
+                  label={sources.length > 1 ? label + ' (' + (index + 1) + ')' : label}
+                  value={item.matchesTarget ? item.areaCM2 : null}
+                  unit="cm²" hasSavedSource
+                  disabled={disabled || readOnly || !!busy}
+                  onNavigate={onViewLASource ? () => onViewLASource(item) : undefined}
+                  onDelete={!readOnly && onDeleteLASource
+                    ? () => onDeleteLASource(item.annotation) : undefined} />
+                {!item.matchesTarget ? (
+                  <span className="text-amber-200">Outside the configured phase frame</span>
+                ) : null}
+              </React.Fragment>
+            ));
+          }}
+          renderPhaseExtras={slot => (
+            <>
+              {isRequiredResearchPhaseMissing(field, slot) ? (
+                <span className="text-amber-300">Missing required protocol frame</span>
+              ) : null}
+              {(laPhaseState?.phaseSources?.[slot]?.length || 0) > 1 ? (
+                <span className="text-amber-200">Multiple contours for this phase. Inspect and delete extras.</span>
+              ) : null}
+            </>
+          )}
+        />
+        {laPhaseState?.unresolvedCount ? (
+          <div role="alert" className="text-xs text-amber-200">
+            Some LA source annotations cannot be verified for this study. Review their source identity before recalculating.
+          </div>
+        ) : null}
+        <EchoCompositeResultCard>
+          <EchoCompositeResultStatus value={laValue}
+            unit={String(field.config?.unit || 'mL')}
+            label={readOnly ? 'Saved answer' : 'Calculated'}
+            unavailableMessage="Complete the required calibrated measurements in the same study." />
+        </EchoCompositeResultCard>
+        {laManualValue != null && String(laManualValue).trim() !== '' ? (
+          <EchoCompositeResultCard warning>
+            <EchoCompositeResultStatus value={laManualValue}
+              unit={String(field.config?.unit || 'mL')} label="Saved manual answer" />
+            <p className="mt-1 text-amber-200">
+              This value is not linked to calibrated contours.
+              Recalculate to replace it with a verified result.
+            </p>
+            {!readOnly && onClearLAManualValue ? (
+              <button type="button" disabled={disabled || !!busy}
+                className="mt-1 text-red-200 hover:underline disabled:opacity-40"
+                onClick={onClearLAManualValue}>Clear manual answer</button>
+            ) : null}
+          </EchoCompositeResultCard>
+        ) : null}
+        {!readOnly && onRecalculateLA ? (
+          <SharedEchoRecalculateButton disabled={disabled || !!busy}
+            busy={busy === 'la-recalculate'}
+            onRecalculate={() => void run('la-recalculate', onRecalculateLA)} />
+        ) : null}
+        {!readOnly && (laValue == null || String(laValue).trim() === '') ? (
+          <div className="text-xs text-gray-400">
+            Draw or select a measurement annotation in the viewport.
+          </div>
+        ) : null}
+      </div>
+    );
+  }
+
   return (
     <div className="rounded border border-cyan-700/70 bg-cyan-950/10 p-3 text-xs text-gray-200">
       <div className="font-semibold text-cyan-100">Guided Echo measurement</div>
@@ -189,8 +289,7 @@ export default function ResearchEchoGuidedControls({
         </div>
       ) : (
         <LearningEchoAcquisitionControls
-          kind={kind === 'laVolumeDisks' ? 'laVolumeDisks'
-            : kind === 'rvFac' ? 'rvFac' : 'ivcCollapsibility'}
+          kind={kind === 'rvFac' ? 'rvFac' : 'ivcCollapsibility'}
           disabled={disabled || readOnly || !!busy}
           isPhaseBlocked={slot => isRequiredResearchPhaseMissing(field, slot)}
           renderPhaseStatus={(slot, label) => {
@@ -212,8 +311,7 @@ export default function ResearchEchoGuidedControls({
           onAcquire={(slot, technique) => void run(
             slot + ':' + (technique || 'length'), async () => {
               await openPhase(slot);
-              const acquisitionKind = kind === 'laVolumeDisks' ? 'laVolumeDisks'
-                : kind === 'rvFac' ? 'rvFac' : 'ivcCollapsibility';
+              const acquisitionKind = kind === 'rvFac' ? 'rvFac' : 'ivcCollapsibility';
               await runCompositeSteps(acquisitionKind, slot, technique || 'freehand');
               if (kind === 'ivcCollapsibility') {
                 const oldSources = ivcMeasurementState?.phaseSources?.[slot] || [];
