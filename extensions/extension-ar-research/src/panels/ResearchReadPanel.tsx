@@ -335,9 +335,15 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
     [context?.readSchema]
   );
   const readDomain = cleanString(context?.readSchema?.domain).toLowerCase();
+  // The authoring modal and in-viewer assessment must consume the same
+  // ordered question definition. Legacy grouping remains for old snapshots.
+  const questionNavigationMode =
+    context?.readSchema?.config?.questionNavigationMode === 'authored'
+      ? 'authored' : 'legacy';
   const visibleFields = useMemo(
-    () => fields.filter(field => !isResearchCompanionHidden(field, fields, readDomain)),
-    [fields, readDomain]
+    () => fields.filter(field =>
+      !isResearchCompanionHidden(field, fields, readDomain, questionNavigationMode)),
+    [fields, readDomain, questionNavigationMode]
   );
   useEffect(() => {
     if (!visibleFields.length) return;
@@ -1138,7 +1144,9 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
   const isBusy = saving || completing;
   const selectedField = visibleFields.find(field => field.key === selectedFieldKey) ||
     visibleFields[0];
-  const groupedFields = getResearchGroupedFields(selectedField, fields, readDomain);
+  const groupedFields = getResearchGroupedFields(
+    selectedField, fields, readDomain, questionNavigationMode
+  );
   const isIVCRapRVSPQuestion = readDomain === 'echo' &&
     selectedField?.componentKey === 'ivcCollapsibility' &&
     groupedFields.some(item => ['rap', 'rvsp'].includes(item.componentKey));
@@ -1178,7 +1186,9 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
     !!selectedField?.config?.calculation
   );
   const completedFields = visibleFields.filter(field =>
-    isResearchQuestionAnswered(field, fields, calculatedReadState.values, readDomain)
+    isResearchQuestionAnswered(
+      field, fields, calculatedReadState.values, readDomain, questionNavigationMode
+    )
   ).length;
 
   // The Research controller retains its Research Review contract, verified
@@ -1191,9 +1201,9 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
         key: 'research-read-fields',
         questions: visibleFields.map(field => ({
           key: field.key,
-          label: getResearchQuestionLabel(field, fields, readDomain),
+          label: getResearchQuestionLabel(field, fields, readDomain, questionNavigationMode),
           answered: isResearchQuestionAnswered(
-            field, fields, calculatedReadState.values, readDomain
+            field, fields, calculatedReadState.values, readDomain, questionNavigationMode
           ),
           required: field.required,
         })),
@@ -1202,7 +1212,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
       selectedQuestion={selectedField ? {
         key: selectedField.key,
         index: visibleFields.indexOf(selectedField),
-        title: getResearchQuestionLabel(selectedField, fields, readDomain),
+        title: getResearchQuestionLabel(selectedField, fields, readDomain, questionNavigationMode),
         required: selectedField.required,
         hasViewerTarget: getResearchProtocolViewerTargets(selectedField).length > 0,
       } : null}
