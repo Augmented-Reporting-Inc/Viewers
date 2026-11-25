@@ -5,6 +5,7 @@ import {
 import { buildViewerMeasurementValueCandidates } from '../../../extension-ar-measurements/src/utils/measurementValueCandidates';
 import { getResearchMeasurementToolForField } from './researchMeasurementTool';
 import { buildViewerMeasurementReadUpdates } from './readSchema';
+import { getEchoAreaSlot, getCalibratedEchoAreaCM2 } from '../../../extension-ar-measurements/src/utils/echoAreaMeasurements';
 import { getLAVolumeContourSlot, getVerifiedLAVolumeContourAreaCM2 } from '../../../extension-ar-measurements/src/utils/laVolume';
 import { getResearchEchoPhaseTarget, isRequiredResearchPhaseMissing } from './researchEchoWorkflow';
 
@@ -282,32 +283,37 @@ export function getResearchLengthSourceState(
   return { status, selected, eligible: unique };
 }
 
-/** LA phase display uses only Review-owned explicit LA contour evidence.
- * The area is the Education calculator's calibrated cm², never an ROI label
- * or the combined biplane volume. Retain off-protocol/invalid sources for
- * explicit inspection/deletion rather than silently picking another contour. */
-export function getResearchLAPhaseSources(
-  field: any, annotations: any[] = [], studyInstanceId: unknown = ''
+/** Shared Review-owned LA/RV contour display. Use the existing calibrated
+ * area engines; retain off-protocol sources for explicit inspection/deletion. */
+function getResearchContourPhaseSources(
+  field: any, annotations: any[], studyInstanceId: unknown,
+  kind: 'laVolumeDisks' | 'rvFac'
 ) {
   const study = cleanString(studyInstanceId);
+  const isLA = kind === 'laVolumeDisks';
+  const slots = isLA ? ['A4C', 'A2C'] : ['RV_ED', 'RV_ES'];
   const phaseSources: Record<string, Array<{
     annotation: any; displayAnnotation: any; areaCM2: number | null; matchesTarget: boolean;
-  }>> = { A4C: [], A2C: [] };
+  }>> = Object.fromEntries(slots.map(slot => [slot, []]));
   let unresolvedCount = 0;
-  if (field?.componentKey !== 'laVolumeDisks') return { phaseSources, unresolvedCount };
+  if (field?.componentKey !== kind) return { phaseSources, unresolvedCount };
   const seen = new Set<string>();
   for (const annotation of annotations) {
     const geometry = annotation?.laVolume || annotation?.measurements?.laVolume;
-    if (geometry?.measurementKind !== 'laVolumeSlot' &&
+    if (isLA && geometry?.measurementKind !== 'laVolumeSlot' &&
         annotation?.measurementKind !== 'laVolumeSlot' &&
         annotation?.measurements?.measurementKind !== 'laVolumeSlot') continue;
-    const slot = getLAVolumeContourSlot(annotation);
+    const slot = isLA ? getLAVolumeContourSlot(annotation) : getEchoAreaSlot(annotation);
+    // RA and generic ROIs are not RV phase evidence.
+    if (!isLA && !slots.includes(slot || '')) continue;
     const id = cleanString(annotation?.annotationId || annotation?.annotationUID ||
       annotation?.uid || annotation?.id);
     if (seen.has(id)) continue;
     const displayAnnotation = getResearchOwnedSourceDisplay(annotation, study);
-    if (!id || !phaseSources[slot] || !displayAnnotation ||
-        !['SplineROI', 'PlanarFreehandROI', 'FreehandROI'].includes(cleanString(annotation.toolName))) {
+    const tools = isLA ? ['SplineROI', 'PlanarFreehandROI', 'FreehandROI']
+      : ['SplineROI', 'PlanarFreehandROI', 'LivewireContour'];
+    if (!id || !slot || !phaseSources[slot] || !displayAnnotation ||
+        !tools.includes(cleanString(annotation.toolName))) {
       unresolvedCount++;
       continue;
     }
@@ -315,12 +321,25 @@ export function getResearchLAPhaseSources(
     const target = getResearchEchoPhaseTarget(field, slot);
     const matchesTarget = !isRequiredResearchPhaseMissing(field, slot) &&
       (!target || annotationMatchesTarget(annotation, target));
-    const areaCM2 = getVerifiedLAVolumeContourAreaCM2({
+    const areaCM2 = isLA ? getVerifiedLAVolumeContourAreaCM2({
       ...annotation, measurementKind: 'laVolumeSlot',
-    });
+    }) : getCalibratedEchoAreaCM2(annotation);
     phaseSources[slot].push({ annotation, displayAnnotation, areaCM2, matchesTarget });
   }
   return { phaseSources, unresolvedCount };
+}
+
+/** Existing LA callers retain their source and calibrated-area contract. */
+export function getResearchLAPhaseSources(
+  field: any, annotations: any[] = [], studyInstanceId: unknown = ''
+) {
+  return getResearchContourPhaseSources(field, annotations, studyInstanceId, 'laVolumeDisks');
+}
+
+export function getResearchRVFACPhaseSources(
+  field: any, annotations: any[] = [], studyInstanceId: unknown = ''
+) {
+  return getResearchContourPhaseSources(field, annotations, studyInstanceId, 'rvFac');
 }
 
 /** Echo IVC label identity is shared by the calculator, redraw flow and UI. */

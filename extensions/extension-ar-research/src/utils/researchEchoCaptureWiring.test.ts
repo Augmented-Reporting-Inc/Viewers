@@ -113,11 +113,11 @@ describe('Research Length selection uses shared restoration and permissions', ()
   });
 });
 
-describe('Research LAV uses shared Education phase rows and calculation controls', () => {
-  it('has one LAV panel, uses Review-owned sources and never imports quiz answer persistence', () => {
+describe('Research LA/RV use shared Education phase rows and calculation controls', () => {
+  it('has one contour panel for LA and RV, uses Review-owned sources and never imports quiz answer persistence', () => {
     const guided = fs.readFileSync(path.resolve(__dirname,
       '../panels/ResearchEchoGuidedControls.tsx'), 'utf8');
-    const start = guided.indexOf("if (kind === 'laVolumeDisks')");
+    const start = guided.indexOf("if (kind === 'laVolumeDisks' || kind === 'rvFac')");
     const end = guided.indexOf('Guided Echo measurement', start);
     expect(start).toBeGreaterThan(0);
     expect(end).toBeGreaterThan(start);
@@ -126,16 +126,23 @@ describe('Research LAV uses shared Education phase rows and calculation controls
       'SharedEchoRecalculateButton', 'EchoCompositeResultStatus', 'EchoCompositeResultCard']) {
       expect(la).toContain('<' + component);
     }
-    expect(la).toContain("await runCompositeSteps('laVolumeDisks', slot");
+    expect(la).toContain('kind={kind}');
+    expect(la).toContain('await runCompositeSteps(kind, slot');
+    expect(la).toContain("const unit = String(field.config?.unit || (isLA ? 'mL' : '%'))");
+    expect(la).toContain('isLA && !readOnly && onRecalculateLA');
     expect(la).toContain('await openPhase(slot)');
     expect(la).toContain('item.matchesTarget ? item.areaCM2 : null');
-    expect(la).toContain('onDelete={!readOnly && onDeleteLASource');
+    expect(la).toContain('onDelete={!readOnly && onDeleteContourSource');
     expect(la).toContain('Multiple contours for this phase');
-    expect(panel).toContain('!selectedLA && !showInlineIVCSources');
-    expect(panel).toContain('!selectedLA && !showGuidedIVCValue');
+    expect(panel).toContain('!selectedContourComposite && !showInlineIVCSources');
+    expect(panel).toContain('!selectedContourComposite && !showGuidedIVCValue');
+    expect(panel).toContain('const selectedContourComposite = selectedLA || selectedRVFAC');
+    expect(panel).toContain('getResearchRVFACPhaseSources(');
+    expect(panel).toContain("if (!selectedRVFAC || valueSourcesRef.current[key]?.source !== 'manual') return;");
+    expect(panel).toContain("if (current[key]?.source !== 'manual') return current;");
     expect(panel).toContain('getResearchLAPhaseSources(');
     expect(panel).toContain('restoreResearchAnnotationSource(item, isCancelled)');
-    expect(panel).toContain('onDeleteLASource={annotation => void deleteResearchAnnotation(annotation)}');
+    expect(panel).toContain('onDeleteContourSource={annotation => void deleteResearchAnnotation(annotation)}');
     expect(panel).toContain('refreshViewerMeasurementBindings(undefined, selectedField.key)');
     expect(panel).toContain("field.key === explicitLAFieldKey && field.componentKey === 'laVolumeDisks'");
     expect(panel).not.toContain('saveViewerQuizResponseForActiveStudy');

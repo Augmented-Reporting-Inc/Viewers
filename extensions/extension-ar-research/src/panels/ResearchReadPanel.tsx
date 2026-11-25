@@ -8,7 +8,6 @@ import React, {
 import { beginEFOpenStage, measureEFOpenStage } from '../../../extension-ar-measurements/src/utils/efPanelOpenProfile';
 import { buildViewerMeasurementValueCandidates } from '../../../extension-ar-measurements/src/utils/measurementValueCandidates';
 import { EchoEFContourVolumes, getLVSimpsonSourceVolumes } from '../../../extension-ar-measurements/src/components/EchoEFContourVolumes';
-import { EchoCompositeResultStatus } from '../../../extension-ar-measurements/src/components/EchoCompositeResultStatus';
 import { SharedQuestionSelector, SharedQuestionStepNavigation } from '../../../extension-ar-measurements/src/components/SharedQuestionNavigation';
 import { SharedMeasurementValueInput, SharedMeasurementLabel } from '../../../extension-ar-measurements/src/components/SharedMeasurementValueInput';
 import LearningQuestionPanel from '../../../extension-ar-learning/src/panels/LearningQuestionPanel';
@@ -54,6 +53,7 @@ import {
   isResearchLengthQuestion,
   getResearchLengthSourceState,
   getResearchLAPhaseSources,
+  getResearchRVFACPhaseSources,
   getResearchFieldSourceAnnotations,
   getResearchProtocolViewerTargets,
   getResearchSourceAnnotationIds,
@@ -1455,12 +1455,19 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
         selectedField, viewerCandidates || [], allAnnotations
       ) : [];
   const selectedLA = readDomain === 'echo' && selectedField?.componentKey === 'laVolumeDisks';
-  const laPhaseState = selectedLA ? getResearchLAPhaseSources(
+  const selectedRVFAC = readDomain === 'echo' && selectedField?.componentKey === 'rvFac';
+  const selectedContourComposite = selectedLA || selectedRVFAC;
+  const contourPhaseState = selectedLA ? getResearchLAPhaseSources(
+    selectedField, allAnnotations, context?.sourceStudyInstanceUID
+  ) : selectedRVFAC ? getResearchRVFACPhaseSources(
     selectedField, allAnnotations, context?.sourceStudyInstanceUID
   ) : null;
-  const laValue = selectedLA && calculatedReadState.sources[selectedField.key]?.source === 'viewer-derived'
+  const contourValue = selectedContourComposite &&
+    calculatedReadState.sources[selectedField.key]?.source === 'viewer-derived'
     ? calculatedReadState.values[selectedField.key] : null;
-  const laManualValue = selectedLA && calculatedReadState.sources[selectedField.key]?.source === 'manual'
+  const hasContourManualSource = selectedContourComposite &&
+    calculatedReadState.sources[selectedField.key]?.source === 'manual';
+  const contourManualValue = hasContourManualSource
     ? calculatedReadState.values[selectedField.key] : null;
   const selectedLength = isResearchLengthQuestion(selectedField, readDomain);
   const lengthState = selectedLength ? getResearchLengthSourceState(
@@ -1606,7 +1613,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
       }
       questionContent={
         <>
-          {!selectedLA && !showGuidedIVCValue && selectedField?.componentKey !== 'lvEjectionFraction' ? (
+          {!selectedContourComposite && !showGuidedIVCValue && selectedField?.componentKey !== 'lvEjectionFraction' ? (
             <ReadField
               key={selectedField.key}
               field={selectedField}
@@ -1641,17 +1648,6 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
               }}
             />
           ) : null}
-          {selectedField?.componentKey === 'rvFac' ? (
-            <div className="rounded border border-gray-700 bg-gray-950 p-2 text-xs">
-              <EchoCompositeResultStatus
-                value={calculatedReadState.sources[selectedField.key]?.source === 'viewer-derived'
-                  ? calculatedReadState.values[selectedField.key] : null}
-                unit={cleanString(selectedField.config?.unit)}
-                label={context.readOnly ? 'Saved calculated result' : 'Calculated measurement'}
-                unavailableMessage="Complete the calibrated contours on their protocol-selected frames."
-              />
-            </div>
-          ) : null}
           {!isIVCRapRVSPQuestion ? groupedFields.map(companionField => (
             <ReadField
               key={companionField.key}
@@ -1684,19 +1680,43 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
                 ? persistedEF : null}
               ivcMeasurementState={ivcMeasurementState}
               ivcReadValue={guidedIVCValue}
-              laPhaseState={laPhaseState}
-              laValue={laValue}
-              laManualValue={laManualValue}
-              onClearLAManualValue={() => updateValue(selectedField.key, '')}
-              onViewLASource={item => queueNavigation(async isCancelled => {
+              contourPhaseState={contourPhaseState}
+              contourValue={contourValue}
+              contourManualValue={contourManualValue}
+              hasContourManualSource={hasContourManualSource}
+              onClearContourManualValue={() => {
+                if (context.readOnly || context.preview || isBusy) return;
+                if (selectedLA) {
+                  updateValue(selectedField.key, '');
+                  return;
+                }
+                // Release only a legacy RV manual override; clearing it must
+                // not leave a manual source flag that suppresses auto-binding.
+                const key = selectedField.key;
+                if (!selectedRVFAC || valueSourcesRef.current[key]?.source !== 'manual') return;
+                setValues(current => {
+                  const next = { ...current };
+                  delete next[key];
+                  return next;
+                });
+                setValueSources(current => {
+                  if (current[key]?.source !== 'manual') return current;
+                  const next = { ...current };
+                  delete next[key];
+                  valueSourcesRef.current = next;
+                  return next;
+                });
+              }}
+              onViewContourSource={item => queueNavigation(async isCancelled => {
                 await restoreResearchAnnotationSource(item, isCancelled);
               })}
-              onDeleteLASource={annotation => void deleteResearchAnnotation(annotation)}
-              onViewLAProtocolTarget={slot => queueNavigation(async isCancelled => {
+              onDeleteContourSource={annotation => void deleteResearchAnnotation(annotation)}
+              onViewContourProtocolTarget={slot => queueNavigation(async isCancelled => {
                 if (!isCancelled()) await jumpToProtocolTarget(
                   getResearchEchoPhaseTarget(selectedField, slot), selectedField.key);
               })}
-              onRecalculateLA={() => refreshViewerMeasurementBindings(undefined, selectedField.key)}
+              onRecalculateLA={selectedLA
+                ? () => refreshViewerMeasurementBindings(undefined, selectedField.key) : undefined}
               efValue={calculatedReadState.values[selectedField.key] ?? ''}
               onChangeEFValue={nextValue => updateValue(selectedField.key, nextValue)}
               onDeleteEFValue={() => {
@@ -1727,7 +1747,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
               status={persistedEF ? 'Saved' : Object.keys(liveVerifiedEchoEvidence.efVolumes).length ? 'Current' : 'Saved'}
             />
           )}
-          {!selectedLA && !showInlineIVCSources &&
+          {!selectedContourComposite && !showInlineIVCSources &&
             selectedField?.componentKey !== 'lvEjectionFraction' &&
             (selectedLength ? showLengthSourceResolution :
               (isSelectedMeasurement || genericProtocolTargets.length > 0)) ? (
