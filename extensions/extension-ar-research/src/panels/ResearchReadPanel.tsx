@@ -15,6 +15,8 @@ import { SharedTRVmaxQuestionAnswer } from '../../../extension-ar-learning/src/c
 import { SharedIVCRapRVSPAnswer } from '../../../extension-ar-learning/src/components/SharedIVCRapRVSPAnswer';
 import { LearningSingleChoiceAnswer } from '../../../extension-ar-learning/src/components/LearningSingleChoiceAnswer';
 import ResearchEchoGuidedControls from './ResearchEchoGuidedControls';
+import ResearchAcquisitionInputs from './ResearchAcquisitionInputs';
+import { canShowResearchAcquisitionInputs } from '../utils/researchAcquisitionInputs';
 import {
   reconcileResearchEchoCompositeAnswers,
   getVerifiedResearchEFResultCandidate,
@@ -317,6 +319,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [completing, setCompleting] = useState(false);
+  const [acquisitionBusy, setAcquisitionBusy] = useState(false);
   const [error, setError] = useState('');
 
   const load = useCallback(async () => {
@@ -1476,7 +1479,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
     cleanString(context?.review?.studyTitle) ||
     'Research Study';
   const reviewStatus = cleanString(context?.review?.status || 'preview');
-  const isBusy = saving || completing;
+  const isBusy = saving || completing || acquisitionBusy;
   const selectedField = visibleFields.find(field => field.key === selectedFieldKey) ||
     visibleFields[0];
   const groupedFields = getResearchGroupedFields(
@@ -1642,6 +1645,11 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
             {context.preview ? 'Protocol preview' : reviewStatus}
             {' · '}{completedFields}/{visibleFields.length} questions answered
           </div>
+      {canShowResearchAcquisitionInputs(context) ? (
+        <ResearchAcquisitionInputs key={context.reviewKey}
+          reviewKey={context.reviewKey} readOnly={context.readOnly}
+          disabled={saving || completing} onBusy={setAcquisitionBusy} />
+      ) : null}
       {context.preview ? (
         <div className="mb-3 rounded border border-blue-900 bg-blue-950 p-3 text-xs text-blue-100">
           Protocol preview. Fields are shown exactly as readers will receive them;
