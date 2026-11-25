@@ -118,7 +118,7 @@ describe('Research LA/RV use shared Education phase rows and calculation control
     const guided = fs.readFileSync(path.resolve(__dirname,
       '../panels/ResearchEchoGuidedControls.tsx'), 'utf8');
     const start = guided.indexOf("if (kind === 'laVolumeDisks' || kind === 'rvFac')");
-    const end = guided.indexOf('Guided Echo measurement', start);
+    const end = guided.indexOf('kind="ivcCollapsibility"', start);
     expect(start).toBeGreaterThan(0);
     expect(end).toBeGreaterThan(start);
     const la = guided.slice(start, end);
@@ -170,5 +170,27 @@ describe('Research TR Vmax uses shared Education presentation and guarded acquis
     expect(run).not.toContain('quizCapture: true');
     expect(panel).toContain('deleteResearchAnnotation(trState.selected.annotation)');
     expect(panel).toContain('Resolve TR Vmax source');
+  });
+});
+
+describe('Research IVC shares Education phase and RAP/RVSP controls', () => {
+  it('renders compact verified phase rows and preserves guarded redraw and source ownership', () => {
+    const guided=fs.readFileSync(path.resolve(__dirname,'../panels/ResearchEchoGuidedControls.tsx'),'utf8');
+    const learning=fs.readFileSync(path.resolve(__dirname,'../../../extension-ar-learning/src/panels/CaseQuestionsPanel.tsx'),'utf8');
+    const ivc=guided.slice(guided.lastIndexOf('kind="ivcCollapsibility"'));
+    expect(ivc).toContain('<SharedEchoPhaseStatus');
+    expect(ivc).toContain('item.matchesTarget ? item.diameterMM : null');
+    expect(ivc).toContain('await openPhase(slot)');
+    expect(ivc).toContain('onBeginIVCPhaseRedraw?.(field, slot, oldSources)');
+    expect(ivc).toContain('<EchoCompositeResultCard>');
+    expect(guided).not.toContain('View protocol frame ');
+    expect(learning).toContain('<SharedIVCRapRVSPAnswer');
+    expect(panel).toContain('<SharedIVCRapRVSPAnswer');
+    expect(panel).toContain('getResearchRapChoices(rapField, readDomain)');
+    expect(panel).toContain('getResearchTRVmaxSourceState(');
+    expect(panel).toContain('const showGuidedIVCValue = showInlineIVCSources');
+    expect(panel).toContain('completeIVC={guidedIVCValue != null}');
+    expect(panel).toContain('updateValue(rapField.key, value)');
+    expect(panel).toContain('onDeleteIVCSource={annotation => void deleteResearchAnnotation(annotation)}');
   });
 });

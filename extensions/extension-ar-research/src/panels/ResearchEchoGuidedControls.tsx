@@ -21,7 +21,7 @@ export default function ResearchEchoGuidedControls({
   assessmentSavedEFResult = null,
   ivcMeasurementState = null, ivcReadValue = null,
   efValue = '', onChangeEFValue, onDeleteEFValue,
-  onBeginIVCPhaseRedraw, onViewIVCSource, onDeleteIVCSource,
+  onBeginIVCPhaseRedraw, onViewIVCSource, onDeleteIVCSource, ivcManualValue = null, onClearIVCManualValue,
   contourPhaseState = null, contourValue = null, contourManualValue = null, hasContourManualSource = false, onClearContourManualValue,
   onViewContourSource, onDeleteContourSource,
   onViewContourProtocolTarget, onRecalculateLA,
@@ -42,6 +42,8 @@ export default function ResearchEchoGuidedControls({
   onBeginIVCPhaseRedraw?: (field: any, slot: string, existing: any[]) => void;
   onViewIVCSource?: (annotation: any) => void;
   onDeleteIVCSource?: (annotation: any) => void;
+  ivcManualValue?: number | string | null;
+  onClearIVCManualValue?: () => void;
   contourPhaseState?: any;
   contourValue?: number | string | null;
   contourManualValue?: number | string | null;
@@ -111,19 +113,6 @@ export default function ResearchEchoGuidedControls({
     } finally {
       setBusy('');
     }
-  };
-  const button = (label: string, key: string, action: () => Promise<any>, blocked = false) => (
-    <button
-      type="button" disabled={disabled || readOnly || !!busy || blocked}
-      className="rounded border border-cyan-600 px-2 py-1 text-xs text-cyan-100 hover:bg-cyan-950/40 disabled:opacity-40"
-      onClick={() => void run(key, action)}
-    >{busy === key ? 'Opening…' : label}</button>
-  );
-  const viewTarget = (slot: string) => {
-    const target = getResearchEchoPhaseTarget(field, slot);
-    return target && isUsableResearchTarget(target)
-      ? button('View protocol frame ' + target.frameNumber, 'view:' + slot, () => openPhase(slot))
-      : null;
   };
   const hasIncompleteRequiredEF = kind === 'lvEjectionFraction' &&
     phases.some(phase => isRequiredResearchPhaseMissing(field, phase.slot));
@@ -278,91 +267,77 @@ export default function ResearchEchoGuidedControls({
   }
 
   return (
-    <div className="rounded border border-cyan-700/70 bg-cyan-950/10 p-3 text-xs text-gray-200">
-      <div className="font-semibold text-cyan-100">Guided Echo measurement</div>
-        <LearningEchoAcquisitionControls
-          kind="ivcCollapsibility"
-          disabled={disabled || readOnly || !!busy}
-          isPhaseBlocked={slot => isRequiredResearchPhaseMissing(field, slot)}
-          renderPhaseStatus={(slot, label) => {
-            const diameter = slot === 'IVC_EXP'
-              ? ivcMeasurementState?.values?.expirationDiameterMM
-              : ivcMeasurementState?.values?.inspirationDiameterMM;
-            return (
-              <span className="min-w-36 text-gray-100">
-                {label + ' · ' + (diameter != null && Number.isFinite(Number(diameter))
-                  ? Number(diameter).toFixed(1) + ' mm' : 'No calibrated diameter')}
-              </span>
-            );
-          }}
-          onAcquire={(slot, technique) => void run(
-            slot + ':' + (technique || 'length'), async () => {
-              await openPhase(slot);
-              await runCompositeSteps('ivcCollapsibility', slot, technique || 'freehand');
-              const oldSources = ivcMeasurementState?.phaseSources?.[slot] || [];
-              onBeginIVCPhaseRedraw?.(field, slot, oldSources);
-            }
-          )}
-          renderPhaseExtras={slot => {
-            const blocked = isRequiredResearchPhaseMissing(field, slot);
-            const phaseSources = ivcMeasurementState?.phaseSources?.[slot] || [];
-            return (
-              <>
-                {!blocked ? viewTarget(slot) : (
-                  <span className="text-amber-300">Missing required protocol frame</span>
-                )}
-                {phaseSources.map((annotation: any, index: number) => (
-                  <span key={String(annotation?.annotationId || annotation?.uid || index)}
-                    className="inline-flex flex-wrap items-center gap-2 rounded border border-gray-700 px-2 py-1">
-                    <button type="button" className="text-cyan-200 hover:underline"
-                      disabled={!onViewIVCSource}
-                      onClick={() => onViewIVCSource?.(annotation)}>View source</button>
-                    {!disabled && !readOnly ? (
-                      <button type="button" className="text-red-300 hover:underline"
-                        disabled={!onDeleteIVCSource}
-                        onClick={() => onDeleteIVCSource?.(annotation)}>Delete</button>
-                    ) : null}
-                  </span>
-                ))}
-                {phaseSources.length > 1 ? (
-                  <span className="text-amber-200">
-                    Multiple measurements for this phase. Delete extras or redraw.
-                  </span>
-                ) : null}
-                {!blocked && !getResearchEchoPhaseTarget(field, slot) ? (
-                  <span className="text-gray-400">
-                    No fixed frame for this phase — uses the current viewer image
-                  </span>
-                ) : null}
-              </>
-            );
-          }}
-          afterPhases={(
-            <div className="border-t border-gray-700 pt-3">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <span className="font-semibold text-gray-100">Calculated IVC collapsibility</span>
-                <span className="font-semibold text-cyan-100">
-                  {ivcMeasurementState?.candidate &&
-                    ivcReadValue !== null && ivcReadValue !== undefined &&
-                    String(ivcReadValue).trim() !== '' &&
-                    Number.isFinite(Number(ivcReadValue))
-                    ? Number(ivcReadValue).toFixed(1) + '%'
-                    : 'Not yet calculated'}
-                </span>
-              </div>
-              {!ivcMeasurementState?.candidate ? (
-                <p className="mt-1 text-amber-200">
-                  {ivcMeasurementState?.message ||
-                    'Draw both calibrated IVC measurements on the assigned frames.'}
-                </p>
-              ) : (
-                <p className="mt-1 text-gray-400">
-                  Derived from the two calibrated diameters on their configured DICOM frames.
-                </p>
-              )}
-            </div>
-          )}
-        />
+    <div className="space-y-2">
+      <LearningEchoAcquisitionControls
+        kind="ivcCollapsibility"
+        disabled={disabled || readOnly || !!busy}
+        isPhaseBlocked={slot => isRequiredResearchPhaseMissing(field, slot)}
+        renderPhaseStatus={slot => {
+          const label = slot === 'IVC_EXP' ? 'IVCexp' : 'IVCinsp';
+          const sources = ivcMeasurementState?.displayPhaseSources?.[slot] || [];
+          const target = getResearchEchoPhaseTarget(field, slot);
+          if (!sources.length) return (
+            <SharedEchoPhaseStatus slot={slot} label={label} unit="mm" value={null}
+              disabled={disabled || readOnly}
+              onNavigate={target && isUsableResearchTarget(target) && onViewContourProtocolTarget
+                ? () => onViewContourProtocolTarget(slot) : undefined} />
+          );
+          return sources.map((item: any, index: number) => (
+            <React.Fragment key={String(item.annotation.annotationId || item.annotation.annotationUID ||
+              item.annotation.uid || item.annotation.id)}>
+              <SharedEchoPhaseStatus slot={slot}
+                label={sources.length > 1 ? label + ' (' + (index + 1) + ')' : label}
+                value={item.matchesTarget ? item.diameterMM : null} unit="mm" hasSavedSource
+                allowZero={slot === 'IVC_INSP'}
+                disabled={disabled || readOnly || !!busy}
+                onNavigate={onViewIVCSource ? () => onViewIVCSource(item) : undefined}
+                onDelete={!readOnly && onDeleteIVCSource ? () => onDeleteIVCSource(item.annotation) : undefined} />
+              {!item.matchesTarget ? (
+                <span className="text-amber-200">Outside the configured phase frame</span>
+              ) : null}
+            </React.Fragment>
+          ));
+        }}
+        onAcquire={(slot, technique) => void run(slot + ':' + (technique || 'length'), async () => {
+          await openPhase(slot);
+          await runCompositeSteps('ivcCollapsibility', slot, technique || 'freehand');
+          const oldSources = ivcMeasurementState?.phaseSources?.[slot] || [];
+          onBeginIVCPhaseRedraw?.(field, slot, oldSources);
+        })}
+        renderPhaseExtras={slot => (
+          <>
+            {isRequiredResearchPhaseMissing(field, slot) ? (
+              <span className="text-amber-300">Missing required protocol frame</span>
+            ) : null}
+            {(ivcMeasurementState?.displayPhaseSources?.[slot]?.length || 0) > 1 ? (
+              <span className="text-amber-200">Multiple measurements for this phase. Inspect and delete extras or redraw.</span>
+            ) : null}
+          </>
+        )}
+      />
+      {ivcMeasurementState?.unresolvedCount ? (
+        <div role="alert" className="text-xs text-amber-200">
+          Some IVC source annotations cannot be verified for this study.
+        </div>
+      ) : null}
+      <EchoCompositeResultCard>
+        <EchoCompositeResultStatus value={ivcReadValue}
+          unit="%" label={readOnly ? 'Saved answer' : 'Calculated'}
+          unavailableMessage="Complete the required calibrated measurements in the same study." />
+        {ivcMeasurementState?.status === 'invalid' && ivcMeasurementState?.message ? (
+          <div className="mt-1 text-amber-200">{ivcMeasurementState.message}</div>
+        ) : null}
+      </EchoCompositeResultCard>
+      {ivcManualValue != null && String(ivcManualValue).trim() !== '' ? (
+        <EchoCompositeResultCard warning>
+          <EchoCompositeResultStatus value={ivcManualValue} unit="%" label="Saved manual answer" />
+          <p className="mt-1 text-amber-200">This value is not linked to calibrated IVC measurements.</p>
+          {!readOnly && onClearIVCManualValue ? (
+            <button type="button" disabled={disabled || !!busy}
+              className="mt-1 text-red-200 underline" onClick={onClearIVCManualValue}>Clear manual answer</button>
+          ) : null}
+        </EchoCompositeResultCard>
+      ) : null}
     </div>
   );
 }

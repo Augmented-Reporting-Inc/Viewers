@@ -8,6 +8,7 @@ import {
   isResearchCandidateOnProtocolFrames,
   getResearchProtocolCompatibleCandidates,
   getResearchIVCMeasurementState,
+  getResearchIVCPhaseDisplayState,
   getResearchIVCAnnotationSlot,
   isValidResearchIVCPhaseSource,
   getResearchCompatibleMeasurementCandidates,
@@ -577,5 +578,42 @@ describe('Research source-linked spectral TR Vmax presentation', () => {
     expect(state({source:'manual'},[a]).status).toBe('manual');
     expect(state({},[a]).status).toBe('unbound');
     expect(state(linked,[annotation('a',20)],{...field,config:{...field.config,viewerTarget:null}}).status).toBe('linked');
+  });
+});
+
+describe('shared Research IVC phase display adapter', () => {
+  const study='study-ivc';
+  const field={componentKey:'ivcCollapsibility', config:{unit:'%',measurementLabels:['IVCCollapsibility'],
+    compositeFrameGuidanceEnabled:true, compositeFrameTargets:{
+      IVC_EXP:{sopInstanceUID:'sop-ivc',frameNumber:2},
+      IVC_INSP:{sopInstanceUID:'sop-ivc',frameNumber:22}
+    }}};
+  const length=(label:string,mm:number,frame:number,sourceStudy=study)=>({
+    annotationId:label+'-'+frame, label,toolName:'Length',points:[[0,0,0],[1,0,0]],
+    measurements:{length:mm,unit:'mm',lengthUnit:'mm'},
+    StudyInstanceUID:sourceStudy,SeriesInstanceUID:'series-ivc',SOPInstanceUID:'sop-ivc',
+    frameNumber:1,referencedImageId:`wadors:/studies/${sourceStudy}/series/series-ivc/instances/sop-ivc/frames/${frame}`
+  });
+  it('preserves exact source frames, calibrated partial values and existing result', () => {
+    const exp=length('IVCexp',20,2),insp=length('IVCinsp',8,22);
+    const partial=getResearchIVCPhaseDisplayState(field,[exp],study);
+    expect(partial.displayPhaseSources.IVC_EXP[0].diameterMM).toBe(20);
+    expect(partial.candidate).toBeNull();
+    const complete=getResearchIVCPhaseDisplayState(field,[exp,insp],study);
+    expect(complete.candidate?.value).toBe(60);
+    expect(complete.displayPhaseSources.IVC_INSP[0].displayAnnotation.frameNumber).toBe(22);
+    expect(insp.frameNumber).toBe(1);
+  });
+  it('keeps wrong-frame sources inspectable, but does not promote ambiguous or foreign evidence', () => {
+    const exp=length('IVCexp',20,2),insp=length('IVCinsp',8,22);
+    const wrong=length('IVCexp',30,11);
+    const state=getResearchIVCPhaseDisplayState(field,[exp,insp,wrong],study);
+    expect(state.candidate?.value).toBe(60);
+    expect(state.displayPhaseSources.IVC_EXP.find(row=>row.annotation===wrong)?.matchesTarget).toBe(false);
+    const duplicate={...exp,annotationId:'exp-copy'};
+    expect(getResearchIVCPhaseDisplayState(field,[exp,duplicate,insp],study).candidate).toBeNull();
+    expect(getResearchIVCPhaseDisplayState(field,[exp,length('IVCinsp',8,22,'foreign')],study).candidate).toBeNull();
+    const invalid={...insp,measurements:{length:8,unit:'px',lengthUnit:'px'}};
+    expect(getResearchIVCPhaseDisplayState(field,[exp,invalid],study).candidate).toBeNull();
   });
 });

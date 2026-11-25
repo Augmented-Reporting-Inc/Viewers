@@ -95,13 +95,14 @@ export default LearningEchoAcquisitionControls;
 /** Shared phase presentation; callers own annotation identity and permissions. */
 export function SharedEchoPhaseStatus({
   slot, label, value, unit = 'cm²', hasSavedSource = false,
-  onNavigate, onDelete, disabled = false,
+  onNavigate, onDelete, disabled = false, allowZero = false,
 }: {
   slot: string; label: string; value?: number | null; unit?: string;
   hasSavedSource?: boolean; onNavigate?: () => void; onDelete?: () => void;
-  disabled?: boolean;
+  disabled?: boolean; allowZero?: boolean;
 }) {
-  const measured = value != null && Number.isFinite(Number(value)) && Number(value) > 0;
+  const measured = value != null && Number.isFinite(Number(value)) &&
+    (allowZero ? Number(value) >= 0 : Number(value) > 0);
   const displayValue = measured ? Number(value).toFixed(2) + ' ' + unit : 'Not measured';
   return (
     <>

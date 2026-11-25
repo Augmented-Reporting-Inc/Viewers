@@ -16,6 +16,7 @@ on:
       - fix/ef-sticky-tool-between-contours-20261020
       - feat/lv-ef-rounded-contour-20261021
       - port/3.11-custom
+      - fix/ar-1106-research-tr-vmax-question-parity-20261124
       - integration/ef-progress-current
       - integration/quiz-wcag-length-20261013
       - feature/ef-explicit-calculate-20261023

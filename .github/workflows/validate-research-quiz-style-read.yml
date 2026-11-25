@@ -5,6 +5,7 @@ on:
     branches:
       - fix/research-tr-vmax-binding-20261116
       - port/3.11-custom
+      - fix/ar-1106-research-tr-vmax-question-parity-20261124
     paths:
       - 'extensions/extension-ar-research/src/**'
       - 'extensions/extension-ar-research/babel.config.js'
