@@ -118,7 +118,7 @@ describe('Research LA/RV use shared Education phase rows and calculation control
     const guided = fs.readFileSync(path.resolve(__dirname,
       '../panels/ResearchEchoGuidedControls.tsx'), 'utf8');
     const start = guided.indexOf("if (kind === 'laVolumeDisks' || kind === 'rvFac')");
-    const end = guided.indexOf('Guided Echo measurement', start);
+    const end = guided.indexOf('kind="ivcCollapsibility"', start);
     expect(start).toBeGreaterThan(0);
     expect(end).toBeGreaterThan(start);
     const la = guided.slice(start, end);

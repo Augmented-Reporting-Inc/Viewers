@@ -109,5 +109,9 @@ test('EF learner progress panel retains both capture methods and calibrated free
   assert.match(commandsSource, /rowButton\('Axis \+ Apex'/, 'EF Axis + Apex action missing');
   assert.match(commandsSource, /captureMethod === 'freehand'/, 'EF freehand capture dispatch missing');
   assert.match(commandsSource, /calibrateUSContourPoints/, 'EF physical calibration missing');
-  assert.match(commandsSource, /resolveSpectralVmaxClick/, 'Right-heart Vmax workflow must remain present');
+  assert.match(commandsSource, /resolveSpectralVmaxWorldClick\(viewport\.getImageData\?\.\(\), worldPoint, regions\)/, 'Right-heart Vmax workflow must remain present');
+  const spectralSource = fs.readFileSync(
+    path.join(__dirname, '..', '..', '..', 'extensions', 'cornerstone', 'src', 'utils', 'spectralVmaxClick.ts'), 'utf8'
+  );
+  assert.match(spectralSource, /resolveSpectralVmaxClick\(region, peak\[0\], peak\[1\]\)/, 'Spectral world geometry must reuse DICOM calibration');
 });

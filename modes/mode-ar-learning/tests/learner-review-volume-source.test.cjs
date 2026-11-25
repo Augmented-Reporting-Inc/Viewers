@@ -42,10 +42,11 @@ test('learner review distinguishes single LA contour area from calculated biplan
 });
 
 test('TR Vmax rechecks active quiz target at completion to avoid a restoration race dialog', () => {
-  const start = commands.indexOf('ultrasoundDirectionalCompletionHandler = async');
-  const end = commands.indexOf('eventTarget.addEventListener(', start);
+  const start = commands.indexOf('const finalizeDirectionalMeasurement = async');
+  const end = commands.indexOf('ultrasoundDirectionalCompletionHandler = (event: Event)', start);
   assert.ok(start > 0 && end > start);
   const completion = commands.slice(start, end);
+  assert.match(commands.slice(end, commands.indexOf('eventTarget.addEventListener(', end)), /void finalizeDirectionalMeasurement\(event\)\.catch/);
   assert.match(completion, /const isCurrentTrQuizCapture = spectralVmax &&\s*\(quizCapture \|\| activeQuizMeasurementKind === 'trVmax'\)/);
   assert.match(completion, /const completionTargetKey = isCurrentTrQuizCapture\s*\? 'echo\.trPeakVelocity' : preferredTargetKey/);
   assert.match(completion, /if \(!completionTargetKey && Number\.isFinite\(rawValue\)/);
