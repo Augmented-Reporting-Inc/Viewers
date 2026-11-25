@@ -7,6 +7,7 @@ import { SharedQuestionCard } from '../../../extension-ar-measurements/src/compo
 import { LearningEchoAcquisitionControls, SharedEchoPhaseStatus, SharedEchoRecalculateButton } from '../components/LearningEchoAcquisitionControls';
 import { SharedEFQuestionAnswer } from '../components/SharedEFQuestionAnswer';
 import { SharedTRVmaxQuestionAnswer } from '../components/SharedTRVmaxQuestionAnswer';
+import { SharedIVCRapRVSPAnswer } from '../components/SharedIVCRapRVSPAnswer';
 import { LearningSingleChoiceAnswer } from '../components/LearningSingleChoiceAnswer';
 import LearningQuestionPanel from './LearningQuestionPanel';
 import { getEchoCompositeAcquisitionSteps } from '../../../extension-ar-measurements/src/utils/echoCompositeAcquisition';
@@ -6098,82 +6099,41 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     const selection = reviewedRAP != null ? String(reviewedRAP) : '';
 
     return (
-      <div className="mt-2 rounded border border-cyan-700 bg-cyan-950/20 p-2 text-xs text-cyan-100">
-        <div className="font-semibold">After measuring IVC: select your RAP</div>
-        <div className="mt-1 text-gray-300">
-          AR calculates RVSP from your RAP and the TR Vmax you previously
-          captured in this quiz. RAP is not inferred from collapsibility.
-        </div>
-        <label className="mt-2 flex items-center gap-2">
-          RAP
-          <select aria-label="Learner RAP (mmHg)"
-            value={selection} disabled={disabled || !completeIVC}
-            className="rounded border border-cyan-600 bg-black px-2 py-1"
-            onClick={event => event.stopPropagation()}
-            onChange={event => {
-              const value = event.target.value;
-              setRapSelectionsByQuestionKey(current => ({ ...current, [key]: value }));
-              if (!value || !completeIVC) return;
-              const calculated = attachLearnerRapRvspToIVCAnswer({
-                ivcAnswer: answer, rapMMHG: value,
-                trVmaxAnswer: trAnswer, trVmaxQuestionKey: priorTR?.questionKey || '',
+      <SharedIVCRapRVSPAnswer
+        completeIVC={completeIVC} selection={selection}
+        choices={RAP_CHOICES_MMHG.map(rap => ({ value: String(rap), label: rap + ' mmHg' }))}
+        rapComplete={isLearnerIVCRapSelectionComplete(answer)}
+        trIsRecorded={trIsRecorded} trValue={trValue}
+        rvspValue={saved.rvspMMHG} disabled={disabled}
+        onChange={value => {
+          setRapSelectionsByQuestionKey(current => ({ ...current, [key]: value }));
+          if (!value || !completeIVC) return;
+          const calculated = attachLearnerRapRvspToIVCAnswer({
+            ivcAnswer: answer, rapMMHG: value,
+            trVmaxAnswer: trAnswer, trVmaxQuestionKey: priorTR?.questionKey || '',
+          });
+          if (calculated.status === 'complete') {
+            setAnswer(quiz.quizKey, question, calculated.answer);
+          } else if (calculated.reason === 'previous-tr-vmax-required') {
+            const rapOnly = attachLearnerRapSelectionToIVCAnswer({
+              ivcAnswer: answer, rapMMHG: value,
+            });
+            if (rapOnly.status === 'rap-only') {
+              setAnswer(quiz.quizKey, question, rapOnly.answer);
+              uiNotificationService.show({
+                title: 'RAP recorded', type: 'info', duration: 5000,
+                message: 'Your RAP selection is saved. RVSP remains unavailable until a calibrated earlier TR Vmax answer is recorded.',
               });
-              if (calculated.status === 'complete') {
-                setAnswer(quiz.quizKey, question, calculated.answer);
-              } else if (calculated.reason === 'previous-tr-vmax-required') {
-                const rapOnly = attachLearnerRapSelectionToIVCAnswer({
-                  ivcAnswer: answer, rapMMHG: value,
-                });
-                if (rapOnly.status === 'rap-only') {
-                  setAnswer(quiz.quizKey, question, rapOnly.answer);
-                  uiNotificationService.show({
-                    title: 'RAP recorded', type: 'info', duration: 5000,
-                    message: 'Your RAP selection is saved. RVSP remains unavailable until a calibrated earlier TR Vmax answer is recorded.',
-                  });
-                }
-              } else {
-                uiNotificationService.show({
-                  title: 'RAP / RVSP',
-                  type: 'warning', duration: 5500,
-                  message: 'The IVC source evidence must be current before RVSP can be calculated.',
-                });
-              }
-            }}
-          >
-            <option value="" disabled={reviewedRAP != null}>Select RAP</option>
-            {RAP_CHOICES_MMHG.map(rap => (
-              <option key={rap} value={String(rap)}>{rap} mmHg</option>
-            ))}
-          </select>
-        </label>
-        {!completeIVC ? (
-          <div className="mt-1 text-amber-200">
-            Complete both calibrated IVC phase measurements first.
-          </div>
-        ) : !isLearnerIVCRapSelectionComplete(answer) ? (
-          <div className="mt-1 text-amber-200" role="status">
-            Select RAP (3, 8, or 15 mmHg) to complete this IVC question.
-          </div>
-        ) : !trIsRecorded ? (
-          <div className="mt-1 text-amber-200">
-            RAP recorded; RVSP unavailable until a source-linked TR Vmax is recorded earlier in this quiz.
-          </div>
-        ) : (
-          <div className="mt-1 text-green-200">
-            Recorded TR Vmax: {trValue.toFixed(2)} m/s
-          </div>
-        )}
-        {reviewedRAP != null ? (
-          <div className="mt-2 rounded border border-emerald-700 p-2 text-emerald-100">
-            Saved learner RAP: {reviewedRAP} mmHg
-            {saved.rvspMMHG != null && Number.isFinite(Number(saved.rvspMMHG)) ? (
-              <div>Calculated RVSP: {Number(saved.rvspMMHG).toFixed(2)} mmHg</div>
-            ) : (
-              <div>RVSP unavailable: review a recorded TR Vmax before calculating RVSP.</div>
-            )}
-          </div>
-        ) : null}
-      </div>
+            }
+          } else {
+            uiNotificationService.show({
+              title: 'RAP / RVSP',
+              type: 'warning', duration: 5500,
+              message: 'The IVC source evidence must be current before RVSP can be calculated.',
+            });
+          }
+        }}
+      />
     );
   }
 

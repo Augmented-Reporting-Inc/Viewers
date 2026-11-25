@@ -11,6 +11,7 @@ on:
   pull_request:
     branches:
       - port/3.11-custom
+      - fix/ar-1106-research-tr-vmax-question-parity-20261124
     paths:
       - 'extensions/cornerstone/src/utils/lvSimpsonContour.test.ts'
       - 'extensions/cornerstone/src/utils/efPhysicalCalibration.test.ts'

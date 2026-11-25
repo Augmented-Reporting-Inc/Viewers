@@ -12,6 +12,7 @@ import { SharedQuestionSelector, SharedQuestionStepNavigation } from '../../../e
 import { SharedMeasurementValueInput, SharedMeasurementLabel } from '../../../extension-ar-measurements/src/components/SharedMeasurementValueInput';
 import LearningQuestionPanel from '../../../extension-ar-learning/src/panels/LearningQuestionPanel';
 import { SharedTRVmaxQuestionAnswer } from '../../../extension-ar-learning/src/components/SharedTRVmaxQuestionAnswer';
+import { SharedIVCRapRVSPAnswer } from '../../../extension-ar-learning/src/components/SharedIVCRapRVSPAnswer';
 import { LearningSingleChoiceAnswer } from '../../../extension-ar-learning/src/components/LearningSingleChoiceAnswer';
 import ResearchEchoGuidedControls from './ResearchEchoGuidedControls';
 import {
@@ -64,6 +65,7 @@ import {
   getResearchSourceAnnotationIds,
   getResearchCompatibleMeasurementCandidates,
   getResearchIVCMeasurementState,
+  getResearchIVCPhaseDisplayState,
   getResearchQuestionEntryTarget,
   getResearchIVCAnnotationSlot,
   isValidResearchIVCPhaseSource,
@@ -1543,16 +1545,52 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
     ['trVmax', 'lvEjectionFraction', 'laVolumeDisks', 'rvFac', 'ivcCollapsibility']
       .includes(cleanString(selectedField?.componentKey));
   const genericProtocolTargets = guidedOwnsProtocolFrames ? [] : protocolTargets;
-  const ivcMeasurementState = selectedField?.componentKey === 'ivcCollapsibility'
-    ? getResearchIVCMeasurementState(selectedField, allAnnotations)
-    : null;
-  const guidedIVCValue = selectedField
-    ? calculatedReadState.values[selectedField.key] : null;
   const showInlineIVCSources = readDomain === 'echo' &&
     selectedField?.componentKey === 'ivcCollapsibility';
-  const showGuidedIVCValue = guidedOwnsProtocolFrames &&
-    selectedField?.componentKey === 'ivcCollapsibility' &&
-    protocolTargets.length > 0;
+  const showGuidedIVCValue = showInlineIVCSources;
+  const ivcMeasurementState = showInlineIVCSources
+    ? getResearchIVCPhaseDisplayState(selectedField, allAnnotations, context?.sourceStudyInstanceUID)
+    : null;
+  const ivcSource = showInlineIVCSources ? calculatedReadState.sources[selectedField.key] : null;
+  const ivcValue = showInlineIVCSources ? calculatedReadState.values[selectedField.key] : null;
+  const guidedIVCValue = ivcMeasurementState?.candidate &&
+    ivcSource?.source === 'viewer-derived' &&
+    ivcSource.sourceMeasurementKey === ivcMeasurementState.candidate.sourceMeasurementKey &&
+    ivcValue != null && String(ivcValue).trim() !== '' &&
+    Math.abs(Number(ivcValue) - Number(ivcMeasurementState.candidate.value)) <=
+      Math.max(0.005000001, Number(selectedField?.config?.step || 0.01) / 2 + 1e-9)
+    ? ivcValue : null;
+  const rapFields = groupedFields.filter(item => item.componentKey === 'rap');
+  const rvspFields = groupedFields.filter(item => item.componentKey === 'rvsp');
+  const rapField = rapFields.length === 1 ? rapFields[0] : null;
+  const rvspField = rvspFields.length === 1 ? rvspFields[0] : null;
+  const rapChoices = rapField ? getResearchRapChoices(rapField, readDomain).map(value => {
+    const configured = rapField.config?.options?.find(option =>
+      String(option?.value ?? option?.label ?? option ?? '').trim() === value);
+    const label = cleanString(configured?.label || value);
+    return { value, label: /mmhg/i.test(label) ? label : label + ' mmHg' };
+  }) : [];
+  const formula = rvspField?.config?.calculation;
+  const trFields = fields.filter(item => item.componentKey === formula?.trVmaxComponentKey);
+  const linkedTR = trFields.length === 1 && trFields[0].componentKey === 'trVmax' ? trFields[0] : null;
+  const useSharedRap = isIVCRapRVSPQuestion && !!rapField && !!rvspField &&
+    rapChoices.length > 0 && formula?.type === 'rvsp' &&
+    formula.rapComponentKey === rapField.componentKey && !!linkedTR &&
+    [rapField, rvspField].every(item => cleanString(item.config?.unit).toLowerCase() === 'mmhg') &&
+    cleanString(linkedTR.config?.unit).toLowerCase() === 'm/s';
+  const rapSelection = useSharedRap ? String(calculatedReadState.values[rapField.key] ?? '').trim() : '';
+  const rapComplete = !!rapSelection && rapChoices.some(choice => choice.value === rapSelection);
+  const linkedTRValue = linkedTR ? calculatedReadState.values[linkedTR.key] : null;
+  const linkedTRState = useSharedRap ? getResearchTRVmaxSourceState(
+    linkedTR, calculatedReadState.sources[linkedTR.key], allAnnotations, context?.sourceStudyInstanceUID
+  ) : null;
+  const linkedTRRecorded = !!linkedTRState?.selected && linkedTRValue != null &&
+    cleanString(linkedTRValue) !== '' && Number.isFinite(Number(linkedTRValue)) &&
+    Math.abs(Number(linkedTRValue) - Number(linkedTRState.selected.candidate.value)) <=
+      Math.max(0.005000001, Number(linkedTR?.config?.step || 0.01) / 2 + 1e-9);
+  const sharedRVSP = useSharedRap && linkedTRRecorded && rapComplete &&
+    calculatedReadState.sources[rvspField.key]?.source === 'viewer-derived'
+    ? calculatedReadState.values[rvspField.key] : null;
   const isSelectedMeasurement = selectedField && (
     ['measurement', 'continuous'].includes(cleanString(selectedField.kind).toLowerCase()) ||
     !!selectedField?.config?.calculation
@@ -1739,6 +1777,16 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
                 ? persistedEF : null}
               ivcMeasurementState={ivcMeasurementState}
               ivcReadValue={guidedIVCValue}
+              ivcManualValue={ivcSource?.source === 'manual' ? ivcValue : null}
+              onClearIVCManualValue={() => {
+                if (!editingAllowedRef.current || valueSourcesRef.current[selectedField.key]?.source !== 'manual') return;
+                const key = selectedField.key;
+                setValues(current => { const next = { ...current }; delete next[key]; return next; });
+                setValueSources(current => {
+                  if (current[key]?.source !== 'manual') return current;
+                  const next = { ...current }; delete next[key]; valueSourcesRef.current = next; return next;
+                });
+              }}
               contourPhaseState={contourPhaseState}
               contourValue={contourValue}
               contourManualValue={contourManualValue}
@@ -1793,7 +1841,9 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
                 }
               }}
               onBeginIVCPhaseRedraw={beginIVCPhaseRedraw}
-              onViewIVCSource={annotation => void jumpToAnnotation(annotation)}
+              onViewIVCSource={item => queueNavigation(async isCancelled => {
+                await restoreResearchAnnotationSource(item, isCancelled);
+              })}
               onDeleteIVCSource={annotation => void deleteResearchAnnotation(annotation)}
               disabled={context.readOnly || context.preview || isBusy}
               readOnly={context.readOnly || context.preview}
@@ -1949,7 +1999,31 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
               ) : null}
             </div>
           ) : null}
-          {isIVCRapRVSPQuestion ? (
+          {useSharedRap ? (
+            <>
+              <SharedIVCRapRVSPAnswer
+                completeIVC={guidedIVCValue != null}
+                selection={rapSelection} choices={rapChoices} rapComplete={rapComplete}
+                trIsRecorded={linkedTRRecorded} trValue={linkedTRRecorded ? Number(linkedTRValue) : null}
+                rvspValue={sharedRVSP} ownerLabel="reader" captureLabel="Read" allowClear
+                disabled={isBusy} readOnly={context.readOnly || context.preview}
+                onChange={value => {
+                  if (editingAllowedRef.current && guidedIVCValue != null &&
+                      (value === '' || rapChoices.some(choice => choice.value === value))) {
+                    updateValue(rapField.key, value);
+                  }
+                }}
+                onViewTR={() => selectField(linkedTR.key)}
+              />
+              {groupedFields.filter(item => item !== rapField && item !== rvspField).map(groupedField => (
+                <ReadField key={groupedField.key} field={groupedField} readDomain={readDomain}
+                  value={calculatedReadState.values[groupedField.key] ?? ''}
+                  source={calculatedReadState.sources[groupedField.key]}
+                  disabled={context.readOnly || context.preview || isBusy}
+                  onChange={value => updateValue(groupedField.key, value)} />
+              ))}
+            </>
+          ) : isIVCRapRVSPQuestion ? (
             <div className="space-y-2 rounded border border-cyan-700/70 bg-cyan-950/10 p-2">
               <div className="text-xs font-semibold text-cyan-100">
                 RAP selection and calculated RVSP
@@ -1982,6 +2056,9 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
                 >View the linked TR peak velocity question</button>
               ) : null}
             </div>
+          ) : null}
+          {showInlineIVCSources && !context.readOnly && !context.preview && guidedIVCValue == null ? (
+            <div className="text-xs text-gray-400">Draw or select a measurement annotation in the viewport.</div>
           ) : null}
         </>
       }

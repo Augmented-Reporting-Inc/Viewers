@@ -4,6 +4,7 @@ import { LearningEchoAcquisitionControls, SharedEchoPhaseStatus, SharedEchoRecal
 import { SharedEFQuestionAnswer } from '../components/SharedEFQuestionAnswer';
 import { SharedMeasurementValueInput } from '../../../extension-ar-measurements/src/components/SharedMeasurementValueInput';
 import { SharedTRVmaxQuestionAnswer } from '../components/SharedTRVmaxQuestionAnswer';
+import { SharedIVCRapRVSPAnswer } from '../components/SharedIVCRapRVSPAnswer';
 import fs from 'fs';
 import path from 'path';
 
@@ -197,6 +198,37 @@ describe('shared TR Vmax answer presentation', () => {
       {captured:true,value:2.56,disabled:true}]) {
       expect(nodes(SharedTRVmaxQuestionAnswer({...props,onDelete:()=>{}}))
         .some(node=>node.props?.['aria-label']==='Delete TR Vmax measurement')).toBe(false);
+    }
+  });
+});
+
+describe('shared IVC RAP/RVSP answer presentation', () => {
+  const choices = [{value:'2',label:'2 mmHg'}, {value:'5',label:'5 mmHg'}];
+  const selected:string[] = [];
+  const props = {completeIVC:true, choices, selection:'5', rapComplete:true,
+    trIsRecorded:true, trValue:3, rvspValue:41, ownerLabel:'reader', captureLabel:'Read',
+    onChange:(value:string)=>selected.push(value)};
+  it('honors protocol choices without inferring RAP and displays the supplied RVSP', () => {
+    const rendered = nodes(SharedIVCRapRVSPAnswer(props));
+    expect(rendered.filter(n=>typeof n==='string').join(' ').replace(/\s+/g, ' ')).toContain('Calculated RVSP: 41.00 mmHg');
+    const select = rendered.find(n=>n.type==='select');
+    expect(select.props.value).toBe('5');
+    select.props.onChange({target:{value:'2'}});
+    select.props.onChange({target:{value:'15'}});
+    expect(selected).toEqual(['2']);
+  });
+  it('blocks new RAP selection with missing phase evidence or completed permission', () => {
+    for (const override of [{completeIVC:false},{readOnly:true},{disabled:true}]) {
+      const select = nodes(SharedIVCRapRVSPAnswer({...props,...override})).find(n=>n.type==='select');
+      expect(select.props.disabled).toBe(true);
+      select.props.onChange({target:{value:'2'}});
+    }
+    expect(selected).toEqual(['2']);
+  });
+  it('does not present RVSP without verified TR or a current RAP choice', () => {
+    for (const override of [{trIsRecorded:false},{rapComplete:false}]) {
+      const rendered = nodes(SharedIVCRapRVSPAnswer({...props,...override}));
+      expect(rendered.filter(n=>typeof n==='string').join(' ')).not.toContain('Calculated RVSP:');
     }
   });
 });

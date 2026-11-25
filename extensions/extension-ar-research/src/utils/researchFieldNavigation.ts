@@ -455,6 +455,53 @@ export function getResearchIVCMeasurementState(field: any, annotations: any[] = 
   };
 }
 
+/** Display adapter only: retain the existing IVC calculator and its source
+ * pairing rules. Normalize owned source copies for exact frame restoration.
+ * Wrong-frame sources remain inspectable/deletable but never show a verified value. */
+export function getResearchIVCPhaseDisplayState(
+  field: any, annotations: any[] = [], studyInstanceId: unknown = ''
+) {
+  const state = getResearchIVCMeasurementState(field, annotations);
+  const phaseSources: Record<string, Array<{
+    annotation: any; displayAnnotation: any; diameterMM: number | null; matchesTarget: boolean;
+  }>> = { IVC_EXP: [], IVC_INSP: [] };
+  const study = cleanString(studyInstanceId);
+  let unresolvedCount = 0;
+  const seen = new Set<string>();
+  for (const annotation of [...state.annotations, ...state.excludedAnnotations]) {
+    const id = cleanString(annotation?.annotationId || annotation?.annotationUID || annotation?.uid || annotation?.id);
+    const slot = getResearchIVCAnnotationSlot(annotation);
+    if (id && seen.has(id)) continue;
+    const displayAnnotation = getResearchOwnedSourceDisplay(annotation, study);
+    if (!id || !phaseSources[slot] || !displayAnnotation || annotation.toolName !== 'Length' ||
+        !Array.isArray(annotation.points) || annotation.points.length !== 2 ||
+        !annotation.points.every(point => Array.isArray(point) && point.length >= 3 &&
+          point.slice(0, 3).every(Number.isFinite))) {
+      unresolvedCount++;
+      continue;
+    }
+    seen.add(id);
+    const target = getResearchEchoPhaseTarget(field, slot);
+    const matchesTarget = !isRequiredResearchPhaseMissing(field, slot) &&
+      (!target || annotationMatchesTarget(annotation, target));
+    const measurement = calculateIVCFromMeasurements([annotation]);
+    const diameter = slot === 'IVC_EXP' ? measurement?.values?.expirationDiameterMM
+      : measurement?.values?.inspirationDiameterMM;
+    phaseSources[slot].push({ annotation, displayAnnotation,
+      diameterMM: diameter != null && Number.isFinite(Number(diameter)) ? Number(diameter) : null,
+      matchesTarget });
+  }
+  // Compare against the existing derived candidate: no independently computed
+  // answer can be displayed as verified, including a saved manual override.
+  const validPair = ['IVC_EXP', 'IVC_INSP'].every(slot => {
+    const matching = phaseSources[slot].filter(row => row.matchesTarget);
+    return matching.length === 1 && matching[0].diameterMM != null &&
+      (slot === 'IVC_EXP' ? matching[0].diameterMM > 0 : matching[0].diameterMM >= 0);
+  });
+  return { ...state, displayPhaseSources: phaseSources, unresolvedCount,
+    candidate: validPair && !unresolvedCount ? state.candidate : null };
+}
+
 /** Reuse protocol verification for all other measurements unchanged. */
 export function getResearchCompatibleMeasurementCandidates(
   field: any, candidates: any[] = [], annotations: any[] = []
