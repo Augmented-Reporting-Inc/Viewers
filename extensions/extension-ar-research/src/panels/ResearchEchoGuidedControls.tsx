@@ -22,9 +22,9 @@ export default function ResearchEchoGuidedControls({
   ivcMeasurementState = null, ivcReadValue = null,
   efValue = '', onChangeEFValue, onDeleteEFValue,
   onBeginIVCPhaseRedraw, onViewIVCSource, onDeleteIVCSource,
-  laPhaseState = null, laValue = null, laManualValue = null, onClearLAManualValue,
-  onViewLASource, onDeleteLASource,
-  onViewLAProtocolTarget, onRecalculateLA,
+  contourPhaseState = null, contourValue = null, contourManualValue = null, hasContourManualSource = false, onClearContourManualValue,
+  onViewContourSource, onDeleteContourSource,
+  onViewContourProtocolTarget, onRecalculateLA,
 }: {
   field: any;
   commandsManager: any;
@@ -42,13 +42,14 @@ export default function ResearchEchoGuidedControls({
   onBeginIVCPhaseRedraw?: (field: any, slot: string, existing: any[]) => void;
   onViewIVCSource?: (annotation: any) => void;
   onDeleteIVCSource?: (annotation: any) => void;
-  laPhaseState?: any;
-  laValue?: number | string | null;
-  laManualValue?: number | string | null;
-  onClearLAManualValue?: () => void;
-  onViewLASource?: (item: any) => void;
-  onDeleteLASource?: (annotation: any) => void;
-  onViewLAProtocolTarget?: (slot: string) => void;
+  contourPhaseState?: any;
+  contourValue?: number | string | null;
+  contourManualValue?: number | string | null;
+  hasContourManualSource?: boolean;
+  onClearContourManualValue?: () => void;
+  onViewContourSource?: (item: any) => void;
+  onDeleteContourSource?: (annotation: any) => void;
+  onViewContourProtocolTarget?: (slot: string) => void;
   onRecalculateLA?: () => Promise<any>;
 }) {
   const [busy, setBusy] = useState('');
@@ -182,25 +183,27 @@ export default function ResearchEchoGuidedControls({
     );
   }
 
-  if (kind === 'laVolumeDisks') {
+  if (kind === 'laVolumeDisks' || kind === 'rvFac') {
+    const isLA = kind === 'laVolumeDisks';
+    const unit = String(field.config?.unit || (isLA ? 'mL' : '%'));
     return (
       <div className="mt-2 w-full min-w-0 max-w-full space-y-2 overflow-hidden">
         <LearningEchoAcquisitionControls
-          kind="laVolumeDisks"
+          kind={kind}
           disabled={disabled || readOnly || !!busy}
           isPhaseBlocked={slot => isRequiredResearchPhaseMissing(field, slot)}
           onAcquire={(slot, technique) => void run(slot + ':' + technique, async () => {
             await openPhase(slot);
-            await runCompositeSteps('laVolumeDisks', slot, technique || 'freehand');
+            await runCompositeSteps(kind, slot, technique || 'freehand');
           })}
           renderPhaseStatus={(slot, label) => {
-            const sources = laPhaseState?.phaseSources?.[slot] || [];
+            const sources = contourPhaseState?.phaseSources?.[slot] || [];
             const target = getResearchEchoPhaseTarget(field, slot);
             if (!sources.length) return (
               <SharedEchoPhaseStatus slot={slot} label={label} value={null}
                 disabled={disabled || readOnly}
-                onNavigate={target && isUsableResearchTarget(target) && onViewLAProtocolTarget
-                  ? () => onViewLAProtocolTarget(slot) : undefined} />
+                onNavigate={target && isUsableResearchTarget(target) && onViewContourProtocolTarget
+                  ? () => onViewContourProtocolTarget(slot) : undefined} />
             );
             return sources.map((item: any, index: number) => (
               <React.Fragment key={String(item.annotation.annotationId ||
@@ -210,9 +213,9 @@ export default function ResearchEchoGuidedControls({
                   value={item.matchesTarget ? item.areaCM2 : null}
                   unit="cm²" hasSavedSource
                   disabled={disabled || readOnly || !!busy}
-                  onNavigate={onViewLASource ? () => onViewLASource(item) : undefined}
-                  onDelete={!readOnly && onDeleteLASource
-                    ? () => onDeleteLASource(item.annotation) : undefined} />
+                  onNavigate={onViewContourSource ? () => onViewContourSource(item) : undefined}
+                  onDelete={!readOnly && onDeleteContourSource
+                    ? () => onDeleteContourSource(item.annotation) : undefined} />
                 {!item.matchesTarget ? (
                   <span className="text-amber-200">Outside the configured phase frame</span>
                 ) : null}
@@ -224,44 +227,48 @@ export default function ResearchEchoGuidedControls({
               {isRequiredResearchPhaseMissing(field, slot) ? (
                 <span className="text-amber-300">Missing required protocol frame</span>
               ) : null}
-              {(laPhaseState?.phaseSources?.[slot]?.length || 0) > 1 ? (
+              {(contourPhaseState?.phaseSources?.[slot]?.length || 0) > 1 ? (
                 <span className="text-amber-200">Multiple contours for this phase. Inspect and delete extras.</span>
               ) : null}
             </>
           )}
         />
-        {laPhaseState?.unresolvedCount ? (
+        {contourPhaseState?.unresolvedCount ? (
           <div role="alert" className="text-xs text-amber-200">
-            Some LA source annotations cannot be verified for this study. Review their source identity before recalculating.
+            Some {isLA ? 'LA' : 'RV'} source annotations cannot be verified for this study. Review their source identity before {isLA ? 'recalculating' : 'continuing'}.
           </div>
         ) : null}
         <EchoCompositeResultCard>
-          <EchoCompositeResultStatus value={laValue}
-            unit={String(field.config?.unit || 'mL')}
+          <EchoCompositeResultStatus value={contourValue}
+            unit={unit}
             label={readOnly ? 'Saved answer' : 'Calculated'}
             unavailableMessage="Complete the required calibrated measurements in the same study." />
         </EchoCompositeResultCard>
-        {laManualValue != null && String(laManualValue).trim() !== '' ? (
+        {(contourManualValue != null && String(contourManualValue).trim() !== '') ||
+          (!isLA && hasContourManualSource && !readOnly) ? (
           <EchoCompositeResultCard warning>
-            <EchoCompositeResultStatus value={laManualValue}
-              unit={String(field.config?.unit || 'mL')} label="Saved manual answer" />
+            {contourManualValue != null && String(contourManualValue).trim() !== '' ? (
+              <EchoCompositeResultStatus value={contourManualValue}
+                unit={unit} label="Saved manual answer" />
+            ) : <div className="text-amber-200">Manual answer mode</div>}
             <p className="mt-1 text-amber-200">
               This value is not linked to calibrated contours.
-              Recalculate to replace it with a verified result.
+              {isLA ? 'Recalculate to replace it with a verified result.'
+                : 'Clear the manual answer to enable automatic calculation from verified contours.'}
             </p>
-            {!readOnly && onClearLAManualValue ? (
+            {!readOnly && onClearContourManualValue ? (
               <button type="button" disabled={disabled || !!busy}
                 className="mt-1 text-red-200 hover:underline disabled:opacity-40"
-                onClick={onClearLAManualValue}>Clear manual answer</button>
+                onClick={onClearContourManualValue}>Clear manual answer</button>
             ) : null}
           </EchoCompositeResultCard>
         ) : null}
-        {!readOnly && onRecalculateLA ? (
+        {isLA && !readOnly && onRecalculateLA ? (
           <SharedEchoRecalculateButton disabled={disabled || !!busy}
             busy={busy === 'la-recalculate'}
             onRecalculate={() => void run('la-recalculate', onRecalculateLA)} />
         ) : null}
-        {!readOnly && (laValue == null || String(laValue).trim() === '') ? (
+        {!readOnly && (contourValue == null || String(contourValue).trim() === '') ? (
           <div className="text-xs text-gray-400">
             Draw or select a measurement annotation in the viewport.
           </div>
@@ -289,40 +296,31 @@ export default function ResearchEchoGuidedControls({
         </div>
       ) : (
         <LearningEchoAcquisitionControls
-          kind={kind === 'rvFac' ? 'rvFac' : 'ivcCollapsibility'}
+          kind="ivcCollapsibility"
           disabled={disabled || readOnly || !!busy}
           isPhaseBlocked={slot => isRequiredResearchPhaseMissing(field, slot)}
           renderPhaseStatus={(slot, label) => {
-            const diameter = kind === 'ivcCollapsibility'
-              ? (slot === 'IVC_EXP'
-                  ? ivcMeasurementState?.values?.expirationDiameterMM
-                  : ivcMeasurementState?.values?.inspirationDiameterMM)
-              : null;
+            const diameter = slot === 'IVC_EXP'
+              ? ivcMeasurementState?.values?.expirationDiameterMM
+              : ivcMeasurementState?.values?.inspirationDiameterMM;
             return (
               <span className="min-w-36 text-gray-100">
-                {kind === 'ivcCollapsibility'
-                  ? label + ' · ' + (diameter != null && Number.isFinite(Number(diameter))
-                    ? Number(diameter).toFixed(1) + ' mm'
-                    : 'No calibrated diameter')
-                  : label}
+                {label + ' · ' + (diameter != null && Number.isFinite(Number(diameter))
+                  ? Number(diameter).toFixed(1) + ' mm' : 'No calibrated diameter')}
               </span>
             );
           }}
           onAcquire={(slot, technique) => void run(
             slot + ':' + (technique || 'length'), async () => {
               await openPhase(slot);
-              const acquisitionKind = kind === 'rvFac' ? 'rvFac' : 'ivcCollapsibility';
-              await runCompositeSteps(acquisitionKind, slot, technique || 'freehand');
-              if (kind === 'ivcCollapsibility') {
-                const oldSources = ivcMeasurementState?.phaseSources?.[slot] || [];
-                onBeginIVCPhaseRedraw?.(field, slot, oldSources);
-              }
+              await runCompositeSteps('ivcCollapsibility', slot, technique || 'freehand');
+              const oldSources = ivcMeasurementState?.phaseSources?.[slot] || [];
+              onBeginIVCPhaseRedraw?.(field, slot, oldSources);
             }
           )}
           renderPhaseExtras={slot => {
             const blocked = isRequiredResearchPhaseMissing(field, slot);
-            const phaseSources = kind === 'ivcCollapsibility'
-              ? ivcMeasurementState?.phaseSources?.[slot] || [] : [];
+            const phaseSources = ivcMeasurementState?.phaseSources?.[slot] || [];
             return (
               <>
                 {!blocked ? viewTarget(slot) : (
@@ -354,7 +352,7 @@ export default function ResearchEchoGuidedControls({
               </>
             );
           }}
-          afterPhases={kind === 'ivcCollapsibility' ? (
+          afterPhases={(
             <div className="border-t border-gray-700 pt-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <span className="font-semibold text-gray-100">Calculated IVC collapsibility</span>
@@ -378,7 +376,7 @@ export default function ResearchEchoGuidedControls({
                 </p>
               )}
             </div>
-          ) : null}
+          )}
         />
       )}
     </div>

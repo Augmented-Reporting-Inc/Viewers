@@ -1,3 +1,4 @@
+import { calculateRVFACFromMeasurements } from '../../../extension-ar-measurements/src/utils/echoAreaMeasurements';
 import {
   getResearchFieldMeasurementCandidates,
   getResearchSourceAnnotationIds,
@@ -13,6 +14,7 @@ import {
   isResearchLengthQuestion,
   getResearchLengthSourceState,
   getResearchLAPhaseSources,
+  getResearchRVFACPhaseSources,
 } from './researchFieldNavigation';
 
 describe('Research quiz-style field sources and navigation', () => {
@@ -463,5 +465,63 @@ describe('Research LA phase display uses calibrated Education areas and Review s
     expect(result.phaseSources.A4C[0].annotation).toBe(invalid);
     expect(getResearchLAPhaseSources({componentKey:'rvFac'}, [original], study)
       .phaseSources.A4C).toEqual([]);
+  });
+});
+
+describe('Research RV FAC phase display uses the existing calibrated RV area engine', () => {
+  const study = 'study-rv';
+  const source = (slot: string, frame: number, area: number, unit = 'cm²', studyId = study) => ({
+    annotationId: 'rv-' + slot + '-' + frame,
+    toolName: 'SplineROI', measurementKind: 'echoAreaSlot',
+    label: slot === 'RV_ED' ? 'RVEDA' : 'RVESA',
+    StudyInstanceUID: studyId, SeriesInstanceUID: 'series-rv',
+    SOPInstanceUID: 'sop-rv', frameNumber: 1,
+    referencedImageId: `wadors:/studies/${studyId}/series/series-rv/instances/sop-rv/frames/${frame}`,
+    points: [[0,0,0],[1,0,0],[1,1,0],[0,1,0]],
+    echoArea: { slot }, measurements: { area, areaUnit: unit },
+  });
+  const field = { componentKey:'rvFac', config:{ unit:'%' } };
+  const pinned = { ...field, config: { ...field.config, compositeFrameGuidanceEnabled: true,
+    compositeFrameTargets: {
+      RV_ED: { sopInstanceUID:'sop-rv', frameNumber:2 },
+      RV_ES: { sopInstanceUID:'sop-rv', frameNumber:8 },
+    },
+  }};
+  it('shows partial and complete areas, normalizes only the display frame, and preserves the existing FAC calculation', () => {
+    const ed = source('RV_ED', 2, 2000, 'mm²');
+    const es = source('RV_ES', 8, 12);
+    const partial = getResearchRVFACPhaseSources(field, [ed], study);
+    expect(partial.phaseSources.RV_ED[0].areaCM2).toBe(20);
+    expect(partial.phaseSources.RV_ES).toEqual([]);
+    const both = getResearchRVFACPhaseSources(pinned, [ed, es], study);
+    expect(both.phaseSources.RV_ES[0].areaCM2).toBe(12);
+    expect(both.phaseSources.RV_ED[0].matchesTarget).toBe(true);
+    expect(both.phaseSources.RV_ES[0].matchesTarget).toBe(true);
+    expect(both.phaseSources.RV_ES[0].displayAnnotation.frameNumber).toBe(8);
+    expect(es.frameNumber).toBe(1);
+    expect(calculateRVFACFromMeasurements([ed,es]).values?.facPercent).toBeCloseTo(40);
+  });
+  it('keeps duplicate/off-frame sources inspectable and rejects foreign or generic ROIs', () => {
+    const generic = { ...source('RV_ES',8,12), measurementKind:'', echoArea:undefined };
+    const ra = source('RA_ES',8,12);
+    const both = getResearchRVFACPhaseSources(pinned,
+      [source('RV_ED',2,20), source('RV_ED',20,20),
+       source('RV_ES',8,12,'cm²','foreign'), generic, ra], study);
+    expect(both.phaseSources.RV_ED.map(row => row.matchesTarget)).toEqual([true,false]);
+    expect(both.phaseSources.RV_ES).toEqual([]);
+    expect(both.unresolvedCount).toBe(1);
+  });
+  it('does not promote pixels, missing contours or unconfigured required frames', () => {
+    const invalid = source('RV_ED',2,2000,'px²');
+    expect(getResearchRVFACPhaseSources(field,[invalid],study).phaseSources.RV_ED[0].areaCM2).toBeNull();
+    const incomplete = { ...invalid, measurements:{ area:20, areaUnit:'cm²' }, points:[] };
+    expect(getResearchRVFACPhaseSources(field,[incomplete],study).phaseSources.RV_ED[0].areaCM2).toBeNull();
+    const missing = { ...field, config:{...field.config, compositeFrameGuidanceEnabled:true} };
+    expect(getResearchRVFACPhaseSources(missing,[source('RV_ED',2,20)],study)
+      .phaseSources.RV_ED[0].matchesTarget).toBe(false);
+    expect(getResearchRVFACPhaseSources({componentKey:'laVolumeDisks'},[source('RV_ED',2,20)],study)
+      .phaseSources.RV_ED).toEqual([]);
+    expect(calculateRVFACFromMeasurements([source('RV_ED',2,20),source('RV_ES',2,12)]).status).toBe('invalid');
+    expect(calculateRVFACFromMeasurements([source('RV_ED',2,20),source('RV_ED',3,20),source('RV_ES',8,12)]).status).toBe('invalid');
   });
 });
