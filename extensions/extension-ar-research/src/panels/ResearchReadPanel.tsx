@@ -1518,8 +1518,17 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
     const field = fields.find(item => item.key === selectedFieldKey);
     if (!field || !isResearchLengthQuestion(field, readDomain) ||
         context?.readOnly || context?.preview || !context?.reviewKey) return;
+    const snapshotContext = (event: Event) => {
+      const detail = (event as CustomEvent)?.detail;
+      if (typeof detail?.accept !== 'function' || !editingAllowedRef.current ||
+          valueSourcesRef.current[field.key]?.source) return;
+      detail.accept({ ...activeCaptureRef.current, generation: selectionGenerationRef.current });
+    };
     const completed = (event: Event) => {
       const detail = (event as CustomEvent)?.detail;
+      const owner = detail?.captureContext;
+      if (owner?.fieldKey !== field.key || owner?.reviewKey !== activeCaptureRef.current.reviewKey ||
+          owner?.generation !== selectionGenerationRef.current) return;
       // Only the mode's fresh completion event can claim a Research caliper.
       // Raw, restored and ordinary MeasurementService updates never auto-bind.
       if (typeof detail?.accept !== 'function' || detail.toolName !== 'Length' ||
@@ -1527,8 +1536,12 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
           valueSourcesRef.current[field.key]?.source) return;
       detail.accept(captureSharedLength(field, cleanString(detail.measurementId)));
     };
+    window.addEventListener('ar-measurements:question-capture-context', snapshotContext);
     window.addEventListener('ar-learning:quiz-measurement-added', completed);
-    return () => window.removeEventListener('ar-learning:quiz-measurement-added', completed);
+    return () => {
+      window.removeEventListener('ar-measurements:question-capture-context', snapshotContext);
+      window.removeEventListener('ar-learning:quiz-measurement-added', completed);
+    };
   }, [selectedFieldKey, fields, readDomain, context?.reviewKey, context?.readOnly, context?.preview,
     context?.sourceStudyInstanceUID, servicesManager, commandsManager, refreshViewerMeasurementBindings]);
 

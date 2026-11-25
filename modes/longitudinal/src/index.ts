@@ -10,7 +10,7 @@ import toolbarButtons from './toolbarButtons';
 import { createEducationUnsavedWorkGuard } from './educationUnsavedWorkGuard';
 import { installEducationUnsavedNavigation } from './educationUnsavedNavigation';
 import { installEducationUnsavedWorkEvents } from './educationUnsavedWorkEvents';
-import { dispatchQuestionMeasurementAdded } from './questionMeasurementCompletion';
+import { dispatchQuestionMeasurementAdded, snapshotQuestionMeasurementCaptureContext } from './questionMeasurementCompletion';
 
 const ECHO_LENGTH_MEASUREMENT_LABELS_CONFIG = {
   id: 'echoLengthMeasurementLabels',
@@ -1150,6 +1150,10 @@ function modeFactory({ modeConfiguration }) {
           return;
         }
 
+        const captureContext = sourceAnnotation?.metadata?.toolName === 'Length' &&
+          isResearchViewerContextFromUrl() && !isViewerMeasurementReadOnlyFromUrl()
+          ? snapshotQuestionMeasurementCaptureContext() : undefined;
+
         // Let hydration finish applying its saved-workflow marker before
         // deciding whether this is a new user-created annotation.
         await new Promise(resolve => window.setTimeout(resolve, 0));
@@ -1212,7 +1216,11 @@ function modeFactory({ modeConfiguration }) {
         if (isResearchViewerContextFromUrl() &&
             !isViewerMeasurementReadOnlyFromUrl() &&
             currentMeasurement?.toolName === 'Length') {
-          if (await dispatchQuestionMeasurementAdded(currentMeasurement, true)) return;
+          if (captureContext && await dispatchQuestionMeasurementAdded(currentMeasurement, captureContext)) {
+            const completed = cornerstoneAnnotation.state.getAnnotation?.(annotationId);
+            if (completed?.data?.arPendingLengthLabel === true) delete completed.data.arPendingLengthLabel;
+            return;
+          }
         }
 
         if (!currentMeasurement?.label) {
