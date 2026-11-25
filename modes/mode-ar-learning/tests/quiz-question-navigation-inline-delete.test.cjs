@@ -57,7 +57,11 @@ test('question stepping uses the existing selectQuestion workflow for both roles
 test('measurement clear actions are inline, accessible, and retain source-aware deletions', () => {
   assert.match(phaseUI, /aria-label=\{`Delete \$\{slot\} measurement`\}/);
   assert.match(panel, /deleteCompositePhaseMeasurement\(quiz, question, slot, phaseSource\)/);
-  assert.match(panel, /aria-label="Delete TR Vmax measurement"/);
+  const sharedTR = fs.readFileSync(
+    path.resolve(__dirname, '../../../extensions/extension-ar-learning/src/components/SharedTRVmaxQuestionAnswer.tsx'), 'utf8');
+  assert.match(panel, /<SharedTRVmaxQuestionAnswer captured=\{captured\}/);
+  assert.match(sharedTR, /aria-label="Delete TR Vmax measurement"/);
+  assert.match(sharedTR, /valid && !disabled && !readOnly && onDelete/);
   assert.match(panel, /deleteLearnerQuizSourceMeasurement\(quiz, question, value\)/);
   assert.doesNotMatch(panel, />Delete<\/button>/);
   assert.doesNotMatch(panel, />\s*Delete measurement\s*<\/button>/);

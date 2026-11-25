@@ -11624,7 +11624,9 @@ function commandsModule({
       spectralVmax = false,
       preferredTargetKey = '',
       quizCapture = false,
+      isCancelled = () => false,
     } = {}) => {
+      if (isCancelled()) return { ok: false, reason: 'selection-cancelled' };
       // The Vmax toolbar uses this same clinical acquisition command. When a
       // TR Vmax quiz question is active, bind the known spectral target rather
       // than falling back to generic Ultrasound Directional target selection.
@@ -11676,7 +11678,7 @@ function commandsModule({
       activeUltrasoundDirectionalWorkflowSessionId = workflowSessionId;
 
       ultrasoundDirectionalCompletionHandler = async (event: Event) => {
-        if (activeUltrasoundDirectionalWorkflowSessionId !== workflowSessionId) {
+        if (isCancelled() || activeUltrasoundDirectionalWorkflowSessionId !== workflowSessionId) {
           return;
         }
 
@@ -11705,6 +11707,7 @@ function commandsModule({
           stats = getUltrasoundDirectionalStatsFromAnnotationData(stateAnnotation?.data || {});
         }
 
+        if (isCancelled() || activeUltrasoundDirectionalWorkflowSessionId !== workflowSessionId) return;
         const distance = stats ? getUltrasoundDirectionalDistance(stats) : null;
         const rawValue = Number(distance?.value);
         const rawUnit = String(distance?.unit || '').trim();
@@ -11776,6 +11779,7 @@ function commandsModule({
           }
         }
 
+        if (isCancelled() || activeUltrasoundDirectionalWorkflowSessionId !== workflowSessionId) return;
         // Cancelled or unsupported units remain valid annotations, but they do not
         // write to the AR report.
         if (!selectedTarget) {

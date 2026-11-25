@@ -3,6 +3,7 @@ import LearningQuestionPanel from './LearningQuestionPanel';
 import { LearningEchoAcquisitionControls, SharedEchoPhaseStatus, SharedEchoRecalculateButton } from '../components/LearningEchoAcquisitionControls';
 import { SharedEFQuestionAnswer } from '../components/SharedEFQuestionAnswer';
 import { SharedMeasurementValueInput } from '../../../extension-ar-measurements/src/components/SharedMeasurementValueInput';
+import { SharedTRVmaxQuestionAnswer } from '../components/SharedTRVmaxQuestionAnswer';
 import fs from 'fs';
 import path from 'path';
 
@@ -173,5 +174,29 @@ describe('shared calibrated LA phase presentation', () => {
     expect(busy.find(node => node.type === 'button').props.disabled).toBe(true);
     busy.find(node => node.type === 'button').props.onClick(event);
     expect(calls).toBe(1);
+  });
+});
+
+describe('shared TR Vmax answer presentation', () => {
+  const event = {preventDefault(){},stopPropagation(){}};
+  it('uses the same instructions and delegates exact source actions', () => {
+    const missing = nodes(SharedTRVmaxQuestionAnswer({captured:false}));
+    expect(missing.filter(node => typeof node === 'string').join(' ')).toContain('No source-linked learner TR Vmax');
+    expect(missing.some(node => node.type === 'button')).toBe(false);
+    const actions:string[] = [];
+    const saved = nodes(SharedTRVmaxQuestionAnswer({captured:true,value:2.56,
+      ownerLabel:'reader',captureLabel:'Read',showInstructions:false,
+      onNavigate:()=>actions.push('view'),onDelete:()=>actions.push('delete')}));
+    expect(saved.filter(node => typeof node === 'string').join(' ')).toContain('Saved reader TR Vmax: 2.56 m/s');
+    saved.find(node => node.props?.['data-quiz-review-action']==='navigation').props.onClick(event);
+    saved.find(node => node.props?.['aria-label']==='Delete TR Vmax measurement').props.onClick(event);
+    expect(actions).toEqual(['view','delete']);
+  });
+  it('never enables delete for invalid or completed measurements', () => {
+    for (const props of [{captured:true,value:9},{captured:true,value:2.56,readOnly:true},
+      {captured:true,value:2.56,disabled:true}]) {
+      expect(nodes(SharedTRVmaxQuestionAnswer({...props,onDelete:()=>{}}))
+        .some(node=>node.props?.['aria-label']==='Delete TR Vmax measurement')).toBe(false);
+    }
   });
 });

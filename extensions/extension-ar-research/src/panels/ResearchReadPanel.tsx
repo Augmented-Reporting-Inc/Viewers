@@ -11,6 +11,7 @@ import { EchoEFContourVolumes, getLVSimpsonSourceVolumes } from '../../../extens
 import { SharedQuestionSelector, SharedQuestionStepNavigation } from '../../../extension-ar-measurements/src/components/SharedQuestionNavigation';
 import { SharedMeasurementValueInput, SharedMeasurementLabel } from '../../../extension-ar-measurements/src/components/SharedMeasurementValueInput';
 import LearningQuestionPanel from '../../../extension-ar-learning/src/panels/LearningQuestionPanel';
+import { SharedTRVmaxQuestionAnswer } from '../../../extension-ar-learning/src/components/SharedTRVmaxQuestionAnswer';
 import { LearningSingleChoiceAnswer } from '../../../extension-ar-learning/src/components/LearningSingleChoiceAnswer';
 import ResearchEchoGuidedControls from './ResearchEchoGuidedControls';
 import {
@@ -39,6 +40,8 @@ import {
   getResearchQuestionLabel,
   isResearchQuestionAnswered,
   isResearchCompanionHidden,
+  isUsableResearchTarget,
+  isRequiredResearchPhaseMissing,
 } from '../utils/researchEchoWorkflow';
 import {
   buildReadFields,
@@ -52,6 +55,8 @@ import {
   getResearchFieldMeasurementCandidates,
   isResearchLengthQuestion,
   getResearchLengthSourceState,
+  isResearchTRVmaxQuestion,
+  getResearchTRVmaxSourceState,
   getResearchLAPhaseSources,
   getResearchRVFACPhaseSources,
   getResearchFieldSourceAnnotations,
@@ -1311,6 +1316,24 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
 
   const navigateToField = async (field: any, isCancelled: () => boolean) => {
     if (isCancelled()) return false;
+    if (isResearchTRVmaxQuestion(field, readDomain)) {
+      const state = getResearchTRVmaxSourceState(
+        field, calculatedReadState.sources[field.key], allAnnotations,
+        context?.sourceStudyInstanceUID);
+      const target = getResearchEchoPhaseTarget(field, '');
+      if ((target && !isUsableResearchTarget(target)) || isRequiredResearchPhaseMissing(field, '')) {
+        notify(servicesManager, 'The configured TR Vmax frame is incomplete.', 'warning');
+        return false;
+      }
+      const source = state.selected || (state.status === 'unbound' &&
+        !context?.readOnly && !context?.preview ? state.eligible[0] : null);
+      if (source) return restoreResearchAnnotationSource(source, isCancelled);
+      if (state.status === 'invalid' || state.status === 'ambiguous' || state.status === 'manual') {
+        notify(servicesManager, 'Resolve the TR Vmax source before measuring again.', 'warning');
+        return false;
+      }
+      return target ? jumpToProtocolTarget(target, field.key) : true;
+    }
     if (isResearchLengthQuestion(field, readDomain)) {
       const state = getResearchLengthSourceState(
         field, calculatedReadState.sources[field.key], allAnnotations,
@@ -1364,6 +1387,16 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
   const runFieldSelection = (field: any) => queueNavigation(async isCancelled => {
     const navigated = await navigateToField(field, isCancelled);
     if (!navigated || isCancelled() || !editingAllowedRef.current) return;
+    if (isResearchTRVmaxQuestion(field, readDomain)) {
+      // Same calibrated acquisition command used by Education. Do not enter
+      // quiz capture mode or publish Education answer events for a Research Read.
+      const result = await commandsManager?.runCommand('startUltrasoundDirectionalWorkflow', {
+        spectralVmax: true, preferredTargetKey: 'echo.trPeakVelocity',
+        isCancelled: () => isCancelled() || !editingAllowedRef.current,
+      });
+      if (result?.ok === false) throw new Error(result.reason || 'TR Vmax activation failed');
+      return;
+    }
     const toolName = getResearchMeasurementToolForField(field, readDomain);
     if (toolName) {
       await commandsManager?.runCommand('activateViewerMeasurementTool', {
@@ -1388,7 +1421,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
     const field = visibleFields.find(item => item.key === selectedFieldKey);
     if (!field) return;
     initializedReviewRef.current = reviewKey;
-    if (isResearchLengthQuestion(field, readDomain)) runFieldSelection(field);
+    if (isResearchLengthQuestion(field, readDomain) || isResearchTRVmaxQuestion(field, readDomain)) runFieldSelection(field);
   }, [loading, commandsManager, context?.reviewKey, context?.preview,
     selectedFieldKey, visibleFields, readDomain]);
   useEffect(() => () => { ++selectionGenerationRef.current; },
@@ -1469,6 +1502,20 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
     calculatedReadState.sources[selectedField.key]?.source === 'manual';
   const contourManualValue = hasContourManualSource
     ? calculatedReadState.values[selectedField.key] : null;
+  const selectedTR = isResearchTRVmaxQuestion(selectedField, readDomain);
+  const trState = selectedTR ? getResearchTRVmaxSourceState(
+    selectedField, calculatedReadState.sources[selectedField.key], allAnnotations,
+    context?.sourceStudyInstanceUID
+  ) : null;
+  const trValue = selectedTR ? calculatedReadState.values[selectedField.key] : null;
+  const trCaptured = !!trState?.selected && trValue != null &&
+    cleanString(trValue) !== '' && Number.isFinite(Number(trValue)) &&
+    Math.abs(Number(trValue) - Number(trState.selected.candidate.value)) <=
+      Math.max(0.005000001, Number(selectedField?.config?.step || 0.01) / 2 + 1e-9);
+  const trNeedsResolution = !!trState &&
+    (trState.status === 'invalid' || trState.status === 'ambiguous' ||
+      trState.status === 'manual' || trState.status === 'unbound' ||
+      trState.eligible.length > 1 || (trState.status === 'linked' && !trCaptured));
   const selectedLength = isResearchLengthQuestion(selectedField, readDomain);
   const lengthState = selectedLength ? getResearchLengthSourceState(
     selectedField, calculatedReadState.sources[selectedField.key], allAnnotations,
@@ -1613,7 +1660,19 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
       }
       questionContent={
         <>
-          {!selectedContourComposite && !showGuidedIVCValue && selectedField?.componentKey !== 'lvEjectionFraction' ? (
+          {selectedTR ? (
+            <SharedTRVmaxQuestionAnswer captured={trCaptured} value={trValue}
+              ownerLabel="reader" captureLabel="Read"
+              disabled={isBusy} readOnly={context.readOnly || context.preview}
+              showInstructions={!trCaptured && !trNeedsResolution}
+              issue={trNeedsResolution ? 'TR Vmax source needs review before it can be used as a verified answer.' : ''}
+              onNavigate={trState?.selected ? () => queueNavigation(async isCancelled => {
+                await restoreResearchAnnotationSource(trState.selected, isCancelled);
+              }) : undefined}
+              onDelete={trState?.selected ? () => void deleteResearchAnnotation(trState.selected.annotation) : undefined}
+            />
+          ) : null}
+          {!selectedTR && !selectedContourComposite && !showGuidedIVCValue && selectedField?.componentKey !== 'lvEjectionFraction' ? (
             <ReadField
               key={selectedField.key}
               field={selectedField}
@@ -1659,7 +1718,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
               onChange={nextValue => updateValue(companionField.key, nextValue)}
             />
           )) : null}
-          {cleanString(context?.readSchema?.domain).toLowerCase() === 'echo' ? (
+          {!selectedTR && cleanString(context?.readSchema?.domain).toLowerCase() === 'echo' ? (
             <ResearchEchoGuidedControls
               field={selectedField}
               commandsManager={commandsManager}
@@ -1747,7 +1806,51 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
               status={persistedEF ? 'Saved' : Object.keys(liveVerifiedEchoEvidence.efVolumes).length ? 'Current' : 'Saved'}
             />
           )}
-          {!selectedContourComposite && !showInlineIVCSources &&
+          {selectedTR && trNeedsResolution ? (
+            <div className="rounded border border-gray-700 p-2 text-xs space-y-2">
+              <div className="font-semibold">Resolve TR Vmax source</div>
+              {trState.status === 'manual' || trState.status === 'invalid' ||
+                (trState.status === 'linked' && !trCaptured) ? (
+                <div className="text-amber-200">Existing answer: {cleanString(trValue) || 'unavailable'} m/s.
+                  It has not been changed.</div>
+              ) : null}
+              {trState.eligible.map(item => (
+                <div key={item.candidate.sourceMeasurementKey} className="flex flex-wrap gap-2 items-center">
+                  <button type="button" className="text-cyan-200 underline"
+                    onClick={() => queueNavigation(async isCancelled => {
+                      await restoreResearchAnnotationSource(item, isCancelled);
+                    })}>{Number(item.candidate.value).toFixed(2)} m/s · View source</button>
+                  {!context.readOnly && !context.preview ? (
+                    <>
+                      <button type="button" disabled={isBusy} className="text-cyan-200 underline"
+                        onClick={() => {
+                          selectSourceCandidate(selectedField, item.candidate);
+                          queueNavigation(async isCancelled => {
+                            await restoreResearchAnnotationSource(item, isCancelled);
+                          });
+                        }}>Use source</button>
+                      <button type="button" disabled={isBusy} className="text-red-200 underline"
+                        aria-label="Delete this TR Vmax source"
+                        onClick={() => void deleteResearchAnnotation(item.annotation)}>×</button>
+                    </>
+                  ) : null}
+                </div>
+              ))}
+              {!context.readOnly && !context.preview && ['manual', 'invalid'].includes(trState.status) ? (
+                <button type="button" disabled={isBusy} className="text-red-200 underline"
+                  onClick={() => {
+                    if (!editingAllowedRef.current ||
+                        !window.confirm('Clear the TR Vmax answer link? Source annotations will be preserved.')) return;
+                    const key = selectedField.key;
+                    setValues(current => { const next = { ...current }; delete next[key]; return next; });
+                    setValueSources(current => {
+                      const next = { ...current }; delete next[key]; valueSourcesRef.current = next; return next;
+                    });
+                  }}>Clear answer link</button>
+              ) : null}
+            </div>
+          ) : null}
+          {!selectedTR && !selectedContourComposite && !showInlineIVCSources &&
             selectedField?.componentKey !== 'lvEjectionFraction' &&
             (selectedLength ? showLengthSourceResolution :
               (isSelectedMeasurement || genericProtocolTargets.length > 0)) ? (

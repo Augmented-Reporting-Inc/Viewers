@@ -148,3 +148,27 @@ describe('Research LA/RV use shared Education phase rows and calculation control
     expect(panel).not.toContain('saveViewerQuizResponseForActiveStudy');
   });
 });
+
+describe('Research TR Vmax uses shared Education presentation and guarded acquisition', () => {
+  it('reuses source restoration and calibrated workflow without quiz capture or extra panel', () => {
+    const guided = fs.readFileSync(path.resolve(__dirname,'../panels/ResearchEchoGuidedControls.tsx'),'utf8');
+    const learning = fs.readFileSync(path.resolve(__dirname,'../../../extension-ar-learning/src/panels/CaseQuestionsPanel.tsx'),'utf8');
+    expect(learning).toContain('<SharedTRVmaxQuestionAnswer');
+    expect(panel).toContain('<SharedTRVmaxQuestionAnswer');
+    expect(guided).not.toContain("button('Measure TR Vmax'");
+    expect(panel).toContain('!selectedTR && !selectedContourComposite');
+    expect(panel).toContain('getResearchTRVmaxSourceState(');
+    const nav = panel.slice(panel.indexOf('const navigateToField ='),panel.indexOf('const selectionGenerationRef'));
+    expect(nav).toContain('return restoreResearchAnnotationSource(source, isCancelled)');
+    expect(nav).toContain('isRequiredResearchPhaseMissing(field,');
+    expect(nav).toContain('return target ? jumpToProtocolTarget(target, field.key) : true;');
+    const run = panel.slice(panel.indexOf('const runFieldSelection ='),panel.indexOf('const selectField ='));
+    expect(run).toContain("runCommand('startUltrasoundDirectionalWorkflow'");
+    expect(run).toContain("preferredTargetKey: 'echo.trPeakVelocity'");
+    expect(run).toContain('!editingAllowedRef.current');
+    expect(run).toContain('isCancelled: () => isCancelled() || !editingAllowedRef.current');
+    expect(run).not.toContain('quizCapture: true');
+    expect(panel).toContain('deleteResearchAnnotation(trState.selected.annotation)');
+    expect(panel).toContain('Resolve TR Vmax source');
+  });
+});

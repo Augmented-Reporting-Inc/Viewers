@@ -105,7 +105,7 @@ function getDirectMeasurementValue(annotation: any = {}) {
  * DICOM spectral velocity is commonly measured in cm/s even though research
  * and RVSP calculations require m/s. Never parse display text or guess units.
  */
-function getResearchTRVelocityCandidate(annotation: any = {}) {
+export function getResearchTRVelocityCandidate(annotation: any = {}) {
   const labelToken = cleanString(
     annotation?.label || annotation?.measurementRole || annotation?.role
   ).toLowerCase().replace(/[^a-z0-9]/g, '');

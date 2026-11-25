@@ -2,7 +2,7 @@ import {
   calculateIVCFromMeasurements,
   isIVCDiameterMeasurement,
 } from '../../../extension-ar-measurements/src/utils/rightHeartMeasurements';
-import { buildViewerMeasurementValueCandidates } from '../../../extension-ar-measurements/src/utils/measurementValueCandidates';
+import { buildViewerMeasurementValueCandidates, getResearchTRVelocityCandidate } from '../../../extension-ar-measurements/src/utils/measurementValueCandidates';
 import { getResearchMeasurementToolForField } from './researchMeasurementTool';
 import { buildViewerMeasurementReadUpdates } from './readSchema';
 import { getEchoAreaSlot, getCalibratedEchoAreaCM2 } from '../../../extension-ar-measurements/src/utils/echoAreaMeasurements';
@@ -249,9 +249,9 @@ export function isResearchLengthQuestion(field: any, domain: string) {
 /** Use only Review-owned, compatible Length sources on the configured study
  * and any pinned frame. A linked source is authoritative; do not guess a
  * replacement or change manual answers. Normalize a display copy only. */
-export function getResearchLengthSourceState(
-  field: any, fieldSource: any, annotations: any[] = [],
-  candidates: any[] = [], studyInstanceId: unknown = ''
+function getResearchSingleSourceState(
+  field: any, fieldSource: any, annotations: any[],
+  candidates: any[], studyInstanceId: unknown, toolName: string
 ) {
   const study = cleanString(studyInstanceId);
   const eligible = getResearchCompatibleMeasurementCandidates(field, candidates, annotations)
@@ -264,7 +264,7 @@ export function getResearchLengthSourceState(
       if (matches.length !== 1) return [];
       const annotation = matches[0];
       const displayAnnotation = getResearchOwnedSourceDisplay(annotation, study);
-      if (!displayAnnotation || annotation.toolName !== 'Length' ||
+      if (!displayAnnotation || annotation.toolName !== toolName ||
           !Array.isArray(annotation.points) || annotation.points.length !== 2 ||
           !annotation.points.every(point => Array.isArray(point) && point.length >= 3 &&
             point.slice(0, 3).every(Number.isFinite))) return [];
@@ -281,6 +281,40 @@ export function getResearchLengthSourceState(
     ? 'invalid' : kind === 'manual' ? 'manual'
       : unique.length > 1 ? 'ambiguous' : unique.length === 1 ? 'unbound' : 'none';
   return { status, selected, eligible: unique };
+}
+
+export function getResearchLengthSourceState(
+  field: any, fieldSource: any, annotations: any[] = [],
+  candidates: any[] = [], studyInstanceId: unknown = ''
+) {
+  return getResearchSingleSourceState(field, fieldSource, annotations,
+    candidates, studyInstanceId, 'Length');
+}
+
+export function isResearchTRVmaxQuestion(field: any, domain: string) {
+  return String(domain || '').toLowerCase() === 'echo' && field?.componentKey === 'trVmax';
+}
+
+/** Use the existing strict spectral conversion, not generic ROI candidates
+ * or displayed text. Reuse Length's owned source/geometry/frame resolution. */
+export function getResearchTRVmaxSourceState(
+  field: any, fieldSource: any, annotations: any[] = [], studyInstanceId: unknown = ''
+) {
+  const candidates = annotations.flatMap(annotation => {
+    const directional = annotation?.ultrasoundDirectional || annotation?.measurements?.ultrasoundDirectional;
+    if (directional?.isUnitless === true || directional?.isHorizontal === true) return [];
+    const result = getResearchTRVelocityCandidate(annotation);
+    return result?.candidate ? [result.candidate] : [];
+  });
+  const state = getResearchSingleSourceState(field, fieldSource, annotations,
+    candidates, studyInstanceId, 'UltrasoundDirectionalTool');
+  // An explicitly configured but incomplete target is not an unpinned protocol.
+  const target = getResearchEchoPhaseTarget(field, '');
+  if ((target && !getResearchProtocolViewerTargets(field).length) ||
+      isRequiredResearchPhaseMissing(field, '')) {
+    return { status: 'invalid', selected: null, eligible: [] };
+  }
+  return state;
 }
 
 /** Shared Review-owned LA/RV contour display. Use the existing calibrated

@@ -55,7 +55,7 @@ export default function ResearchEchoGuidedControls({
   const [busy, setBusy] = useState('');
   const kind = String(field?.componentKey || '');
   const phases = getResearchEchoPhases(field);
-  const supported = ['lvEjectionFraction', 'laVolumeDisks', 'rvFac', 'ivcCollapsibility', 'trVmax'].includes(kind);
+  const supported = ['lvEjectionFraction', 'laVolumeDisks', 'rvFac', 'ivcCollapsibility'].includes(kind);
   if (!supported || (!commandsManager && kind !== 'lvEjectionFraction')) return null;
 
   const notifyError = (message: string) => onError?.(message);
@@ -280,21 +280,6 @@ export default function ResearchEchoGuidedControls({
   return (
     <div className="rounded border border-cyan-700/70 bg-cyan-950/10 p-3 text-xs text-gray-200">
       <div className="font-semibold text-cyan-100">Guided Echo measurement</div>
-      {kind === 'trVmax' ? (
-        <div className="mt-2 space-y-2">
-          <p>Use the calibrated TR spectral Doppler Vmax tool. The stored value is
-            converted to m/s and linked to its source annotation.</p>
-          <div className="flex flex-wrap gap-2">
-            {button('Measure TR Vmax', 'tr', async () => {
-              await openPhase('');
-              await command('startUltrasoundDirectionalWorkflow', {
-                spectralVmax: true, preferredTargetKey: 'echo.trPeakVelocity',
-              });
-            })}
-            {viewTarget('')}
-          </div>
-        </div>
-      ) : (
         <LearningEchoAcquisitionControls
           kind="ivcCollapsibility"
           disabled={disabled || readOnly || !!busy}
@@ -378,7 +363,6 @@ export default function ResearchEchoGuidedControls({
             </div>
           )}
         />
-      )}
     </div>
   );
 }
