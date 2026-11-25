@@ -1457,8 +1457,8 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
   const activeCaptureRef = useRef({ fieldKey: '', reviewKey: '' });
   activeCaptureRef.current = { fieldKey: selectedFieldKey, reviewKey: cleanString(context?.reviewKey) };
   const lengthCaptureInFlightRef = useRef(new Set<string>());
-  const captureSharedLength = async (field: any, measurementId = '', explicit = false) => {
-    if (!field || !isResearchLengthQuestion(field, readDomain) ||
+  const captureSharedLength = async (field: any, measurementId: string) => {
+    if (!measurementId || !field || !isResearchLengthQuestion(field, readDomain) ||
         !editingAllowedRef.current || !context?.reviewKey || !commandsManager) return false;
     const generation = selectionGenerationRef.current;
     const reviewKey = cleanString(context.reviewKey);
@@ -1466,7 +1466,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
       generation === selectionGenerationRef.current &&
       activeCaptureRef.current.fieldKey === field.key &&
       activeCaptureRef.current.reviewKey === reviewKey;
-    if (!isCurrent() || (!explicit && valueSourcesRef.current[field.key]?.source)) return false;
+    if (!isCurrent() || valueSourcesRef.current[field.key]?.source) return false;
     const pendingKey = reviewKey + '|' + field.key + '|' + measurementId;
     if (lengthCaptureInFlightRef.current.has(pendingKey)) return false;
     lengthCaptureInFlightRef.current.add(pendingKey);
@@ -1475,12 +1475,10 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
         question: { questionKey: field.componentKey, answerConfig: { measurementKind: 'length' } },
         unit: field.config?.unit, measurementId,
       });
-      if (!isCurrent() || (!explicit && valueSourcesRef.current[field.key]?.source)) return false;
+      if (!isCurrent() || valueSourcesRef.current[field.key]?.source) return false;
       const capture = resolveResearchLengthCapture(field, result,
         cleanString(context.sourceStudyInstanceUID), measurementId, valueSourcesRef.current, fields);
       if (!capture || deletedAnnotationIdsRef.current.has(capture.sourceId)) {
-        if (explicit) notify(servicesManager,
-          'Select a calibrated Length on the correct study/frame with a compatible measurement binding.', 'warning');
         return false;
       }
       const measurementService = servicesManager?.services?.measurementService;
@@ -1503,11 +1501,9 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
       valueSourcesRef.current = nextSources;
       setValueSources(nextSources);
       setValues(current => ({ ...current, [field.key]: capture.update.value }));
-      if (explicit) notify(servicesManager, 'Measurement captured.');
       void refreshViewerMeasurementBindings();
       return true;
     } catch {
-      if (explicit && isCurrent()) notify(servicesManager, 'Unable to capture the selected Length.', 'warning');
       return false;
     } finally {
       lengthCaptureInFlightRef.current.delete(pendingKey);
@@ -2002,13 +1998,6 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
                   }}>Clear answer link</button>
               ) : null}
             </div>
-          ) : null}
-          {selectedLength && !context.preview && !context.readOnly ? (
-            <button type="button" disabled={isBusy}
-              className="rounded border border-blue-700 px-2 py-1 text-xs text-blue-100 disabled:opacity-50"
-              onClick={() => void captureSharedLength(selectedField, '', true)}>
-              Use selected measurement
-            </button>
           ) : null}
           {!selectedTR && !selectedContourComposite && !showInlineIVCSources &&
             selectedField?.componentKey !== 'lvEjectionFraction' &&
