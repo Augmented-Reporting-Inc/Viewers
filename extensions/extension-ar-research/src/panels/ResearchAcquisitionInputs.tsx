@@ -2,6 +2,15 @@ import React, { useEffect, useState, useRef } from 'react';
 import { loadResearchReadAnthropometrics, saveResearchReadAnthropometrics } from '../utils/researchContext';
 import { acquisitionFields, acquisitionInputStrings, buildAcquisitionOverrideRequest } from '../utils/researchAcquisitionInputs';
 
+// OHIF's global form-control background can be white even in the dark viewer.
+// Set both foreground and background explicitly on these local controls.
+const acquisitionInputStyle: React.CSSProperties = {
+  color: '#111827',
+  backgroundColor: '#ffffff',
+  caretColor: '#111827',
+  WebkitTextFillColor: '#111827',
+};
+
 export default function ResearchAcquisitionInputs({reviewKey, readOnly, disabled, onBusy, onNotify}: {
   reviewKey: string; readOnly: boolean; disabled: boolean; onBusy: (busy: boolean) => void; onNotify?: (message: string) => void;
 }) {
@@ -66,14 +75,14 @@ export default function ResearchAcquisitionInputs({reviewKey, readOnly, disabled
     {snapshot ? <div className="mt-2 space-y-2">
       {acquisitionFields.map(({key,label}) => <label key={key} className="block">
         {label}
-        <input className="mt-1 block w-full rounded border border-gray-600 bg-gray-950 p-1 text-white" type="text" inputMode="decimal"
+        <input className="mt-1 block w-full rounded border border-gray-600 p-1" style={acquisitionInputStyle} type="text" inputMode="decimal"
           value={inputs[key] || ''} disabled={locked} onChange={event => {setInputs(old=>({...old,[key]:event.target.value}));setVerified(false);setNotice('');}} />
         <span className="block text-gray-400">DICOM: {snapshot.baseline.dicom?.[key] ?? 'Unavailable'} · baseline: {snapshot.baseline.values[key] ?? 'Unavailable'}</span>
       </label>)}
       {!locked ? <>
         <button type="button" className="rounded border border-gray-500 px-2 py-1" onClick={()=>{setInputs(acquisitionInputStrings(snapshot.baseline.values));setVerified(false);setNotice('Baseline restored locally. Save acquisition inputs to persist the change.');onNotify?.('Baseline restored locally. Save to persist.');}}>Restore baseline</button>
         <label className="block">Reason for correction or confirmation
-          <textarea className="block w-full rounded border border-gray-600 bg-gray-950 p-1 text-white" maxLength={500} value={reason} onChange={event=>setReason(event.target.value)} />
+          <textarea className="block w-full rounded border border-gray-600 p-1" style={acquisitionInputStyle} maxLength={500} value={reason} onChange={event=>setReason(event.target.value)} />
         </label>
         <label className="block"><input type="checkbox" checked={verified} onChange={event=>setVerified(event.target.checked)} /> I verified these acquisition values.</label>
         <button type="button" className="rounded bg-blue-700 px-2 py-1 text-white" onClick={()=>void save()}>Save acquisition inputs</button>
