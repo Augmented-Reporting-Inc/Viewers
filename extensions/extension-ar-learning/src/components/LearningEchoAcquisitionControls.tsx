@@ -91,3 +91,63 @@ export function LearningEchoAcquisitionControls({
 }
 
 export default LearningEchoAcquisitionControls;
+
+/** Shared phase presentation; callers own annotation identity and permissions. */
+export function SharedEchoPhaseStatus({
+  slot, label, value, unit = 'cm²', hasSavedSource = false,
+  onNavigate, onDelete, disabled = false,
+}: {
+  slot: string; label: string; value?: number | null; unit?: string;
+  hasSavedSource?: boolean; onNavigate?: () => void; onDelete?: () => void;
+  disabled?: boolean;
+}) {
+  const measured = value != null && Number.isFinite(Number(value)) && Number(value) > 0;
+  const displayValue = measured ? Number(value).toFixed(2) + ' ' + unit : 'Not measured';
+  return (
+    <>
+      {onNavigate ? (
+        <button type="button" data-quiz-review-action="navigation"
+          aria-label={`Jump to ${label}${hasSavedSource ? ' saved' : ''} source`}
+          className="min-w-0 text-left font-medium text-cyan-100 hover:underline"
+          onClick={event => {
+            event.preventDefault(); event.stopPropagation(); onNavigate();
+          }}>{label}</button>
+      ) : <span className="text-gray-300">{label}</span>}
+      <div className="inline-flex max-w-full items-center rounded border border-gray-600 bg-black text-xs">
+        <input type="text" readOnly aria-label={`${label} measured value`}
+          value={displayValue}
+          className="w-28 min-w-0 bg-transparent px-2 py-1 text-emerald-200"
+          onClick={measured && onNavigate ? event => {
+            event.preventDefault(); event.stopPropagation(); onNavigate();
+          } : undefined}
+        />
+        {onDelete ? (
+          <button type="button" data-quiz-review-action="delete"
+            aria-label={`Delete ${slot} measurement`} title={`Delete ${slot} measurement`}
+            className="shrink-0 border-l border-gray-600 px-2 py-1 font-bold text-red-200 hover:bg-red-950 disabled:opacity-40"
+            disabled={disabled}
+            onClick={event => {
+              event.preventDefault(); event.stopPropagation();
+              if (!disabled) onDelete();
+            }}>×</button>
+        ) : null}
+      </div>
+    </>
+  );
+}
+
+export function SharedEchoRecalculateButton({
+  disabled = false, busy = false, onRecalculate, label = 'Recalculate from measured contours',
+}: {
+  disabled?: boolean; busy?: boolean; onRecalculate: () => void; label?: string;
+}) {
+  return (
+    <button type="button"
+      className="rounded border border-gray-600 px-2 py-1 text-[11px] text-gray-300 hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-50"
+      disabled={disabled || busy}
+      onClick={event => {
+        event.preventDefault(); event.stopPropagation();
+        if (!disabled && !busy) onRecalculate();
+      }}>{busy ? 'Capturing…' : label}</button>
+  );
+}

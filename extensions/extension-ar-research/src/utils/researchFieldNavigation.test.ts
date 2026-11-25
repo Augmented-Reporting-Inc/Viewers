@@ -12,6 +12,7 @@ import {
   getResearchCompatibleMeasurementCandidates,
   isResearchLengthQuestion,
   getResearchLengthSourceState,
+  getResearchLAPhaseSources,
 } from './researchFieldNavigation';
 
 describe('Research quiz-style field sources and navigation', () => {
@@ -409,5 +410,58 @@ describe('Research independent Length source restoration', () => {
     expect(state({ source: 'manual' }, both, candidates).status).toBe('manual');
     expect(state({}, [both[0]], [candidates[0]]).status).toBe('unbound');
     expect(state({}, [], []).status).toBe('none');
+  });
+});
+
+describe('Research LA phase display uses calibrated Education areas and Review sources', () => {
+  const study = 'study-la';
+  const points = [[-10,0,0],[-10,20,0],[-10,40,0],[0,40,0],
+    [10,40,0],[10,20,0],[10,0,0]];
+  const source = (slot: string, frame = 2, studyId = study) => ({
+    annotationId: 'la-' + slot + '-' + frame,
+    toolName: 'SplineROI', measurementKind: 'laVolumeSlot',
+    StudyInstanceUID: studyId, SeriesInstanceUID: 'series-' + slot,
+    SOPInstanceUID: 'sop-' + slot, frameNumber: 1,
+    referencedImageId: `wadors:/studies/${studyId}/series/series-${slot}/instances/sop-${slot}/frames/${frame}`,
+    points,
+    laVolume: { measurementKind: 'laVolumeSlot', slot, baseLeftPoint: points[0],
+      baseRightPoint: points[6], superiorPoint: points[3], longAxisLengthMM: 40 },
+    measurements: { area: 999, areaUnit: 'mm²' }, // must not use cached display area
+  });
+  const field = { componentKey: 'laVolumeDisks', config: { unit: 'mL' } };
+  const pinned = { ...field, config: { ...field.config, compositeFrameGuidanceEnabled: true,
+    compositeFrameTargets: {
+      A4C: { sopInstanceUID: 'sop-A4C', frameNumber: 2 },
+      A2C: { sopInstanceUID: 'sop-A2C', frameNumber: 2 },
+    },
+  }};
+  it('returns separate calibrated areas from partial and complete saved/live evidence', () => {
+    const a4c = source('A4C');
+    const a2c = source('A2C');
+    const partial = getResearchLAPhaseSources(field, [a4c], study);
+    expect(partial.phaseSources.A4C[0].areaCM2).toBeCloseTo(8);
+    expect(partial.phaseSources.A2C).toEqual([]);
+    expect(partial.phaseSources.A4C[0].displayAnnotation.frameNumber).toBe(2);
+    expect(a4c.frameNumber).toBe(1);
+    const complete = getResearchLAPhaseSources(pinned, [a4c, a2c], study);
+    expect(complete.phaseSources.A2C[0].areaCM2).toBeCloseTo(8);
+    expect(complete.phaseSources.A2C[0].matchesTarget).toBe(true);
+    expect(complete.unresolvedCount).toBe(0);
+  });
+  it('retains duplicate and off-frame owned sources for explicit inspection, rejects foreign study', () => {
+    const result = getResearchLAPhaseSources(pinned,
+      [source('A4C'), source('A4C', 20), source('A2C', 2, 'foreign')], study);
+    expect(result.phaseSources.A4C.map(item => item.matchesTarget)).toEqual([true, false]);
+    expect(result.phaseSources.A2C).toEqual([]);
+    expect(result.unresolvedCount).toBe(1);
+  });
+  it('never substitutes cached ROI area for missing physical LA geometry', () => {
+    const original = source('A4C');
+    const invalid = { ...original, laVolume: { ...original.laVolume, longAxisLengthMM: 0 } };
+    const result = getResearchLAPhaseSources(field, [invalid], study);
+    expect(result.phaseSources.A4C[0].areaCM2).toBeNull();
+    expect(result.phaseSources.A4C[0].annotation).toBe(invalid);
+    expect(getResearchLAPhaseSources({componentKey:'rvFac'}, [original], study)
+      .phaseSources.A4C).toEqual([]);
   });
 });

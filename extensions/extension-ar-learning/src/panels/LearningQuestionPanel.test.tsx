@@ -1,6 +1,6 @@
 import React from 'react';
 import LearningQuestionPanel from './LearningQuestionPanel';
-import { LearningEchoAcquisitionControls } from '../components/LearningEchoAcquisitionControls';
+import { LearningEchoAcquisitionControls, SharedEchoPhaseStatus, SharedEchoRecalculateButton } from '../components/LearningEchoAcquisitionControls';
 import { SharedEFQuestionAnswer } from '../components/SharedEFQuestionAnswer';
 import { SharedMeasurementValueInput } from '../../../extension-ar-measurements/src/components/SharedMeasurementValueInput';
 import fs from 'fs';
@@ -134,5 +134,44 @@ describe('Education and Research use Learning question renderer', () => {
     expect(research).toContain('saveResearchReadReview');
     expect(research).toContain('completeResearchReadReview');
     expect(research).not.toContain('submitAndRefreshViewerQuizScoreForActiveStudy');
+  });
+});
+
+describe('shared calibrated LA phase presentation', () => {
+  const event = { preventDefault() {}, stopPropagation() {} };
+  it('shows measured area, source navigation and inline deletion with delegated handlers', () => {
+    const actions: string[] = [];
+    const tree = nodes(SharedEchoPhaseStatus({
+      slot: 'A4C', label: 'Apical four-chamber', value: 8, unit: 'cm²',
+      hasSavedSource: true, onNavigate: () => actions.push('view'),
+      onDelete: () => actions.push('delete'),
+    }));
+    const input = tree.find(node => node.type === 'input');
+    expect(input.props.value).toBe('8.00 cm²');
+    expect(input.props.readOnly).toBe(true);
+    tree.find(node => node.props?.['aria-label'] === 'Jump to Apical four-chamber saved source')
+      .props.onClick(event);
+    input.props.onClick(event);
+    tree.find(node => node.props?.['aria-label'] === 'Delete A4C measurement').props.onClick(event);
+    expect(actions).toEqual(['view', 'view', 'delete']);
+  });
+  it('preserves empty phase and read-only deletion; delegates recalculation', () => {
+    let calls = 0;
+    const empty = nodes(SharedEchoPhaseStatus({ slot:'A2C', label:'Apical two-chamber' }));
+    expect(empty.find(node => node.type === 'input').props.value).toBe('Not measured');
+    expect(empty.some(node => node.type === 'button')).toBe(false);
+    const locked = nodes(SharedEchoPhaseStatus({ slot:'A4C', label:'Apical four-chamber',
+      value:8, disabled:true, onDelete: () => calls++ }));
+    const remove = locked.find(node => node.props?.['aria-label'] === 'Delete A4C measurement');
+    expect(remove.props.disabled).toBe(true);
+    remove.props.onClick(event);
+    expect(calls).toBe(0);
+    const recalc = nodes(SharedEchoRecalculateButton({ onRecalculate: () => calls++ }));
+    recalc.find(node => node.type === 'button').props.onClick(event);
+    expect(calls).toBe(1);
+    const busy = nodes(SharedEchoRecalculateButton({ busy:true, onRecalculate: () => calls++ }));
+    expect(busy.find(node => node.type === 'button').props.disabled).toBe(true);
+    busy.find(node => node.type === 'button').props.onClick(event);
+    expect(calls).toBe(1);
   });
 });
