@@ -16,6 +16,7 @@ import { SharedIVCRapRVSPAnswer } from '../../../extension-ar-learning/src/compo
 import { LearningSingleChoiceAnswer } from '../../../extension-ar-learning/src/components/LearningSingleChoiceAnswer';
 import ResearchEchoGuidedControls from './ResearchEchoGuidedControls';
 import ResearchAcquisitionInputs from './ResearchAcquisitionInputs';
+import { resolveResearchLengthCapture } from '../utils/researchLengthCapture';
 import { canShowResearchAcquisitionInputs } from '../utils/researchAcquisitionInputs';
 import {
   reconcileResearchEchoCompositeAnswers,
@@ -1450,6 +1451,104 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
     });
   };
 
+  // Education and Research consume the SAME calibrated, exact-ID viewer
+  // capture command. This adapter only establishes Research's own answer link.
+  const activeCaptureRef = useRef({ fieldKey: '', reviewKey: '' });
+  activeCaptureRef.current = { fieldKey: selectedFieldKey, reviewKey: cleanString(context?.reviewKey) };
+  const lengthCaptureInFlightRef = useRef(new Set<string>());
+  const captureSharedLength = async (field: any, measurementId = '', explicit = false) => {
+    if (!field || !isResearchLengthQuestion(field, readDomain) ||
+        !editingAllowedRef.current || !context?.reviewKey || !commandsManager) return false;
+    const generation = selectionGenerationRef.current;
+    const reviewKey = cleanString(context.reviewKey);
+    const isCurrent = () => editingAllowedRef.current &&
+      generation === selectionGenerationRef.current &&
+      activeCaptureRef.current.fieldKey === field.key &&
+      activeCaptureRef.current.reviewKey === reviewKey;
+    if (!isCurrent() || (!explicit && valueSourcesRef.current[field.key]?.source)) return false;
+    const pendingKey = reviewKey + '|' + field.key + '|' + measurementId;
+    if (lengthCaptureInFlightRef.current.has(pendingKey)) return false;
+    lengthCaptureInFlightRef.current.add(pendingKey);
+    try {
+      const result = await commandsManager.runCommand('getSelectedViewerMeasurementQuizAnswer', {
+        question: { questionKey: field.componentKey, answerConfig: { measurementKind: 'length' } },
+        unit: field.config?.unit, measurementId,
+      });
+      if (!isCurrent() || (!explicit && valueSourcesRef.current[field.key]?.source)) return false;
+      const capture = resolveResearchLengthCapture(field, result,
+        cleanString(context.sourceStudyInstanceUID), measurementId, valueSourcesRef.current, fields);
+      if (!capture || deletedAnnotationIdsRef.current.has(capture.sourceId)) {
+        if (explicit) notify(servicesManager,
+          'Select a calibrated Length on the correct study/frame with a compatible measurement binding.', 'warning');
+        return false;
+      }
+      const measurementService = servicesManager?.services?.measurementService;
+      const measurement = measurementService?.getMeasurement?.(capture.sourceId);
+      if (!measurement || measurement.toolName !== 'Length' || !isCurrent()) return false;
+      const label = cleanString(measurement.label || measurement.measurementRole);
+      const normalizeLabel = value => cleanString(value).toLowerCase().replace(/[^a-z0-9]/g, '');
+      if (label && !['length', normalizeLabel(capture.label)].includes(normalizeLabel(label))) return false;
+      // Use the existing shared MeasurementService annotation update, exactly
+      // as the viewer's established label dialog/IVC phase binding does.
+      if (normalizeLabel(label) !== normalizeLabel(capture.label)) {
+        measurementService.update(capture.sourceId, {
+          ...measurement, label: capture.label, measurementRole: capture.label,
+        }, true);
+      }
+      if (!isCurrent()) return false;
+      const nextSources = { ...valueSourcesRef.current, [field.key]: {
+        source: capture.update.source, sourceMeasurementKey: capture.sourceId,
+      } };
+      valueSourcesRef.current = nextSources;
+      setValueSources(nextSources);
+      setValues(current => ({ ...current, [field.key]: capture.update.value }));
+      if (explicit) notify(servicesManager, 'Measurement captured.');
+      void refreshViewerMeasurementBindings();
+      return true;
+    } catch {
+      if (explicit && isCurrent()) notify(servicesManager, 'Unable to capture the selected Length.', 'warning');
+      return false;
+    } finally {
+      lengthCaptureInFlightRef.current.delete(pendingKey);
+    }
+  };
+
+  useEffect(() => {
+    const field = fields.find(item => item.key === selectedFieldKey);
+    const measurementService = servicesManager?.services?.measurementService;
+    if (!field || !isResearchLengthQuestion(field, readDomain) ||
+        context?.readOnly || context?.preview || !context?.reviewKey) return;
+    let cancelled = false;
+    const timers = new Set<number>();
+    const schedule = (measurementId: string) => {
+      if (!measurementId || cancelled || !editingAllowedRef.current ||
+          valueSourcesRef.current[field.key]?.source) return;
+      const generation = selectionGenerationRef.current;
+      const timer = window.setTimeout(() => {
+        timers.delete(timer);
+        if (!cancelled && generation === selectionGenerationRef.current)
+          void captureSharedLength(field, measurementId);
+      }, 100);
+      timers.add(timer);
+    };
+    // Shared Education completion event; never capture restored RAW annotations.
+    const completed = (event: Event) => schedule(cleanString((event as CustomEvent)?.detail?.measurementId));
+    const addedEvent = measurementService?.EVENTS?.MEASUREMENT_ADDED;
+    const subscription = addedEvent ? measurementService.subscribe(addedEvent, ({measurement}) => {
+      if (measurement?.toolName === 'Length') schedule(cleanString(measurement.uid));
+    }) : null;
+    window.addEventListener('ar-learning:quiz-measurement-added', completed);
+    window.addEventListener('ar-learning:quiz-measurement-labelled', completed);
+    return () => {
+      cancelled = true;
+      timers.forEach(timer => window.clearTimeout(timer));
+      subscription?.unsubscribe?.();
+      window.removeEventListener('ar-learning:quiz-measurement-added', completed);
+      window.removeEventListener('ar-learning:quiz-measurement-labelled', completed);
+    };
+  }, [selectedFieldKey, fields, readDomain, context?.reviewKey, context?.readOnly, context?.preview,
+    context?.sourceStudyInstanceUID, servicesManager, commandsManager, refreshViewerMeasurementBindings]);
+
   if (loading) {
     return <div className="p-4 text-sm text-gray-300">Loading Research Read...</div>;
   }
@@ -1907,6 +2006,13 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
                   }}>Clear answer link</button>
               ) : null}
             </div>
+          ) : null}
+          {selectedLength && !context.preview && !context.readOnly ? (
+            <button type="button" disabled={isBusy}
+              className="rounded border border-blue-700 px-2 py-1 text-xs text-blue-100 disabled:opacity-50"
+              onClick={() => void captureSharedLength(selectedField, '', true)}>
+              Use selected measurement
+            </button>
           ) : null}
           {!selectedTR && !selectedContourComposite && !showInlineIVCSources &&
             selectedField?.componentKey !== 'lvEjectionFraction' &&
