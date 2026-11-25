@@ -184,6 +184,20 @@ export function buildReadFields(readSchema: any = {}) {
 
   for (const component of schema.components) {
     const segmentKeys = component.segmentKeys.length ? component.segmentKeys : [''];
+    // An older assigned Read may precede automatic authoring bindings (#917).
+    // Project a stable internal label only for a scalar, explicitly configured
+    // Length question. Do not mutate the saved protocol or existing labels.
+    const config = component.config;
+    const implicitLengthBinding = schema.domain === 'echo' &&
+      ['measurement', 'continuous'].includes(component.kind) &&
+      config.viewerMeasurementTool === 'Length' &&
+      ['mm', 'cm'].includes(config.unit) &&
+      !component.segmentKeys.length && !config.measurementLabels.length &&
+      !config.calculation && !config.options.length &&
+      !Object.keys(config.compositeFrameTargets || {}).length &&
+      !['lvEjectionFraction', 'laVolumeDisks', 'rvFac', 'ivcCollapsibility', 'trVmax', 'rap', 'rvsp']
+        .includes(component.componentKey);
+    const fieldConfig = implicitLengthBinding ? {...config, measurementLabels:[component.componentKey]} : config;
 
     for (const segmentKey of segmentKeys) {
       fields.push({
@@ -196,7 +210,7 @@ export function buildReadFields(readSchema: any = {}) {
         componentLabel: component.label,
         kind: component.kind,
         required: component.required,
-        config: component.config,
+        config: fieldConfig,
       });
     }
   }
