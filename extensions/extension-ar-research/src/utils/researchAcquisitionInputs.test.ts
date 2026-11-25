@@ -16,6 +16,15 @@ test('keeps zero age and submits only changed fields',()=>{
 test('rejects invalid or read-only requests',()=>{
  const inputs=acquisitionInputStrings(snapshot.baseline.values);
  expect(buildAcquisitionOverrideRequest(snapshot,{...inputs,heightCm:''},'reason',true)).toBeNull();
- expect(buildAcquisitionOverrideRequest(snapshot,inputs,' ',true)).toBeNull();
+ expect(buildAcquisitionOverrideRequest(snapshot,{...inputs,weightKg:'21'},' ',true)).toBeNull();
  expect(buildAcquisitionOverrideRequest({...snapshot,editable:false},inputs,'reason',true)).toBeNull();
+});
+
+test('confirm unchanged values and restore exact baseline without a reason',()=>{
+ const inputs=acquisitionInputStrings(snapshot.baseline.values);
+ expect(buildAcquisitionOverrideRequest(snapshot,inputs,'',true)?.reason).toBe('');
+ const corrected={...snapshot,overrides:{weightKg:21}};
+ expect(buildAcquisitionOverrideRequest(corrected,inputs,'',true)?.overrides).toEqual({});
+ expect(buildAcquisitionOverrideRequest(corrected,{...inputs,weightKg:'21'},'',true)?.overrides).toEqual({weightKg:21});
+ expect(buildAcquisitionOverrideRequest(corrected,{...inputs,weightKg:'22'},'',true)).toBeNull();
 });
