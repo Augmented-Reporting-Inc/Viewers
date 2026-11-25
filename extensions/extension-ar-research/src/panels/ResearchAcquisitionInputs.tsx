@@ -48,7 +48,7 @@ export default function ResearchAcquisitionInputs({reviewKey, readOnly, disabled
   async function save() {
     if (pending.current || readOnly || disabled) return;
     const body = buildAcquisitionOverrideRequest(snapshot,inputs,reason,verified);
-    if (!body) {setError('Enter valid values and a reason. Restore the baseline to remove corrections.');return;}
+    if (!body) {setError('Enter valid acquisition values. A reason is required only when correcting values.');return;}
     const request = new AbortController(); pending.current=request;
     setBusy(true); onBusy(true); setError(''); setNotice('');
     try {
@@ -80,11 +80,11 @@ export default function ResearchAcquisitionInputs({reviewKey, readOnly, disabled
         <span className="block text-gray-400">DICOM: {snapshot.baseline.dicom?.[key] ?? 'Unavailable'} · baseline: {snapshot.baseline.values[key] ?? 'Unavailable'}</span>
       </label>)}
       {!locked ? <>
-        <button type="button" className="rounded border border-gray-500 px-2 py-1" onClick={()=>{setInputs(acquisitionInputStrings(snapshot.baseline.values));setVerified(false);setNotice('Baseline restored locally. Save acquisition inputs to persist the change.');onNotify?.('Baseline restored locally. Save to persist.');}}>Restore baseline</button>
-        <label className="block">Reason for correction or confirmation
+        <button type="button" className="rounded border border-gray-500 px-2 py-1" onClick={()=>{setInputs(acquisitionInputStrings(snapshot.baseline.values));setVerified(false);setReason('');setError('');setNotice('Baseline restored locally. Save acquisition inputs to persist the change.');onNotify?.('Baseline restored locally. Save to persist.');}}>Restore baseline</button>
+        <label className="block">Reason for correction (only required for changed values)
           <textarea className="block w-full rounded border border-gray-600 p-1" style={acquisitionInputStyle} maxLength={500} value={reason} onChange={event=>setReason(event.target.value)} />
         </label>
-        <label className="block"><input type="checkbox" checked={verified} onChange={event=>setVerified(event.target.checked)} /> I verified these acquisition values.</label>
+        <label className="block"><input type="checkbox" checked={verified} onChange={event=>{setVerified(event.target.checked);setError('');}} /> I verified these acquisition values.</label>
         <button type="button" className="rounded bg-blue-700 px-2 py-1 text-white" onClick={()=>void save()}>Save acquisition inputs</button>
       </> : null}
     </div> : null}
