@@ -1,4 +1,8 @@
 import React, { useState } from 'react';
+import { getEchoCompositeAcquisitionSteps } from '../../../extension-ar-measurements/src/utils/echoCompositeAcquisition';
+import { LearningEchoAcquisitionControls, SharedEchoPhaseStatus, SharedEchoRecalculateButton } from '../../../extension-ar-learning/src/components/LearningEchoAcquisitionControls';
+import { EchoCompositeResultStatus, EchoCompositeResultCard } from '../../../extension-ar-measurements/src/components/EchoCompositeResultStatus';
+import { SharedEFQuestionAnswer } from '../../../extension-ar-learning/src/components/SharedEFQuestionAnswer';
 import {
   getResearchEchoPhases,
   getResearchEchoPhaseTarget,
@@ -13,8 +17,14 @@ import {
  */
 export default function ResearchEchoGuidedControls({
   field, commandsManager, disabled = false, readOnly = false, onError,
-  sourceAnnotations = [], ivcMeasurementState = null, ivcReadValue = null,
+  sourceAnnotations = [], assessmentSavedEFAnnotations = null,
+  assessmentSavedEFResult = null,
+  ivcMeasurementState = null, ivcReadValue = null,
+  efValue = '', onChangeEFValue, onDeleteEFValue,
   onBeginIVCPhaseRedraw, onViewIVCSource, onDeleteIVCSource,
+  laPhaseState = null, laValue = null, laManualValue = null, onClearLAManualValue,
+  onViewLASource, onDeleteLASource,
+  onViewLAProtocolTarget, onRecalculateLA,
 }: {
   field: any;
   commandsManager: any;
@@ -22,23 +32,44 @@ export default function ResearchEchoGuidedControls({
   readOnly?: boolean;
   onError?: (message: string) => void;
   sourceAnnotations?: any[];
+  assessmentSavedEFAnnotations?: any[] | null;
+  assessmentSavedEFResult?: any;
   ivcMeasurementState?: any;
   ivcReadValue?: any;
+  efValue?: string | number | null;
+  onChangeEFValue?: (value: string) => void;
+  onDeleteEFValue?: () => void;
   onBeginIVCPhaseRedraw?: (field: any, slot: string, existing: any[]) => void;
   onViewIVCSource?: (annotation: any) => void;
   onDeleteIVCSource?: (annotation: any) => void;
+  laPhaseState?: any;
+  laValue?: number | string | null;
+  laManualValue?: number | string | null;
+  onClearLAManualValue?: () => void;
+  onViewLASource?: (item: any) => void;
+  onDeleteLASource?: (annotation: any) => void;
+  onViewLAProtocolTarget?: (slot: string) => void;
+  onRecalculateLA?: () => Promise<any>;
 }) {
   const [busy, setBusy] = useState('');
   const kind = String(field?.componentKey || '');
   const phases = getResearchEchoPhases(field);
   const supported = ['lvEjectionFraction', 'laVolumeDisks', 'rvFac', 'ivcCollapsibility', 'trVmax'].includes(kind);
-  if (!supported || !commandsManager) return null;
+  if (!supported || (!commandsManager && kind !== 'lvEjectionFraction')) return null;
 
   const notifyError = (message: string) => onError?.(message);
   const command = async (name: string, payload: any = {}) => {
     const result = await commandsManager.runCommand(name, payload);
     if (result?.ok === false) throw new Error(result?.reason || name + ' failed');
     return result;
+  };
+  const runCompositeSteps = async (
+    measurementKind: 'laVolumeDisks' | 'rvFac' | 'ivcCollapsibility',
+    slot: string, technique: 'freehand' | 'axisApex' = 'freehand'
+  ) => {
+    const steps = getEchoCompositeAcquisitionSteps(measurementKind, slot, technique);
+    if (!steps.length) throw new Error('Unsupported configured Echo measurement phase.');
+    for (const step of steps) await command(step.name, step.payload);
   };
   const openPhase = async (slot: string) => {
     const target = getResearchEchoPhaseTarget(field, slot);
@@ -96,24 +127,33 @@ export default function ResearchEchoGuidedControls({
   const hasIncompleteRequiredEF = kind === 'lvEjectionFraction' &&
     phases.some(phase => isRequiredResearchPhaseMissing(field, phase.slot));
 
-  return (
-    <div className="rounded border border-cyan-700/70 bg-cyan-950/10 p-3 text-xs text-gray-200">
-      <div className="font-semibold text-cyan-100">Guided Echo measurement</div>
-      {kind === 'lvEjectionFraction' ? (
-        <div className="mt-2 space-y-2">
-          <p>Open the existing Simpson EF panel to draw or review four A4C/A2C
-            end-diastolic/end-systolic contours, choose the drawing technique,
-            calculate EF, and inspect existing source frames.</p>
-          {button('Open EF contour panel', 'ef', async () => {
+  if (kind === 'lvEjectionFraction') {
+    return (
+      <div className="space-y-2">
+        <SharedEFQuestionAnswer
+          value={efValue}
+          onChange={onChangeEFValue || (() => {})}
+          onDelete={!disabled && !readOnly && efValue !== null &&
+            efValue !== undefined && String(efValue).trim() !== ''
+              ? onDeleteEFValue : undefined}
+          unit={String(field?.config?.unit || '%')}
+          min={field?.config?.min}
+          max={field?.config?.max}
+          step="0.01"
+          disabled={disabled || readOnly || !onChangeEFValue}
+          openDisabled={hasIncompleteRequiredEF || !commandsManager}
+          busy={busy === 'ef'}
+          onOpen={() => void run('ef', async () => {
             if (hasIncompleteRequiredEF) {
               throw new Error('Configure all four EF frames in Research Manager before opening the guided protocol.');
             }
-            // The Research Review owns these saved contour annotations even
-            // when the shared study has no clinical AR Series document.
-            // Restore their exact source images one at a time before opening
-            // the established EF panel. Never substitute another frame.
+            // Preserve Research-owned source evidence. The existing EF panel
+            // remains responsible for contours, volumes, DICOM targets, and EF.
             const seen = new Set<string>();
-            for (const annotation of sourceAnnotations) {
+            // Shared EF owns Review-provided restoration. Do not navigate/
+            // hydrate those same annotations twice in the Research wrapper.
+            for (const annotation of Array.isArray(assessmentSavedEFAnnotations)
+              ? [] : sourceAnnotations) {
               const id = String(annotation?.annotationId || annotation?.uid || annotation?.id || '');
               if (!id || seen.has(id)) continue;
               seen.add(id);
@@ -124,19 +164,116 @@ export default function ResearchEchoGuidedControls({
             return command('startLVSimpsonEFWorkflow', {
               efContourTargets: field.config?.compositeFrameTargets || null,
               allowCanonicalFrameTargets: true,
+              assessmentSavedEFAnnotations,
+              assessmentSavedEFResult,
+              deferSavedEFRestoration: true,
+              notifyAssessmentOnCalculate: true,
               questionKey: field.key,
             });
-          }, hasIncompleteRequiredEF)}
-          {phases.map(phase => (
-            <div key={phase.slot} className="flex flex-wrap items-center gap-2">
-              <span className="min-w-36">{phase.label}</span>
-              {viewTarget(phase.slot)}
-              {isRequiredResearchPhaseMissing(field, phase.slot)
-                ? <span className="text-amber-300">Missing required frame</span> : null}
-            </div>
-          ))}
-        </div>
-      ) : kind === 'trVmax' ? (
+          })}
+        />
+        {hasIncompleteRequiredEF ? (
+          <div role="alert" className="text-xs text-amber-200">
+            The Research protocol requires all four configured EF source frames
+            before measurement can begin.
+          </div>
+        ) : null}
+      </div>
+    );
+  }
+
+  if (kind === 'laVolumeDisks') {
+    return (
+      <div className="mt-2 w-full min-w-0 max-w-full space-y-2 overflow-hidden">
+        <LearningEchoAcquisitionControls
+          kind="laVolumeDisks"
+          disabled={disabled || readOnly || !!busy}
+          isPhaseBlocked={slot => isRequiredResearchPhaseMissing(field, slot)}
+          onAcquire={(slot, technique) => void run(slot + ':' + technique, async () => {
+            await openPhase(slot);
+            await runCompositeSteps('laVolumeDisks', slot, technique || 'freehand');
+          })}
+          renderPhaseStatus={(slot, label) => {
+            const sources = laPhaseState?.phaseSources?.[slot] || [];
+            const target = getResearchEchoPhaseTarget(field, slot);
+            if (!sources.length) return (
+              <SharedEchoPhaseStatus slot={slot} label={label} value={null}
+                disabled={disabled || readOnly}
+                onNavigate={target && isUsableResearchTarget(target) && onViewLAProtocolTarget
+                  ? () => onViewLAProtocolTarget(slot) : undefined} />
+            );
+            return sources.map((item: any, index: number) => (
+              <React.Fragment key={String(item.annotation.annotationId ||
+                item.annotation.annotationUID || item.annotation.uid || item.annotation.id)}>
+                <SharedEchoPhaseStatus slot={slot}
+                  label={sources.length > 1 ? label + ' (' + (index + 1) + ')' : label}
+                  value={item.matchesTarget ? item.areaCM2 : null}
+                  unit="cm²" hasSavedSource
+                  disabled={disabled || readOnly || !!busy}
+                  onNavigate={onViewLASource ? () => onViewLASource(item) : undefined}
+                  onDelete={!readOnly && onDeleteLASource
+                    ? () => onDeleteLASource(item.annotation) : undefined} />
+                {!item.matchesTarget ? (
+                  <span className="text-amber-200">Outside the configured phase frame</span>
+                ) : null}
+              </React.Fragment>
+            ));
+          }}
+          renderPhaseExtras={slot => (
+            <>
+              {isRequiredResearchPhaseMissing(field, slot) ? (
+                <span className="text-amber-300">Missing required protocol frame</span>
+              ) : null}
+              {(laPhaseState?.phaseSources?.[slot]?.length || 0) > 1 ? (
+                <span className="text-amber-200">Multiple contours for this phase. Inspect and delete extras.</span>
+              ) : null}
+            </>
+          )}
+        />
+        {laPhaseState?.unresolvedCount ? (
+          <div role="alert" className="text-xs text-amber-200">
+            Some LA source annotations cannot be verified for this study. Review their source identity before recalculating.
+          </div>
+        ) : null}
+        <EchoCompositeResultCard>
+          <EchoCompositeResultStatus value={laValue}
+            unit={String(field.config?.unit || 'mL')}
+            label={readOnly ? 'Saved answer' : 'Calculated'}
+            unavailableMessage="Complete the required calibrated measurements in the same study." />
+        </EchoCompositeResultCard>
+        {laManualValue != null && String(laManualValue).trim() !== '' ? (
+          <EchoCompositeResultCard warning>
+            <EchoCompositeResultStatus value={laManualValue}
+              unit={String(field.config?.unit || 'mL')} label="Saved manual answer" />
+            <p className="mt-1 text-amber-200">
+              This value is not linked to calibrated contours.
+              Recalculate to replace it with a verified result.
+            </p>
+            {!readOnly && onClearLAManualValue ? (
+              <button type="button" disabled={disabled || !!busy}
+                className="mt-1 text-red-200 hover:underline disabled:opacity-40"
+                onClick={onClearLAManualValue}>Clear manual answer</button>
+            ) : null}
+          </EchoCompositeResultCard>
+        ) : null}
+        {!readOnly && onRecalculateLA ? (
+          <SharedEchoRecalculateButton disabled={disabled || !!busy}
+            busy={busy === 'la-recalculate'}
+            onRecalculate={() => void run('la-recalculate', onRecalculateLA)} />
+        ) : null}
+        {!readOnly && (laValue == null || String(laValue).trim() === '') ? (
+          <div className="text-xs text-gray-400">
+            Draw or select a measurement annotation in the viewport.
+          </div>
+        ) : null}
+      </div>
+    );
+  }
+
+  return (
+    <div className="rounded border border-cyan-700/70 bg-cyan-950/10 p-3 text-xs text-gray-200">
+      <div className="font-semibold text-cyan-100">Guided Echo measurement</div>
+      {kind === 'trVmax' ? (
         <div className="mt-2 space-y-2">
           <p>Use the calibrated TR spectral Doppler Vmax tool. The stored value is
             converted to m/s and linked to its source annotation.</p>
@@ -151,122 +288,76 @@ export default function ResearchEchoGuidedControls({
           </div>
         </div>
       ) : (
-        <div className="mt-2 space-y-3">
-          {kind === 'laVolumeDisks' ? (
-            <p>Select A4C and A2C end-systolic sources. Use freehand or axis +
-              apex contours; the existing 20-disk calculator derives LA volume.</p>
-          ) : kind === 'rvFac' ? (
-            <p>Draw end-diastolic RVEDA and end-systolic RVESA from the
-              selected RV-focused views; existing viewer tools derive FAC.</p>
-          ) : (
-            <p>Draw two calibrated Length measurements: IVCexp and IVCinsp.
-              The existing IVC calculator derives collapsibility; RAP remains a separate explicit choice.</p>
-          )}
-          {phases.map(phase => {
-            const blocked = isRequiredResearchPhaseMissing(field, phase.slot);
-            const phaseSources = kind === 'ivcCollapsibility'
-              ? (ivcMeasurementState?.phaseSources?.[phase.slot] || [])
-              : [];
+        <LearningEchoAcquisitionControls
+          kind={kind === 'rvFac' ? 'rvFac' : 'ivcCollapsibility'}
+          disabled={disabled || readOnly || !!busy}
+          isPhaseBlocked={slot => isRequiredResearchPhaseMissing(field, slot)}
+          renderPhaseStatus={(slot, label) => {
+            const diameter = kind === 'ivcCollapsibility'
+              ? (slot === 'IVC_EXP'
+                  ? ivcMeasurementState?.values?.expirationDiameterMM
+                  : ivcMeasurementState?.values?.inspirationDiameterMM)
+              : null;
             return (
-              <div key={phase.slot} className="border-t border-gray-700 pt-2">
-                <div className="mb-2 flex flex-wrap items-center justify-between gap-2 font-medium text-gray-100">
-                  <span>{phase.label}</span>
-                  {kind === 'ivcCollapsibility' ? (() => {
-                    const diameter = phase.slot === 'IVC_EXP'
-                      ? ivcMeasurementState?.values?.expirationDiameterMM
-                      : ivcMeasurementState?.values?.inspirationDiameterMM;
-                    return (
-                      <span className="text-cyan-100">
-                        {diameter != null && Number.isFinite(Number(diameter))
-                          ? Number(diameter).toFixed(1) + ' mm'
-                          : 'No calibrated diameter'}
-                      </span>
-                    );
-                  })() : null}
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  {kind === 'laVolumeDisks'
-                    ? <>
-                      {button('Freehand', phase.slot + ':freehand', async () => {
-                        await openPhase(phase.slot);
-                        await command('startLAVolumeWorkflow', {
-                          slot: phase.slot, contourTechnique: 'freehand', autoContinue: false,
-                        });
-                      }, blocked)}
-                      {button('Axis + apex', phase.slot + ':axis', async () => {
-                        await openPhase(phase.slot);
-                        await command('startLAVolumeWorkflow', {
-                          slot: phase.slot, contourTechnique: 'axisApex', autoContinue: false,
-                        });
-                      }, blocked)}
-                    </>
-                    : kind === 'rvFac'
-                      ? <>
-                        {button('Freehand', phase.slot + ':freehand', async () => {
-                          await openPhase(phase.slot);
-                          await command('startEchoAreaContourWorkflow', {
-                            slot: phase.slot, clickTrace: true,
-                          });
-                        }, blocked)}
-                        {button('Axis + apex', phase.slot + ':axis', async () => {
-                          await openPhase(phase.slot);
-                          await command('startGuidedRVFACContourWorkflow', { slot: phase.slot });
-                        }, blocked)}
-                      </>
-                      : <>
-                        {button(
-                          (phaseSources.length ? 'Redraw ' : 'Measure ') +
-                            (phase.slot === 'IVC_EXP' ? 'IVCexp' : 'IVCinsp'),
-                          phase.slot + ':length', async () => {
-                            await openPhase(phase.slot);
-                            await command('resetViewerLengthLabelMode', {});
-                            await command('activateViewerMeasurementTool', {
-                              toolName: 'Length', stopCine: true,
-                            });
-                            // Keep the original annotation until the new
-                            // calibrated source is verified after labelling.
-                            onBeginIVCPhaseRedraw?.(field, phase.slot, phaseSources);
-                          }, blocked)}
-                        {phaseSources.length === 0 ? viewTarget(phase.slot) : null}
-                        {phaseSources.map((annotation: any, index: number) => (
-                          <span key={String(annotation?.annotationId || annotation?.uid || index)}
-                            className="inline-flex flex-wrap items-center gap-2 rounded border border-gray-700 px-2 py-1">
-                            {phaseSources.length > 1 ? (
-                              <span className="text-amber-200">Source {index + 1}</span>
-                            ) : null}
-                            <button type="button" className="text-cyan-200 hover:underline"
-                              disabled={!onViewIVCSource}
-                              onClick={() => onViewIVCSource?.(annotation)}
-                            >View source</button>
-                            {!readOnly && !disabled ? (
-                              <button type="button" className="text-red-300 hover:underline"
-                                disabled={!onDeleteIVCSource}
-                                onClick={() => onDeleteIVCSource?.(annotation)}
-                              >Delete</button>
-                            ) : null}
-                          </span>
-                        ))}
-                      </>}
-                  {kind !== 'ivcCollapsibility' ? viewTarget(phase.slot) : null}
-                  {kind === 'ivcCollapsibility' && phaseSources.length > 1 ? (
-                    <span className="text-amber-200">
-                      Multiple measurements for this phase. Delete extras or redraw.
-                    </span>
-                  ) : null}
-                  {blocked ? <span className="text-amber-300">Missing required protocol frame</span> : null}
-                  {!blocked && !getResearchEchoPhaseTarget(field, phase.slot)
-                    ? <span className="text-gray-400">No fixed frame for this phase — uses the current viewer image</span>
-                    : null}
-                </div>
-              </div>
+              <span className="min-w-36 text-gray-100">
+                {kind === 'ivcCollapsibility'
+                  ? label + ' · ' + (diameter != null && Number.isFinite(Number(diameter))
+                    ? Number(diameter).toFixed(1) + ' mm'
+                    : 'No calibrated diameter')
+                  : label}
+              </span>
             );
-          })}
-          {kind === 'ivcCollapsibility' ? (
+          }}
+          onAcquire={(slot, technique) => void run(
+            slot + ':' + (technique || 'length'), async () => {
+              await openPhase(slot);
+              const acquisitionKind = kind === 'rvFac' ? 'rvFac' : 'ivcCollapsibility';
+              await runCompositeSteps(acquisitionKind, slot, technique || 'freehand');
+              if (kind === 'ivcCollapsibility') {
+                const oldSources = ivcMeasurementState?.phaseSources?.[slot] || [];
+                onBeginIVCPhaseRedraw?.(field, slot, oldSources);
+              }
+            }
+          )}
+          renderPhaseExtras={slot => {
+            const blocked = isRequiredResearchPhaseMissing(field, slot);
+            const phaseSources = kind === 'ivcCollapsibility'
+              ? ivcMeasurementState?.phaseSources?.[slot] || [] : [];
+            return (
+              <>
+                {!blocked ? viewTarget(slot) : (
+                  <span className="text-amber-300">Missing required protocol frame</span>
+                )}
+                {phaseSources.map((annotation: any, index: number) => (
+                  <span key={String(annotation?.annotationId || annotation?.uid || index)}
+                    className="inline-flex flex-wrap items-center gap-2 rounded border border-gray-700 px-2 py-1">
+                    <button type="button" className="text-cyan-200 hover:underline"
+                      disabled={!onViewIVCSource}
+                      onClick={() => onViewIVCSource?.(annotation)}>View source</button>
+                    {!disabled && !readOnly ? (
+                      <button type="button" className="text-red-300 hover:underline"
+                        disabled={!onDeleteIVCSource}
+                        onClick={() => onDeleteIVCSource?.(annotation)}>Delete</button>
+                    ) : null}
+                  </span>
+                ))}
+                {phaseSources.length > 1 ? (
+                  <span className="text-amber-200">
+                    Multiple measurements for this phase. Delete extras or redraw.
+                  </span>
+                ) : null}
+                {!blocked && !getResearchEchoPhaseTarget(field, slot) ? (
+                  <span className="text-gray-400">
+                    No fixed frame for this phase — uses the current viewer image
+                  </span>
+                ) : null}
+              </>
+            );
+          }}
+          afterPhases={kind === 'ivcCollapsibility' ? (
             <div className="border-t border-gray-700 pt-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <span className="font-semibold text-gray-100">
-                  Calculated IVC collapsibility
-                </span>
+                <span className="font-semibold text-gray-100">Calculated IVC collapsibility</span>
                 <span className="font-semibold text-cyan-100">
                   {ivcMeasurementState?.candidate &&
                     ivcReadValue !== null && ivcReadValue !== undefined &&
@@ -286,11 +377,9 @@ export default function ResearchEchoGuidedControls({
                   Derived from the two calibrated diameters on their configured DICOM frames.
                 </p>
               )}
-              {/* Off-protocol annotations remain excluded by the validation
-                  engine; they are diagnostic evidence, not reader results. */}
             </div>
           ) : null}
-        </div>
+        />
       )}
     </div>
   );

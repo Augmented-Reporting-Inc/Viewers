@@ -10,6 +10,9 @@ import {
   getResearchIVCAnnotationSlot,
   isValidResearchIVCPhaseSource,
   getResearchCompatibleMeasurementCandidates,
+  isResearchLengthQuestion,
+  getResearchLengthSourceState,
+  getResearchLAPhaseSources,
 } from './researchFieldNavigation';
 
 describe('Research quiz-style field sources and navigation', () => {
@@ -95,6 +98,47 @@ describe('Research protocol frame enforcement', () => {
       },
     }, composite, sources)).toBe(false);
   });
+  it('rejects composite candidates with missing, surplus or duplicate sources', () => {
+    const field = { componentKey: 'lvEjectionFraction', config: {
+      compositeFrameGuidanceEnabled: true,
+      compositeFrameTargets: {
+        A4C_ED: { sopInstanceUID: 'sop1', frameNumber: 2 },
+        A4C_ES: { sopInstanceUID: 'sop2', frameNumber: 3 },
+        A2C_ED: { sopInstanceUID: 'sop3', frameNumber: 4 },
+        A2C_ES: { sopInstanceUID: 'sop4', frameNumber: 5 },
+      },
+    } };
+    const annotations = [1,2,3,4,5].map((n) => ({
+      annotationId: 'source' + n, SOPInstanceUID: 'sop' + n,
+      frameNumber: n + 1,
+    }));
+    const candidate = (ids: string) => ({ sourceMeasurementKey: 'lv-simpson:' + ids });
+    expect(isResearchCandidateOnProtocolFrames(field,
+      candidate('source1,source2,source3,source4'), annotations)).toBe(true);
+    expect(isResearchCandidateOnProtocolFrames(field,
+      candidate('source1,source2,source3'), annotations)).toBe(false);
+    expect(isResearchCandidateOnProtocolFrames(field,
+      candidate('source1,source2,source3,source4,source5'), annotations)).toBe(false);
+    expect(isResearchCandidateOnProtocolFrames(field,
+      candidate('source1,source2,source3,source3'), annotations)).toBe(false);
+  });
+  it('preserves legacy partial phase pinning when the other phases remain reader-selectable', () => {
+    const field = { componentKey: 'lvEjectionFraction', config: {
+      compositeFrameGuidanceEnabled: false,
+      compositeFrameTargets: {
+        A4C_ED: { sopInstanceUID: 'sop1', frameNumber: 2 },
+      },
+    } };
+    const all = [1, 2, 3, 4].map(n => ({
+      annotationId: 'phase' + n,
+      SOPInstanceUID: 'sop' + n,
+      frameNumber: n + 1,
+    }));
+    expect(isResearchCandidateOnProtocolFrames(field,
+      { sourceMeasurementKey: 'lv-simpson:phase1,phase2,phase3,phase4' },
+      all)).toBe(true);
+  });
+
   it('leaves protocols with no configured target untouched', () => {
     expect(isResearchCandidateOnProtocolFrames({
       componentKey: 'trVmax', config: {},
@@ -309,5 +353,115 @@ describe('Research question-entry source frame navigation', () => {
     })).toEqual(source(9));
     expect(getResearchQuestionEntryTarget({ componentKey: 'ivcCollapsibility', config: {} }))
       .toBeNull();
+  });
+});
+
+describe('Research independent Length source restoration', () => {
+  const study = 'study-length';
+  const sop = 'sop-length';
+  const field = { key: 'lvidd|', componentKey: 'lvidd', kind: 'measurement', config: {
+    unit: 'mm', measurementLabels: ['LVIDd'], step: 0.01,
+    viewerTarget: { studyInstanceUID: study, sopInstanceUID: sop, frameNumber: 2 },
+  }};
+  const length = (id: string, frame = 2, studyId = study) => ({
+    annotationId: id, toolName: 'Length', label: 'LVIDd',
+    StudyInstanceUID: studyId, SeriesInstanceUID: 'series', SOPInstanceUID: sop,
+    frameNumber: 1, referencedImageId:
+      `wadors:/studies/${studyId}/series/series/instances/${sop}/frames/${frame}`,
+    points: [[0,0,0],[54.5,0,0]], measurements: { length: 54.5, unit: 'mm' },
+  });
+  const candidate = (id: string, unit = 'mm') => ({
+    source: 'viewer-measurement', sourceMeasurementKey: id, labels: ['LVIDd'], value: 54.5, unit,
+  });
+  const state = (source: any, annotations: any[], candidates: any[]) =>
+    getResearchLengthSourceState(field, source, annotations, candidates, study);
+  it('only uses compact layout for independent configured Echo Length', () => {
+    expect(isResearchLengthQuestion(field, 'echo')).toBe(true);
+    expect(isResearchLengthQuestion(field, 'bowel')).toBe(false);
+    expect(isResearchLengthQuestion({ ...field, componentKey: 'ivcCollapsibility' }, 'echo')).toBe(false);
+    expect(isResearchLengthQuestion({ ...field, config: { ...field.config, unit: 'cm' } }, 'echo')).toBe(false);
+  });
+  it('restores the linked caliper instead of guessing among candidates', () => {
+    const saved = length('a');
+    const result = state({ source: 'viewer-measurement', sourceMeasurementKey: 'a' },
+      [saved, length('b')], [candidate('a'), candidate('b')]);
+    expect(result.status).toBe('linked');
+    expect(result.selected?.annotation).toBe(saved);
+    expect(result.selected?.displayAnnotation.frameNumber).toBe(2);
+    expect(saved.frameNumber).toBe(1);
+    expect(result.eligible).toHaveLength(2);
+  });
+  it('rejects wrong study/frame/tool, invalid geometry, pixel units or missing linked source', () => {
+    const source = { source: 'viewer-measurement', sourceMeasurementKey: 'a' };
+    for (const annotation of [length('a', 20), length('a', 2, 'other-study'),
+      { ...length('a'), toolName: 'PlanarFreehandROI' },
+      { ...length('a'), referencedImageId: length('a', 2, 'other-study').referencedImageId },
+      { ...length('a'), points: [[0,0,0]] }]) {
+      expect(state(source, [annotation, length('b')], [candidate('a'), candidate('b')]).status).toBe('invalid');
+    }
+    expect(state(source, [length('a')], [candidate('a', 'px')]).status).toBe('invalid');
+    expect(state(source, [length('b')], [candidate('b')]).selected).toBeNull();
+  });
+  it('preserves manual answers and exposes ambiguity without selecting a caliper', () => {
+    const both = [length('a'), length('b')];
+    const candidates = [candidate('a'), candidate('b')];
+    expect(state({}, both, candidates).status).toBe('ambiguous');
+    expect(state({}, both, candidates).selected).toBeNull();
+    expect(state({ source: 'manual' }, both, candidates).status).toBe('manual');
+    expect(state({}, [both[0]], [candidates[0]]).status).toBe('unbound');
+    expect(state({}, [], []).status).toBe('none');
+  });
+});
+
+describe('Research LA phase display uses calibrated Education areas and Review sources', () => {
+  const study = 'study-la';
+  const points = [[-10,0,0],[-10,20,0],[-10,40,0],[0,40,0],
+    [10,40,0],[10,20,0],[10,0,0]];
+  const source = (slot: string, frame = 2, studyId = study) => ({
+    annotationId: 'la-' + slot + '-' + frame,
+    toolName: 'SplineROI', measurementKind: 'laVolumeSlot',
+    StudyInstanceUID: studyId, SeriesInstanceUID: 'series-' + slot,
+    SOPInstanceUID: 'sop-' + slot, frameNumber: 1,
+    referencedImageId: `wadors:/studies/${studyId}/series/series-${slot}/instances/sop-${slot}/frames/${frame}`,
+    points,
+    laVolume: { measurementKind: 'laVolumeSlot', slot, baseLeftPoint: points[0],
+      baseRightPoint: points[6], superiorPoint: points[3], longAxisLengthMM: 40 },
+    measurements: { area: 999, areaUnit: 'mm²' }, // must not use cached display area
+  });
+  const field = { componentKey: 'laVolumeDisks', config: { unit: 'mL' } };
+  const pinned = { ...field, config: { ...field.config, compositeFrameGuidanceEnabled: true,
+    compositeFrameTargets: {
+      A4C: { sopInstanceUID: 'sop-A4C', frameNumber: 2 },
+      A2C: { sopInstanceUID: 'sop-A2C', frameNumber: 2 },
+    },
+  }};
+  it('returns separate calibrated areas from partial and complete saved/live evidence', () => {
+    const a4c = source('A4C');
+    const a2c = source('A2C');
+    const partial = getResearchLAPhaseSources(field, [a4c], study);
+    expect(partial.phaseSources.A4C[0].areaCM2).toBeCloseTo(8);
+    expect(partial.phaseSources.A2C).toEqual([]);
+    expect(partial.phaseSources.A4C[0].displayAnnotation.frameNumber).toBe(2);
+    expect(a4c.frameNumber).toBe(1);
+    const complete = getResearchLAPhaseSources(pinned, [a4c, a2c], study);
+    expect(complete.phaseSources.A2C[0].areaCM2).toBeCloseTo(8);
+    expect(complete.phaseSources.A2C[0].matchesTarget).toBe(true);
+    expect(complete.unresolvedCount).toBe(0);
+  });
+  it('retains duplicate and off-frame owned sources for explicit inspection, rejects foreign study', () => {
+    const result = getResearchLAPhaseSources(pinned,
+      [source('A4C'), source('A4C', 20), source('A2C', 2, 'foreign')], study);
+    expect(result.phaseSources.A4C.map(item => item.matchesTarget)).toEqual([true, false]);
+    expect(result.phaseSources.A2C).toEqual([]);
+    expect(result.unresolvedCount).toBe(1);
+  });
+  it('never substitutes cached ROI area for missing physical LA geometry', () => {
+    const original = source('A4C');
+    const invalid = { ...original, laVolume: { ...original.laVolume, longAxisLengthMM: 0 } };
+    const result = getResearchLAPhaseSources(field, [invalid], study);
+    expect(result.phaseSources.A4C[0].areaCM2).toBeNull();
+    expect(result.phaseSources.A4C[0].annotation).toBe(invalid);
+    expect(getResearchLAPhaseSources({componentKey:'rvFac'}, [original], study)
+      .phaseSources.A4C).toEqual([]);
   });
 });

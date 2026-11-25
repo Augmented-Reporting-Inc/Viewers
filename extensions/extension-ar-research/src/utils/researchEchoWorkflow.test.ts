@@ -75,6 +75,42 @@ describe('Echo Research mirrors existing guided education controls', () => {
     expect(values['rap|']).toBe(3);
     expect(values['rvsp|']).toBeCloseTo(29.2144);
   });
+  it('uses authored question count and sequence without viewer-only companions', () => {
+    // This order is the protocol authoring order, not a guessed Echo order.
+    const fields = [
+      { componentKey: 'rvsp', key: 'rvsp|', label: 'Calculated RVSP',
+        config: { calculation: { type: 'rvsp' } } },
+      { componentKey: 'ivcCollapsibility', key: 'ivcCollapsibility|',
+        label: 'IVC collapsibility' },
+      { componentKey: 'readerComment', key: 'readerComment|', label: 'Comment' },
+      { componentKey: 'imageQuality', key: 'imageQuality|', label: 'Quality' },
+      { componentKey: 'rap', key: 'rap|', label: 'RAP' },
+    ];
+    const mode = 'authored';
+    expect(fields.filter(field =>
+      !isResearchCompanionHidden(field, fields, 'echo', mode)
+    ).map(field => field.componentKey)).toEqual([
+      'rvsp', 'ivcCollapsibility', 'readerComment', 'imageQuality', 'rap',
+    ]);
+    expect(getResearchGroupedFields(fields[1], fields, 'echo', mode)).toEqual([]);
+    expect(getResearchQuestionLabel(fields[1], fields, 'echo', mode))
+      .toBe('IVC collapsibility');
+    const values = { 'ivcCollapsibility|': 40 };
+    expect(isResearchQuestionAnswered(fields[1], fields, values, 'echo', mode)).toBe(true);
+    expect(isResearchQuestionAnswered(fields[0], fields, values, 'echo', mode)).toBe(false);
+    expect(fields.map(field => field.componentKey)).toHaveLength(5);
+  });
+
+  it('legacy snapshots retain the established grouped IVC navigation', () => {
+    const fields = [
+      { componentKey: 'ivcCollapsibility', key: 'ivcCollapsibility|' },
+      { componentKey: 'rap', key: 'rap|' },
+      { componentKey: 'rvsp', key: 'rvsp|' },
+    ];
+    expect(fields.filter(field => !isResearchCompanionHidden(field, fields))
+      .map(field => field.componentKey)).toEqual(['ivcCollapsibility']);
+  });
+
   it('does not hide RAP or RVSP when IVC is absent or on non-Echo profiles', () => {
     const fields = [
       { componentKey: 'rap', key: 'rap|' },

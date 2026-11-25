@@ -8,6 +8,8 @@ import {
 
 export { buildViewerMeasurementValueCandidates } from './utils/measurementValueCandidates';
 export { calculateRVSP } from './utils/rightHeartMeasurements';
+export { EchoEFContourVolumes, getLVSimpsonSourceVolumes } from './components/EchoEFContourVolumes';
+export { EchoCompositeResultStatus } from './components/EchoCompositeResultStatus';
 
 const arMeasurementsExtension = {
   id,

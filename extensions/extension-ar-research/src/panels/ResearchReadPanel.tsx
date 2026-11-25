@@ -5,8 +5,28 @@ import React, {
   useRef,
   useState,
 } from 'react';
-import { buildViewerMeasurementValueCandidates } from 'extension-ar-measurements';
+import { beginEFOpenStage, measureEFOpenStage } from '../../../extension-ar-measurements/src/utils/efPanelOpenProfile';
+import { buildViewerMeasurementValueCandidates } from '../../../extension-ar-measurements/src/utils/measurementValueCandidates';
+import { EchoEFContourVolumes, getLVSimpsonSourceVolumes } from '../../../extension-ar-measurements/src/components/EchoEFContourVolumes';
+import { EchoCompositeResultStatus } from '../../../extension-ar-measurements/src/components/EchoCompositeResultStatus';
+import { SharedQuestionSelector, SharedQuestionStepNavigation } from '../../../extension-ar-measurements/src/components/SharedQuestionNavigation';
+import { SharedMeasurementValueInput, SharedMeasurementLabel } from '../../../extension-ar-measurements/src/components/SharedMeasurementValueInput';
+import LearningQuestionPanel from '../../../extension-ar-learning/src/panels/LearningQuestionPanel';
+import { LearningSingleChoiceAnswer } from '../../../extension-ar-learning/src/components/LearningSingleChoiceAnswer';
 import ResearchEchoGuidedControls from './ResearchEchoGuidedControls';
+import {
+  reconcileResearchEchoCompositeAnswers,
+  getVerifiedResearchEFResultCandidate,
+  dedupeResearchMeasurementCandidates,
+  getResearchEFRestoreSources,
+  resolvePersistedResearchEF,
+  getResearchAnnotationKey as getAnnotationKey,
+  mergeResearchMeasurementAnnotations as mergeMeasurementAnnotations,
+  applyResearchSnapshotEvidence,
+  withPersistedResearchEF as withPersistedEF,
+} from '../utils/researchEchoAnswerBinding';
+import { isMatchingQuizEFCompletion } from '../../../extension-ar-learning/src/utils/quizCompositeCaptureIntent';
+import { getResearchMeasurementToolForField } from '../utils/researchMeasurementTool';
 import {
   getResearchFramePickerIntent,
   getResearchCapturedFrameTarget,
@@ -14,6 +34,8 @@ import {
 } from '../utils/researchFramePicker';
 import {
   getResearchRapChoices,
+  getResearchEchoPhases,
+  getResearchEchoPhaseTarget,
   getResearchGroupedFields,
   getResearchQuestionLabel,
   isResearchQuestionAnswered,
@@ -29,6 +51,9 @@ import {
 } from '../utils/readSchema';
 import {
   getResearchFieldMeasurementCandidates,
+  isResearchLengthQuestion,
+  getResearchLengthSourceState,
+  getResearchLAPhaseSources,
   getResearchFieldSourceAnnotations,
   getResearchProtocolViewerTargets,
   getResearchSourceAnnotationIds,
@@ -50,31 +75,6 @@ const VIEWER_MEASUREMENTS_WORKFLOW = 'viewerMeasurements';
 
 function cleanString(value: unknown) {
   return String(value || '').trim();
-}
-
-function getAnnotationKey(annotation: any = {}) {
-  return cleanString(
-    annotation?.annotationId ||
-      annotation?.annotationUID ||
-      annotation?.uid ||
-      annotation?.id
-  );
-}
-
-function mergeMeasurementAnnotations(
-  saved: any[] = [], live: any[] = [],
-  deletedIds: Set<string> = new Set()
-) {
-  const merged = new Map<string, any>();
-
-  for (const annotation of [...(saved || []), ...(live || [])]) {
-    const key = getAnnotationKey(annotation);
-    if (key && !deletedIds.has(key)) {
-      merged.set(key, annotation);
-    }
-  }
-
-  return Array.from(merged.values());
 }
 
 function getAnnotationLabel(annotation: any = {}) {
@@ -129,14 +129,22 @@ function ReadField({
   source,
   disabled,
   onChange,
+  onDelete,
   readDomain,
+  hideHeader = false,
+  lengthAnswer = false,
+  measurementLabel = '',
 }: {
   field: any;
   value: any;
   source?: any;
   disabled: boolean;
   onChange: (value: any) => void;
+  onDelete?: () => void;
   readDomain?: string;
+  hideHeader?: boolean;
+  lengthAnswer?: boolean;
+  measurementLabel?: string;
 }) {
   const kind = cleanString(field.kind).toLowerCase();
   const numeric = ['measurement', 'continuous', 'number', 'numeric'].includes(kind);
@@ -154,8 +162,29 @@ function ReadField({
     : getResearchRapChoices(field, readDomain).map(value => ({ value, label: value + ' mmHg' }));
   const calculated = cleanString(field?.config?.calculation?.type).toLowerCase() === 'rvsp';
 
+  // The shared question card supplies the heading and border.
+  if (lengthAnswer) {
+    return (
+      <div className="space-y-2">
+        <SharedMeasurementValueInput
+          value={value}
+          onChange={onChange}
+          unit={unit}
+          disabled={disabled}
+          min={field?.config?.min}
+          max={field?.config?.max}
+          step={field?.config?.step || 'any'}
+          onDelete={onDelete}
+          deleteLabel={`Delete ${field.label} measurement`}
+        />
+        <SharedMeasurementLabel label={measurementLabel} />
+      </div>
+    );
+  }
+
   return (
     <div className="rounded border border-gray-700 bg-gray-950 p-3">
+      {!hideHeader ? (
       <div className="mb-2 flex items-start justify-between gap-2">
         <div>
           <div className="text-sm font-semibold text-white">{field.label}</div>
@@ -171,6 +200,7 @@ function ReadField({
           </span>
         ) : null}
       </div>
+      ) : null}
 
       {['viewer-measurement', 'viewer-derived'].includes(cleanString(source?.source)) ? (
         <div className="mb-2 text-xs text-blue-300">
@@ -178,7 +208,17 @@ function ReadField({
         </div>
       ) : null}
 
-      {options.length > 0 ? (
+      {options.length > 0 && field.componentKey !== 'rap' ? (
+        <LearningSingleChoiceAnswer
+          name={field.key}
+          choices={options}
+          value={value}
+          disabled={disabled || calculated}
+          onChange={onChange}
+        />
+      ) : options.length > 0 ? (
+        // RAP is a clinical numeric interpretation; Learning also uses
+        // a dropdown for RAP. Never infer it from IVC automatically.
         <select
           className="w-full rounded border border-gray-600 bg-black px-3 py-2 text-sm text-white"
           value={value ?? ''}
@@ -200,20 +240,28 @@ function ReadField({
           onChange={event => onChange(event.target.value)}
           placeholder="Enter reader comment"
         />
+      ) : numeric ? (
+        <SharedMeasurementValueInput
+          value={value}
+          onChange={onChange}
+          unit={unit}
+          disabled={disabled || calculated}
+          min={field?.config?.min}
+          max={field?.config?.max}
+          step={field?.config?.step || 'any'}
+          onDelete={!disabled && !calculated &&
+            value !== null && value !== undefined && String(value).trim() !== ''
+              ? onDelete : undefined}
+          deleteLabel={`Delete ${field.label} measurement`}
+        />
       ) : (
-        <div className="flex items-center gap-2">
-          <input
-            className="min-w-0 flex-1 rounded border border-gray-600 bg-black px-3 py-2 text-sm text-white"
-            type={numeric ? 'number' : 'text'}
-            value={value ?? ''}
-            disabled={disabled || calculated}
-            min={numeric ? field?.config?.min : undefined}
-            max={numeric ? field?.config?.max : undefined}
-            step={numeric ? field?.config?.step || 'any' : undefined}
-            onChange={event => onChange(event.target.value)}
-          />
-          {unit ? <span className="text-sm text-gray-300">{unit}</span> : null}
-        </div>
+        <input
+          className="w-full min-w-0 rounded border border-gray-600 bg-black px-3 py-2 text-sm text-white"
+          type="text"
+          value={value ?? ''}
+          disabled={disabled || calculated}
+          onChange={event => onChange(event.target.value)}
+        />
       )}
     </div>
   );
@@ -224,12 +272,16 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
   const [values, setValues] = useState<Record<string, any>>({});
   const [valueSources, setValueSources] = useState<Record<string, any>>({});
   const [viewerCandidates, setViewerCandidates] = useState<any[] | null>(null);
+  const [liveVerifiedEchoEvidence, setLiveVerifiedEchoEvidence] = useState<{
+    candidates: any[]; efVolumes: Record<string, number | null>;
+  }>({ candidates: [], efVolumes: {} });
   const valueSourcesRef = useRef<Record<string, any>>({});
   const [savedAnnotations, setSavedAnnotations] = useState<any[]>([]);
   const [liveAnnotations, setLiveAnnotations] = useState<any[]>([]);
   // Explicit research-source deletion is carried through Save even if
   // legacy clinical Series hydration is unavailable for this research case.
   const deletedAnnotationIdsRef = useRef<Set<string>>(new Set());
+  const invalidatedEFSourceIdsRef = useRef<Set<string>>(new Set());
   // Redraw is transactional in the local draft: retain the old source until
   // a NEW calibrated, correctly labelled annotation lands on the pinned SOP/
   // frame. Closing the viewer without completing does not delete old evidence.
@@ -239,6 +291,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
   const [selectedFieldKey, setSelectedFieldKey] = useState('');
   const [capturingProtocolFrame, setCapturingProtocolFrame] = useState(false);
   const [capturedProtocolFrame, setCapturedProtocolFrame] = useState('');
+  const [capturePhaseSelection, setCapturePhaseSelection] = useState('');
   const protocolFramePickerIntent = useMemo(
     () => getResearchFramePickerIntent(
       typeof window !== 'undefined' ? window.location.search : '',
@@ -246,6 +299,14 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
     ),
     []
   );
+  const isBatchFramePicker = protocolFramePickerIntent?.phaseKey === '__all__';
+  const capturePhases = isBatchFramePicker
+    ? getResearchEchoPhases({ componentKey: protocolFramePickerIntent.componentKey })
+    : [];
+  const capturePhaseKey = isBatchFramePicker
+    ? (capturePhases.find(phase => phase.slot === capturePhaseSelection)?.slot ||
+      capturePhases[0]?.slot || '')
+    : (protocolFramePickerIntent?.phaseKey || '');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [completing, setCompleting] = useState(false);
@@ -268,9 +329,11 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
       const persistedAnnotations = Array.isArray(next?.review?.measurementAnnotations)
         ? next.review.measurementAnnotations : [];
       deletedAnnotationIdsRef.current = new Set();
+      invalidatedEFSourceIdsRef.current = new Set();
       pendingIVCReplacementRef.current = null;
       setLiveAnnotations([]);
-      setViewerCandidates(buildViewerMeasurementValueCandidates(persistedAnnotations));
+      setLiveVerifiedEchoEvidence({ candidates: [], efVolumes: {} });
+      setViewerCandidates(buildViewerMeasurementValueCandidates(persistedAnnotations, { includeLVSimpson: false }));
       setSavedAnnotations(persistedAnnotations);
     } catch (loadError) {
       console.error('[AR Research] unable to load Research Read context', loadError);
@@ -289,17 +352,25 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
     [context?.readSchema]
   );
   const readDomain = cleanString(context?.readSchema?.domain).toLowerCase();
+  // The authoring modal and in-viewer assessment must consume the same
+  // ordered question definition. Legacy grouping remains for old snapshots.
+  const questionNavigationMode =
+    context?.readSchema?.config?.questionNavigationMode === 'authored'
+      ? 'authored' : 'legacy';
   const visibleFields = useMemo(
-    () => fields.filter(field => !isResearchCompanionHidden(field, fields, readDomain)),
-    [fields, readDomain]
+    () => fields.filter(field =>
+      !isResearchCompanionHidden(field, fields, readDomain, questionNavigationMode)),
+    [fields, readDomain, questionNavigationMode]
   );
   useEffect(() => {
     if (!visibleFields.length) return;
     setSelectedFieldKey(current =>
       visibleFields.some(field => field.key === current) ? current :
-      (visibleFields.find(field => field.required)?.key || visibleFields[0].key)
+      (questionNavigationMode === 'authored'
+        ? visibleFields[0].key
+        : (visibleFields.find(field => field.required)?.key || visibleFields[0].key))
     );
-  }, [visibleFields]);
+  }, [visibleFields, questionNavigationMode]);
 
   useEffect(() => {
     if (!protocolFramePickerIntent || !visibleFields.length) return;
@@ -311,53 +382,55 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
 
   const allAnnotations = useMemo(
     () => mergeMeasurementAnnotations(
-      savedAnnotations, liveAnnotations, deletedAnnotationIdsRef.current
+      savedAnnotations, liveAnnotations, deletedAnnotationIdsRef.current,
+      invalidatedEFSourceIdsRef.current
     ),
     [savedAnnotations, liveAnnotations]
   );
-
+  const persistedReadState = useMemo(
+    () => buildReadValueState(context?.review?.readResults || {}),
+    [context?.review?.readResults]
+  );
+  const persistedEF = useMemo(() => resolvePersistedResearchEF(
+    fields, persistedReadState.values, persistedReadState.sources,
+    savedAnnotations, allAnnotations, context?.sourceStudyInstanceUID,
+    invalidatedEFSourceIdsRef.current
+  ), [fields, persistedReadState, savedAnnotations, allAnnotations, context?.sourceStudyInstanceUID]);
+  const savedEFVolumes = useMemo(() => {
+    const efField = fields.find(field => field.componentKey === 'lvEjectionFraction');
+    const selected = getResearchEFRestoreSources(
+      efField, savedAnnotations, persistedReadState.sources[efField?.key]?.sourceMeasurementKey
+    ).filter(annotation => {
+      const id = getAnnotationKey(annotation);
+      return !deletedAnnotationIdsRef.current.has(id) &&
+        !invalidatedEFSourceIdsRef.current.has(id);
+    });
+    return measureEFOpenStage('research-saved-volumes', () =>
+      getLVSimpsonSourceVolumes(selected, { verifiedSavedSources: !!persistedEF }));
+  }, [fields, savedAnnotations, persistedReadState, allAnnotations, persistedEF]);
+  const displayedEFVolumes = {
+    ...liveVerifiedEchoEvidence.efVolumes,
+    ...Object.fromEntries(Object.entries(savedEFVolumes).filter(
+      ([slot, volume]) => volume != null || liveVerifiedEchoEvidence.efVolumes[slot] == null
+    )),
+  };
   const calculatedReadState = useMemo(() => {
     if (context?.readOnly || context?.preview) {
       return { values, sources: valueSources };
     }
-    // Derive the IVC number from verified, case-scoped Length annotations as
-    // soon as they exist. Do not wait for an unrelated MeasurementService
-    // event to bind the value into local React state.
-    const ivcField = fields.find(field =>
-      field.componentKey === 'ivcCollapsibility'
+    // All guided Echo composites now reconcile from the same verified
+    // source-annotation snapshot. Education and Research share the calculation
+    // engines; Research retains its own ReadSchema values and ownership.
+    const reconciled = reconcileResearchEchoCompositeAnswers(
+      fields, values, valueSources, allAnnotations,
+      withPersistedEF(liveVerifiedEchoEvidence.candidates, persistedEF),
+      { verifiedEFOnly: true }
     );
-    const ivcCandidates = ivcField
-      ? getResearchCompatibleMeasurementCandidates(
-          ivcField, viewerCandidates || [], allAnnotations
-        )
-      : [];
-    const updates = ivcField
-      ? buildViewerMeasurementReadUpdates(
-          [ivcField], ivcCandidates,
-          getResearchBindingSources(ivcField, valueSources, ivcCandidates)
-        )
-      : [];
-    const nextValues = { ...values };
-    const nextSources = { ...valueSources };
-    // Do not display an old collapsibility percentage when its source pair
-    // has been deleted, is duplicated, or no longer matches the fixed frames.
-    if (ivcField && getResearchProtocolViewerTargets(ivcField).length &&
-        !ivcCandidates.length) {
-      delete nextValues[ivcField.key];
-      delete nextSources[ivcField.key];
-    }
-    for (const update of updates) {
-      nextValues[update.fieldKey] = update.value;
-      nextSources[update.fieldKey] = {
-        source: update.source,
-        sourceMeasurementKey: update.sourceMeasurementKey,
-      };
-    }
     return buildCalculatedReadState(
-      fields, nextValues, nextSources, viewerCandidates
+      fields, reconciled.values, reconciled.sources, viewerCandidates
     );
   }, [context?.readOnly, context?.preview, fields, values, valueSources,
-      viewerCandidates, allAnnotations]);
+      viewerCandidates, allAnnotations, liveVerifiedEchoEvidence.candidates, persistedEF]);
   const missingRequired = useMemo(
     () => getMissingRequiredReadFields(fields, calculatedReadState.values),
     [fields, calculatedReadState.values]
@@ -383,7 +456,9 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
     });
   }, []);
 
-  const refreshViewerMeasurementBindings = useCallback(async () => {
+  const refreshViewerMeasurementBindings = useCallback(async (
+    prepared?: { serialized: any; efSnapshot: any }, explicitLAFieldKey = ''
+  ) => {
     if (
       !commandsManager ||
       !fields.length ||
@@ -394,13 +469,20 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
       return;
     }
 
+    const endBinding = beginEFOpenStage('research-binding');
     try {
-      const serialized = await commandsManager.runCommand(
+      const serialized = prepared?.serialized ?? await commandsManager.runCommand(
         'getSerializedViewerMeasurements',
         {
           domain: cleanString(context?.readSchema?.domain) || 'generic',
           workflow: VIEWER_MEASUREMENTS_WORKFLOW,
+          includeResearchEchoContours: true,
+          researchSavedAnnotations: savedAnnotations,
+          researchStudyInstanceId: context?.sourceStudyInstanceUID,
         }
+      );
+      const evidence = applyResearchSnapshotEvidence(
+        serialized, deletedAnnotationIdsRef.current, invalidatedEFSourceIdsRef.current
       );
 
       const snapshot = (Array.isArray(serialized?.annotations)
@@ -415,21 +497,72 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
       // candidate creation; otherwise a replaced IVC phase is still counted
       // twice until the next React render.
       const available = mergeMeasurementAnnotations(
-        savedAnnotations, snapshot, deletedAnnotationIdsRef.current
+        savedAnnotations, snapshot, deletedAnnotationIdsRef.current,
+        invalidatedEFSourceIdsRef.current
       );
-      const candidates = buildViewerMeasurementValueCandidates(available);
-
+      const liveVerified = (Array.isArray(evidence.candidates)
+        ? evidence.candidates : []).filter(candidate =>
+        getResearchSourceAnnotationIds(candidate?.sourceMeasurementKey).every(id =>
+          available.some(item => getAnnotationKey(item) === id)
+        )
+      );
+      const efField = fields.find(field => field.componentKey === 'lvEjectionFraction');
+      let verifiedEF: any = null;
+      if (efField) {
+        const reviewedEF = prepared?.efSnapshot ?? await commandsManager.runCommand('getViewerQuizLVSimpsonForActiveStudy');
+        verifiedEF = String(reviewedEF?.studyInstanceId || '') ===
+          String(context?.sourceStudyInstanceUID || '')
+          ? getVerifiedResearchEFResultCandidate(efField, reviewedEF, available) : null;
+      }
+      // An explicit Calculate EF snapshot is the same trusted result the
+      // Education capture command uses. Deduplicate by source identity:
+      // repeated live/explicit candidates are not competing measurements.
+      const verifiedEvidence = dedupeResearchMeasurementCandidates([
+        ...liveVerified, ...(verifiedEF ? [verifiedEF] : []),
+      ]);
+      setLiveVerifiedEchoEvidence({
+        candidates: verifiedEvidence,
+        efVolumes: evidence.efVolumes || {},
+      });
+      const savedEF = resolvePersistedResearchEF(
+        fields, persistedReadState.values, persistedReadState.sources,
+        savedAnnotations, available, context?.sourceStudyInstanceUID,
+        invalidatedEFSourceIdsRef.current
+      );
+      const candidateList = [
+        ...buildViewerMeasurementValueCandidates(available, { includeLVSimpson: false }),
+        ...withPersistedEF(verifiedEvidence, savedEF),
+      ];
+      const candidates = dedupeResearchMeasurementCandidates(candidateList);
       setViewerCandidates(candidates);
       const updates = fields.flatMap(field => {
         const compatible = getResearchCompatibleMeasurementCandidates(
           field, candidates, available
         );
+        if (field.key === explicitLAFieldKey && field.componentKey === 'laVolumeDisks') {
+          // Explicit recalculation may replace a legacy manual answer, but
+          // only from the two unambiguous, calibrated and verified sources.
+          const phases = getResearchLAPhaseSources(field, available, context.sourceStudyInstanceUID);
+          const rows = ['A4C', 'A2C'].map(slot => phases.phaseSources[slot]);
+          if (phases.unresolvedCount || rows.some(items => items.length !== 1 ||
+              !items[0].matchesTarget || items[0].areaCM2 == null)) return [];
+          const ids = rows.map(items => getAnnotationKey(items[0].annotation));
+          const derived = compatible.filter(candidate =>
+            candidate.source === 'viewer-derived' &&
+            cleanString(candidate.sourceMeasurementKey).startsWith('la-disks:') &&
+            getResearchSourceAnnotationIds(candidate.sourceMeasurementKey).length === 2 &&
+            ids.every(id => getResearchSourceAnnotationIds(candidate.sourceMeasurementKey).includes(id)));
+          return buildViewerMeasurementReadUpdates([field], derived, {});
+        }
         return buildViewerMeasurementReadUpdates(
           [field], compatible,
           getResearchBindingSources(field, valueSourcesRef.current, compatible)
         );
       });
 
+      if (explicitLAFieldKey && !updates.some(update => update.fieldKey === explicitLAFieldKey)) {
+        notify(servicesManager, 'LA volume could not be recalculated from two verified calibrated contours.', 'warning');
+      }
       if (!updates.length) {
         return;
       }
@@ -480,15 +613,77 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
         '[AR Research] viewer measurement binding refresh failed',
         bindingError
       );
-    }
+      if (explicitLAFieldKey) {
+        notify(servicesManager, 'Unable to recalculate LA volume. Existing saved evidence was not changed.', 'warning');
+      }
+    } finally { endBinding(); }
   }, [
     commandsManager,
     context?.preview,
     context?.readOnly,
     context?.readSchema?.domain,
+    context?.sourceStudyInstanceUID,
     fields,
     savedAnnotations,
+    persistedReadState,
+    servicesManager,
   ]);
+
+  // Education already listens to this exact EF calculation/capture event.
+  // Research subscribes to the same checkpoint and supplies its own saved
+  // ReadSchema source/answer adapter; never trust the event value alone.
+  useEffect(() => {
+    if (!commandsManager || !context?.reviewKey ||
+        context.readOnly || context.preview) return;
+    const onCalculatedEF = (event: Event) => {
+      void (async () => {
+        const detail = (event as CustomEvent)?.detail || {};
+        const field = fields.find(item =>
+          item.componentKey === 'lvEjectionFraction' && item.key === selectedFieldKey
+        );
+        if (!field) return;
+        const snapshot = await commandsManager.runCommand('getViewerQuizLVSimpsonForActiveStudy');
+        if (!isMatchingQuizEFCompletion({
+          mode: String(detail.mode || ''),
+          authoringMode: false,
+          questionKind: 'lvSimpsonEF',
+          eventStudy: String(detail.studyInstanceId || ''),
+          activeStudy: String(snapshot?.studyInstanceId || ''),
+          eventValue: detail.value,
+          currentValue: snapshot?.composite?.value,
+        }) || String(snapshot?.studyInstanceId || '') !==
+          String(context.sourceStudyInstanceUID || '')) return;
+
+        const serialized = await commandsManager.runCommand('getSerializedViewerMeasurements', {
+          domain: 'echo', workflow: VIEWER_MEASUREMENTS_WORKFLOW,
+          includeResearchEchoContours: true,
+          researchSavedAnnotations: savedAnnotations,
+          researchStudyInstanceId: context?.sourceStudyInstanceUID,
+        });
+        applyResearchSnapshotEvidence(
+          serialized, deletedAnnotationIdsRef.current, invalidatedEFSourceIdsRef.current
+        );
+        const available = mergeMeasurementAnnotations(
+          savedAnnotations, Array.isArray(serialized?.annotations) ? serialized.annotations : [],
+          deletedAnnotationIdsRef.current, invalidatedEFSourceIdsRef.current
+        );
+        const verified = getVerifiedResearchEFResultCandidate(field, snapshot, available);
+        if (!verified) {
+          notify(servicesManager,
+            'EF calculated, but its four saved contours do not match the Research protocol frames. Review each source frame before saving.',
+            'warning');
+          return;
+        }
+        await refreshViewerMeasurementBindings({ serialized, efSnapshot: snapshot });
+      })().catch(error =>
+        console.warn('[AR Research] verified EF capture refresh failed', error)
+      );
+    };
+    window.addEventListener('ar-measurements:lv-simpson-capture-requested', onCalculatedEF);
+    return () => window.removeEventListener('ar-measurements:lv-simpson-capture-requested', onCalculatedEF);
+  }, [commandsManager, context?.reviewKey, context?.readOnly, context?.preview,
+      context?.sourceStudyInstanceUID, fields, selectedFieldKey, savedAnnotations,
+      refreshViewerMeasurementBindings, servicesManager]);
 
   const removeResearchSourceIds = useCallback(async (ids: string[]) => {
     const unique = Array.from(new Set(ids.map(cleanString).filter(Boolean)));
@@ -507,6 +702,14 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
       !getResearchSourceAnnotationIds(candidate?.sourceMeasurementKey)
         .some(id => removed.has(id))
     ));
+    setLiveVerifiedEchoEvidence(current => ({
+      candidates: current.candidates.filter(candidate =>
+        !getResearchSourceAnnotationIds(candidate?.sourceMeasurementKey)
+          .some(id => removed.has(id))
+      ),
+      // Clear live slot readouts until the post-deletion snapshot is verified.
+      efVolumes: {},
+    }));
     const affected = new Set(Object.entries(valueSourcesRef.current)
       .filter(([, source]) =>
         getResearchSourceAnnotationIds(source?.sourceMeasurementKey)
@@ -598,10 +801,24 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
 
     let cancelled = false;
 
+    let refreshTimer: number | undefined;
+    let running = false;
+    let pending = false;
     const refresh = () => {
-      if (!cancelled) {
-        void refreshViewerMeasurementBindings();
-      }
+      if (cancelled) return;
+      pending = true;
+      if (running || refreshTimer !== undefined) return;
+      refreshTimer = window.setTimeout(async () => {
+        refreshTimer = undefined;
+        if (cancelled) return;
+        running = true;
+        pending = false;
+        try { await refreshViewerMeasurementBindings(); }
+        finally {
+          running = false;
+          if (pending && !cancelled) refresh();
+        }
+      }, 50);
     };
 
     const events = measurementService.EVENTS || {};
@@ -640,6 +857,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
 
     return () => {
       cancelled = true;
+      if (refreshTimer !== undefined) window.clearTimeout(refreshTimer);
 
       subscriptions.forEach(subscription =>
         subscription?.unsubscribe?.()
@@ -662,7 +880,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
   ]);
 
   const captureViewerAnnotations = useCallback(async () => {
-    if (!commandsManager) return savedAnnotations;
+    if (!commandsManager) throw new Error('Viewer measurement service unavailable');
 
     try {
       const serialized = await commandsManager.runCommand(
@@ -670,24 +888,41 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
         {
           domain: cleanString(context?.readSchema?.domain) || 'generic',
           workflow: VIEWER_MEASUREMENTS_WORKFLOW,
+          includeResearchEchoContours: true,
+          researchSavedAnnotations: savedAnnotations,
+          researchStudyInstanceId: context?.sourceStudyInstanceUID,
         }
       );
+      if (!Array.isArray(serialized?.annotations)) {
+        throw new Error('Viewer measurement snapshot is unavailable');
+      }
 
-      return mergeMeasurementAnnotations(
-        savedAnnotations,
-        Array.isArray(serialized?.annotations) ? serialized.annotations : [],
-        deletedAnnotationIdsRef.current
+      const evidence = applyResearchSnapshotEvidence(
+        serialized, deletedAnnotationIdsRef.current, invalidatedEFSourceIdsRef.current
       );
+      const liveIds = new Set(serialized.annotations.map(getAnnotationKey));
+      // Never save stale geometry after a genuine edit if that source is
+      // temporarily unavailable. Unchanged saved sources need no hydration.
+      if (savedAnnotations.some(annotation => {
+        const id = getAnnotationKey(annotation);
+        return invalidatedEFSourceIdsRef.current.has(id) &&
+          !deletedAnnotationIdsRef.current.has(id) && !liveIds.has(id);
+      })) throw new Error('An edited EF contour is not available. Restore its frame before saving.');
+      return {
+        annotations: mergeMeasurementAnnotations(
+          savedAnnotations, serialized.annotations, deletedAnnotationIdsRef.current,
+          invalidatedEFSourceIdsRef.current
+        ),
+        verifiedCandidates: Array.isArray(evidence.candidates) ? evidence.candidates : [],
+      };
     } catch (captureError) {
       console.warn(
         '[AR Research] viewer measurement capture failed; preserving saved annotations',
         captureError
       );
-      return savedAnnotations.filter(annotation =>
-        !deletedAnnotationIdsRef.current.has(getAnnotationKey(annotation))
-      );
+      throw new Error('Could not capture current viewer annotations. Research Read was not saved.');
     }
-  }, [commandsManager, context?.readSchema?.domain, savedAnnotations]);
+  }, [commandsManager, context?.readSchema?.domain, context?.sourceStudyInstanceUID, savedAnnotations]);
 
   const save = useCallback(async () => {
     if (!context?.reviewKey || context?.readOnly || context?.preview) {
@@ -698,11 +933,49 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
     setError('');
 
     try {
-      const measurementAnnotations = await captureViewerAnnotations();
+      const captured = await captureViewerAnnotations();
+      const measurementAnnotations = captured.annotations;
       // Recompute against the exact annotations being persisted. Otherwise a
       // fresh toolbar measurement can race the React event/state update and
       // save as an unlinked viewer annotation with an empty numeric field.
-      const latestCandidates = buildViewerMeasurementValueCandidates(measurementAnnotations);
+      const validCapturedIds = new Set(measurementAnnotations.map(getAnnotationKey));
+      const freshVerified = captured.verifiedCandidates.filter(candidate =>
+        getResearchSourceAnnotationIds(candidate?.sourceMeasurementKey).every(id =>
+          validCapturedIds.has(id)
+        )
+      );
+      const efField = fields.find(field => field.componentKey === 'lvEjectionFraction');
+      const efSnapshot = efField
+        ? await commandsManager.runCommand('getViewerQuizLVSimpsonForActiveStudy')
+        : null;
+      const verifiedEF = efField && String(efSnapshot?.studyInstanceId || '') ===
+        String(context?.sourceStudyInstanceUID || '')
+        ? getVerifiedResearchEFResultCandidate(efField, efSnapshot, measurementAnnotations)
+        : null;
+      const savedEF = resolvePersistedResearchEF(
+        fields, persistedReadState.values, persistedReadState.sources,
+        savedAnnotations, measurementAnnotations, context?.sourceStudyInstanceUID,
+        invalidatedEFSourceIdsRef.current
+      );
+      const freshVerifiedEvidence = withPersistedEF([
+        ...freshVerified, ...(verifiedEF ? [verifiedEF] : []),
+      ], savedEF);
+      const candidateList = [
+        ...buildViewerMeasurementValueCandidates(measurementAnnotations, { includeLVSimpson: false }),
+        ...freshVerifiedEvidence,
+      ];
+      const latestCandidates = dedupeResearchMeasurementCandidates(candidateList);
+      // An explicitly calculated EF with contour evidence is never a
+      // successful zero-result draft. Preserve the measurements and explain
+      // the frame/source failure rather than silently saving an empty answer.
+      if (efField && efSnapshot?.composite?.measurementKind === 'lvSimpsonEF' &&
+          !verifiedEF) {
+        throw new Error(
+          'Calculated EF cannot be saved: its four contours do not match the ' +
+          'Research protocol DICOM frames or contain duplicate/invalid source IDs. ' +
+          'Review each EF frame; existing annotations were not overwritten.'
+        );
+      }
       const freshUpdates = fields.flatMap(field => {
         const compatible = getResearchCompatibleMeasurementCandidates(
           field, latestCandidates, measurementAnnotations
@@ -712,8 +985,14 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
           getResearchBindingSources(field, valueSourcesRef.current, compatible)
         );
       });
-      const latestValues = { ...values };
-      const latestSources = { ...valueSourcesRef.current };
+      // Save must use the same verified derived values shown in the question,
+      // even if the last MeasurementService event has not yet been delivered.
+      const reconciled = reconcileResearchEchoCompositeAnswers(
+        fields, values, valueSourcesRef.current, measurementAnnotations,
+        freshVerifiedEvidence, { verifiedEFOnly: true }
+      );
+      const latestValues = { ...reconciled.values };
+      const latestSources = { ...reconciled.sources };
       for (const update of freshUpdates) {
         latestValues[update.fieldKey] = update.value;
         latestSources[update.fieldKey] = {
@@ -771,6 +1050,27 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
           latestReadState.sources
         ),
       };
+      // A complete EF contour set without a valid structured EF answer is
+      // not a successful assessment save. Partial drafts remain saveable.
+      // Do not silently overwrite a previously saved Research EF with zero.
+      const efSlots = new Set(measurementAnnotations
+        .filter(annotation =>
+          annotation?.measurementKind === 'lvSimpsonSlot' ||
+          annotation?.lvSimpson?.measurementKind === 'lvSimpsonSlot' ||
+          annotation?.measurements?.lvSimpson?.measurementKind === 'lvSimpsonSlot'
+        )
+        .map(annotation => String(annotation?.slot ||
+          annotation?.lvSimpson?.slot || annotation?.measurements?.lvSimpson?.slot || ''))
+        .filter(Boolean));
+      if (efField &&
+          ['A4C_ED', 'A4C_ES', 'A2C_ED', 'A2C_ES'].every(slot => efSlots.has(slot)) &&
+          !readResults.entries.some(entry => entry.componentKey === 'lvEjectionFraction')) {
+        throw new Error(
+          'All four EF contour phases are present, but no protocol-verified EF answer ' +
+          'could be captured. Research Read was not saved; check duplicate contours ' +
+          'and exact frame targets in the EF panel.'
+        );
+      }
       const saved = await saveResearchReadReview({
         reviewKey: context.reviewKey,
         readResults,
@@ -795,6 +1095,10 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
           : measurementAnnotations
       );
       deletedAnnotationIdsRef.current = new Set();
+      invalidatedEFSourceIdsRef.current = new Set();
+      setLiveAnnotations([]);
+      setLiveVerifiedEchoEvidence({ candidates: [], efVolumes: {} });
+      setViewerCandidates(latestCandidates);
       notify(
         servicesManager,
         `Research Read saved (${readResults.entries.length} structured result${
@@ -818,6 +1122,9 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
     servicesManager,
     calculatedReadState,
     values,
+    persistedReadState,
+    savedAnnotations,
+    commandsManager,
   ]);
 
   const complete = useCallback(async () => {
@@ -879,23 +1186,31 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
   ]);
 
   const jumpToAnnotation = useCallback(
-    async annotation => {
+    async (annotation: any, options: {
+      requireExactSopFrame?: boolean; isCancelled?: () => boolean;
+    } = {}) => {
+      if (options.isCancelled?.()) return false;
       try {
         const result = await commandsManager.runCommand('jumpToSavedViewerAnnotation', {
           annotation,
           selectAnnotation: true,
           pauseCineOnSource: true,
+          ...options,
         });
+        if (options.isCancelled?.()) return false;
         if (result?.ok !== true) {
           throw new Error(result?.reason || 'saved source navigation was unsuccessful');
         }
+        return true;
       } catch (jumpError) {
+        if (options.isCancelled?.()) return false;
         console.warn('[AR Research] saved annotation navigation failed', jumpError);
         notify(
           servicesManager,
           'Unable to navigate to the saved viewer annotation.',
           'warning'
         );
+        return false;
       }
     },
     [commandsManager, servicesManager]
@@ -936,17 +1251,22 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
         session: protocolFramePickerIntent.session,
         studyInstanceUID: protocolFramePickerIntent.studyInstanceUID,
         componentKey: protocolFramePickerIntent.componentKey,
-        phaseKey: protocolFramePickerIntent.phaseKey,
+        phaseKey: capturePhaseKey,
         target,
       }, protocolFramePickerIntent.parentOrigin);
       setCapturedProtocolFrame(
         'Captured frame ' + target.frameNumber +
         ' for ' + protocolFramePickerIntent.componentKey +
-        (protocolFramePickerIntent.phaseKey
-          ? ' / ' + protocolFramePickerIntent.phaseKey : '') +
+        (capturePhaseKey ? ' / ' + capturePhaseKey : '') +
         '. Return to Research Manager and click Save.'
       );
       notify(servicesManager, 'Frame sent to Research Manager. Save the protocol there.');
+      if (isBatchFramePicker) {
+        const currentIndex = capturePhases.findIndex(phase => phase.slot === capturePhaseKey);
+        if (currentIndex >= 0 && currentIndex + 1 < capturePhases.length) {
+          setCapturePhaseSelection(capturePhases[currentIndex + 1].slot);
+        }
+      }
     } catch (captureError) {
       console.warn('[AR Research] unable to capture authoring frame', captureError);
       notify(servicesManager,
@@ -958,7 +1278,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
   };
 
   const jumpToProtocolTarget = async (target: any, fieldKey: string) => {
-    if (!commandsManager) return;
+    if (!commandsManager) return false;
     try {
       const result = await commandsManager.runCommand('jumpToViewerQuizTarget', {
         viewerTarget: target,
@@ -969,40 +1289,110 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
       if (result?.ok !== true) {
         throw new Error(result?.reason || 'protocol target navigation failed');
       }
+      return true;
     } catch (navigationError) {
       console.warn('[AR Research] protocol frame navigation failed', navigationError);
       notify(servicesManager, 'Unable to open the configured protocol instance/frame.', 'warning');
+      return false;
     }
   };
 
-  const navigateToField = async (field: any) => {
+  // A deleted source must not be restored by queued navigation. Reuse this
+  // same guarded display path for automatic selection and explicit resolution.
+  const restoreResearchAnnotationSource = (item: any, isCancelled: () => boolean) => {
+    const sourceId = getAnnotationKey(item.annotation);
+    const cancelled = () => isCancelled() || !sourceId ||
+      deletedAnnotationIdsRef.current.has(sourceId);
+    return jumpToAnnotation({
+      ...item.displayAnnotation,
+      ...(context?.readOnly || context?.preview ? { isLocked: true } : {}),
+    }, { requireExactSopFrame: true, isCancelled: cancelled });
+  };
+
+  const navigateToField = async (field: any, isCancelled: () => boolean) => {
+    if (isCancelled()) return false;
+    if (isResearchLengthQuestion(field, readDomain)) {
+      const state = getResearchLengthSourceState(
+        field, calculatedReadState.sources[field.key], allAnnotations,
+        viewerCandidates || [], context?.sourceStudyInstanceUID);
+      const source = state.selected || (state.status === 'unbound' &&
+        !context?.readOnly && !context?.preview ? state.eligible[0] : null);
+      if (source) return restoreResearchAnnotationSource(source, isCancelled);
+      if (state.status === 'invalid' || state.status === 'ambiguous') {
+        notify(servicesManager, 'Choose or resolve the exact Length measurement source before continuing.', 'warning');
+        return false;
+      }
+      const target = getResearchQuestionEntryTarget(field);
+      return target ? jumpToProtocolTarget(target, field.key) : true;
+    }
     const targets = getResearchProtocolViewerTargets(field);
     const initialTarget = getResearchQuestionEntryTarget(field);
     // Research IVC starts at the explicit expiration frame, as Education
     // does; other multi-phase questions still require an explicit choice.
     if (initialTarget) {
       await jumpToProtocolTarget(initialTarget, field.key);
-      return;
+      return true;
     }
-    if (targets.length > 1) return;
+    if (targets.length > 1) return true;
     const sourceAnnotations = getResearchFieldSourceAnnotations(
       calculatedReadState.sources[field.key], allAnnotations,
       getResearchFieldMeasurementCandidates(field, viewerCandidates || [])
     );
     if (sourceAnnotations.length === 1) {
-      await jumpToAnnotation(sourceAnnotations[0]);
+      await jumpToAnnotation(sourceAnnotations[0], { isCancelled });
     }
+    return true;
   };
 
+  const selectionGenerationRef = useRef(0);
+  const selectionQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const initializedReviewRef = useRef('');
+  const editingAllowedRef = useRef(false);
+  editingAllowedRef.current = !!context && !context.readOnly && !context.preview &&
+    !saving && !completing;
+  // Serialize navigation and invalidate stale work, including A -> B -> A.
+  const queueNavigation = (work: (isCancelled: () => boolean) => Promise<void>) => {
+    const generation = ++selectionGenerationRef.current;
+    const isCancelled = () => selectionGenerationRef.current !== generation;
+    const run = async () => { if (!isCancelled()) await work(isCancelled); };
+    selectionQueueRef.current = selectionQueueRef.current.then(run, run).catch(error => {
+      if (isCancelled()) return;
+      console.warn('[AR Research] question navigation failed', error);
+      notify(servicesManager, 'Unable to navigate to the selected measurement.', 'warning');
+    });
+  };
+  const runFieldSelection = (field: any) => queueNavigation(async isCancelled => {
+    const navigated = await navigateToField(field, isCancelled);
+    if (!navigated || isCancelled() || !editingAllowedRef.current) return;
+    const toolName = getResearchMeasurementToolForField(field, readDomain);
+    if (toolName) {
+      await commandsManager?.runCommand('activateViewerMeasurementTool', {
+        toolName, stopCine: true,
+      });
+    }
+  });
   const selectField = (key: string) => {
     const field = fields.find(item => item.key === key);
     if (!field) return;
-    // Leaving an unfinished redraw abandons the pending replacement, not the
-    // old source. No annotation is removed until a new one has been verified.
     pendingIVCReplacementRef.current = null;
+    initializedReviewRef.current = cleanString(context?.reviewKey);
     setSelectedFieldKey(key);
-    void navigateToField(field);
+    runFieldSelection(field);
   };
+  // A reopened review's first selected Length question also restores its
+  // saved source. Do not jump again whenever binding refreshes or Save runs.
+  useEffect(() => {
+    const reviewKey = cleanString(context?.reviewKey);
+    if (loading || !commandsManager || context?.preview || !reviewKey ||
+        initializedReviewRef.current === reviewKey || !selectedFieldKey) return;
+    const field = visibleFields.find(item => item.key === selectedFieldKey);
+    if (!field) return;
+    initializedReviewRef.current = reviewKey;
+    if (isResearchLengthQuestion(field, readDomain)) runFieldSelection(field);
+  }, [loading, commandsManager, context?.reviewKey, context?.preview,
+    selectedFieldKey, visibleFields, readDomain]);
+  useEffect(() => () => { ++selectionGenerationRef.current; },
+    [context?.reviewKey, context?.readOnly, context?.preview]);
 
   const selectSourceCandidate = (field: any, candidate: any) => {
     const updates = buildViewerMeasurementReadUpdates([field], [candidate], {});
@@ -1054,7 +1444,9 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
   const isBusy = saving || completing;
   const selectedField = visibleFields.find(field => field.key === selectedFieldKey) ||
     visibleFields[0];
-  const groupedFields = getResearchGroupedFields(selectedField, fields, readDomain);
+  const groupedFields = getResearchGroupedFields(
+    selectedField, fields, readDomain, questionNavigationMode
+  );
   const isIVCRapRVSPQuestion = readDomain === 'echo' &&
     selectedField?.componentKey === 'ivcCollapsibility' &&
     groupedFields.some(item => ['rap', 'rvsp'].includes(item.componentKey));
@@ -1062,10 +1454,36 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
     ? getResearchCompatibleMeasurementCandidates(
         selectedField, viewerCandidates || [], allAnnotations
       ) : [];
-  const selectedSources = selectedField
-    ? getResearchFieldSourceAnnotations(
+  const selectedLA = readDomain === 'echo' && selectedField?.componentKey === 'laVolumeDisks';
+  const laPhaseState = selectedLA ? getResearchLAPhaseSources(
+    selectedField, allAnnotations, context?.sourceStudyInstanceUID
+  ) : null;
+  const laValue = selectedLA && calculatedReadState.sources[selectedField.key]?.source === 'viewer-derived'
+    ? calculatedReadState.values[selectedField.key] : null;
+  const laManualValue = selectedLA && calculatedReadState.sources[selectedField.key]?.source === 'manual'
+    ? calculatedReadState.values[selectedField.key] : null;
+  const selectedLength = isResearchLengthQuestion(selectedField, readDomain);
+  const lengthState = selectedLength ? getResearchLengthSourceState(
+    selectedField, calculatedReadState.sources[selectedField.key], allAnnotations,
+    viewerCandidates || [], context?.sourceStudyInstanceUID) : null;
+  const selectedSources = lengthState
+    ? lengthState.eligible.map(item => item.annotation)
+    : selectedField ? getResearchFieldSourceAnnotations(
         calculatedReadState.sources[selectedField.key], allAnnotations, selectedCandidates
       ) : [];
+  const showLengthSourceResolution = !!lengthState &&
+    (lengthState.status === 'invalid' || lengthState.status === 'ambiguous' ||
+      lengthState.eligible.length > 1 ||
+      (lengthState.status === 'manual' && lengthState.eligible.length > 0) ||
+      (lengthState.status === 'unbound' && (context.readOnly || context.preview)));
+  const sourceResolutionCandidates = lengthState
+    ? lengthState.eligible.map(item => item.candidate) : selectedCandidates;
+  const viewLengthSource = (item: any) => queueNavigation(async isCancelled => {
+    await restoreResearchAnnotationSource(item, isCancelled);
+  });
+  // Research review annotations are already review-scoped. Use the same
+  // verified single-view calculator and display component as Education.
+  // This is presentation only; Research ReadSchema owns the numeric answer.
   const protocolTargets = selectedField ? getResearchProtocolViewerTargets(selectedField) : [];
   const guidedOwnsProtocolFrames = readDomain === 'echo' &&
     ['trVmax', 'lvEjectionFraction', 'laVolumeDisks', 'rvFac', 'ivcCollapsibility']
@@ -1086,48 +1504,52 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
     !!selectedField?.config?.calculation
   );
   const completedFields = visibleFields.filter(field =>
-    isResearchQuestionAnswered(field, fields, calculatedReadState.values, readDomain)
+    isResearchQuestionAnswered(
+      field, fields, calculatedReadState.values, readDomain, questionNavigationMode
+    )
   ).length;
-  const linkedAnnotationKeys = new Set(fields.flatMap(field =>
-    getResearchFieldSourceAnnotations(
-      calculatedReadState.sources[field.key], allAnnotations,
-      getResearchFieldMeasurementCandidates(field, viewerCandidates || [])
-    ).map(getAnnotationKey)
-  ));
-  const unlinkedAnnotations = allAnnotations.filter(annotation =>
-    !linkedAnnotationKeys.has(getAnnotationKey(annotation))
-  );
 
+  // The Research controller retains its Research Review contract, verified
+  // DICOM source evidence and completion authorization. The rendered panel
+  // itself is the same LearningQuestionPanel used by Education.
   return (
-    <div className="h-full overflow-auto p-3 text-white">
-      <div className="mb-3 rounded border border-gray-700 bg-gray-950 p-3">
-        <div className="text-sm font-semibold">{title}</div>
-        <div className="mt-1 text-xs text-gray-400">
-          {cleanString(context?.imagingProfile?.label) ||
-            cleanString(context?.imagingProfileKey) ||
-            'Research imaging profile'}
-          {' - '}
-          {cleanString(context?.readSchema?.schemaKey)}
-          {context?.readSchema?.schemaVersion
-            ? ` v${context.readSchema.schemaVersion}`
-            : ''}
-        </div>
-        <div className="mt-2 flex flex-wrap gap-2 text-xs">
-          <span className="rounded bg-gray-800 px-2 py-1">
+    <LearningQuestionPanel
+      title={title}
+      groups={[{
+        key: 'research-read-fields',
+        questions: visibleFields.map(field => ({
+          key: field.key,
+          label: getResearchQuestionLabel(field, fields, readDomain, questionNavigationMode),
+          answered: isResearchQuestionAnswered(
+            field, fields, calculatedReadState.values, readDomain, questionNavigationMode
+          ),
+          required: field.required,
+        })),
+      }]}
+      selectedKey={selectedField?.key || ''}
+      selectedQuestion={selectedField ? {
+        key: selectedField.key,
+        index: visibleFields.indexOf(selectedField),
+        title: getResearchQuestionLabel(selectedField, fields, readDomain, questionNavigationMode),
+        required: selectedField.required,
+        hasViewerTarget: getResearchProtocolViewerTargets(selectedField).length > 0,
+      } : null}
+      onSelect={selectField}
+      disabled={isBusy}
+      readOnly={context.readOnly}
+      selectorTitle="Question"
+      description={
+        (cleanString(context?.imagingProfile?.label) ||
+          cleanString(context?.imagingProfileKey) || 'Research imaging profile') +
+        ' · ' + cleanString(context?.readSchema?.schemaKey) +
+        (context?.readSchema?.schemaVersion ? ' v' + context.readSchema.schemaVersion : '')
+      }
+      topContent={
+        <>
+          <div className="text-xs text-gray-400">
             {context.preview ? 'Protocol preview' : reviewStatus}
-          </span>
-          {context.readOnly ? (
-            <span className="rounded bg-yellow-950 px-2 py-1 text-yellow-200">
-              Read-only
-            </span>
-          ) : (
-            <span className="rounded bg-green-950 px-2 py-1 text-green-200">
-              Editable
-            </span>
-          )}
-        </div>
-      </div>
-
+            {' · '}{completedFields}/{visibleFields.length} questions answered
+          </div>
       {context.preview ? (
         <div className="mb-3 rounded border border-blue-900 bg-blue-950 p-3 text-xs text-blue-100">
           Protocol preview. Fields are shown exactly as readers will receive them;
@@ -1140,17 +1562,38 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
           <div className="font-semibold text-sm">Research protocol frame authoring</div>
           <p className="mt-1">
             Capture the source for {protocolFramePickerIntent.componentKey}
-            {protocolFramePickerIntent.phaseKey
+            {!isBatchFramePicker && protocolFramePickerIntent.phaseKey
               ? ' / ' + protocolFramePickerIntent.phaseKey : ''}.
             Select the correct instance and cine frame in the viewer first.
+            {isBatchFramePicker
+              ? ' Capture each phase here without reopening the viewer.' : ''}
           </p>
+          {isBatchFramePicker && capturePhases.length > 0 ? (
+            <label className="mt-2 block text-xs">
+              Contour / measurement phase
+              <select
+                className="mt-1 block w-full rounded border border-cyan-500 bg-gray-950 p-2 text-white"
+                value={capturePhaseKey}
+                disabled={capturingProtocolFrame}
+                onChange={event => setCapturePhaseSelection(event.target.value)}
+              >
+                {capturePhases.map(phase => (
+                  <option key={phase.slot} value={phase.slot}>{phase.label}</option>
+                ))}
+              </select>
+            </label>
+          ) : null}
           <button
             type="button"
             className="mt-2 rounded border border-cyan-500 bg-cyan-900 px-3 py-2 font-semibold text-white disabled:opacity-40"
             disabled={capturingProtocolFrame || !commandsManager}
             onClick={() => void captureCurrentProtocolFrame()}
           >
-            {capturingProtocolFrame ? 'Capturing current frame…' : 'Capture current frame'}
+            {capturingProtocolFrame
+              ? 'Capturing current frame…'
+              : isBatchFramePicker && capturePhaseKey
+                ? 'Capture ' + capturePhaseKey + ' frame'
+                : 'Capture current frame'}
           </button>
           {capturedProtocolFrame ? (
             <div role="status" className="mt-2 text-green-200">
@@ -1159,66 +1602,55 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
           ) : null}
         </div>
       ) : null}
-
-      {error ? (
-        <div className="mb-3 rounded border border-red-800 bg-red-950 p-3 text-sm text-red-100">
-          {error}
-        </div>
-      ) : null}
-
-      <div className="mb-3 rounded border border-gray-700 bg-gray-950 p-3">
-        <label htmlFor="research-read-field-select" className="text-xs font-semibold text-gray-200">
-          Question / measurement
-        </label>
-        <select
-          id="research-read-field-select"
-          className="mt-1 w-full min-w-0 rounded border border-gray-600 bg-gray-900 px-2 py-2 text-sm text-white"
-          value={selectedField?.key || ''}
-          onChange={event => selectField(event.target.value)}
-          disabled={isBusy}
-        >
-          {visibleFields.map((field, index) => {
-            const answered = isResearchQuestionAnswered(
-              field, fields, calculatedReadState.values, readDomain
-            );
-            return <option key={field.key} value={field.key}>
-              {index + 1}. {answered ? '✓ ' : ''}
-              {getResearchQuestionLabel(field, fields, readDomain)}
-              {field.required ? ' (required)' : ''}
-            </option>;
-          })}
-        </select>
-        <div className="mt-2 flex items-center justify-between gap-2">
-          <span className="text-xs text-gray-400">{completedFields}/{visibleFields.length} questions answered</span>
-          <div className="flex items-center gap-1">
-            <button
-              type="button"
-              className="rounded border border-gray-600 px-2 py-1 text-xs text-gray-200 disabled:opacity-40"
-              disabled={isBusy || visibleFields.indexOf(selectedField) <= 0}
-              onClick={() => selectField(visibleFields[visibleFields.indexOf(selectedField) - 1].key)}
-            >Previous</button>
-            <button
-              type="button"
-              className="rounded border border-gray-600 px-2 py-1 text-xs text-gray-200 disabled:opacity-40"
-              disabled={isBusy || visibleFields.indexOf(selectedField) >= visibleFields.length - 1}
-              onClick={() => selectField(visibleFields[visibleFields.indexOf(selectedField) + 1].key)}
-            >Next</button>
-          </div>
-        </div>
-      </div>
-
-      {selectedField ? (
-        <div className="space-y-2">
-          {!showGuidedIVCValue ? (
+        </>
+      }
+      questionContent={
+        <>
+          {!selectedLA && !showGuidedIVCValue && selectedField?.componentKey !== 'lvEjectionFraction' ? (
             <ReadField
               key={selectedField.key}
               field={selectedField}
               readDomain={readDomain}
+              hideHeader
+              lengthAnswer={selectedLength}
+              measurementLabel={lengthState?.selected
+                ? getAnnotationLabel(lengthState.selected.annotation) : ''}
               value={calculatedReadState.values[selectedField.key] ?? ''}
               source={calculatedReadState.sources[selectedField.key]}
               disabled={context.readOnly || context.preview || isBusy}
               onChange={nextValue => updateValue(selectedField.key, nextValue)}
+              onDelete={selectedLength && !lengthState?.selected &&
+                !(lengthState?.status === 'manual' &&
+                  cleanString(calculatedReadState.values[selectedField.key])) ? undefined : () => {
+                if (lengthState?.selected) {
+                  void deleteResearchAnnotation(lengthState.selected.annotation);
+                  return;
+                }
+                const source = calculatedReadState.sources[selectedField.key];
+                if (['viewer-derived', 'viewer-measurement'].includes(source?.source)) {
+                  if (selectedSources.length === 1) {
+                    void deleteResearchAnnotation(selectedSources[0]);
+                  } else {
+                    notify(servicesManager,
+                      'Select the exact measurement source to delete; multiple sources are linked.',
+                      'warning');
+                  }
+                } else {
+                  updateValue(selectedField.key, '');
+                }
+              }}
             />
+          ) : null}
+          {selectedField?.componentKey === 'rvFac' ? (
+            <div className="rounded border border-gray-700 bg-gray-950 p-2 text-xs">
+              <EchoCompositeResultStatus
+                value={calculatedReadState.sources[selectedField.key]?.source === 'viewer-derived'
+                  ? calculatedReadState.values[selectedField.key] : null}
+                unit={cleanString(selectedField.config?.unit)}
+                label={context.readOnly ? 'Saved calculated result' : 'Calculated measurement'}
+                unavailableMessage="Complete the calibrated contours on their protocol-selected frames."
+              />
+            </div>
           ) : null}
           {!isIVCRapRVSPQuestion ? groupedFields.map(companionField => (
             <ReadField
@@ -1236,8 +1668,51 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
               field={selectedField}
               commandsManager={commandsManager}
               sourceAnnotations={selectedSources}
+              assessmentSavedEFAnnotations={selectedField?.componentKey === 'lvEjectionFraction'
+                ? getResearchEFRestoreSources(
+                    selectedField,
+                    allAnnotations.filter(annotation =>
+                      String(annotation?.StudyInstanceUID || annotation?.referenceStudyUID || '') ===
+                        String(context?.sourceStudyInstanceUID || '') &&
+                      (!invalidatedEFSourceIdsRef.current.has(getAnnotationKey(annotation)) ||
+                        liveAnnotations.some(item => getAnnotationKey(item) === getAnnotationKey(annotation)))
+                    ),
+                    calculatedReadState.sources[selectedField.key]?.sourceMeasurementKey
+                  )
+                : null}
+              assessmentSavedEFResult={selectedField?.componentKey === 'lvEjectionFraction'
+                ? persistedEF : null}
               ivcMeasurementState={ivcMeasurementState}
               ivcReadValue={guidedIVCValue}
+              laPhaseState={laPhaseState}
+              laValue={laValue}
+              laManualValue={laManualValue}
+              onClearLAManualValue={() => updateValue(selectedField.key, '')}
+              onViewLASource={item => queueNavigation(async isCancelled => {
+                await restoreResearchAnnotationSource(item, isCancelled);
+              })}
+              onDeleteLASource={annotation => void deleteResearchAnnotation(annotation)}
+              onViewLAProtocolTarget={slot => queueNavigation(async isCancelled => {
+                if (!isCancelled()) await jumpToProtocolTarget(
+                  getResearchEchoPhaseTarget(selectedField, slot), selectedField.key);
+              })}
+              onRecalculateLA={() => refreshViewerMeasurementBindings(undefined, selectedField.key)}
+              efValue={calculatedReadState.values[selectedField.key] ?? ''}
+              onChangeEFValue={nextValue => updateValue(selectedField.key, nextValue)}
+              onDeleteEFValue={() => {
+                const source = calculatedReadState.sources[selectedField.key];
+                if (['viewer-derived', 'viewer-measurement'].includes(source?.source)) {
+                  if (selectedSources.length === 1) {
+                    void deleteResearchAnnotation(selectedSources[0]);
+                  } else {
+                    notify(servicesManager,
+                      'Open the EF panel to manage the linked contours.',
+                      'warning');
+                  }
+                } else {
+                  updateValue(selectedField.key, '');
+                }
+              }}
               onBeginIVCPhaseRedraw={beginIVCPhaseRedraw}
               onViewIVCSource={annotation => void jumpToAnnotation(annotation)}
               onDeleteIVCSource={annotation => void deleteResearchAnnotation(annotation)}
@@ -1246,10 +1721,25 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
               onError={message => notify(servicesManager, message, 'warning')}
             />
           ) : null}
-          {!showInlineIVCSources && (isSelectedMeasurement || genericProtocolTargets.length > 0) ? (
+          {selectedField?.componentKey === 'lvEjectionFraction' && (
+            <EchoEFContourVolumes
+              volumes={displayedEFVolumes}
+              status={persistedEF ? 'Saved' : Object.keys(liveVerifiedEchoEvidence.efVolumes).length ? 'Current' : 'Saved'}
+            />
+          )}
+          {!selectedLA && !showInlineIVCSources &&
+            selectedField?.componentKey !== 'lvEjectionFraction' &&
+            (selectedLength ? showLengthSourceResolution :
+              (isSelectedMeasurement || genericProtocolTargets.length > 0)) ? (
             <div className="rounded border border-gray-700 bg-gray-950 p-3 text-xs">
               <div className="font-semibold text-gray-100">Measurement sources</div>
-              {genericProtocolTargets.length ? (
+              {selectedLength && lengthState?.status === 'invalid' ? (
+                <div role="alert" className="mt-2 text-amber-200">
+                  The linked Length source is missing or does not match the configured study/frame.
+                  The saved answer has not been changed.
+                </div>
+              ) : null}
+              {!selectedLength && genericProtocolTargets.length ? (
                 <div className="mt-2 space-y-1">
                   <div className="text-gray-400">Protocol-selected instance/frame</div>
                   {genericProtocolTargets.map(({ label, viewerTarget }) => (
@@ -1282,30 +1772,43 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
                       <button type="button"
                         className="shrink-0 text-blue-300 hover:underline disabled:opacity-40"
                         disabled={!commandsManager}
-                        onClick={() => void jumpToAnnotation(annotation)}
+                        onClick={() => {
+                          const item = lengthState?.eligible.find(source =>
+                            getAnnotationKey(source.annotation) === getAnnotationKey(annotation));
+                          if (item) viewLengthSource(item);
+                          else if (!selectedLength) void jumpToAnnotation(annotation);
+                        }}
                       >View source</button>
-                      {!context.readOnly && !context.preview ? (
-                        <button type="button"
-                          className="shrink-0 text-red-300 hover:underline disabled:opacity-40"
+                      {!context.readOnly && !context.preview &&
+                        selectedSources.length > 1 ? (
+                        <button type="button" aria-label="Delete this measurement source"
+                          className="shrink-0 rounded border border-gray-600 px-2 py-1 font-bold text-red-200 disabled:opacity-40"
                           disabled={isBusy}
                           onClick={() => void deleteResearchAnnotation(annotation)}
-                        >Delete</button>
+                        >×</button>
                       ) : null}
                     </div>
                   ))}
                 </div>
               ) : null}
-              {isSelectedMeasurement && selectedCandidates.length > 1 && !context.preview && !context.readOnly ? (
+              {isSelectedMeasurement && (selectedLength
+                ? sourceResolutionCandidates.length > 0 : selectedCandidates.length > 1) &&
+                !context.preview && !context.readOnly ? (
                 <div className="mt-2 space-y-1">
                   <div className="text-amber-200">
                     Multiple matching measurements. Choose the intended source rather than automatically accepting another frame.
                   </div>
-                  {selectedCandidates.map((candidate, index) => (
+                  {sourceResolutionCandidates.map((candidate, index) => (
                     <button
                       key={candidate.sourceMeasurementKey || index}
                       type="button"
                       className="block w-full rounded border border-blue-800 px-2 py-2 text-left text-blue-100 hover:bg-blue-950/40"
-                      onClick={() => selectSourceCandidate(selectedField, candidate)}
+                      onClick={() => {
+                        selectSourceCandidate(selectedField, candidate);
+                        const item = lengthState?.eligible.find(source =>
+                          source.candidate.sourceMeasurementKey === candidate.sourceMeasurementKey);
+                        if (item) viewLengthSource(item);
+                      }}
                     >
                       Use {Number(candidate.value).toFixed(2)} {candidate.unit}
                       {' · '}{candidate.sourceMeasurementKey}
@@ -1313,7 +1816,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
                   ))}
                 </div>
               ) : null}
-              {isSelectedMeasurement && !selectedSources.length &&
+              {!selectedLength && isSelectedMeasurement && !selectedSources.length &&
                !guidedOwnsProtocolFrames && !genericProtocolTargets.length ? (
                 <div className="mt-2 text-gray-400">
                   {selectedCandidates.length
@@ -1357,33 +1860,10 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
               ) : null}
             </div>
           ) : null}
-        </div>
-      ) : null}
-
-      {!context.preview && unlinkedAnnotations.length ? (
-        <details className="mt-3 rounded border border-gray-700 bg-gray-950 p-3">
-          <summary className="cursor-pointer text-xs font-semibold text-gray-300">
-            Other viewer annotations ({unlinkedAnnotations.length})
-          </summary>
-          <div className="mt-2 space-y-1">
-            {unlinkedAnnotations.slice(0, 12).map((annotation, index) => (
-              <button
-                key={getAnnotationKey(annotation) || index}
-                type="button"
-                className="block w-full rounded border border-gray-700 bg-black px-2 py-2 text-left text-xs hover:border-blue-700"
-                onClick={() => void jumpToAnnotation(annotation)}
-                disabled={!commandsManager}
-              >
-                {getAnnotationLabel(annotation)}
-                {getAnnotationValue(annotation) ? ' · ' + getAnnotationValue(annotation) : ''}
-              </button>
-            ))}
-          </div>
-        </details>
-      ) : null}
-
-      {!context.preview && !context.readOnly ? (
-        <div className="sticky bottom-0 mt-4 border-t border-gray-700 bg-black/95 pt-3">
+        </>
+      }
+      footer={!context.preview && !context.readOnly ? (
+        <div className="space-y-2">
           {missingRequired.length ? (
             <div className="mb-2 text-xs text-yellow-300">
               {missingRequired.length} required field
@@ -1410,6 +1890,6 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
           </div>
         </div>
       ) : null}
-    </div>
+    />
   );
 }

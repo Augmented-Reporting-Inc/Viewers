@@ -77,8 +77,10 @@ export function getResearchRapChoices(field: any, domain = 'echo') {
  * has guided exp/insp measurements, RAP is explicitly selected, and RVSP
  * is derived independently from source-linked TR Vmax + selected RAP.
  */
-export function getResearchGroupedFields(field: any, fields: any[] = [], domain = 'echo') {
-  if (!field) return [];
+export function getResearchGroupedFields(field: any, fields: any[] = [], domain = 'echo', navigationMode = 'legacy') {
+  // An authored assessment lists each authored question once. Grouping
+  // belongs in the authored definition, not a separate viewer-only rule.
+  if (!field || navigationMode === 'authored') return [];
   const componentKey = String(field.componentKey || '');
   const isEcho = String(domain).toLowerCase() === 'echo';
 
@@ -120,16 +122,16 @@ export function getResearchCompanionField(field: any, fields: any[] = [], domain
   return getResearchGroupedFields(field, fields, domain)[0] || null;
 }
 
-export function isResearchCompanionHidden(field: any, fields: any[] = [], domain = 'echo') {
-  if (!field) return false;
+export function isResearchCompanionHidden(field: any, fields: any[] = [], domain = 'echo', navigationMode = 'legacy') {
+  if (!field || navigationMode === 'authored') return false;
   return fields.some(parent =>
     parent.key !== field.key &&
     getResearchGroupedFields(parent, fields, domain).some(child => child.key === field.key)
   );
 }
 
-export function getResearchQuestionLabel(field: any, fields: any[] = [], domain = 'echo') {
-  const grouped = getResearchGroupedFields(field, fields, domain);
+export function getResearchQuestionLabel(field: any, fields: any[] = [], domain = 'echo', navigationMode = 'legacy') {
+  const grouped = getResearchGroupedFields(field, fields, domain, navigationMode);
   if (String(domain).toLowerCase() === 'echo' &&
       field?.componentKey === 'ivcCollapsibility' && grouped.length) {
     const items = ['IVC', ...grouped.map(item =>
@@ -142,7 +144,8 @@ export function getResearchQuestionLabel(field: any, fields: any[] = [], domain 
 }
 
 export function isResearchQuestionAnswered(
-  field: any, fields: any[] = [], values: Record<string, any> = {}, domain = 'echo'
+  field: any, fields: any[] = [], values: Record<string, any> = {}, domain = 'echo',
+  navigationMode = 'legacy'
 ) {
   if (!field) return false;
   const isAnswered = (item: any) => {
@@ -154,7 +157,7 @@ export function isResearchQuestionAnswered(
   // The IVC question represents a three-part assessment, not three
   // independent dropdown questions. Other grouped optional fields (such as
   // Reader Comment) must not change the original completion semantics.
-  if (String(domain).toLowerCase() === 'echo' &&
+  if (navigationMode !== 'authored' && String(domain).toLowerCase() === 'echo' &&
       field.componentKey === 'ivcCollapsibility') {
     return getResearchGroupedFields(field, fields, domain).every(isAnswered);
   }

@@ -211,7 +211,8 @@ function addDerivedCandidate({
 }
 
 export function buildViewerMeasurementValueCandidates(
-  annotations: any[] = []
+  annotations: any[] = [],
+  { includeLVSimpson = true }: { includeLVSimpson?: boolean } = {}
 ) {
   const measurements = Array.isArray(annotations) ? annotations : [];
   const candidates: any[] = [];
@@ -248,7 +249,7 @@ export function buildViewerMeasurementValueCandidates(
     });
   }
 
-  const lvSimpson = calculateLVSimpson(measurements);
+  const lvSimpson = includeLVSimpson ? calculateLVSimpson(measurements) : null;
 
   if (
     lvSimpson?.status === 'complete' &&

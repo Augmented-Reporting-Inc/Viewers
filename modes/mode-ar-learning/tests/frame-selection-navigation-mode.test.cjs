@@ -63,7 +63,15 @@ test('viewer authoring retains full quiz ordinals while skipping non-viewer ques
 });
 
 test('learner cards display an explicit active question status', () => {
-  assert.match(panelSource, /isActiveQuestion \? \(\s*<div[^>]*>[\s\S]*?Active Question/);
+  const card = fs.readFileSync(path.join(__dirname, '..', '..', '..', 'extensions',
+    'extension-ar-measurements', 'src', 'components', 'SharedQuestionCard.tsx'), 'utf8');
+  const learning = fs.readFileSync(path.join(__dirname, '..', '..', '..', 'extensions',
+    'extension-ar-learning', 'src', 'panels', 'LearningQuestionPanel.tsx'), 'utf8');
+  assert.match(panelSource, /<SharedQuestionCard[\s\S]*?active=\{isActiveQuestion\}/);
+  assert.match(panelSource, /<LearningQuestionPanel[\s\S]*?selectedQuestion=\{selected \?/);
+  assert.match(learning, /\{selectedQuestion \? \([\s\S]*?<SharedQuestionCard/);
+  assert.match(card, /active = true/);
+  assert.match(card, /active \? \(\s*<div[^>]*>[\s\S]*?Active Question/);
 });
 
 test('learner measurement domain prefers the authorized quiz before URL fallback', () => {
@@ -284,7 +292,17 @@ test('measurement label wraps and longitudinal caliper spacing uses learner cali
   assert.match(panelSource, /getBowelMeasurementSetMidpointSpacingMm\(bowelGeometryEntries\)/);
   assert.match(panelSource, /Caliper spacing \(centre-to-centre\):/);
   assert.match(panelSource, /informational; not an endpoint scoring tolerance/);
-  assert.match(panelSource, /whitespace-normal break-words text-xs text-gray-300/);
+  const sharedValueInput = fs.readFileSync(
+    path.join(__dirname, '..', '..', '..', 'extensions', 'extension-ar-measurements',
+      'src', 'components', 'SharedMeasurementValueInput.tsx'), 'utf8'
+  );
+  assert.match(panelSource, /<SharedMeasurementLabel label=\{cleanString\(\s*plainObject\(value\?\.reviewPayload\)\.label \|\|\s*value\?\.measurementLabel \|\|\s*value\?\.label/);
+  const labelStart = sharedValueInput.indexOf('export function SharedMeasurementLabel(');
+  assert.ok(labelStart >= 0);
+  const label = sharedValueInput.slice(labelStart);
+  assert.match(label, /min-w-0 whitespace-normal break-words text-xs text-gray-300/);
+  assert.match(label, /title=\{text\}/);
+  assert.match(label, /Measurement label: \{text\}/);
   assert.match(panelSource, /getLearnerBwtCaptureFailureMessage\(reason\)/);
 });
 

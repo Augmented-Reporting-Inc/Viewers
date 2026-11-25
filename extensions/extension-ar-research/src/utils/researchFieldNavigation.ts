@@ -3,6 +3,10 @@ import {
   isIVCDiameterMeasurement,
 } from '../../../extension-ar-measurements/src/utils/rightHeartMeasurements';
 import { buildViewerMeasurementValueCandidates } from '../../../extension-ar-measurements/src/utils/measurementValueCandidates';
+import { getResearchMeasurementToolForField } from './researchMeasurementTool';
+import { buildViewerMeasurementReadUpdates } from './readSchema';
+import { getLAVolumeContourSlot, getVerifiedLAVolumeContourAreaCM2 } from '../../../extension-ar-measurements/src/utils/laVolume';
+import { getResearchEchoPhaseTarget, isRequiredResearchPhaseMissing } from './researchEchoWorkflow';
 
 /**
  * Reuse existing OHIF viewer navigation commands rather than duplicating image
@@ -176,12 +180,25 @@ export function isResearchCandidateOnProtocolFrames(
   }
   if (!fixedTargets.length) return true;
   const sourceKeys = getResearchSourceAnnotationIds(candidate?.sourceMeasurementKey);
+  // The composite derived result must contain exactly one source per
+  // configured protocol phase, not a convenient subset plus unrelated ROI.
+  const completePhaseCounts: Record<string, number> = {
+    lvEjectionFraction: 4, laVolumeDisks: 2,
+    rvFac: 2, ivcCollapsibility: 2,
+  };
+  const completeCount = completePhaseCounts[cleanString(field?.componentKey)];
+  // Cardinality equality only applies when the protocol pins *every* phase.
+  // A legacy partially pinned protocol may legitimately have more distinct
+  // annotation sources than its configured target subset.
+  if (completeCount && fixedTargets.length === completeCount &&
+      sourceKeys.length !== completeCount) return false;
+  if (new Set(sourceKeys).size !== sourceKeys.length) return false;
   const matchedAnnotations = sourceKeys
     .map(key => annotations.find(item => cleanString(
       item?.annotationId || item?.annotationUID || item?.uid || item?.id
     ) === key))
     .filter(Boolean);
-  if (!matchedAnnotations.length) return false;
+  if (matchedAnnotations.length !== sourceKeys.length) return false;
   const remaining = [...matchedAnnotations];
   for (const { viewerTarget } of fixedTargets) {
     const index = remaining.findIndex(annotation =>
@@ -199,6 +216,111 @@ export function getResearchProtocolCompatibleCandidates(
   return candidates.filter(candidate =>
     isResearchCandidateOnProtocolFrames(field, candidate, annotations)
   );
+}
+
+/** Verify the identity of Review-owned source evidence, not the current image.
+ * A display copy normalizes a stale frameNumber without rewriting stored data. */
+function getResearchOwnedSourceDisplay(annotation: any, study: string) {
+  const frame = getAnnotationSourceFrame(annotation);
+  const reference = cleanString(annotation?.referencedImageId ||
+    annotation?.metadata?.referencedImageId);
+  const imageStudy = reference.match(/\/studies\/([^/?#]+)/i)?.[1];
+  const imageSeries = reference.match(/\/series\/([^/?#]+)/i)?.[1];
+  try {
+    if ((imageStudy && decodeURIComponent(imageStudy) !== study) ||
+        (imageSeries && frame.series && decodeURIComponent(imageSeries) !== frame.series)) return null;
+  } catch { return null; }
+  if (!study || frame.study !== study || !frame.sop ||
+      !Number.isInteger(frame.frame) || frame.frame < 1) return null;
+  return { ...annotation, StudyInstanceUID: frame.study, SeriesInstanceUID: frame.series,
+    SOPInstanceUID: frame.sop, frameNumber: frame.frame };
+}
+
+/** The compact question layout is only for independent Echo Length fields. */
+export function isResearchLengthQuestion(field: any, domain: string) {
+  return getResearchMeasurementToolForField(field, domain) === 'Length' &&
+    !['lvEjectionFraction', 'laVolumeDisks', 'rvFac', 'ivcCollapsibility', 'trVmax', 'rap', 'rvsp']
+      .includes(cleanString(field?.componentKey)) &&
+    !field?.config?.calculation && !field?.config?.options?.length &&
+    !Object.keys(field?.config?.compositeFrameTargets || {}).length;
+}
+
+/** Use only Review-owned, compatible Length sources on the configured study
+ * and any pinned frame. A linked source is authoritative; do not guess a
+ * replacement or change manual answers. Normalize a display copy only. */
+export function getResearchLengthSourceState(
+  field: any, fieldSource: any, annotations: any[] = [],
+  candidates: any[] = [], studyInstanceId: unknown = ''
+) {
+  const study = cleanString(studyInstanceId);
+  const eligible = getResearchCompatibleMeasurementCandidates(field, candidates, annotations)
+    .filter(candidate => candidate?.source === 'viewer-measurement' &&
+      Number.isFinite(Number(candidate.value)) && Number(candidate.value) > 0 &&
+      buildViewerMeasurementReadUpdates([field], [candidate], {}).length === 1)
+    .flatMap(candidate => {
+      const matches = getResearchFieldSourceAnnotations(
+        { sourceMeasurementKey: candidate.sourceMeasurementKey }, annotations);
+      if (matches.length !== 1) return [];
+      const annotation = matches[0];
+      const displayAnnotation = getResearchOwnedSourceDisplay(annotation, study);
+      if (!displayAnnotation || annotation.toolName !== 'Length' ||
+          !Array.isArray(annotation.points) || annotation.points.length !== 2 ||
+          !annotation.points.every(point => Array.isArray(point) && point.length >= 3 &&
+            point.slice(0, 3).every(Number.isFinite))) return [];
+      return [{ candidate, annotation, displayAnnotation }];
+    });
+  const unique = Array.from(new Map(eligible.map(item =>
+    [cleanString(item.candidate.sourceMeasurementKey), item])).values());
+  const linkedKey = cleanString(fieldSource?.sourceMeasurementKey);
+  const kind = cleanString(fieldSource?.source);
+  const selected = kind === 'viewer-measurement' && linkedKey
+    ? unique.find(item => cleanString(item.candidate.sourceMeasurementKey) === linkedKey) || null
+    : null;
+  const status = selected ? 'linked' : linkedKey || kind === 'viewer-derived'
+    ? 'invalid' : kind === 'manual' ? 'manual'
+      : unique.length > 1 ? 'ambiguous' : unique.length === 1 ? 'unbound' : 'none';
+  return { status, selected, eligible: unique };
+}
+
+/** LA phase display uses only Review-owned explicit LA contour evidence.
+ * The area is the Education calculator's calibrated cm², never an ROI label
+ * or the combined biplane volume. Retain off-protocol/invalid sources for
+ * explicit inspection/deletion rather than silently picking another contour. */
+export function getResearchLAPhaseSources(
+  field: any, annotations: any[] = [], studyInstanceId: unknown = ''
+) {
+  const study = cleanString(studyInstanceId);
+  const phaseSources: Record<string, Array<{
+    annotation: any; displayAnnotation: any; areaCM2: number | null; matchesTarget: boolean;
+  }>> = { A4C: [], A2C: [] };
+  let unresolvedCount = 0;
+  if (field?.componentKey !== 'laVolumeDisks') return { phaseSources, unresolvedCount };
+  const seen = new Set<string>();
+  for (const annotation of annotations) {
+    const geometry = annotation?.laVolume || annotation?.measurements?.laVolume;
+    if (geometry?.measurementKind !== 'laVolumeSlot' &&
+        annotation?.measurementKind !== 'laVolumeSlot' &&
+        annotation?.measurements?.measurementKind !== 'laVolumeSlot') continue;
+    const slot = getLAVolumeContourSlot(annotation);
+    const id = cleanString(annotation?.annotationId || annotation?.annotationUID ||
+      annotation?.uid || annotation?.id);
+    if (seen.has(id)) continue;
+    const displayAnnotation = getResearchOwnedSourceDisplay(annotation, study);
+    if (!id || !phaseSources[slot] || !displayAnnotation ||
+        !['SplineROI', 'PlanarFreehandROI', 'FreehandROI'].includes(cleanString(annotation.toolName))) {
+      unresolvedCount++;
+      continue;
+    }
+    seen.add(id);
+    const target = getResearchEchoPhaseTarget(field, slot);
+    const matchesTarget = !isRequiredResearchPhaseMissing(field, slot) &&
+      (!target || annotationMatchesTarget(annotation, target));
+    const areaCM2 = getVerifiedLAVolumeContourAreaCM2({
+      ...annotation, measurementKind: 'laVolumeSlot',
+    });
+    phaseSources[slot].push({ annotation, displayAnnotation, areaCM2, matchesTarget });
+  }
+  return { phaseSources, unresolvedCount };
 }
 
 /** Echo IVC label identity is shared by the calculator, redraw flow and UI. */
@@ -301,27 +423,45 @@ export function getResearchCompatibleMeasurementCandidates(
 export function getResearchBindingSources(
   field: any, sources: Record<string, any> = {}, candidates: any[] = []
 ) {
+  const kind = cleanString(field?.componentKey);
+  const isIVC = kind === 'ivcCollapsibility';
+  const isGuidedComposite = ['lvEjectionFraction', 'laVolumeDisks', 'rvFac'].includes(kind);
   const fixedPhases = field?.config?.compositeFrameTargets;
-  if (cleanString(field?.componentKey) !== 'ivcCollapsibility' ||
-      !fixedPhases || typeof fixedPhases !== 'object' ||
-      !fixedPhases.IVC_EXP || !fixedPhases.IVC_INSP) return sources;
+  if ((!isIVC && !isGuidedComposite) ||
+      !fixedPhases || typeof fixedPhases !== 'object') return sources;
+  const requiredSlots: Record<string, string[]> = {
+    lvEjectionFraction: ['A4C_ED', 'A4C_ES', 'A2C_ED', 'A2C_ES'],
+    laVolumeDisks: ['A4C', 'A2C'],
+    rvFac: ['RV_ED', 'RV_ES'],
+    ivcCollapsibility: ['IVC_EXP', 'IVC_INSP'],
+  };
+  const slots = requiredSlots[kind];
+  if (!slots.every(slot => !!fixedPhases[slot])) return sources;
 
   const current = sources?.[field.key] || {};
   const currentKind = cleanString(current.source);
   const previousKey = cleanString(current.sourceMeasurementKey);
-  // When the reader intentionally replaces a validated Length, both source
-  // annotation IDs change. Keep the no-guessing rule: release the previous key
-  // only if there is exactly one compatible, verified IVC candidate.
+  // Retain existing manually selected values unless the protocol pins every
+  // phase and a single verified composite calculation supplies replacement.
+  // An old source key may be replaced only by one new verified candidate.
   const eligible = (Array.isArray(candidates) ? candidates : []).filter(item =>
     cleanString(item.source) === 'viewer-derived' &&
-    cleanString(item.sourceMeasurementKey).startsWith('ivc-collapse:')
+    cleanString(item.sourceMeasurementKey).startsWith(
+      kind === 'lvEjectionFraction' ? 'lv-simpson:' :
+      kind === 'laVolumeDisks' ? 'la-disks:' :
+      kind === 'rvFac' ? 'rv-fac:' : 'ivc-collapse:'
+    )
   );
   const changedVerifiedSource = eligible.length === 1 &&
     !!previousKey && previousKey !== cleanString(eligible[0].sourceMeasurementKey);
   if (currentKind !== 'manual' && !changedVerifiedSource) return sources;
-
+  // Preserve the established IVC contract: a fixed two-phase protocol may
+  // release a manual placeholder before a candidate arrives. The caller
+  // still requires calibrated, source-linked evidence to populate the value.
+  // Newly supported EF/LA/RV fields wait for one verified candidate instead.
+  if (eligible.length !== 1 && !(isIVC && currentKind === 'manual')) return sources;
   return { ...sources, [field.key]: {
-    source: 'viewer-derived', sourceMeasurementKey:
-      changedVerifiedSource ? '' : previousKey,
+    source: 'viewer-derived',
+    sourceMeasurementKey: changedVerifiedSource ? '' : previousKey,
   } };
 }

@@ -1,4 +1,4 @@
-import { calculateRVSP } from 'extension-ar-measurements';
+import { calculateRVSP } from '../../../extension-ar-measurements/src/utils/rightHeartMeasurements';
 
 function cleanString(value: unknown) {
   return String(value || '').trim();
@@ -117,6 +117,10 @@ export function normalizeReadSchema(readSchema: any = {}) {
     schemaVersion: cleanString(schema.schemaVersion),
     domain: cleanString(schema.domain).toLowerCase(),
     compatibilitySource: cleanString(schema.compatibilitySource),
+    // The authored question-list contract belongs to the persisted schema,
+    // not to viewer heuristics. Preserve its explicit navigation policy.
+    config: schema.config && typeof schema.config === 'object' &&
+      !Array.isArray(schema.config) ? { ...schema.config } : {},
     segments: (Array.isArray(schema.segments) ? schema.segments : [])
       .map(segment => {
         const key = cleanKey(typeof segment === 'string' ? segment : segment?.key);
@@ -435,7 +439,8 @@ export function buildViewerMeasurementReadUpdates(
       continue;
     }
 
-    value = roundToConfiguredStep(value, field?.config?.step);
+    value = roundToConfiguredStep(value, field.componentKey === 'lvEjectionFraction' &&
+      matchedCandidate.source === 'viewer-derived' ? 0.01 : field?.config?.step);
 
     const min = Number(field?.config?.min);
     const max = Number(field?.config?.max);

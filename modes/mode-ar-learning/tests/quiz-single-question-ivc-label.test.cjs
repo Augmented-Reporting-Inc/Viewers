@@ -7,6 +7,22 @@ const panel = fs.readFileSync(path.join(
   __dirname, '..', '..', '..', 'extensions', 'extension-ar-learning',
   'src', 'panels', 'CaseQuestionsPanel.tsx'
 ), 'utf8');
+const acquisition = fs.readFileSync(path.join(
+  __dirname, '..', '..', '..', 'extensions', 'extension-ar-measurements',
+  'src', 'utils', 'echoCompositeAcquisition.ts'
+), 'utf8');
+const sharedNavigation = fs.readFileSync(path.join(
+  __dirname, '..', '..', '..', 'extensions', 'extension-ar-measurements',
+  'src', 'components', 'SharedQuestionNavigation.tsx'
+), 'utf8');
+const learningPanel = fs.readFileSync(path.join(
+  __dirname, '..', '..', '..', 'extensions', 'extension-ar-learning',
+  'src', 'panels', 'LearningQuestionPanel.tsx'
+), 'utf8');
+const acquisitionControls = fs.readFileSync(path.join(
+  __dirname, '..', '..', '..', 'extensions', 'extension-ar-learning',
+  'src', 'components', 'LearningEchoAcquisitionControls.tsx'
+), 'utf8');
 const commands = fs.readFileSync(path.join(
   __dirname, '..', '..', '..', 'extensions', 'cornerstone',
   'src', 'commandsModule.ts'
@@ -22,7 +38,13 @@ test('educator shows one selected viewer-native question without renumbering the
 
 test('learner question dropdown uses saved selection and only renders its question', () => {
   assert.match(panel, /id="quiz-learner-question-select"/);
-  assert.match(panel, /value=\{quizzes\.some\(quiz/);
+  assert.match(panel, /selectedKey=\{quizzes\.some\(quiz[\s\S]*?\? activeQuestionKey : ''\}/);
+  assert.match(sharedNavigation, /value=\{selectedKey\}/);
+  assert.match(sharedNavigation, /onChange=\{event => onSelect\(event.target.value\)\}/);
+  assert.match(panel, /const selected = questions.find\(question =>\s*activeQuestionKey ===/);
+  assert.match(panel, /selectedKey=\{selected \? `\$\{quiz.quizKey\}:\$\{selected.questionKey\}` : ''\}/);
+  assert.match(panel, /questionContent=\{selected \? \([\s\S]*?renderQuestion\(quiz, selected, questionLocked\)[\s\S]*?renderQuestionReview\(quiz, selected, quizScore\)/);
+  assert.match(learningPanel, /\{selectedQuestion \? \([\s\S]*?\{questionContent\}/);
   assert.match(panel, /if \(question\) \{\s*void selectQuestion\(quiz, question\);/);
   assert.match(panel, /if \(activeQuestionKey !== questionSelectionKey\) return null;/);
   assert.match(panel, /\{renderQuestion\(quiz, question, submitted \|\| scoredReviewReadOnly\)\}/);
@@ -41,12 +63,25 @@ test('explicit learner IVC phase navigates exactly and retains the normal calibr
   const end = panel.indexOf('\n  function ', start + 1);
   assert.ok(start >= 0, 'IVC phase control exists');
   const ivcControls = panel.slice(start, end > start ? end : undefined);
-  assert.match(ivcControls, /ensureConfiguredCompositePhaseFrame\(question, phase\.slot\)/);
-  assert.match(ivcControls, /resetViewerLengthLabelMode'/);
-  assert.match(ivcControls, /'activateViewerMeasurementTool'/);
-  assert.match(ivcControls, /toolName: 'Length', stopCine: true/);
-  assert.match(ivcControls, /label it IVCexp or IVCinsp respectively/);
-  assert.doesNotMatch(ivcControls, /labelMode: 'measure-only'/,
+  assert.match(ivcControls, /return renderSharedEchoPhaseControls\(quiz, question, disabled, 'ivcCollapsibility'\)/);
+  const sharedStart = panel.indexOf('function renderSharedEchoPhaseControls(');
+  assert.ok(sharedStart >= 0 && sharedStart < start);
+  const shared = panel.slice(sharedStart, start);
+  assert.match(shared, /<LearningEchoAcquisitionControls\s+kind=\{kind\}/);
+  assert.match(shared, /if \(!\(await ensureConfiguredCompositePhaseFrame\(question, slot\)\)\) return;/);
+  assert.match(shared, /getEchoCompositeAcquisitionSteps\(\s*kind,\s*slot,/);
+  assert.match(shared, /await runViewerCommand\(commandsManager, step.name, step.payload\)/);
+  assert.ok(shared.indexOf('await ensureConfiguredCompositePhaseFrame(question, slot)') <
+    shared.indexOf('const steps = getEchoCompositeAcquisitionSteps('));
+  assert.match(acquisitionControls, /onAcquire\(phase.slot\)/);
+  assert.match(acquisition, /name: 'resetViewerLengthLabelMode'/);
+  assert.match(acquisition, /name: 'activateViewerMeasurementTool'/);
+  assert.match(acquisition, /toolName: 'Length', stopCine: true/);
+  assert.ok(acquisition.indexOf("name: 'resetViewerLengthLabelMode'") <
+    acquisition.indexOf("name: 'activateViewerMeasurementTool'"),
+    'the shared IVC contract must reset labeling before activating Length');
+  assert.match(acquisitionControls, /label it IVCexp or IVCinsp respectively/);
+  assert.doesNotMatch(shared + ivcControls + acquisition, /labelMode: 'measure-only'/,
     'a global measure-only override would suppress labels on other quiz questions');
   assert.match(commands, /measurement\?\.toolName === 'Length'/);
   assert.match(commands, /'ar-learning:quiz-measurement-added'/);
@@ -73,7 +108,9 @@ test('learner question dropdown shows answer status without exposing educator go
   assert.match(panel, /id="quiz-learner-question-select"/);
   assert.match(panel, /function isLearnerQuestionAnswered\(/);
   assert.match(panel, /isLearnerQuestionAnswered\(\s*question, answersByQuizKey\?\.\[quiz\.quizKey\]/);
-  assert.match(panel, /'✓ ' : ''/);
+  assert.match(sharedNavigation, /question.answered \? '✓ ' : ''/);
+  assert.match(panel, /label: question.title \|\| question.prompt \|\| question.questionKey,\s*answered: isLearnerQuestionAnswered/);
+  assert.doesNotMatch(sharedNavigation, /goldAnswer|correctAnswer|answerConfig|rubric/i);
   assert.doesNotMatch(panel, /An assigned target opens its/);
   assert.doesNotMatch(panel, /'Opens target instance' : 'Opens target'/);
 });

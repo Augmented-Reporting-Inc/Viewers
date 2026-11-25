@@ -10,6 +10,27 @@ const panel = fs.readFileSync(
   'utf8'
 );
 
+const sharedNavigation = fs.readFileSync(
+  path.resolve(__dirname, '../../../extensions/extension-ar-measurements/src/components/SharedQuestionNavigation.tsx'),
+  'utf8'
+);
+const learningQuestionPanel = fs.readFileSync(
+  path.resolve(__dirname, '../../../extensions/extension-ar-learning/src/panels/LearningQuestionPanel.tsx'),
+  'utf8'
+);
+const acquisitionControls = fs.readFileSync(
+  path.resolve(__dirname, '../../../extensions/extension-ar-learning/src/components/LearningEchoAcquisitionControls.tsx'),
+  'utf8'
+);
+const phaseStart = panel.indexOf('function renderCompositePhaseStatusAndDelete(');
+const phaseEnd = panel.indexOf('function setAnswer(', phaseStart);
+assert.ok(phaseStart >= 0 && phaseEnd > phaseStart);
+const phaseAdapter = panel.slice(phaseStart, phaseEnd);
+// The LAV parity refactor extracts the existing phase presentation. Verify
+// the renderer actually mounted by the Education adapter, not a dead copy.
+const usesSharedPhase = /<SharedEchoPhaseStatus\b/.test(phaseAdapter);
+const phaseUI = usesSharedPhase ? acquisitionControls : phaseAdapter;
+
 test('question stepping uses the existing selectQuestion workflow for both roles', () => {
   assert.match(panel, /function renderQuestionNavigation\(/);
   assert.match(panel, /void selectQuestion\(quiz, target\)/);
@@ -17,11 +38,24 @@ test('question stepping uses the existing selectQuestion workflow for both roles
   assert.doesNotMatch(panel, /renderQuestionNavigation\(quiz, question, questions, submitted \|\| quizSaving\)/);
   assert.match(panel, /authoringQuestions\.filter\(isViewerNativeQuestion\)/);
   assert.match(panel, /const navigatingDisabled = disabled \|\| !!capturingMeasurementKey/);
-  assert.match(panel, /disabled=\{navigatingDisabled \|\| !target\}/);
+  assert.match(panel, /const navigatingDisabled = disabled \|\| !!capturingMeasurementKey \|\|\s*!!capturingFrameKey \|\| !!capturingPointKey \|\| !!capturingAuthoringKey/);
+  assert.match(panel, /<SharedQuestionStepNavigation\s+previousKey=\{orderedQuestions\[index - 1\]\?\.questionKey \|\| ''\}\s+nextKey=\{orderedQuestions\[index \+ 1\]\?\.questionKey \|\| ''\}\s+disabled=\{navigatingDisabled\}/);
+  assert.match(panel, /const target = orderedQuestions\.find\(item => item\.questionKey === questionKey\);\s*if \(target\) void selectQuestion\(quiz, target\)/);
+  assert.match(learningQuestionPanel, /<SharedQuestionStepNavigation\s+previousKey=\{previousKey\}\s+nextKey=\{nextKey\}\s+disabled=\{disabled\}\s+onNavigate=\{onSelect\}/);
+  assert.match(learningQuestionPanel, /const previousKey = index > 0 \? questions\[index - 1\]\.key : ''/);
+  assert.match(learningQuestionPanel, /const nextKey = index >= 0 && index \+ 1 < questions\.length \? questions\[index \+ 1\]\.key : ''/);
+  assert.match(sharedNavigation, /disabled=\{disabled \|\| !item\.key\}/);
+  assert.match(sharedNavigation, /if \(item\.key\) onNavigate\(item\.key\)/);
+  const learnerStart = panel.indexOf('<LearningQuestionPanel');
+  assert.ok(learnerStart >= 0);
+  const learner = panel.slice(learnerStart);
+  assert.match(learner, /onSelect=\{key => \{\s*const question = questions\.find\(item => key ===[\s\S]*?if \(question\) void selectQuestion\(quiz, question\)/);
+  assert.match(learner, /disabled=\{!!capturingMeasurementKey \|\| !!capturingFrameKey \|\|\s*!!capturingPointKey \|\| quizSaving\}/);
+  assert.match(learner, /readOnly=\{questionLocked\}/);
 });
 
 test('measurement clear actions are inline, accessible, and retain source-aware deletions', () => {
-  assert.match(panel, /aria-label=\{\`Delete \$\{slot\} measurement\`\}/);
+  assert.match(phaseUI, /aria-label=\{`Delete \$\{slot\} measurement`\}/);
   assert.match(panel, /deleteCompositePhaseMeasurement\(quiz, question, slot, phaseSource\)/);
   assert.match(panel, /aria-label="Delete TR Vmax measurement"/);
   assert.match(panel, /deleteLearnerQuizSourceMeasurement\(quiz, question, value\)/);
@@ -55,12 +89,28 @@ const review = fs.readFileSync(
 
 test('EF-style LA, RV FAC and IVC rows have source links, value boxes and inline deletion', () => {
   assert.match(panel, /function renderCompositePhaseStatusAndDelete\(/);
-  assert.match(panel, /Jump to \$\{label\} saved source/);
-  assert.match(panel, /Jump to \$\{label\} source/);
-  assert.match(panel, /viewerTarget: navigationTarget/);
-  assert.match(panel, /readOnly aria-label=/);
-  assert.match(panel, /aria-label=\{`Delete \$\{slot\} measurement`\}/);
-  assert.match(panel, /renderCompositePhaseStatusAndDelete\(quiz, question, slot, disabled, label\)/);
+  if (usesSharedPhase) {
+    assert.match(phaseUI, /export function SharedEchoPhaseStatus/);
+    assert.match(phaseUI, /Jump to \$\{label\}\$\{hasSavedSource \? ' saved' : ''\} source/);
+    assert.match(phaseAdapter, /hasSavedSource=\{savedNavigation\} onNavigate=\{onNavigate\}/);
+    assert.match(phaseAdapter, /onDelete=\{\(getCompositePhaseMeasurementId\(live\) \|\| hasSaved\)/);
+    assert.match(phaseUI, /if \(!disabled\) onDelete\(\)/);
+  } else {
+    assert.match(phaseUI, /Jump to \$\{label\} saved source/);
+    assert.match(phaseUI, /Jump to \$\{label\} source/);
+    assert.match(phaseUI, /disabled=\{disabled\}/);
+  }
+  assert.match(phaseAdapter, /viewerTarget: navigationTarget/);
+  assert.match(phaseAdapter, /showViewerQuizLearnerCompositeMeasurement/);
+  assert.match(phaseAdapter, /showViewerQuizMeasurementComparison/);
+  assert.match(phaseAdapter, /deleteCompositePhaseMeasurement\(quiz, question, slot, phaseSource\)/);
+  assert.match(phaseUI, /readOnly aria-label=/);
+  assert.match(phaseUI, /aria-label=\{`Delete \$\{slot\} measurement`\}/);
+  assert.match(panel, /renderPhaseStatus=\{\(slot, label\) =>\s*renderCompositePhaseStatusAndDelete\(quiz, question, slot, disabled,\s*kind === 'ivcCollapsibility'\s*\? slot === 'IVC_EXP' \? 'IVCexp' : 'IVCinsp'\s*: label\)/);
+  for (const kind of ['laVolumeDisks', 'rvFac', 'ivcCollapsibility']) {
+    assert.ok(panel.includes("return renderSharedEchoPhaseControls(quiz, question, disabled, '" + kind + "')"));
+  }
+  assert.match(acquisitionControls, /renderPhaseStatus\?\.\(phase\.slot, phase\.label\)/);
   assert.doesNotMatch(panel, />View saved<\/button>/);
   assert.doesNotMatch(panel, /Review LA view selection and contour placement if possible/);
 });
