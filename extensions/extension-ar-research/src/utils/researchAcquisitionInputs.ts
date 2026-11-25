@@ -19,7 +19,7 @@ export function acquisitionInputStrings(values: any = {}) {
 
 export function buildAcquisitionOverrideRequest(snapshot: any, inputs: Record<string, string>, reason: string, verified: boolean) {
   if (!snapshot?.editable || !Number.isSafeInteger(snapshot.revision) || snapshot.revision < 0 ||
-      !snapshot.baseline?.values || !reason.trim() || reason.trim().length > 500) return null;
+      !snapshot.baseline?.values || reason.trim().length > 500) return null;
   const overrides: Record<string, number> = {};
   for (const { key, max } of acquisitionFields) {
     const raw = inputs[key]?.trim() || '';
@@ -32,5 +32,10 @@ export function buildAcquisitionOverrideRequest(snapshot: any, inputs: Record<st
     if (!Number.isFinite(value) || value > max || (key === 'ageYears' ? value < 0 : value <= 0)) return null;
     if (value !== baseline) overrides[key] = value;
   }
+  const changed = acquisitionFields.some(({key}) =>
+    (overrides[key] ?? snapshot.baseline.values[key]) !==
+    (snapshot.overrides?.[key] ?? snapshot.baseline.values[key]));
+  const restoring = changed && Object.keys(overrides).length === 0;
+  if (changed && !restoring && !reason.trim()) return null;
   return {expectedRevision: snapshot.revision, overrides, reason: reason.trim(), acquisitionVerified: verified};
 }
