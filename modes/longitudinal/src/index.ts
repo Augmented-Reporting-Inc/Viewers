@@ -10,6 +10,7 @@ import toolbarButtons from './toolbarButtons';
 import { createEducationUnsavedWorkGuard } from './educationUnsavedWorkGuard';
 import { installEducationUnsavedNavigation } from './educationUnsavedNavigation';
 import { installEducationUnsavedWorkEvents } from './educationUnsavedWorkEvents';
+import { dispatchQuestionMeasurementAdded } from './questionMeasurementCompletion';
 
 const ECHO_LENGTH_MEASUREMENT_LABELS_CONFIG = {
   id: 'echoLengthMeasurementLabels',
@@ -1204,6 +1205,16 @@ function modeFactory({ modeConfiguration }) {
 
         const currentMeasurement = measurementService.getMeasurement?.(annotationId) || measurement;
 
+        // Research and Education share the completed-question event. A fresh
+        // Research Length can be claimed by its active question before opening
+        // the generic clinical label dialog. Failed claims fall back to the
+        // original dialog; no existing annotation is deleted or reassigned.
+        if (isResearchViewerContextFromUrl() &&
+            !isViewerMeasurementReadOnlyFromUrl() &&
+            currentMeasurement?.toolName === 'Length') {
+          if (await dispatchQuestionMeasurementAdded(currentMeasurement, true)) return;
+        }
+
         if (!currentMeasurement?.label) {
           const labelOptions = await getLabelConfigForMeasurement(
             currentMeasurement,
@@ -1549,3 +1560,5 @@ export { initToolGroups, toolbarButtons };
 export { createEducationUnsavedWorkGuard } from './educationUnsavedWorkGuard';
 export { installEducationUnsavedNavigation, requestEducationViewerExit } from './educationUnsavedNavigation';
 export { installEducationUnsavedWorkEvents, emitEducationWorkChange, emitEducationWorkSaveStart, emitEducationWorkSaveResult } from './educationUnsavedWorkEvents';
+
+export { dispatchQuestionMeasurementAdded } from './questionMeasurementCompletion';

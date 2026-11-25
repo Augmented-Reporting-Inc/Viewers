@@ -11,6 +11,7 @@ import {
   createEducationUnsavedWorkGuard,
   installEducationUnsavedNavigation,
   installEducationUnsavedWorkEvents,
+  dispatchQuestionMeasurementAdded,
 } from '@ohif/mode-longitudinal';
 
 const ECHO_LENGTH_MEASUREMENT_LABELS_CONFIG = {
@@ -176,33 +177,9 @@ function getExplicitQuizMeasurementDomainFromUrl() {
   );
 }
 
-const AR_QUIZ_MEASUREMENT_ADDED_EVENT = 'ar-learning:quiz-measurement-added';
-
 function dispatchViewerQuizMeasurementAdded(measurement) {
-  if (!isViewerQuizMeasurementCaptureMode()) {
-    return;
-  }
-
-  const measurementId = String(
-    measurement?.uid || measurement?.annotationUID || measurement?.annotationId || ''
-  ).trim();
-
-  if (!measurementId) {
-    return;
-  }
-
-  window.setTimeout(() => {
-    try {
-      window.dispatchEvent(
-        new CustomEvent(AR_QUIZ_MEASUREMENT_ADDED_EVENT, {
-          detail: {
-            measurementId,
-            toolName: measurement?.toolName || '',
-          },
-        })
-      );
-    } catch {}
-  }, 50);
+  if (!isViewerQuizMeasurementCaptureMode()) return;
+  void dispatchQuestionMeasurementAdded(measurement);
 }
 
 const AR_US_REGION_PIXEL_SPACING_PROVIDER_PRIORITY = 10000;

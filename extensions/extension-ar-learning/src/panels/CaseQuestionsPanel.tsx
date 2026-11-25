@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState, useRef } from 'react';
+import { captureViewerQuestionMeasurement } from '../../../extension-ar-measurements/src/utils/questionMeasurementCapture';
 import { EchoEFContourVolumes } from '../../../extension-ar-measurements/src/components/EchoEFContourVolumes';
 import { EchoCompositeResultStatus, EchoCompositeResultCard } from '../../../extension-ar-measurements/src/components/EchoCompositeResultStatus';
 import { SharedQuestionSelector, SharedQuestionStepNavigation } from '../../../extension-ar-measurements/src/components/SharedQuestionNavigation';
@@ -3830,7 +3831,7 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
     const captureQuestion = linkedRVSP
       ? { ...question, answerConfig: { ...config, measurementKind: 'ivcCollapsibility', unit: '%' } }
       : question;
-    const result = await runViewerCommand(commandsManager, 'getSelectedViewerMeasurementQuizAnswer', {
+    const result = await captureViewerQuestionMeasurement(commandsManager, {
       question: captureQuestion,
       measurementType: cleanString(config.measurementType),
       unit: linkedRVSP ? '%' : cleanString(config.unit),

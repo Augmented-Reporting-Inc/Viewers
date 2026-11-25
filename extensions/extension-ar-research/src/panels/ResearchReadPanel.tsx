@@ -17,6 +17,7 @@ import { LearningSingleChoiceAnswer } from '../../../extension-ar-learning/src/c
 import ResearchEchoGuidedControls from './ResearchEchoGuidedControls';
 import ResearchAcquisitionInputs from './ResearchAcquisitionInputs';
 import { resolveResearchLengthCapture } from '../utils/researchLengthCapture';
+import { captureViewerQuestionMeasurement } from '../../../extension-ar-measurements/src/utils/questionMeasurementCapture';
 import { canShowResearchAcquisitionInputs } from '../utils/researchAcquisitionInputs';
 import {
   reconcileResearchEchoCompositeAnswers,
@@ -1470,7 +1471,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
     if (lengthCaptureInFlightRef.current.has(pendingKey)) return false;
     lengthCaptureInFlightRef.current.add(pendingKey);
     try {
-      const result = await commandsManager.runCommand('getSelectedViewerMeasurementQuizAnswer', {
+      const result = await captureViewerQuestionMeasurement(commandsManager, {
         question: { questionKey: field.componentKey, answerConfig: { measurementKind: 'length' } },
         unit: field.config?.unit, measurementId,
       });
@@ -1515,37 +1516,19 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
 
   useEffect(() => {
     const field = fields.find(item => item.key === selectedFieldKey);
-    const measurementService = servicesManager?.services?.measurementService;
     if (!field || !isResearchLengthQuestion(field, readDomain) ||
         context?.readOnly || context?.preview || !context?.reviewKey) return;
-    let cancelled = false;
-    const timers = new Set<number>();
-    const schedule = (measurementId: string) => {
-      if (!measurementId || cancelled || !editingAllowedRef.current ||
+    const completed = (event: Event) => {
+      const detail = (event as CustomEvent)?.detail;
+      // Only the mode's fresh completion event can claim a Research caliper.
+      // Raw, restored and ordinary MeasurementService updates never auto-bind.
+      if (typeof detail?.accept !== 'function' || detail.toolName !== 'Length' ||
+          !detail.measurementId || !editingAllowedRef.current ||
           valueSourcesRef.current[field.key]?.source) return;
-      const generation = selectionGenerationRef.current;
-      const timer = window.setTimeout(() => {
-        timers.delete(timer);
-        if (!cancelled && generation === selectionGenerationRef.current)
-          void captureSharedLength(field, measurementId);
-      }, 100);
-      timers.add(timer);
+      detail.accept(captureSharedLength(field, cleanString(detail.measurementId)));
     };
-    // Shared Education completion event; never capture restored RAW annotations.
-    const completed = (event: Event) => schedule(cleanString((event as CustomEvent)?.detail?.measurementId));
-    const addedEvent = measurementService?.EVENTS?.MEASUREMENT_ADDED;
-    const subscription = addedEvent ? measurementService.subscribe(addedEvent, ({measurement}) => {
-      if (measurement?.toolName === 'Length') schedule(cleanString(measurement.uid));
-    }) : null;
     window.addEventListener('ar-learning:quiz-measurement-added', completed);
-    window.addEventListener('ar-learning:quiz-measurement-labelled', completed);
-    return () => {
-      cancelled = true;
-      timers.forEach(timer => window.clearTimeout(timer));
-      subscription?.unsubscribe?.();
-      window.removeEventListener('ar-learning:quiz-measurement-added', completed);
-      window.removeEventListener('ar-learning:quiz-measurement-labelled', completed);
-    };
+    return () => window.removeEventListener('ar-learning:quiz-measurement-added', completed);
   }, [selectedFieldKey, fields, readDomain, context?.reviewKey, context?.readOnly, context?.preview,
     context?.sourceStudyInstanceUID, servicesManager, commandsManager, refreshViewerMeasurementBindings]);
 
