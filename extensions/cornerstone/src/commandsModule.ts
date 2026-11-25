@@ -94,7 +94,7 @@ import {
 } from './utils/lvSimpsonContour';
 import { buildRVFACContourFromAnnulusApex } from './utils/rvFacContour';
 import { recalibrateEditedLVSimpsonContour } from './utils/lvSimpsonContourRecalibration';
-import { resolveSpectralVmaxClick } from './utils/spectralVmaxClick';
+import { resolveSpectralVmaxWorldClick } from './utils/spectralVmaxClick';
 import {
   SPECTRAL_DOPPLER_LABEL,
   SPECTRAL_DOPPLER_MEASUREMENT_KIND,
@@ -11624,7 +11624,9 @@ function commandsModule({
       spectralVmax = false,
       preferredTargetKey = '',
       quizCapture = false,
+      isCancelled = () => false,
     } = {}) => {
+      if (isCancelled()) return { ok: false, reason: 'selection-cancelled' };
       // The Vmax toolbar uses this same clinical acquisition command. When a
       // TR Vmax quiz question is active, bind the known spectral target rather
       // than falling back to generic Ultrasound Directional target selection.
@@ -11675,8 +11677,8 @@ function commandsModule({
       const workflowSessionId = `${csUtils.uuidv4()}`;
       activeUltrasoundDirectionalWorkflowSessionId = workflowSessionId;
 
-      ultrasoundDirectionalCompletionHandler = async (event: Event) => {
-        if (activeUltrasoundDirectionalWorkflowSessionId !== workflowSessionId) {
+      const finalizeDirectionalMeasurement = async (event: Event) => {
+        if (isCancelled() || activeUltrasoundDirectionalWorkflowSessionId !== workflowSessionId) {
           return;
         }
 
@@ -11687,6 +11689,10 @@ function commandsModule({
         if (sourceToolName !== ULTRASOUND_DIRECTIONAL_TOOL_NAME) {
           return;
         }
+        // A completed native two-point measurement also retires the optional
+        // single-click handler; it must not intercept a later edit.
+        spectralVmaxClickCleanup?.();
+        spectralVmaxClickCleanup = null;
 
         const annotationId = String(sourceAnnotation?.annotationUID || '').trim();
         if (!annotationId) {
@@ -11705,6 +11711,7 @@ function commandsModule({
           stats = getUltrasoundDirectionalStatsFromAnnotationData(stateAnnotation?.data || {});
         }
 
+        if (isCancelled() || activeUltrasoundDirectionalWorkflowSessionId !== workflowSessionId) return;
         const distance = stats ? getUltrasoundDirectionalDistance(stats) : null;
         const rawValue = Number(distance?.value);
         const rawUnit = String(distance?.unit || '').trim();
@@ -11776,6 +11783,7 @@ function commandsModule({
           }
         }
 
+        if (isCancelled() || activeUltrasoundDirectionalWorkflowSessionId !== workflowSessionId) return;
         // Cancelled or unsupported units remain valid annotations, but they do not
         // write to the AR report.
         if (!selectedTarget) {
@@ -11919,12 +11927,29 @@ function commandsModule({
         });
       };
 
+      // DOM event dispatch does not await an async listener. Handle failures
+      // at the owning workflow, rather than leaking a rejected promise to
+      // OHIF's global ErrorBoundary. Keep the native source for inspection.
+      ultrasoundDirectionalCompletionHandler = (event: Event) => {
+        void finalizeDirectionalMeasurement(event).catch(error => {
+          console.error('[AR Ultrasound Directional] completion failed', error);
+          if (!isCancelled() && activeUltrasoundDirectionalWorkflowSessionId === workflowSessionId) {
+            uiNotificationService.show({
+              title: spectralVmax ? 'Spectral Vmax' : 'Ultrasound Directional',
+              message: 'The measurement could not be finalized. Inspect the source and retry before saving.',
+              type: 'error', duration: 6000,
+            });
+          }
+        });
+      };
       eventTarget.addEventListener(
         Enums.Events.ANNOTATION_COMPLETED,
         ultrasoundDirectionalCompletionHandler
       );
 
       if (spectralVmax) {
+        // Optional one-click setup must not prevent native calibrated capture.
+        try {
         const activeViewportId = viewportGridService.getActiveViewportId();
         const viewport = cornerstoneViewportService.getCornerstoneViewport(activeViewportId);
         const element = viewport?.element;
@@ -11951,64 +11976,100 @@ function commandsModule({
         const regions = regionSources.map(readRegion);
         if (element && imageId && regions.length > 0) {
           const captureClick = (event: PointerEvent) => {
-            if (event.button !== 0 || activeUltrasoundDirectionalWorkflowSessionId !== workflowSessionId) return;
-            const bounds = element.getBoundingClientRect();
-            const canvasPoint: [number, number] = [event.clientX - bounds.left, event.clientY - bounds.top];
-            const imageData = viewport.getImageData?.();
-            if (!imageData) return;
-            const worldPoint = viewport.canvasToWorld?.(canvasPoint);
-            if (!worldPoint) return;
-            const peakIndex = csUtils.transformWorldToIndex(imageData, worldPoint);
-            if (!peakIndex || !Number.isFinite(peakIndex[0]) || !Number.isFinite(peakIndex[1])) return;
-            const resolved = regions.map(region => ({
-              region,
-              result: resolveSpectralVmaxClick(region as any, peakIndex[0], peakIndex[1]),
-            })).find(candidate => candidate.result);
-            if (!resolved?.result) return; // Existing two-point workflow remains available.
+            if (event.button !== 0 || isCancelled() ||
+                activeUltrasoundDirectionalWorkflowSessionId !== workflowSessionId) return;
+            // Calibration is tied to the exact image that supplied the regions.
+            // Do not reuse its metadata after changing frame or active viewport.
+            if (viewportGridService.getActiveViewportId() !== activeViewportId ||
+                viewport.getCurrentImageId?.() !== imageId) {
+              spectralVmaxClickCleanup?.();
+              spectralVmaxClickCleanup = null;
+              return;
+            }
+            let created: any;
+            let annotationId = '';
+            try {
+              const bounds = element.getBoundingClientRect();
+              const canvasPoint: [number, number] = [event.clientX - bounds.left, event.clientY - bounds.top];
+              const worldPoint = Array.from(viewport.canvasToWorld?.(canvasPoint) || []) as number[];
+              const result = resolveSpectralVmaxWorldClick(viewport.getImageData?.(), worldPoint, regions);
+              if (!result) {
+                traceQuizTrVmax('workflow.single-click-native-fallback', { reason: 'unverified-calibration-or-transform' });
+                // Do not intercept the native pointer event on failure.
+                spectralVmaxClickCleanup?.();
+                spectralVmaxClickCleanup = null;
+                return;
+              }
+              annotationId = csUtils.uuidv4();
+              const stats = {
+                xValues: [0, 0], yValues: [0, result.velocityMps * 100],
+                units: ['s', 'cm/s'], isHorizontal: false, isUnitless: false,
+              };
+              const points = [result.baselineWorld, worldPoint];
+              const viewReference = getViewerAnnotationViewportReference(viewport, points);
+              const camera = viewport.getCamera?.() || {};
+              const frameOfReference = viewReference.FrameOfReferenceUID || viewport.getFrameOfReferenceUID?.();
+              if (!frameOfReference) throw new Error('Spectral viewport frame of reference unavailable');
+              const data = {
+                handles: { points, activeHandleIndex: null,
+                  textBox: { hasMoved: false, worldPosition: worldPoint,
+                    worldBoundingBox: { topLeft: [0,0,0], topRight: [0,0,0],
+                      bottomLeft: [0,0,0], bottomRight: [0,0,0] } } },
+                cachedStats: { [`imageId:${imageId}`]: stats },
+                ultrasoundDirectional: { acquisitionMode: 'spectralVmax', value: result.velocityMps * 100, unit: 'cm/s' },
+              };
+              const ToolClass: any = (cornerstoneTools as any).UltrasoundDirectionalTool;
+              const baseData = {
+                annotationUID: annotationId, highlighted: true, invalidated: false,
+                metadata: { ...viewReference, toolName: ULTRASOUND_DIRECTIONAL_TOOL_NAME,
+                  referencedImageId: imageId, FrameOfReferenceUID: frameOfReference,
+                  viewPlaneNormal: camera.viewPlaneNormal || viewReference.viewPlaneNormal,
+                  viewUp: camera.viewUp || viewReference.viewUp },
+                data,
+              };
+              if (typeof ToolClass?.createAnnotationForViewport !== 'function') {
+                throw new Error('Native spectral annotation factory unavailable');
+              }
+              created = ToolClass.createAnnotationForViewport(viewport, baseData);
+              if (!created) throw new Error('Native spectral annotation factory returned no annotation');
+              created.annotationUID = annotationId;
+              created.data = { ...(created.data || {}), ...data };
+              created.metadata = { ...(created.metadata || {}), ...baseData.metadata };
+              created.invalidated = false;
+              if (isCancelled() || viewport.getCurrentImageId?.() !== imageId) return;
+            } catch (error) {
+              console.warn('[AR Spectral Vmax] single-click preparation failed; native capture available', error);
+              spectralVmaxClickCleanup?.();
+              spectralVmaxClickCleanup = null;
+              return;
+            }
+            // Only consume the click after the complete annotation is prepared.
             event.preventDefault();
             event.stopImmediatePropagation();
             spectralVmaxClickCleanup?.();
             spectralVmaxClickCleanup = null;
-            const baselineIndex: [number, number, number] = [peakIndex[0], resolved.result.baselineY, peakIndex[2] || 0];
-            const baselineWorld = csUtils.transformIndexToWorld(imageData, baselineIndex);
-            const annotationId = csUtils.uuidv4();
-            const stats = {
-              xValues: [0, 0],
-              yValues: [0, resolved.result.velocityMps * 100],
-              units: ['s', 'cm/s'],
-              isHorizontal: false,
-              isUnitless: false,
-            };
-            const data = {
-              handles: { points: [baselineWorld, worldPoint], activeHandleIndex: null,
-                textBox: { hasMoved: false, worldPosition: worldPoint, worldBoundingBox: null } },
-              cachedStats: { [`imageId:${imageId}`]: stats },
-              ultrasoundDirectional: { acquisitionMode: 'spectralVmax', value: resolved.result.velocityMps * 100, unit: 'cm/s' },
-            };
-            const viewReference = getViewerAnnotationViewportReference(viewport, [baselineWorld, worldPoint]);
-            const ToolClass: any = (cornerstoneTools as any).UltrasoundDirectionalTool;
-            const baseData = {
-              annotationUID: annotationId,
-              highlighted: true,
-              invalidated: false,
-              metadata: { ...viewReference, toolName: ULTRASOUND_DIRECTIONAL_TOOL_NAME, referencedImageId: imageId },
-              data,
-            };
-            const created = typeof ToolClass?.createAnnotationForViewport === 'function'
-              ? ToolClass.createAnnotationForViewport(viewport, baseData)
-              : baseData;
-            created.annotationUID = annotationId;
-            created.data = { ...(created.data || {}), ...data };
-            created.metadata = { ...(created.metadata || {}), ...baseData.metadata };
-            created.invalidated = false;
-            annotation.state.addAnnotation(created, element);
-            eventTarget.dispatchEvent(new CustomEvent(Enums.Events.ANNOTATION_COMPLETED, {
-              detail: { annotation: created },
-            }));
-            viewport.render?.();
+            try {
+              annotation.state.addAnnotation(created, element);
+              eventTarget.dispatchEvent(new CustomEvent(Enums.Events.ANNOTATION_COMPLETED, {
+                detail: { annotation: created },
+              }));
+              viewport.render?.();
+            } catch (error) {
+              console.error('[AR Spectral Vmax] annotation insertion/render failed', error);
+              uiNotificationService.show({
+                title: 'Spectral Vmax',
+                message: 'Unable to finish this spectral measurement. Inspect the viewport before retrying.',
+                type: 'error', duration: 6000,
+              });
+            }
           };
           element.addEventListener('pointerdown', captureClick, true);
           spectralVmaxClickCleanup = () => element.removeEventListener('pointerdown', captureClick, true);
+        }
+        } catch (error) {
+          console.warn('[AR Spectral Vmax] optional single-click setup failed; native capture available', error);
+          spectralVmaxClickCleanup?.();
+          spectralVmaxClickCleanup = null;
         }
       }
 

@@ -6,6 +6,7 @@ import { SharedMeasurementValueInput, SharedMeasurementLabel } from '../../../ex
 import { SharedQuestionCard } from '../../../extension-ar-measurements/src/components/SharedQuestionCard';
 import { LearningEchoAcquisitionControls, SharedEchoPhaseStatus, SharedEchoRecalculateButton } from '../components/LearningEchoAcquisitionControls';
 import { SharedEFQuestionAnswer } from '../components/SharedEFQuestionAnswer';
+import { SharedTRVmaxQuestionAnswer } from '../components/SharedTRVmaxQuestionAnswer';
 import { LearningSingleChoiceAnswer } from '../components/LearningSingleChoiceAnswer';
 import LearningQuestionPanel from './LearningQuestionPanel';
 import { getEchoCompositeAcquisitionSteps } from '../../../extension-ar-measurements/src/utils/echoCompositeAcquisition';
@@ -6626,28 +6627,13 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
                   Number(value?.value) > 0 && Number(value?.value) <= 8 &&
                   !!cleanString(value?.sourceAnnotationId) &&
                   targetHasNavigationIdentity(value?.viewerTarget);
-                const issue = spectralLearnerCaptureErrors[captureKey];
                 return (
-                  <div className={captured
-                    ? 'rounded border border-emerald-700 bg-emerald-950/20 p-2 text-xs text-emerald-100'
-                    : 'rounded border border-amber-700 bg-amber-950/20 p-2 text-xs text-amber-100'}>
-                    <div className="flex items-center justify-between gap-2">
-                      <span>{captured
-                        ? 'Saved learner TR Vmax: ' + Number(value.value).toFixed(2) +
-                          ' m/s · Available for IVC / RVSP calculation'
-                        : (issue || 'No source-linked learner TR Vmax is recorded yet. Complete the calibrated spectral Vmax measurement before proceeding to IVC.')}</span>
-                      {captured && !disabled ? (
-                        <button type="button" data-quiz-review-action="delete"
-                          className="shrink-0 rounded border border-red-700 px-2 py-1 text-sm font-bold text-red-200 hover:bg-red-950"
-                          title="Delete TR Vmax measurement" aria-label="Delete TR Vmax measurement"
-                          onClick={event => {
-                            event.preventDefault();
-                            event.stopPropagation();
-                            void deleteLearnerQuizSourceMeasurement(quiz, question, value);
-                          }}>×</button>
-                      ) : null}
-                    </div>
-                  </div>
+                  <SharedTRVmaxQuestionAnswer captured={captured} value={value?.value}
+                    issue={spectralLearnerCaptureErrors[captureKey]}
+                    disabled={disabled}
+                    showInstructions={value?.value == null || cleanString(value?.value) === ''}
+                    onDelete={() => void deleteLearnerQuizSourceMeasurement(quiz, question, value)}
+                  />
                 );
               })() : null}
           {renderLearnerIVCRapReview(quiz, question, value, disabled)}
@@ -6827,13 +6813,11 @@ function CaseQuestionsPanel({ commandsManager, servicesManager }: CaseQuestionsP
           {(value?.value === null ||
           typeof value?.value === 'undefined' ||
           cleanString(value?.value) === '') &&
-          cleanString(plainObject(question.answerConfig).measurementKind) !== 'lvSimpsonEF' ? (
+          !['lvSimpsonEF', 'trVmax'].includes(cleanString(plainObject(question.answerConfig).measurementKind)) ? (
             <div className="text-xs text-gray-400">
               {cleanString(plainObject(question.answerConfig).measurementKind) === 'laVolumeBiplane'
                   ? 'Complete both LA contours, then capture the calculated volume.'
-                  : cleanString(plainObject(question.answerConfig).measurementKind) === 'trVmax'
-                    ? 'Complete a calibrated TR spectral peak measurement; the quiz will capture its velocity and DICOM source automatically.'
-                    : 'Draw or select a measurement annotation in the viewport.'}
+                  : 'Draw or select a measurement annotation in the viewport.'}
             </div>
           ) : null}
         </div>

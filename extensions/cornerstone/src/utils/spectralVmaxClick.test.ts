@@ -1,4 +1,4 @@
-import { resolveSpectralVmaxClick } from './spectralVmaxClick';
+import { resolveSpectralVmaxClick, resolveSpectralVmaxWorldClick } from './spectralVmaxClick';
 
 const spectralRegion = {
   minX: 20, maxX: 500, minY: 40, maxY: 400,
@@ -23,5 +23,31 @@ describe('single-click spectral Vmax calibration', () => {
     expect(resolveSpectralVmaxClick({ ...spectralRegion, referenceY: NaN }, 150, 100)).toBeNull();
     expect(resolveSpectralVmaxClick(spectralRegion, 900, 100)).toBeNull();
     expect(resolveSpectralVmaxClick({ ...spectralRegion, referenceY: 900 }, 150, 100)).toBeNull();
+  });
+});
+
+describe('spectral click uses verified viewport VTK geometry', () => {
+  const vtk = {
+    worldToIndex: ([x,y,z]: number[]) => [(x-10)/2,(y-20)/3,z],
+    indexToWorld: ([x,y,z]: number[]) => [x*2+10,y*3+20,z],
+  };
+  const point = [310,320,0]; // pixel index 150,100,0
+  it('accepts a StackViewport descriptor or direct vtk geometry, preserving anisotropic spacing', () => {
+    for (const imageData of [vtk,{imageData:vtk,dimensions:[512,512,1]}]) {
+      expect(resolveSpectralVmaxWorldClick(imageData,point,[spectralRegion]))
+        .toEqual({baselineWorld:[310,770,0],velocityMps:3});
+    }
+  });
+  it('leaves native two-point capture available if geometry is absent, throws or is inconsistent', () => {
+    for (const imageData of [
+      {}, {imageData:{}}, {imageData:{...vtk,worldToIndex:()=>{throw Error('no transform');}}},
+      {imageData:{...vtk,indexToWorld:()=>[NaN,0,0]}},
+      {imageData:{...vtk,indexToWorld:()=>[0,0,0]}},
+    ]) expect(resolveSpectralVmaxWorldClick(imageData,point,[spectralRegion])).toBeNull();
+  });
+  it('does not guess among conflicting spectral regions or missing metadata', () => {
+    expect(resolveSpectralVmaxWorldClick(vtk,point,[spectralRegion,{...spectralRegion,physicalDeltaY:-3}])).toBeNull();
+    expect(resolveSpectralVmaxWorldClick(vtk,point,[{...spectralRegion,referenceY:NaN}])).toBeNull();
+    expect(resolveSpectralVmaxWorldClick(vtk,point,[spectralRegion,spectralRegion])?.velocityMps).toBe(3);
   });
 });

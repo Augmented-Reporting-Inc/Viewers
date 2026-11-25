@@ -15,6 +15,8 @@ import {
   getResearchLengthSourceState,
   getResearchLAPhaseSources,
   getResearchRVFACPhaseSources,
+  getResearchTRVmaxSourceState,
+  isResearchTRVmaxQuestion,
 } from './researchFieldNavigation';
 
 describe('Research quiz-style field sources and navigation', () => {
@@ -523,5 +525,57 @@ describe('Research RV FAC phase display uses the existing calibrated RV area eng
       .phaseSources.RV_ED).toEqual([]);
     expect(calculateRVFACFromMeasurements([source('RV_ED',2,20),source('RV_ES',2,12)]).status).toBe('invalid');
     expect(calculateRVFACFromMeasurements([source('RV_ED',2,20),source('RV_ED',3,20),source('RV_ES',8,12)]).status).toBe('invalid');
+  });
+});
+
+describe('Research source-linked spectral TR Vmax presentation', () => {
+  const study = 'study-tr';
+  const field = { key:'tr|', componentKey:'trVmax', kind:'measurement', config:{
+    unit:'m/s', measurementLabels:['TRVel','TR Vmax'], step:0.01,
+    viewerTarget:{sopInstanceUID:'tr-sop',frameNumber:2},
+  }};
+  const annotation = (id:string, frame=2, value=256, unit='cm/s', studyId=study) => ({
+    annotationId:id, toolName:'UltrasoundDirectionalTool',
+    label:'TR peak velocity', measurementKind:'ultrasound-directional',
+    StudyInstanceUID:studyId, SeriesInstanceUID:'series-tr', SOPInstanceUID:'tr-sop',
+    frameNumber:1, referencedImageId:
+      `wadors:/studies/${studyId}/series/series-tr/instances/tr-sop/frames/${frame}`,
+    points:[[0,0,0],[0,1,0]],
+    ultrasoundDirectional:{value,unit,measurementKind:'ultrasound-directional'},
+  });
+  const linked = {source:'viewer-measurement',sourceMeasurementKey:'a'};
+  const state = (source:any, annotations:any[], f:any=field) =>
+    getResearchTRVmaxSourceState(f,source,annotations,study);
+  it('reuses exact physical velocity conversion and normalizes only the display frame', () => {
+    const saved = annotation('a');
+    const result = state(linked,[saved]);
+    expect(result.status).toBe('linked');
+    expect(result.selected?.candidate.value).toBeCloseTo(2.56);
+    expect(result.selected?.candidate.unit).toBe('m/s');
+    expect(result.selected?.displayAnnotation.frameNumber).toBe(2);
+    expect(saved.frameNumber).toBe(1);
+    expect(isResearchTRVmaxQuestion(field,'echo')).toBe(true);
+    expect(isResearchTRVmaxQuestion(field,'bowel')).toBe(false);
+  });
+  it('rejects wrong frame, foreign study, generic ROI, invalid velocity or calibration', () => {
+    const a = annotation('a');
+    for (const invalid of [annotation('a',20),annotation('a',2,256,'cm/s','other-study'),
+      annotation('a',2,256,'px'),annotation('a',2,801,'cm/s'),
+      {...a,toolName:'Length'}, {...a,points:[]},
+      {...a,ultrasoundDirectional:{...a.ultrasoundDirectional,isUnitless:true}},
+      {...a,ultrasoundDirectional:{...a.ultrasoundDirectional,isHorizontal:true}},
+      {...a,label:'AV peak velocity'}, {...a,ultrasoundDirectional:undefined}]) {
+      expect(state(linked,[invalid]).status).toBe('invalid');
+    }
+    expect(state(linked,[a],{...field,config:{...field.config,viewerTarget:{frameNumber:2}}}).status).toBe('invalid');
+  });
+  it('does not guess a new link or overwrite manual evidence; supports unpinned studies', () => {
+    const a = annotation('a'), b = annotation('b');
+    expect(state({},[a,b]).status).toBe('ambiguous');
+    expect(state(linked,[a,b]).selected?.annotation).toBe(a);
+    expect(state(linked,[b]).status).toBe('invalid');
+    expect(state({source:'manual'},[a]).status).toBe('manual');
+    expect(state({},[a]).status).toBe('unbound');
+    expect(state(linked,[annotation('a',20)],{...field,config:{...field.config,viewerTarget:null}}).status).toBe('linked');
   });
 });

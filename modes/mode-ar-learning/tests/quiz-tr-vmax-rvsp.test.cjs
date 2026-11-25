@@ -6,6 +6,8 @@ const path = require('node:path');
 const repoRoot = path.join(__dirname, '..', '..', '..');
 const panel = fs.readFileSync(path.join(repoRoot,
   'extensions/extension-ar-learning/src/panels/CaseQuestionsPanel.tsx'), 'utf8');
+const sharedTR = fs.readFileSync(path.join(repoRoot,
+  'extensions/extension-ar-learning/src/components/SharedTRVmaxQuestionAnswer.tsx'), 'utf8');
 const commands = fs.readFileSync(path.join(repoRoot,
   'extensions/cornerstone/src/commandsModule.ts'), 'utf8');
 const reviewModal = fs.readFileSync(path.join(repoRoot,
@@ -96,15 +98,18 @@ test('learner retries the exact calibrated TR Vmax annotation before IVC RVSP li
   assert.match(panel, /captureSelectedMeasurementAnswer\(quiz, question, \{\s*measurementId, silent: true/);
   assert.match(panel, /lastActivatedQuestionRef\.current !== key/);
   assert.match(panel, /TR Vmax not recorded/);
-  assert.match(panel, /Saved learner TR Vmax:/);
-  assert.match(panel, /Available for IVC \/ RVSP calculation/);
+  assert.match(panel, /<SharedTRVmaxQuestionAnswer captured=\{captured\} value=\{value\?\.value\}/);
+  assert.match(sharedTR, /ownerLabel = 'learner'/);
+  assert.match(sharedTR, /'Saved ' \+ ownerLabel \+ ' TR Vmax: '/);
+  assert.match(sharedTR, /Available for IVC \/ RVSP calculation/);
   assert.match(panel, /targetHasNavigationIdentity\(value\?\.viewerTarget\)/);
   assert.match(panel, /'ivcCollapsibility'\)\s*\{[\s\S]*?setAnswer\(quiz\.quizKey, question/);
 });
 
 test('learner TR Vmax uses only a calibrated annotation, never a typed scalar or gold', () => {
   assert.match(panel, /cleanString\(plainObject\(question\.answerConfig\)\.measurementKind\) === 'trVmax'\s*\? null :/);
-  assert.match(panel, /Complete a calibrated TR spectral peak measurement/);
+  assert.match(panel, /<SharedTRVmaxQuestionAnswer captured=\{captured\}/);
+  assert.match(sharedTR, /Complete a calibrated TR spectral peak measurement/);
   assert.match(panel, /priorTR\.questionKey/);
   assert.match(panel, /trAnswer\?\.sourceAnnotationId/);
   assert.match(commands, /directional\?\.acquisitionMode === 'spectralVmax'/);
@@ -156,4 +161,19 @@ test('TR Vmax quiz clinical mapping is opt-in through existing report review onl
   assert.match(commands, /\(!quizCapture \|\| allowReportOwnedQuizTR\)/);
   assert.match(panel, /saveViewerMeasurementsForActiveStudy/);
   assert.match(panel, /reportFieldNames: fields/);
+});
+
+test('spectral acquisition verifies native geometry before intercepting clicks and owns completion failures', () => {
+  const start = commands.indexOf('startUltrasoundDirectionalWorkflow: async');
+  const end = commands.indexOf('// AR_DECELERATION_TIME:BEGIN action', start);
+  assert.ok(start >= 0 && end > start);
+  const workflow = commands.slice(start,end);
+  assert.match(workflow, /resolveSpectralVmaxWorldClick\(viewport\.getImageData\?\.\(\), worldPoint, regions\)/);
+  assert.match(workflow, /viewport\.getCurrentImageId\?\.\(\) !== imageId/);
+  assert.ok(workflow.indexOf('if (!result)') < workflow.indexOf('event.stopImmediatePropagation()'));
+  assert.ok(workflow.indexOf('ToolClass.createAnnotationForViewport(viewport, baseData)') < workflow.indexOf('event.stopImmediatePropagation()'));
+  assert.match(workflow, /void finalizeDirectionalMeasurement\(event\)\.catch/);
+  assert.match(workflow, /optional single-click setup failed; native capture available/);
+  assert.match(workflow, /sourceToolName !== ULTRASOUND_DIRECTIONAL_TOOL_NAME/);
+  assert.doesNotMatch(workflow, /csUtils\.transform(?:WorldToIndex|IndexToWorld)\(imageData/);
 });
