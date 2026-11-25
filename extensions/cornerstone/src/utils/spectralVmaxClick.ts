@@ -28,3 +28,41 @@ export function resolveSpectralVmaxClick(
       velocityMps <= 0 || velocityMps > 7) return null;
   return { baselineY, velocityMps };
 }
+
+/** Resolve native VTK geometry from either a StackViewport image-data
+ * descriptor or a direct vtkImageData. Never substitute pixel coordinates
+ * for world coordinates. Failure leaves the native two-point tool available. */
+export function resolveSpectralVmaxWorldClick(
+  imageData: any, worldPoint: unknown, regions: SpectralRegion[]
+): { baselineWorld: number[]; velocityMps: number } | null {
+  const vector = (value: any): number[] | null => {
+    if (!value || typeof value.length !== 'number' || value.length !== 3) return null;
+    const coordinates = Array.from(value) as number[];
+    return coordinates.every(Number.isFinite) ? coordinates : null;
+  };
+  const point = vector(worldPoint);
+  if (!point) return null;
+  const vtk = [imageData?.imageData, imageData].find(candidate =>
+    typeof candidate?.worldToIndex === 'function' &&
+    typeof candidate?.indexToWorld === 'function');
+  if (!vtk) return null;
+  try {
+    const peak = vector(vtk.worldToIndex(point));
+    if (!peak) return null;
+    const matches = regions.map(region => resolveSpectralVmaxClick(region, peak[0], peak[1]))
+      .filter(result => result !== null);
+    const result = matches[0];
+    if (!result || matches.some(match =>
+      Math.abs(match.baselineY - result.baselineY) > 1e-6 ||
+      Math.abs(match.velocityMps - result.velocityMps) > 1e-6)) return null;
+    const baseline = vector(vtk.indexToWorld([peak[0], result.baselineY, peak[2]]));
+    if (!baseline) return null;
+    const roundTrip = vector(vtk.worldToIndex(baseline));
+    if (!roundTrip || Math.abs(roundTrip[0] - peak[0]) > 1e-4 ||
+        Math.abs(roundTrip[1] - result.baselineY) > 1e-4 ||
+        Math.abs(roundTrip[2] - peak[2]) > 1e-4) return null;
+    return { baselineWorld: baseline, velocityMps: result.velocityMps };
+  } catch {
+    return null;
+  }
+}
