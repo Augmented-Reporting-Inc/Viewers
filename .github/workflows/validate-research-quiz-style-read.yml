@@ -5,6 +5,7 @@ on:
     branches:
       - fix/research-tr-vmax-binding-20261116
       - port/3.11-custom
+      - fix/ar-1109-shared-research-length-capture
       - fix/ar-1106-research-tr-vmax-question-parity-20261124
     paths:
       - 'extensions/extension-ar-research/src/**'
@@ -34,7 +35,7 @@ jobs:
       - name: Install exact dependencies
         run: yarn install --frozen-lockfile --non-interactive
       - name: Check Research source navigation and calculated RVSP
-        run: yarn jest --config extensions/extension-ar-research/jest.config.js --runInBand --coverage=false --runTestsByPath extensions/extension-ar-research/src/utils/readSchemaCalculated.test.ts extensions/extension-ar-research/src/utils/researchFieldNavigation.test.ts extensions/extension-ar-research/src/utils/researchAcquisitionInputs.test.ts extensions/extension-ar-research/src/utils/researchLengthCapture.test.ts
+        run: yarn jest --config extensions/extension-ar-research/jest.config.js --runInBand --coverage=false --runTestsByPath extensions/extension-ar-research/src/utils/readSchemaCalculated.test.ts extensions/extension-ar-research/src/utils/researchFieldNavigation.test.ts extensions/extension-ar-research/src/utils/researchAcquisitionInputs.test.ts extensions/extension-ar-research/src/utils/researchLengthCapture.test.ts extensions/extension-ar-research/src/utils/researchReadZScore.test.ts
       - name: Check calibrated source extraction, including cm/sec
         run: yarn jest --config extensions/extension-ar-measurements/jest.config.js --runInBand --coverage=false --runTestsByPath extensions/extension-ar-measurements/src/utils/measurementValueCandidates.test.ts
       - name: Compile Research Read panel JSX/TypeScript
@@ -45,6 +46,7 @@ jobs:
           const result = babel.transformFileSync(path, { envName: 'production' });
           if (!result || !result.code) throw new Error('Research panel did not compile');
           babel.transformFileSync('extensions/extension-ar-research/src/panels/ResearchAcquisitionInputs.tsx', { envName: 'production' });
+          babel.transformFileSync('extensions/extension-ar-research/src/panels/ResearchReadZScore.tsx', { envName: 'production' });
           console.log('Research Read panel compiled successfully');
           NODE
       - name: Test restored learner and educator TR Vmax quiz context
