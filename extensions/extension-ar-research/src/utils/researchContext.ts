@@ -180,6 +180,7 @@ export async function saveResearchReadAnthropometrics(reviewKey: string, body: {
   overrides: Record<string, number>;
   reason: string;
   acquisitionVerified: boolean;
+  modelEligibilityVerified?: boolean;
 }, signal?: AbortSignal) {
   if (!reviewKey) throw new Error('Research review key is missing.');
   return fetchJson(`research/reviews/${encodeURIComponent(reviewKey)}/zscore-anthropometrics`, {
