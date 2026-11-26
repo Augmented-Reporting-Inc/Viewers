@@ -95,9 +95,26 @@ test('research reviewer receives a distinct review-bound grant, never learner gr
   });
 });
 
+test('protected educator preview uses an explicit source-case grant and never downgrades', async () => {
+  const url = href('/rviewer/viewer', 'arEducationSourceSeriesId=' + attempt);
+  expect(parseArImageReadScope(url)).toEqual({
+    scope: 'educationSource', id: attempt, studyInstanceUID: study,
+  });
+  const session = createArImageReadGrantSession({
+    href: url,
+    fetchImpl: async () => makeResponse({ protectedStudy: false }),
+  });
+  await expect(session.initialize()).rejects.toThrow('ar_image_read_grant_required');
+  expect(session.getHeaders()).toEqual({});
+});
+
 test('multiple Study UIDs or conflicting assignments fail closed', () => {
   for (const url of [
     href('/rviewer/viewer', 'arLearnerSeriesId=' + attempt + '&arResearchReviewKey=' + research),
+    href('/rviewer/viewer', 'arEducationSourceSeriesId=' + attempt + '&arLearnerSeriesId=' + attempt),
+    href('/rviewer/viewer', 'arEducationSourceSeriesId=' + attempt + '&arResearchReviewKey=' + research),
+    href('/rviewer/viewer', 'arEducationSourceSeriesId='),
+    href('/rviewer/viewer', 'arEducationSourceSeriesId=' + attempt + '&arEducationSourceSeriesId=' + attempt),
     origin + '/rviewer/viewer?StudyInstanceUIDs=' + study +
       '&StudyInstanceUIDs=1.2.840.2&arLearnerSeriesId=' + attempt,
     href('/rviewer/viewer', 'arLearnerSeriesId=not-an-object-id'),

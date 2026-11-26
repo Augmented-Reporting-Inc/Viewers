@@ -1,7 +1,7 @@
 /**
  * AR-1107: per-window image read grants. This module deliberately does not
  * participate in iUSCAN external website launches (which retain their own
- * session-only bviewer authorization), ordinary clinical viewers or previews.
+ * session-only bviewer authorization), ordinary clinical viewers or unprotected previews.
  * Grants never enter query strings, localStorage, cookies or global state.
  */
 const DICOM_ID = /^[0-9]+(?:\.[0-9]+)+$/;
@@ -17,19 +17,24 @@ export function parseArImageReadScope(href) {
 
   const learnerId = (params.get('arLearnerSeriesId') || '').trim();
   const reviewKey = (params.get('arResearchReviewKey') || '').trim();
-  if (!learnerId && !reviewKey) return null;
+  const sourceValues = params.getAll('arEducationSourceSeriesId');
+  const sourceId = (sourceValues[0] || '').trim();
+  const sourceRequested = sourceValues.length > 0;
+  if (!learnerId && !reviewKey && !sourceRequested) return null;
 
   const studyValues = params.getAll('StudyInstanceUIDs').filter(Boolean);
   const study = studyValues.length === 1 ? studyValues[0].trim() : '';
-  if ((learnerId && reviewKey) || !DICOM_ID.test(study) || study.length > 64 ||
+  if ((learnerId && reviewKey) ||
+      (sourceRequested && (sourceValues.length !== 1 || !OBJECT_ID.test(sourceId) || learnerId || reviewKey)) ||
+      !DICOM_ID.test(study) || study.length > 64 ||
       (learnerId && !OBJECT_ID.test(learnerId)) ||
       (reviewKey && (reviewKey.length > 200 || !/^[a-z0-9-]+$/i.test(reviewKey)))) {
     throw new Error('ar_image_read_launch_invalid');
   }
 
   return {
-    scope: learnerId ? 'educationAttempt' : 'researchReview',
-    id: learnerId || reviewKey.toLowerCase(),
+    scope: sourceRequested ? 'educationSource' : learnerId ? 'educationAttempt' : 'researchReview',
+    id: sourceId || learnerId || reviewKey.toLowerCase(),
     studyInstanceUID: study,
   };
 }
@@ -189,6 +194,9 @@ export function createArImageReadGrantSession({
     if (!response.ok) throw new Error('ar_image_read_grant_request_denied');
     const value = await response.json();
     if (value?.protected === false) {
+      if (target.scope === 'educationSource' || protectedStudy) {
+        throw new Error('ar_image_read_grant_required');
+      }
       protectedStudy = false;
       activeToken = '';
       expiresAt = 0;
