@@ -1,4 +1,4 @@
-import {canShowResearchZScore,matchesSavedResearchZScoreEvidence,matchesZScoreResponse,getVisibleResearchZScore} from './researchReadZScore';
+import {canShowResearchZScore,matchesSavedResearchZScoreEvidence,matchesZScoreResponse,getVisibleResearchZScore,buildResearchZScorePreviewRequest,matchesResearchZScorePreviewResponse} from './researchReadZScore';
 
 const field = {key:'root|',componentKey:'root',config:{zScore:{enabled:true,parameterKey:'ROOT'}}};
 const context = {reviewKey:'test-read',preview:false,review:{reviewType:'independent'},
@@ -57,4 +57,24 @@ test('automatic mode exposes the saved score panel only for eligible configured 
   expect(canShowResearchZScore({...automatic,preview:true},field)).toBe(false);
   expect(canShowResearchZScore({...automatic,review:{reviewType:'adjudication'}},field)).toBe(false);
   expect(canShowResearchZScore(automatic,{...field,config:{}})).toBe(false);
+});
+
+test('preview accepts only current automatic visible unique Length evidence and exact revision',()=>{
+  const ctx={...context,review:{...context.review,status:'draft'},readSchema:{...context.readSchema,config:{zScore:{...context.readSchema.config.zScore,verificationMode:'automatic_calibrated',visibility:'during_read'}}}};
+  const entry={componentKey:'root',value:20,unit:'mm',source:'viewer-measurement',sourceMeasurementKey:'source-1'};
+  const req=(c:any=ctx,e:any[]=[entry],a:any[]=[annotation()],rev=2,d=new Set<string>())=>buildResearchZScorePreviewRequest(c,field,rev,e,a,d);
+  expect(req()).toMatchObject({componentKey:'root',expectedRevision:2,readResults:{entries:[entry]}});
+  expect(req({...ctx,readOnly:true})).toBeNull();
+  expect(req(context)).toBeNull();
+  expect(req(ctx,[entry,{...entry,componentKey:'other'}])).toBeNull();
+  expect(req(ctx,[{...entry,source:'manual'}])).toBeNull();
+  expect(req(ctx,[entry],[annotation(),annotation()])).toBeNull();
+  expect(req(ctx,[entry],[annotation()],0)).toBeNull();
+  expect(req(ctx,[entry],[annotation()],2,new Set(['source-1']))).toBeNull();
+  const hidden={...ctx,readSchema:{...ctx.readSchema,config:{zScore:{...ctx.readSchema.config.zScore,visibility:'report_only'}}}};
+  expect(req(hidden)).toBeNull();
+  const response={provisional:true,componentKey:'root',acquisitionRevision:2,results:[]};
+  expect(matchesResearchZScorePreviewResponse(response,field,2)).toBe(true);
+  expect(matchesResearchZScorePreviewResponse(response,field,3)).toBe(false);
+  expect(matchesResearchZScorePreviewResponse({...response,provisional:false},field,2)).toBe(false);
 });
