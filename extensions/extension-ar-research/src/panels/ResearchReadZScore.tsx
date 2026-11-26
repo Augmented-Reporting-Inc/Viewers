@@ -10,9 +10,9 @@ const checks = [
 const unchecked = () => ({applicability:false,technique:false,calibration:false});
 
 export default function ResearchReadZScore({reviewKey, field, savedAt, acquisitionRevision,
-  readOnly, disabled, visibility, completed, onBusy}: {
+  readOnly, disabled, visibility, completed, onBusy, automatic=false}: {
   reviewKey:string; field:any; savedAt:unknown; acquisitionRevision:number;
-  readOnly:boolean; disabled:boolean; visibility:string; completed:boolean;
+  readOnly:boolean; disabled:boolean; visibility:string; completed:boolean; automatic?:boolean;
   onBusy:(busy:boolean)=>void;
 }) {
   const [snapshot,setSnapshot] = useState<any>(null);
@@ -22,7 +22,8 @@ export default function ResearchReadZScore({reviewKey, field, savedAt, acquisiti
   const pending = useRef<AbortController | null>(null);
 
   function apply(next:any) {
-    if (!matchesZScoreResponse(next,savedAt,acquisitionRevision))
+    if (!matchesZScoreResponse(next,savedAt,acquisitionRevision) ||
+        (automatic && next.verificationMode !== 'automatic_calibrated'))
       throw new Error('Saved evidence has changed. Reopen or save the Read and reload acquisition inputs.');
     setSnapshot(next);
     setConfirmations(unchecked());
@@ -48,7 +49,7 @@ export default function ResearchReadZScore({reviewKey, field, savedAt, acquisiti
   const matches = Array.isArray(snapshot?.questions) ? snapshot.questions.filter(q =>
     q?.componentKey === field.componentKey) : [];
   const question = matches.length === 1 ? matches[0] : null;
-  const canAttest = !readOnly && !disabled && !busy && snapshot?.editable === true &&
+  const canAttest = !automatic && snapshot?.verificationMode !== 'automatic_calibrated' && !readOnly && !disabled && !busy && snapshot?.editable === true &&
     question?.status === 'ready_for_verification' && /^[a-f0-9]{64}$/.test(question.evidenceDigest || '');
   async function attest() {
     if (!canAttest || pending.current || !Object.values(confirmations).every(v => v === true)) return;
@@ -80,9 +81,10 @@ export default function ResearchReadZScore({reviewKey, field, savedAt, acquisiti
       <div><div className="text-gray-400">BSA</div>
         <div className="text-lg font-semibold">{score.bsaM2.toFixed(3)} m²</div></div>
       <div className="col-span-2 text-gray-400">PHN 2017 · Haycock BSA</div>
+      {Math.abs(score.zScore)>=5 ? <div role="status" className="col-span-2 text-amber-200">Extreme Z-score — review measurement and acquisition inputs. This is a review flag, not a diagnostic threshold.</div> : null}
     </div> : null}
     {question?.status === 'verified' && !score ? <p className="mt-1 text-gray-400">Verification recorded. Score visibility is restricted by the study policy.</p> : null}
-    {question?.status === 'unavailable' ? <p className="mt-1 text-amber-200">Z-score unavailable: saved measurement or acquisition evidence is not eligible.</p> : null}
+    {question?.status === 'unavailable' ? <p className="mt-1 text-amber-200">{question.reason === 'automatic_calibration_unavailable' ? 'Z-score unavailable: automatic source calibration could not be corroborated. Check the saved measurement and source frame.' : question.reason === 'model_eligibility_unconfirmed' ? 'Confirm reference model eligibility with the acquisition inputs.' : 'Z-score unavailable: saved measurement or acquisition evidence is not eligible.'}</p> : null}
     {question?.status === 'unverified' ? <p className="mt-1 text-gray-400">No verified result is available for this saved measurement.</p> : null}
     {canAttest ? <div className="mt-2 space-y-2">
       {checks.map(([key,label]) => <label key={key} className="flex items-start gap-2">
@@ -95,7 +97,7 @@ export default function ResearchReadZScore({reviewKey, field, savedAt, acquisiti
       </button>
     </div> : null}
     {error ? <p role="alert" className="mt-2 text-red-300">{error}</p> : null}
-    {error && !busy ? <button type="button" disabled={disabled} onClick={()=>void load()}
+    {(error || (automatic && question?.status === 'unavailable')) && !busy ? <button type="button" disabled={disabled} onClick={()=>void load()}
       className="mt-2 rounded border border-gray-500 px-2 py-1 disabled:opacity-50">Reload saved evidence</button> : null}
   </div>;
 }
