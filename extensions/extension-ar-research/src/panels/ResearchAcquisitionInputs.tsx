@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { loadResearchReadAnthropometrics, saveResearchReadAnthropometrics } from '../utils/researchContext';
-import { acquisitionFields, acquisitionInputStrings, buildAcquisitionOverrideRequest } from '../utils/researchAcquisitionInputs';
+import { acquisitionFields, acquisitionInputStrings, buildAcquisitionOverrideRequest, hasVerifiedAcquisitionRevision } from '../utils/researchAcquisitionInputs';
 
 // OHIF's global form-control background can be white even in the dark viewer.
 // Set both foreground and background explicitly on these local controls.
@@ -20,6 +20,7 @@ export default function ResearchAcquisitionInputs({reviewKey, readOnly, disabled
   const [reason,setReason] = useState('');
   const [verified,setVerified] = useState(false);
   const [eligibility,setEligibility] = useState(false);
+  const [expanded,setExpanded] = useState(true);
   const [busy,setBusy] = useState(false);
   const [error,setError] = useState('');
   const [notice,setNotice] = useState('');
@@ -34,12 +35,13 @@ export default function ResearchAcquisitionInputs({reviewKey, readOnly, disabled
     setSnapshot(next); setInputs(acquisitionInputStrings(next.effective));
     setVerified(next.acquisitionVerified === true); setReason('');
     setEligibility(next.modelEligibilityVerified === true);
+    setExpanded(!hasVerifiedAcquisitionRevision(next, automatic));
     onEvidenceState?.({revision:next.revision,verified:next.acquisitionVerified === true && (!automatic || next.modelEligibilityVerified === true),dirty:false});
   }
   async function load() {
     if (pending.current) return;
     const request = new AbortController(); pending.current = request;
-    setBusy(true); onBusy(true); setError(''); setNotice(''); setSnapshot(null); onEvidenceState?.(null);
+    setBusy(true); onBusy(true); setError(''); setNotice(''); setSnapshot(null); setExpanded(true); onEvidenceState?.(null);
     try {
       const next = await loadResearchReadAnthropometrics(reviewKey,request.signal);
       if (!request.signal.aborted) apply(next);
@@ -67,6 +69,19 @@ export default function ResearchAcquisitionInputs({reviewKey, readOnly, disabled
     }
   }
   const locked = readOnly || disabled || busy || !snapshot?.editable;
+  if (!expanded && !busy && !error && hasVerifiedAcquisitionRevision(snapshot, automatic)) {
+    const effective = snapshot.effective;
+    return <div className="my-2 rounded border border-gray-700 p-2 text-xs text-gray-200"
+      onKeyDown={event => event.stopPropagation()} onKeyUp={event => event.stopPropagation()}>
+      <div className="flex items-center justify-between gap-2">
+        <span className="font-semibold text-green-300">Acquisition inputs verified</span>
+        <button type="button" aria-expanded={false} className="rounded border border-gray-500 px-2 py-1" onClick={() => setExpanded(true)}>
+          {locked ? 'Review' : 'Review / edit'}
+        </button>
+      </div>
+      <p className="mt-1 text-gray-400">{effective.heightCm ?? '—'} cm · {effective.weightKg ?? '—'} kg · {effective.ageYears ?? '—'} years</p>
+    </div>;
+  }
   return <div className="my-2 rounded border border-gray-700 p-3 text-xs text-gray-200"
     onKeyDown={event => event.stopPropagation()} onKeyUp={event => event.stopPropagation()}>
     <div className="font-semibold">Acquisition measurements</div>
