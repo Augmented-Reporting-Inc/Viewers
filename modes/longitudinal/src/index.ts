@@ -10,6 +10,7 @@ import toolbarButtons from './toolbarButtons';
 import { createEducationUnsavedWorkGuard } from './educationUnsavedWorkGuard';
 import { installEducationUnsavedNavigation } from './educationUnsavedNavigation';
 import { installEducationUnsavedWorkEvents } from './educationUnsavedWorkEvents';
+import { dispatchQuestionMeasurementAdded, snapshotQuestionMeasurementCaptureContext } from './questionMeasurementCompletion';
 
 const ECHO_LENGTH_MEASUREMENT_LABELS_CONFIG = {
   id: 'echoLengthMeasurementLabels',
@@ -1149,6 +1150,10 @@ function modeFactory({ modeConfiguration }) {
           return;
         }
 
+        const captureContext = sourceAnnotation?.metadata?.toolName === 'Length' &&
+          isResearchViewerContextFromUrl() && !isViewerMeasurementReadOnlyFromUrl()
+          ? snapshotQuestionMeasurementCaptureContext() : undefined;
+
         // Let hydration finish applying its saved-workflow marker before
         // deciding whether this is a new user-created annotation.
         await new Promise(resolve => window.setTimeout(resolve, 0));
@@ -1203,6 +1208,20 @@ function modeFactory({ modeConfiguration }) {
         });
 
         const currentMeasurement = measurementService.getMeasurement?.(annotationId) || measurement;
+
+        // Research and Education share the completed-question event. A fresh
+        // Research Length can be claimed by its active question before opening
+        // the generic clinical label dialog. Failed claims fall back to the
+        // original dialog; no existing annotation is deleted or reassigned.
+        if (isResearchViewerContextFromUrl() &&
+            !isViewerMeasurementReadOnlyFromUrl() &&
+            currentMeasurement?.toolName === 'Length') {
+          if (captureContext && await dispatchQuestionMeasurementAdded(currentMeasurement, captureContext)) {
+            const completed = cornerstoneAnnotation.state.getAnnotation?.(annotationId);
+            if (completed?.data?.arPendingLengthLabel === true) delete completed.data.arPendingLengthLabel;
+            return;
+          }
+        }
 
         if (!currentMeasurement?.label) {
           const labelOptions = await getLabelConfigForMeasurement(
@@ -1549,3 +1568,5 @@ export { initToolGroups, toolbarButtons };
 export { createEducationUnsavedWorkGuard } from './educationUnsavedWorkGuard';
 export { installEducationUnsavedNavigation, requestEducationViewerExit } from './educationUnsavedNavigation';
 export { installEducationUnsavedWorkEvents, emitEducationWorkChange, emitEducationWorkSaveStart, emitEducationWorkSaveResult } from './educationUnsavedWorkEvents';
+
+export { dispatchQuestionMeasurementAdded } from './questionMeasurementCompletion';

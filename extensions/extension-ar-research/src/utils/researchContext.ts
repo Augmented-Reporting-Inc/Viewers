@@ -167,3 +167,22 @@ export async function completeResearchReadReview(reviewKey: string) {
     body: JSON.stringify({}),
   });
 }
+
+export async function loadResearchReadAnthropometrics(reviewKey: string, signal?: AbortSignal) {
+  if (!reviewKey) throw new Error('Research review key is missing.');
+  return fetchJson(`research/reviews/${encodeURIComponent(reviewKey)}/zscore-anthropometrics`, {
+    method: 'GET', cache: 'no-store', signal,
+  });
+}
+
+export async function saveResearchReadAnthropometrics(reviewKey: string, body: {
+  expectedRevision: number;
+  overrides: Record<string, number>;
+  reason: string;
+  acquisitionVerified: boolean;
+}, signal?: AbortSignal) {
+  if (!reviewKey) throw new Error('Research review key is missing.');
+  return fetchJson(`research/reviews/${encodeURIComponent(reviewKey)}/zscore-anthropometrics`, {
+    method: 'PUT', body: JSON.stringify(body), signal,
+  });
+}

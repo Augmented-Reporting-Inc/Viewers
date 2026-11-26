@@ -15,6 +15,10 @@ import { SharedTRVmaxQuestionAnswer } from '../../../extension-ar-learning/src/c
 import { SharedIVCRapRVSPAnswer } from '../../../extension-ar-learning/src/components/SharedIVCRapRVSPAnswer';
 import { LearningSingleChoiceAnswer } from '../../../extension-ar-learning/src/components/LearningSingleChoiceAnswer';
 import ResearchEchoGuidedControls from './ResearchEchoGuidedControls';
+import ResearchAcquisitionInputs from './ResearchAcquisitionInputs';
+import { resolveResearchLengthCapture } from '../utils/researchLengthCapture';
+import { captureViewerQuestionMeasurement } from '../../../extension-ar-measurements/src/utils/questionMeasurementCapture';
+import { canShowResearchAcquisitionInputs } from '../utils/researchAcquisitionInputs';
 import {
   reconcileResearchEchoCompositeAnswers,
   getVerifiedResearchEFResultCandidate,
@@ -317,6 +321,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [completing, setCompleting] = useState(false);
+  const [acquisitionBusy, setAcquisitionBusy] = useState(false);
   const [error, setError] = useState('');
 
   const load = useCallback(async () => {
@@ -1447,6 +1452,95 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
     });
   };
 
+  // Education and Research consume the SAME calibrated, exact-ID viewer
+  // capture command. This adapter only establishes Research's own answer link.
+  const activeCaptureRef = useRef({ fieldKey: '', reviewKey: '' });
+  activeCaptureRef.current = { fieldKey: selectedFieldKey, reviewKey: cleanString(context?.reviewKey) };
+  const lengthCaptureInFlightRef = useRef(new Set<string>());
+  const captureSharedLength = async (field: any, measurementId: string) => {
+    if (!measurementId || !field || !isResearchLengthQuestion(field, readDomain) ||
+        !editingAllowedRef.current || !context?.reviewKey || !commandsManager) return false;
+    const generation = selectionGenerationRef.current;
+    const reviewKey = cleanString(context.reviewKey);
+    const isCurrent = () => editingAllowedRef.current &&
+      generation === selectionGenerationRef.current &&
+      activeCaptureRef.current.fieldKey === field.key &&
+      activeCaptureRef.current.reviewKey === reviewKey;
+    if (!isCurrent() || valueSourcesRef.current[field.key]?.source) return false;
+    const pendingKey = reviewKey + '|' + field.key + '|' + measurementId;
+    if (lengthCaptureInFlightRef.current.has(pendingKey)) return false;
+    lengthCaptureInFlightRef.current.add(pendingKey);
+    try {
+      const result = await captureViewerQuestionMeasurement(commandsManager, {
+        question: { questionKey: field.componentKey, answerConfig: { measurementKind: 'length' } },
+        unit: field.config?.unit, measurementId,
+      });
+      if (!isCurrent() || valueSourcesRef.current[field.key]?.source) return false;
+      const capture = resolveResearchLengthCapture(field, result,
+        cleanString(context.sourceStudyInstanceUID), measurementId, valueSourcesRef.current, fields);
+      if (!capture || deletedAnnotationIdsRef.current.has(capture.sourceId)) {
+        return false;
+      }
+      const measurementService = servicesManager?.services?.measurementService;
+      const measurement = measurementService?.getMeasurement?.(capture.sourceId);
+      if (!measurement || measurement.toolName !== 'Length' || !isCurrent()) return false;
+      const label = cleanString(measurement.label || measurement.measurementRole);
+      const normalizeLabel = value => cleanString(value).toLowerCase().replace(/[^a-z0-9]/g, '');
+      if (label && !['length', normalizeLabel(capture.label)].includes(normalizeLabel(label))) return false;
+      // Use the existing shared MeasurementService annotation update, exactly
+      // as the viewer's established label dialog/IVC phase binding does.
+      if (normalizeLabel(label) !== normalizeLabel(capture.label)) {
+        measurementService.update(capture.sourceId, {
+          ...measurement, label: capture.label, measurementRole: capture.label,
+        }, true);
+      }
+      if (!isCurrent()) return false;
+      const nextSources = { ...valueSourcesRef.current, [field.key]: {
+        source: capture.update.source, sourceMeasurementKey: capture.sourceId,
+      } };
+      valueSourcesRef.current = nextSources;
+      setValueSources(nextSources);
+      setValues(current => ({ ...current, [field.key]: capture.update.value }));
+      void refreshViewerMeasurementBindings();
+      return true;
+    } catch {
+      return false;
+    } finally {
+      lengthCaptureInFlightRef.current.delete(pendingKey);
+    }
+  };
+
+  useEffect(() => {
+    const field = fields.find(item => item.key === selectedFieldKey);
+    if (!field || !isResearchLengthQuestion(field, readDomain) ||
+        context?.readOnly || context?.preview || !context?.reviewKey) return;
+    const snapshotContext = (event: Event) => {
+      const detail = (event as CustomEvent)?.detail;
+      if (typeof detail?.accept !== 'function' || !editingAllowedRef.current ||
+          valueSourcesRef.current[field.key]?.source) return;
+      detail.accept({ ...activeCaptureRef.current, generation: selectionGenerationRef.current });
+    };
+    const completed = (event: Event) => {
+      const detail = (event as CustomEvent)?.detail;
+      const owner = detail?.captureContext;
+      if (owner?.fieldKey !== field.key || owner?.reviewKey !== activeCaptureRef.current.reviewKey ||
+          owner?.generation !== selectionGenerationRef.current) return;
+      // Only the mode's fresh completion event can claim a Research caliper.
+      // Raw, restored and ordinary MeasurementService updates never auto-bind.
+      if (typeof detail?.accept !== 'function' || detail.toolName !== 'Length' ||
+          !detail.measurementId || !editingAllowedRef.current ||
+          valueSourcesRef.current[field.key]?.source) return;
+      detail.accept(captureSharedLength(field, cleanString(detail.measurementId)));
+    };
+    window.addEventListener('ar-measurements:question-capture-context', snapshotContext);
+    window.addEventListener('ar-learning:quiz-measurement-added', completed);
+    return () => {
+      window.removeEventListener('ar-measurements:question-capture-context', snapshotContext);
+      window.removeEventListener('ar-learning:quiz-measurement-added', completed);
+    };
+  }, [selectedFieldKey, fields, readDomain, context?.reviewKey, context?.readOnly, context?.preview,
+    context?.sourceStudyInstanceUID, servicesManager, commandsManager, refreshViewerMeasurementBindings]);
+
   if (loading) {
     return <div className="p-4 text-sm text-gray-300">Loading Research Read...</div>;
   }
@@ -1476,7 +1570,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
     cleanString(context?.review?.studyTitle) ||
     'Research Study';
   const reviewStatus = cleanString(context?.review?.status || 'preview');
-  const isBusy = saving || completing;
+  const isBusy = saving || completing || acquisitionBusy;
   const selectedField = visibleFields.find(field => field.key === selectedFieldKey) ||
     visibleFields[0];
   const groupedFields = getResearchGroupedFields(
@@ -1642,6 +1736,11 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
             {context.preview ? 'Protocol preview' : reviewStatus}
             {' · '}{completedFields}/{visibleFields.length} questions answered
           </div>
+      {canShowResearchAcquisitionInputs(context) ? (
+        <ResearchAcquisitionInputs key={context.reviewKey}
+          reviewKey={context.reviewKey} readOnly={context.readOnly}
+          disabled={saving || completing} onBusy={setAcquisitionBusy} />
+      ) : null}
       {context.preview ? (
         <div className="mb-3 rounded border border-blue-900 bg-blue-950 p-3 text-xs text-blue-100">
           Protocol preview. Fields are shown exactly as readers will receive them;
