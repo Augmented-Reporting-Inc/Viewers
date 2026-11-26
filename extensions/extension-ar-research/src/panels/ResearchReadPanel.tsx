@@ -1618,6 +1618,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
       trState.status === 'manual' || trState.status === 'unbound' ||
       trState.eligible.length > 1 || (trState.status === 'linked' && !trCaptured));
   const selectedLength = isResearchLengthQuestion(selectedField, readDomain);
+  const automaticZScore = context?.readSchema?.config?.zScore?.verificationMode === 'automatic_calibrated';
   const showZScore = selectedLength && canShowResearchZScore(context,selectedField);
   const savedZScoreEvidence = showZScore && !!context.review?.savedAt &&
     !!acquisitionEvidence?.verified && !acquisitionEvidence.dirty &&
@@ -1750,7 +1751,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
         <ResearchAcquisitionInputs key={context.reviewKey}
           reviewKey={context.reviewKey} readOnly={context.readOnly}
           disabled={saving || completing || scoreBusy} onBusy={setAcquisitionBusy}
-          onEvidenceState={setAcquisitionEvidence} />
+          onEvidenceState={setAcquisitionEvidence} automatic={automaticZScore} />
       ) : null}
       {context.preview ? (
         <div className="mb-3 rounded border border-blue-900 bg-blue-950 p-3 text-xs text-blue-100">
@@ -1863,8 +1864,8 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
                 acquisitionRevision={acquisitionEvidence.revision} readOnly={context.readOnly}
                 disabled={saving || completing || acquisitionBusy}
                 visibility={context.readSchema.config.zScore.visibility} completed={reviewStatus === 'completed'}
-                onBusy={setScoreBusy} />
-            ) : <p className="mt-2 text-xs text-gray-400">Save the measurement and confirmed acquisition inputs before verifying its Z-score.</p>
+                onBusy={setScoreBusy} automatic={automaticZScore} />
+            ) : <p className="mt-2 text-xs text-gray-400">{automaticZScore ? "Confirm acquisition inputs and reference eligibility once, then save the Read to calculate eligible Z-scores automatically." : "Save the measurement and confirmed acquisition inputs before verifying its Z-score."}</p>
           ) : null}
           {!isIVCRapRVSPQuestion ? groupedFields.map(companionField => (
             <ReadField
