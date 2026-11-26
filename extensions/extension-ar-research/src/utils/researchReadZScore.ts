@@ -65,3 +65,39 @@ export function getVisibleResearchZScore(snapshot: any, field: any) {
     r.modelId === 'phn-2017' && r.modelVersion === 'phn-2017-indexed-table-v1');
   return matches.length === 1 ? matches[0] : null;
 }
+
+// Only exact, unique linked Length evidence can be sent for an unsaved
+// preview. Keep the request minimal; FormAPI independently verifies it.
+export function buildResearchZScorePreviewRequest(context: any, field: any, revision: number,
+  entries: any[], annotations: any[], deleted: ReadonlySet<string> = new Set()) {
+  const policy=context?.readSchema?.config?.zScore;
+  if (!canShowResearchZScore(context,field) || context.readOnly ||
+      context.review?.status !== 'draft' || policy.verificationMode !== 'automatic_calibrated' ||
+      policy.visibility !== 'during_read' || !Number.isSafeInteger(revision) || revision<1) return null;
+  const matches=entries.filter(e=>e.componentKey===field.componentKey && !clean(e.segmentKey));
+  if(matches.length!==1) return null;
+  const entry=matches[0], id=clean(entry.sourceMeasurementKey);
+  if(entry.source!=='viewer-measurement' || !id || deleted.has(id) ||
+      typeof entry.value!=='number' || !Number.isFinite(entry.value) || entry.value<=0 ||
+      entries.some(e=>e!==entry && clean(e.sourceMeasurementKey)===id)) return null;
+  const sources=annotations.filter(a=>clean(a?.annotationId||a?.uid)===id);
+  if(sources.length!==1 || !sourceSignature(sources[0])) return null;
+  const a=sources[0], m=a.measurements;
+  return {
+    componentKey:field.componentKey,expectedRevision:revision,
+    readResults:{entries:[entry]},
+    measurementAnnotations:[{
+      annotationId:a.annotationId,uid:a.uid,toolName:a.toolName,label:a.label,
+      measurementRole:a.measurementRole,role:a.role,
+      StudyInstanceUID:a.StudyInstanceUID,referenceStudyUID:a.referenceStudyUID,
+      SeriesInstanceUID:a.SeriesInstanceUID,referenceSeriesUID:a.referenceSeriesUID,
+      SOPInstanceUID:a.SOPInstanceUID,referencedImageId:a.referencedImageId,
+      points:a.points,measurements:{length:m.length,lengthUnit:m.lengthUnit,value:m.value,unit:m.unit},
+    }],
+  };
+}
+
+export function matchesResearchZScorePreviewResponse(snapshot: any, field: any, revision: number) {
+  return snapshot?.provisional === true && snapshot.componentKey===field?.componentKey &&
+    snapshot.acquisitionRevision===revision && Array.isArray(snapshot.results);
+}
