@@ -17,7 +17,7 @@ export function acquisitionInputStrings(values: any = {}) {
     [key, typeof values?.[key] === 'number' && Number.isFinite(values[key]) ? String(values[key]) : '']));
 }
 
-export function buildAcquisitionOverrideRequest(snapshot: any, inputs: Record<string, string>, reason: string, verified: boolean) {
+export function buildAcquisitionOverrideRequest(snapshot: any, inputs: Record<string, string>, reason: string, verified: boolean, modelEligibilityVerified?: boolean) {
   if (!snapshot?.editable || !Number.isSafeInteger(snapshot.revision) || snapshot.revision < 0 ||
       !snapshot.baseline?.values || reason.trim().length > 500) return null;
   const overrides: Record<string, number> = {};
@@ -37,5 +37,6 @@ export function buildAcquisitionOverrideRequest(snapshot: any, inputs: Record<st
     (snapshot.overrides?.[key] ?? snapshot.baseline.values[key]));
   const restoring = changed && Object.keys(overrides).length === 0;
   if (changed && !restoring && !reason.trim()) return null;
-  return {expectedRevision: snapshot.revision, overrides, reason: reason.trim(), acquisitionVerified: verified};
+  return {expectedRevision: snapshot.revision, overrides, reason: reason.trim(), acquisitionVerified: verified,
+    ...(typeof modelEligibilityVerified === 'boolean' ? {modelEligibilityVerified: verified && modelEligibilityVerified} : {})};
 }
