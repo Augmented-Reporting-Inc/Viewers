@@ -86,6 +86,16 @@ async function fetchJson(path: string, options: RequestInit = {}) {
   return payload;
 }
 
+/** Re-enter the existing viewer read-only mode after server-confirmed completion.
+ * Its toolbar is configured on mode entry, not on a panel state change. */
+export function getCompletedResearchReadOnlyUrl(href: string, status: unknown, measurementAccess: unknown) {
+  if (cleanString(status).toLowerCase() !== 'completed' ||
+      cleanString(measurementAccess).toLowerCase() === 'readonly') return null;
+  const url = new URL(href);
+  url.searchParams.set('arMeasurementAccess', 'readonly');
+  return url.href;
+}
+
 export async function loadResearchReadContext() {
   const viewer = getResearchViewerContext();
   if (!viewer.reviewKey && !viewer.studyKey) {

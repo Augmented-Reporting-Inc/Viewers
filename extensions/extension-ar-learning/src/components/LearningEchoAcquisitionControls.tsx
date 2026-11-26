@@ -27,6 +27,7 @@ const PHASES: Record<LearningEchoAcquisitionKind, Array<{ slot: string; label: s
 export function LearningEchoAcquisitionControls({
   kind,
   disabled = false,
+  readOnly = false,
   onAcquire,
   renderPhaseStatus,
   renderPhaseExtras,
@@ -35,6 +36,7 @@ export function LearningEchoAcquisitionControls({
 }: {
   kind: LearningEchoAcquisitionKind;
   disabled?: boolean;
+  readOnly?: boolean;
   onAcquire: (slot: string, technique?: 'freehand' | 'axisApex') => void;
   renderPhaseStatus?: (slot: string, label: string) => ReactNode;
   renderPhaseExtras?: (slot: string) => ReactNode;
@@ -45,7 +47,7 @@ export function LearningEchoAcquisitionControls({
   const heading = isIVC ? 'IVC phase measurements'
     : kind === 'rvFac' ? 'RV FAC contour technique'
     : 'LA volume contour technique';
-  const description = isIVC
+  const description = readOnly ? 'Select a saved phase to inspect its source image and frame.' : isIVC
     ? 'Choose a phase below and draw the calibrated Length caliper. When prompted, label it IVCexp or IVCinsp respectively.'
     : kind === 'rvFac'
       ? 'For each area click the desired measuring tool to navigate to its image.'
@@ -63,7 +65,7 @@ export function LearningEchoAcquisitionControls({
           return (
             <div key={phase.slot} className="flex flex-wrap items-center gap-2">
               {renderPhaseStatus?.(phase.slot, phase.label)}
-              {isIVC ? (
+              {readOnly ? null : isIVC ? (
                 <button type="button"
                   disabled={blocked}
                   className="rounded border border-cyan-600 px-2 py-1 text-cyan-100 disabled:opacity-40"

@@ -1,3 +1,4 @@
+import { getCompletedResearchReadOnlyUrl } from './researchContext';
 import { calculateRVFACFromMeasurements } from '../../../extension-ar-measurements/src/utils/echoAreaMeasurements';
 import {
   getResearchFieldMeasurementCandidates,
@@ -19,6 +20,19 @@ import {
   getResearchTRVmaxSourceState,
   isResearchTRVmaxQuestion,
 } from './researchFieldNavigation';
+
+describe('completed Research read-only viewer entry', () => {
+  it('preserves the launch and changes only the access flag after confirmed completion', () => {
+    const href = 'https://viewer.example/rviewer/viewer?arResearchReviewKey=review&arMeasurementAccess=edit&StudyInstanceUIDs=study#route';
+    expect(getCompletedResearchReadOnlyUrl(href, 'in_review', 'edit')).toBeNull();
+    expect(getCompletedResearchReadOnlyUrl(href, 'completed', 'readonly')).toBeNull();
+    const locked = new URL(getCompletedResearchReadOnlyUrl(href, 'completed', 'edit')!);
+    expect(locked.searchParams.get('arMeasurementAccess')).toBe('readonly');
+    expect(locked.searchParams.get('arResearchReviewKey')).toBe('review');
+    expect(locked.searchParams.get('StudyInstanceUIDs')).toBe('study');
+    expect(locked.hash).toBe('#route');
+  });
+});
 
 describe('Research quiz-style field sources and navigation', () => {
   const field = { config: { measurementLabels: ['TRVel', 'TR Vmax'] } };

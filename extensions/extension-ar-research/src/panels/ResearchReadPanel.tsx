@@ -80,6 +80,7 @@ import {
 } from '../utils/researchFieldNavigation';
 import {
   completeResearchReadReview,
+  getCompletedResearchReadOnlyUrl,
   loadResearchReadContext,
   saveResearchReadReview,
 } from '../utils/researchContext';
@@ -335,6 +336,13 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
 
     try {
       const next = await loadResearchReadContext();
+      const lockedUrl = next.reviewKey && !next.preview
+        ? getCompletedResearchReadOnlyUrl(window.location.href, next.review?.status, next.measurementAccess)
+        : null;
+      if (lockedUrl) {
+        window.location.replace(lockedUrl);
+        return;
+      }
       const readState = buildReadValueState(
         next?.review?.readResults || {}
       );
@@ -398,11 +406,11 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
   }, [protocolFramePickerIntent, visibleFields]);
 
   const allAnnotations = useMemo(
-    () => mergeMeasurementAnnotations(
+    () => context?.readOnly ? savedAnnotations : mergeMeasurementAnnotations(
       savedAnnotations, liveAnnotations, deletedAnnotationIdsRef.current,
       invalidatedEFSourceIdsRef.current
     ),
-    [savedAnnotations, liveAnnotations]
+    [context?.readOnly, savedAnnotations, liveAnnotations]
   );
   const persistedReadState = useMemo(
     () => buildReadValueState(context?.review?.readResults || {}),
@@ -432,7 +440,8 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
     )),
   };
   const calculatedReadState = useMemo(() => {
-    if (context?.readOnly || context?.preview) {
+    if (context?.readOnly && !context?.preview) return persistedReadState;
+    if (context?.preview) {
       return { values, sources: valueSources };
     }
     // All guided Echo composites now reconcile from the same verified
@@ -447,7 +456,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
       fields, reconciled.values, reconciled.sources, viewerCandidates
     );
   }, [context?.readOnly, context?.preview, fields, values, valueSources,
-      viewerCandidates, allAnnotations, liveVerifiedEchoEvidence.candidates, persistedEF]);
+      viewerCandidates, allAnnotations, liveVerifiedEchoEvidence.candidates, persistedEF, persistedReadState]);
   const missingRequired = useMemo(
     () => getMissingRequiredReadFields(fields, calculatedReadState.values),
     [fields, calculatedReadState.values]
@@ -1184,6 +1193,9 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
         readOnly: true,
       }));
       notify(servicesManager, 'Research Review completed and locked.');
+      const lockedUrl = getCompletedResearchReadOnlyUrl(
+        window.location.href, completed?.status, context.measurementAccess);
+      if (lockedUrl) window.location.replace(lockedUrl);
     } catch (completeError) {
       console.error('[AR Research] completion failed', completeError);
       const message =
@@ -1739,6 +1751,8 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
         hasViewerTarget: getResearchProtocolViewerTargets(selectedField).length > 0,
       } : null}
       onSelect={selectField}
+      onActivateSelected={selectedField && context.readOnly && !context.preview
+        ? () => selectField(selectedField.key) : undefined}
       disabled={isBusy}
       readOnly={context.readOnly}
       selectorTitle="Question"
@@ -1978,7 +1992,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
                 await restoreResearchAnnotationSource(item, isCancelled);
               })}
               onDeleteIVCSource={annotation => void deleteResearchAnnotation(annotation)}
-              disabled={context.readOnly || context.preview || isBusy}
+              disabled={context.preview || isBusy}
               readOnly={context.readOnly || context.preview}
               onError={message => notify(servicesManager, message, 'warning')}
             />

@@ -91,6 +91,38 @@ describe('Research source capture is opt-in without changing other viewer workfl
   });
 });
 
+describe('Completed Research measurement review', () => {
+  const guided = fs.readFileSync(path.resolve(__dirname,
+    '../panels/ResearchEchoGuidedControls.tsx'), 'utf8');
+  const cine = fs.readFileSync(path.resolve(__dirname,
+    '../../../cornerstone/src/components/CinePlayer/CinePlayer.tsx'), 'utf8');
+  it('re-enters read-only mode and uses immutable saved evidence', () => {
+    expect(panel).toContain('getCompletedResearchReadOnlyUrl(');
+    expect(panel).toContain('window.location.replace(lockedUrl)');
+    expect(panel).toContain('context?.readOnly ? savedAnnotations : mergeMeasurementAnnotations(');
+    expect(panel).toContain('if (context?.readOnly && !context?.preview) return persistedReadState;');
+    expect(panel).toContain('onActivateSelected={selectedField && context.readOnly');
+    expect(panel).toContain('pauseCineOnSource: true');
+    expect(cine).toContain('!isLearningRoute && !isReadOnlyResearchRoute()');
+    expect(cine).toContain('isLengthMeasurementActive || isReadOnlyResearchRoute()');
+  });
+  it('opens the shared EF panel for review, not acquisition or calculation', () => {
+    expect(guided).toContain('reviewNavigation={readOnly}');
+    expect(guided).toContain('assessmentReviewOnly: true');
+    expect(viewerCommands).toContain('canEdit: !assessmentReviewOnly');
+    expect(viewerCommands).toContain('if (this.canEdit === false || !LV_TRACE_REQUIRED_SLOTS.includes(slot)');
+    expect(viewerCommands).toContain('if (assessmentReviewOnly || suppressLVSimpsonRecoveryEvents');
+    const review = viewerCommands.slice(
+      viewerCommands.indexOf('if (assessmentReviewOnly) {\n        // Display the immutable'),
+      viewerCommands.indexOf('if (panelOnly) {\n        // Educator authoring uses'));
+    expect(review).toContain('onCalculate = null');
+    expect(review).toContain('Saved LVEF:');
+    expect(review).not.toContain('calculateEF(');
+    expect(guided).toContain('readOnly={readOnly}');
+    expect(guided).toContain('onDelete={!readOnly && onDeleteContourSource');
+  });
+});
+
 describe('Research Length selection uses shared restoration and permissions', () => {
   it('restores linked Length before protocol-only navigation', () => {
     const start = panel.indexOf('const navigateToField = async');

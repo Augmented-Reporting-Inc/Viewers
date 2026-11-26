@@ -9735,6 +9735,7 @@ function commandsModule({
       // an unrelated clinical/learner AR Series for saved source evidence.
       assessmentSavedEFAnnotations = null,
       assessmentSavedEFResult = null,
+      assessmentReviewOnly = false,
       deferSavedEFRestoration = false,
       notifyAssessmentOnCalculate = false,
       questionKey = '',
@@ -9744,6 +9745,10 @@ function commandsModule({
       savedGoldMeasurement = null,
       goldAuthoringEditable = false,
     } = {}) => {
+      if (assessmentReviewOnly && (!Array.isArray(assessmentSavedEFAnnotations) ||
+          requestedSlot || requestedSessionId || panelOnly)) {
+        return { ok: false, reason: 'read-only-assessment-source-required' };
+      }
       const openProfile = !requestedSessionId && !requestedSlot
         ? startEFOpenProfile(panelOnly ? 'panel-only' :
             Array.isArray(assessmentSavedEFAnnotations) ? 'assessment-owned' : 'education-or-clinical')
@@ -9790,7 +9795,7 @@ function commandsModule({
       }
 
       const assessmentOwnedEF = Array.isArray(assessmentSavedEFAnnotations);
-      const panelFirst = assessmentOwnedEF && deferSavedEFRestoration &&
+      const panelFirst = assessmentOwnedEF && (deferSavedEFRestoration || assessmentReviewOnly) &&
         !requestedSlot && !requestedSessionId && !panelOnly;
       let pendingSavedEFRestoration = false;
       const restoreSources = async (sources: any[], cancelled: () => boolean, slots: readonly string[] = LV_TRACE_REQUIRED_SLOTS) => {
@@ -9918,18 +9923,20 @@ function commandsModule({
       const explicitSlot = normalizeLVSimpsonSlot(requestedSlot);
       const panelSources = (live: any[], studyInstanceId: string) => panelFirst
         ? mergeSavedLVSimpsonPanelSources({
-            saved: assessmentSavedEFAnnotations,
+            saved: assessmentReviewOnly
+              ? assessmentSavedEFAnnotations.map(source => ({ ...source, isLocked: true }))
+              : assessmentSavedEFAnnotations,
             // A stale MeasurementService record is not a restored source.
             // Preserve saved evidence until the native exact-frame contour exists.
-            live: live.filter(item => {
+            live: assessmentReviewOnly ? [] : live.filter(item => {
               const native = cornerstoneTools.annotation.state.getAnnotation?.(getMeasurementAnnotationId(item));
               return !!native?.data?.lvSimpson &&
                 isSavedLVSimpsonImageMatch(item, native.metadata?.referencedImageId);
             }),
             studyInstanceId,
             getId: getMeasurementAnnotationId, getSlot: getLVSimpsonSlotFromMeasurement,
-            isDeleted: id => viewerMeasurementsDeletedInSession.has(id),
-            isChanged: source => getSavedLVSimpsonSourceRevisionState(source) === 'changed',
+            isDeleted: id => !assessmentReviewOnly && viewerMeasurementsDeletedInSession.has(id),
+            isChanged: source => !assessmentReviewOnly && getSavedLVSimpsonSourceRevisionState(source) === 'changed',
           }) : live;
       const savedPanelSources = panelFirst ? panelSources([], activeEFStudy) : [];
       const hasSavedPanelSources = savedPanelSources.length > 0;
@@ -9944,7 +9951,7 @@ function commandsModule({
       // is a review action, not permission to overwrite A4C ED or restart
       // the 4-step guided drawing workflow.
       const reviewExistingContours = !requestedSessionId && !explicitSlot &&
-        (!nextMissingSlot || (assessmentOwnedEF &&
+        (assessmentReviewOnly || !nextMissingSlot || (assessmentOwnedEF &&
           (pendingSavedEFRestoration || slotCandidates.size > 0 || hasSavedPanelSources)));
 
       let slotSelection = explicitSlot ? buildLVSimpsonSlotSelection(explicitSlot) : null;
@@ -10018,14 +10025,14 @@ function commandsModule({
 
       // Suspend the previously active mouse tool once for the full four-slot
       // workflow. A later Continue may switch to a different viewport/group.
-      if (!panelOnly && !lvSimpsonMouseTools.isActive()) {
+      if (!panelOnly && !assessmentReviewOnly && !lvSimpsonMouseTools.isActive()) {
         lvSimpsonMouseTools.start();
       }
       const efToolGroupReference = toolGroupService.getToolGroupForViewport(activeViewportId);
       const efToolGroup = typeof efToolGroupReference === 'string'
         ? toolGroupService.getToolGroup(efToolGroupReference)
         : efToolGroupReference;
-      if (!panelOnly) lvSimpsonMouseTools.suspend(efToolGroup);
+      if (!panelOnly && !assessmentReviewOnly) lvSimpsonMouseTools.suspend(efToolGroup);
       refreshLVSimpsonToolbarState();
 
       const { label, slotInfo } = slotSelection;
@@ -10097,7 +10104,7 @@ function commandsModule({
         };
         lvSimpsonPanelController = {
           activeSlot: (reviewExistingContours || panelOnly) ? '' : slotInfo.slot,
-          canEdit: (!panelOnly || goldAuthoringEditable) &&
+          canEdit: !assessmentReviewOnly && (!panelOnly || goldAuthoringEditable) &&
             !(assessmentOwnedEF && pendingSavedEFRestoration),
           questionKey,
           savedGoldMeasurement,
@@ -10152,7 +10159,7 @@ function commandsModule({
             }
             // No unique saved source: an explicitly authored target is still
             // valid, but an ambiguous contour must not be guessed.
-            return saved.length > 1 ? null : getEFContourFrameTarget(this.efContourTargets, slot, { allowCanonical: allowCanonicalFrameTargets });
+            return assessmentReviewOnly || saved.length > 1 ? null : getEFContourFrameTarget(this.efContourTargets, slot, { allowCanonical: allowCanonicalFrameTargets });
           },
           canNavigateSlot(slot: string, snapshot?: any[]) {
             return isActiveStudy() && !!this.getNavigationTarget(slot, snapshot);
@@ -10162,6 +10169,38 @@ function commandsModule({
             const target = this.getNavigationTarget(slot);
             if (!target) return;
             cancelDrawingWithoutClosingPanel();
+            if (assessmentReviewOnly) {
+              const saved = getPanelMeasurements().filter(item =>
+                getLVSimpsonSlotFromMeasurement(item) === slot);
+              if (saved.length !== 1) return;
+              this.busy = true;
+              const cancelled = () => !isActiveStudy() || lvSimpsonPanelController !== this;
+              try {
+                // Same saved-source navigation/hydration used by Education.
+                // Always navigate, even if the contour is already hydrated.
+                const normalized = normalizeViewerQuizTarget(target);
+                const restored = await actions.jumpToSavedViewerAnnotation({
+                  annotation: { ...saved[0], isLocked: true,
+                    SOPInstanceUID: normalized.sopInstanceId,
+                    frameNumber: normalized.frameNumber },
+                  selectAnnotation: false, requireExactSopFrame: true,
+                  pauseCineOnSource: true, runDelayedDisplayRefresh: false,
+                  isCancelled: cancelled,
+                });
+                if (cancelled()) return;
+                if (restored?.ok !== true) {
+                  uiNotificationService.show({ title: 'LV EF', type: 'warning', duration: 5000,
+                    message: 'Saved contour could not be displayed on its exact frame.' });
+                  return;
+                }
+                this.activeSlot = slot;
+                updateLVSimpsonCurrentSlotLabel(slot);
+              } catch (error) {
+                if (!cancelled()) uiNotificationService.show({ title: 'LV EF', type: 'warning',
+                  duration: 5000, message: 'Saved contour navigation failed. Select its row to retry.' });
+              } finally { this.busy = false; }
+              return;
+            }
             const savedSlot = panelFirst ? getPanelMeasurements().filter(item =>
               item.arSavedEFPanelSource && getLVSimpsonSlotFromMeasurement(item) === slot) : [];
             if (savedSlot.length === 1) {
@@ -10269,7 +10308,7 @@ function commandsModule({
             });
           },
           onDeleteSlot(slot: string, ids: string[]) {
-            if (!LV_TRACE_REQUIRED_SLOTS.includes(slot) || !ids.length || !isActiveStudy() || this.busy) return;
+            if (this.canEdit === false || !LV_TRACE_REQUIRED_SLOTS.includes(slot) || !ids.length || !isActiveStudy() || this.busy) return;
             const currentItems = getPanelMeasurements()
               .filter(item => getLVSimpsonSlotFromMeasurement(item) === slot);
             if (currentItems.some(item => {
@@ -10291,7 +10330,7 @@ function commandsModule({
             showRecovery(`${getLVSimpsonSlotDisplayName(slot)} deleted. Select Draw to replace it, or choose another contour.`);
           },
           onAnnotationRemoved(annotationId: string) {
-            if (suppressLVSimpsonRecoveryEvents || !observedIds.has(annotationId)) return;
+            if (assessmentReviewOnly || suppressLVSimpsonRecoveryEvents || !observedIds.has(annotationId)) return;
             // Disarm this ID before invoking removeMeasurement: the service
             // and Cornerstone can each emit a removal event for the same ID.
             observedIds.delete(annotationId);
@@ -10538,6 +10577,36 @@ function commandsModule({
           } finally { controller.busy = false; }
         })();
       };
+      if (assessmentReviewOnly) {
+        // Display the immutable assessment snapshot; never calculate or
+        // publish an EF capture event, even when all four slots are present.
+        activeLVSimpsonWorkflowSessionId = '';
+        cancelActiveLVSimpsonCapture();
+        lvSimpsonMouseTools.restore();
+        refreshLVSimpsonToolbarState();
+        const saved = lvSimpsonPanelController?.getPanelMeasurements?.() || [];
+        const sourceIds = String(assessmentSavedEFResult?.sourceMeasurementKey || '')
+          .replace(/^lv-simpson:/, '').split(',').filter(Boolean);
+        const ids = new Set(saved.map(getMeasurementAnnotationId));
+        const value = Number(assessmentSavedEFResult?.value);
+        const verified = assessmentSavedEFResult?.source === 'viewer-derived' &&
+          assessmentSavedEFResult?.value != null &&
+          String(assessmentSavedEFResult?.value).trim() !== '' &&
+          String(assessmentSavedEFResult?.sourceMeasurementKey || '').startsWith('lv-simpson:') &&
+          sourceIds.length === 4 && new Set(sourceIds).size === 4 &&
+          ids.size === 4 && sourceIds.every(id => ids.has(id)) &&
+          LV_TRACE_REQUIRED_SLOTS.every(slot => getLVSimpsonSlotCandidates(saved).get(slot)?.length === 1) &&
+          Number.isFinite(value) && value >= 0 && value <= 100;
+        lvSimpsonPanelController.onCalculate = null;
+        renderLVSimpsonWorkflowPanel({
+          measurements: saved,
+          resultText: verified ? `Saved LVEF: ${roundQuizMeasurementValue(value, 2).toFixed(2)}%` : '',
+          instruction: 'Read only. Select a saved contour to open its exact image and frame.',
+          onCancel: hideLVSimpsonWorkflowPanel,
+        });
+        openProfile?.finish('review-ready');
+        return { ok: true, panelOpened: true };
+      }
       if (panelOnly) {
         // Educator authoring uses the same four-slot panel without starting a
         // drawing session. Choosing Freehand/Axis+Apex explicitly starts one.

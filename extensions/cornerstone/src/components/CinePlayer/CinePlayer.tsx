@@ -9,7 +9,7 @@ import { useAppConfig } from '@state';
 // from logs which CinePlayer + whether the decode patch is included.
 // ---------------------------------------------------------------------------
 const CINE_PLAYER_VERSION =
-  'rviewer bviewer adaptive-prefetch-100 + global-prefetch-limit-4 + small-window-1 + learning-no-autoplay + length-no-autoplay v6';
+  'rviewer bviewer adaptive-prefetch-100 + global-prefetch-limit-4 + small-window-1 + learning-no-autoplay + length-no-autoplay + research-review-no-autoplay v7';
 
 function shouldAutoPlayCineForCurrentRoute(autoPlayCine): boolean {
   if (!autoPlayCine) {
@@ -23,7 +23,18 @@ function shouldAutoPlayCineForCurrentRoute(autoPlayCine): boolean {
   const pathname = String(window.location?.pathname || '').toLowerCase();
   const isLearningRoute = /(?:^|\/)learning(?:\/|$)/.test(pathname);
 
-  return !isLearningRoute;
+  return !isLearningRoute && !isReadOnlyResearchRoute();
+}
+
+// Research uses the same no-autoplay review behavior as Education.
+function isReadOnlyResearchRoute(): boolean {
+  if (typeof window === 'undefined') return false;
+  const params = new URLSearchParams(window.location.search || '');
+  const hash = String(window.location.hash || '');
+  const hashParams = new URLSearchParams(hash.includes('?') ? hash.slice(hash.indexOf('?') + 1).split('#')[0] : '');
+  const get = (key: string) => params.get(key) ?? hashParams.get(key);
+  return !!String(get('arResearchReviewKey') || '').trim() &&
+    String(get('arMeasurementAccess') || '').trim().toLowerCase() === 'readonly';
 }
 
 function getActivePrimaryToolNameForViewport(toolGroupService, viewportId = ''): string {
@@ -495,7 +506,9 @@ function WrappedCinePlayer({
     const autoPlayCine =
       shouldAutoPlayCineForCurrentRoute(appConfig.autoPlayCine) && !isLengthMeasurementActive;
 
-    if (isLengthMeasurementActive) {
+    if (isLengthMeasurementActive || isReadOnlyResearchRoute()) {
+      cancelPendingPlay();
+      setBufferingProgress(null);
       isPlaying = false;
     }
 
@@ -554,6 +567,7 @@ function WrappedCinePlayer({
     enabledVPElement,
     appConfig,
     toolGroupService,
+    cancelPendingPlay,
   ]);
 
   useEffect(() => {
