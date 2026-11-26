@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { attestResearchReadZScore, loadResearchReadZScores } from '../utils/researchContext';
-import { getVisibleResearchZScore, matchesZScoreResponse } from '../utils/researchReadZScore';
+import { attestResearchReadZScore, loadResearchReadZScores, previewResearchReadZScore } from '../utils/researchContext';
+import { getVisibleResearchZScore, matchesZScoreResponse, matchesResearchZScorePreviewResponse } from '../utils/researchReadZScore';
 
 const checks = [
   ['applicability', 'I confirmed that the patient and acquisition meet the configured PHN reference population and model eligibility criteria.'],
@@ -99,5 +99,36 @@ export default function ResearchReadZScore({reviewKey, field, savedAt, acquisiti
     {error ? <p role="alert" className="mt-2 text-red-300">{error}</p> : null}
     {(error || (automatic && question?.status === 'unavailable')) && !busy ? <button type="button" disabled={disabled} onClick={()=>void load()}
       className="mt-2 rounded border border-gray-500 px-2 py-1 disabled:opacity-50">Reload saved evidence</button> : null}
+  </div>;
+}
+
+// This component is keyed by exact current evidence. No previous response
+// survives an edit, deletion, acquisition revision change or navigation.
+export function ResearchReadZScorePreview({reviewKey,field,acquisitionRevision,requestBody}: {
+  reviewKey:string;field:any;acquisitionRevision:number;requestBody:string;
+}) {
+  const [snapshot,setSnapshot]=useState<any>(null);
+  const [failed,setFailed]=useState(false);
+  useEffect(()=>{
+    const controller=new AbortController();
+    const timer=setTimeout(()=>{
+      void previewResearchReadZScore(reviewKey,requestBody,controller.signal).then(next=>{
+        if(controller.signal.aborted) return;
+        if(!matchesResearchZScorePreviewResponse(next,field,acquisitionRevision)) throw new Error('Stale preview');
+        setSnapshot(next);
+      }).catch(()=>{if(!controller.signal.aborted)setFailed(true);});
+    },300);
+    return ()=>{clearTimeout(timer);controller.abort();};
+  },[reviewKey,requestBody,field.componentKey,acquisitionRevision]);
+  const result=getVisibleResearchZScore(snapshot,field);
+  return <div className="mt-2 rounded border border-gray-700 p-2 text-xs text-gray-200" aria-live="polite">
+    <div className="font-semibold">Z-score preview · pending Read save</div>
+    {result ? <>
+      <div className="flex items-baseline gap-3">
+        <span className="text-xl font-semibold">{result.zScore>0?'+':''}{result.zScore.toFixed(2)}</span>
+        <span className="text-gray-400">BSA {result.bsaM2.toFixed(3)} m² · PHN 2017</span>
+      </div>
+      {Math.abs(result.zScore)>=5 ? <p className="text-amber-200">Extreme Z-score — review measurement and acquisition inputs. This is a review flag, not a diagnostic threshold.</p> : null}
+    </> : failed || snapshot ? <p className="text-amber-200">Z-score preview unavailable. Check acquisition inputs and calibrated source measurement; Save Read to verify the persisted result.</p> : <p role="status">Checking calibration…</p>}
   </div>;
 }
