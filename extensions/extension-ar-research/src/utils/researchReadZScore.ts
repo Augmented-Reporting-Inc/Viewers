@@ -6,7 +6,7 @@ export function canShowResearchZScore(context: any, field: any) {
   const policy = context?.readSchema?.config?.zScore;
   return !!context?.reviewKey && !context.preview &&
     context.review?.reviewType === 'independent' && context.readSchema?.domain === 'echo' &&
-    policy?.enabled === true && policy?.verificationMode === 'reader_attestation' &&
+    policy?.enabled === true && ['reader_attestation','automatic_calibrated'].includes(policy?.verificationMode) &&
     policy?.readerAnthropometrics === 'override' && field?.config?.zScore?.enabled === true &&
     !!clean(field.config.zScore.parameterKey);
 }
