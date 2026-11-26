@@ -205,3 +205,10 @@ export async function attestResearchReadZScore(reviewKey: string, body: {
     method: 'POST', cache: 'no-store', body: JSON.stringify(body), signal,
   });
 }
+
+export async function previewResearchReadZScore(reviewKey: string, requestBody: string, signal?: AbortSignal) {
+  if (!reviewKey) throw new Error('Research review key is missing.');
+  return fetchJson(`research/reviews/${encodeURIComponent(reviewKey)}/zscore-results/preview`, {
+    method:'POST', cache:'no-store', body:requestBody, signal,
+  });
+}
