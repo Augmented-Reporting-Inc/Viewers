@@ -28,3 +28,12 @@ test('confirm unchanged values and restore exact baseline without a reason',()=>
  expect(buildAcquisitionOverrideRequest(corrected,{...inputs,weightKg:'21'},'',true)?.overrides).toEqual({weightKg:21});
  expect(buildAcquisitionOverrideRequest(corrected,{...inputs,weightKg:'22'},'',true)).toBeNull();
 });
+
+test('automatic mode includes a single Read-level eligibility confirmation; manual mode keeps its old payload',()=>{
+  const snapshot={editable:true,revision:2,baseline:{values:{heightCm:110,weightKg:20,ageYears:6}},overrides:{}};
+  const inputs={heightCm:'110',weightKg:'20',ageYears:'6'};
+  const manual=buildAcquisitionOverrideRequest(snapshot,inputs,'',true);
+  expect(manual).not.toHaveProperty('modelEligibilityVerified');
+  expect(buildAcquisitionOverrideRequest(snapshot,inputs,'',true,true)).toMatchObject({modelEligibilityVerified:true});
+  expect(buildAcquisitionOverrideRequest(snapshot,inputs,'',false,true)).toMatchObject({modelEligibilityVerified:false});
+});
