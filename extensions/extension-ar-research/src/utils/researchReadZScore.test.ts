@@ -50,3 +50,11 @@ test('renders only a single valid server result and never reconstructs hidden sc
   expect(getVisibleResearchZScore({results:[{...result,parameterKey:'ANN'}]},field)).toBeNull();
   expect(getVisibleResearchZScore({results:[result,result]},field)).toBeNull();
 });
+
+test('automatic mode exposes the saved score panel only for eligible configured Reads',()=>{
+  const automatic={...context,readSchema:{...context.readSchema,config:{zScore:{...context.readSchema.config.zScore,verificationMode:'automatic_calibrated'}}}};
+  expect(canShowResearchZScore(automatic,field)).toBe(true);
+  expect(canShowResearchZScore({...automatic,preview:true},field)).toBe(false);
+  expect(canShowResearchZScore({...automatic,review:{reviewType:'adjudication'}},field)).toBe(false);
+  expect(canShowResearchZScore(automatic,{...field,config:{}})).toBe(false);
+});
