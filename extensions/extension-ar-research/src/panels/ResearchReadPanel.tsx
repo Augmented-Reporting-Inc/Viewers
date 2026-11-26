@@ -16,8 +16,8 @@ import { SharedIVCRapRVSPAnswer } from '../../../extension-ar-learning/src/compo
 import { LearningSingleChoiceAnswer } from '../../../extension-ar-learning/src/components/LearningSingleChoiceAnswer';
 import ResearchEchoGuidedControls from './ResearchEchoGuidedControls';
 import ResearchAcquisitionInputs from './ResearchAcquisitionInputs';
-import ResearchReadZScore from './ResearchReadZScore';
-import {canShowResearchZScore,matchesSavedResearchZScoreEvidence} from '../utils/researchReadZScore';
+import ResearchReadZScore, {ResearchReadZScorePreview} from './ResearchReadZScore';
+import {canShowResearchZScore,matchesSavedResearchZScoreEvidence,buildResearchZScorePreviewRequest} from '../utils/researchReadZScore';
 import { resolveResearchLengthCapture } from '../utils/researchLengthCapture';
 import { captureViewerQuestionMeasurement } from '../../../extension-ar-measurements/src/utils/questionMeasurementCapture';
 import { canShowResearchAcquisitionInputs } from '../utils/researchAcquisitionInputs';
@@ -1627,6 +1627,13 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
   const lengthState = selectedLength ? getResearchLengthSourceState(
     selectedField, calculatedReadState.sources[selectedField.key], allAnnotations,
     viewerCandidates || [], context?.sourceStudyInstanceUID) : null;
+  const previewRequest = showZScore && automaticZScore && !savedZScoreEvidence &&
+    !saving && !completing && !acquisitionBusy && !!acquisitionEvidence?.verified &&
+    !acquisitionEvidence.dirty && lengthState?.status === 'linked'
+    ? buildResearchZScorePreviewRequest(context,selectedField,acquisitionEvidence.revision,
+      buildReadResultEntries(fields,calculatedReadState.values,calculatedReadState.sources),
+      allAnnotations,deletedAnnotationIdsRef.current) : null;
+  const previewRequestBody = previewRequest ? JSON.stringify(previewRequest) : '';
   const selectedSources = lengthState
     ? lengthState.eligible.map(item => item.annotation)
     : selectedField ? getResearchFieldSourceAnnotations(
@@ -1865,7 +1872,11 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
                 disabled={saving || completing || acquisitionBusy}
                 visibility={context.readSchema.config.zScore.visibility} completed={reviewStatus === 'completed'}
                 onBusy={setScoreBusy} automatic={automaticZScore} />
-            ) : <p className="mt-2 text-xs text-gray-400">{automaticZScore ? "Confirm acquisition inputs and reference eligibility once, then save the Read to calculate eligible Z-scores automatically." : "Save the measurement and confirmed acquisition inputs before verifying its Z-score."}</p>
+            ) : previewRequestBody ? <ResearchReadZScorePreview
+                key={JSON.stringify([context.reviewKey,context.review?.savedAt,previewRequestBody])}
+                reviewKey={context.reviewKey} field={selectedField}
+                acquisitionRevision={acquisitionEvidence.revision} requestBody={previewRequestBody} />
+              : <p className="mt-2 text-xs text-gray-400">{automaticZScore ? "Confirm acquisition inputs and reference eligibility, then capture a calibrated measurement. Save Read to persist eligible Z-scores; visibility follows the protocol." : "Save the measurement and confirmed acquisition inputs before verifying its Z-score."}</p>
           ) : null}
           {!isIVCRapRVSPQuestion ? groupedFields.map(companionField => (
             <ReadField
