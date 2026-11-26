@@ -69,6 +69,9 @@ export type DicomWebConfig = {
   bulkDataURI?: BulkDataURIConfig;
   /** Function that is called after the configuration is initialized */
   onConfiguration: (config: DicomWebConfig, params) => DicomWebConfig;
+  /** Per-window AR image grant headers; absent in iUSCAN/clinical viewers. */
+  getAdditionalRequestHeaders?: () => Record<string, string>;
+  assertArImageReadBulkDataUri?: (url: string) => boolean;
   /** Whether to use the static WADO client */
   staticWado?: boolean;
   /** User authentication service */
@@ -133,6 +136,12 @@ function createDicomWebApi(dicomWebConfig: DicomWebConfig, servicesManager) {
         if (authHeaders && authHeaders.Authorization) {
           xhrRequestHeaders.Authorization = authHeaders.Authorization;
         }
+        // Only the bound, same-origin Orthanc source receives this function.
+        // Fetch a fresh window-scoped grant for each QIDO/WADO metadata call;
+        // do not embed it in image IDs or global authentication state.
+        if (typeof dicomWebConfig.getAdditionalRequestHeaders === 'function') {
+          Object.assign(xhrRequestHeaders, dicomWebConfig.getAdditionalRequestHeaders());
+        }
         return xhrRequestHeaders;
       };
 
@@ -155,7 +164,7 @@ function createDicomWebApi(dicomWebConfig: DicomWebConfig, servicesManager) {
         url: dicomWebConfig.qidoRoot,
         staticWado: dicomWebConfig.staticWado,
         singlepart: dicomWebConfig.singlepart,
-        headers: userAuthenticationService.getAuthorizationHeader(),
+        headers: getAuthorizationHeader(),
         errorInterceptor: errorHandler.getHTTPErrorHandler(),
         supportsFuzzyMatching: dicomWebConfig.supportsFuzzyMatching,
       };
@@ -164,7 +173,7 @@ function createDicomWebApi(dicomWebConfig: DicomWebConfig, servicesManager) {
         url: dicomWebConfig.wadoRoot,
         staticWado: dicomWebConfig.staticWado,
         singlepart: dicomWebConfig.singlepart,
-        headers: userAuthenticationService.getAuthorizationHeader(),
+        headers: getAuthorizationHeader(),
         errorInterceptor: errorHandler.getHTTPErrorHandler(),
         supportsFuzzyMatching: dicomWebConfig.supportsFuzzyMatching,
       };
@@ -315,6 +324,9 @@ function createDicomWebApi(dicomWebConfig: DicomWebConfig, servicesManager) {
       getWadoDicomWebClient: () => wadoDicomWebClient,
 
       bulkDataURI: async ({ StudyInstanceUID, BulkDataURI }) => {
+        if (typeof dicomWebConfig.assertArImageReadBulkDataUri === 'function') {
+          dicomWebConfig.assertArImageReadBulkDataUri(BulkDataURI);
+        }
         qidoDicomWebClient.headers = getAuthorizationHeader();
         const options = {
           multipart: false,
@@ -521,7 +533,12 @@ function createDicomWebApi(dicomWebConfig: DicomWebConfig, servicesManager) {
             // handle the scenarios where bulkDataURI is relative path
             fixBulkDataURI(value, instance, dicomWebConfig);
             // Provide a method to fetch bulkdata
-            value.retrieveBulkData = retrieveBulkData.bind(qidoDicomWebClient, value);
+            value.retrieveBulkData = options => {
+              if (typeof dicomWebConfig.assertArImageReadBulkDataUri === 'function') {
+                dicomWebConfig.assertArImageReadBulkDataUri(value.BulkDataURI);
+              }
+              return retrieveBulkData.call(qidoDicomWebClient, value, options);
+            };
           }
         }
         return naturalized;
