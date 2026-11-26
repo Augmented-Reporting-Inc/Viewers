@@ -21,6 +21,7 @@ export default function ResearchAcquisitionInputs({reviewKey, readOnly, disabled
   const [verified,setVerified] = useState(false);
   const [eligibility,setEligibility] = useState(false);
   const [expanded,setExpanded] = useState(true);
+  const [edited,setEdited] = useState(false);
   const [busy,setBusy] = useState(false);
   const [error,setError] = useState('');
   const [notice,setNotice] = useState('');
@@ -35,6 +36,7 @@ export default function ResearchAcquisitionInputs({reviewKey, readOnly, disabled
     setSnapshot(next); setInputs(acquisitionInputStrings(next.effective));
     setVerified(next.acquisitionVerified === true); setReason('');
     setEligibility(next.modelEligibilityVerified === true);
+    setEdited(false);
     setExpanded(!hasVerifiedAcquisitionRevision(next, automatic));
     onEvidenceState?.({revision:next.revision,verified:next.acquisitionVerified === true && (!automatic || next.modelEligibilityVerified === true),dirty:false});
   }
@@ -69,10 +71,8 @@ export default function ResearchAcquisitionInputs({reviewKey, readOnly, disabled
     }
   }
   const locked = readOnly || disabled || busy || !snapshot?.editable;
-  const canCollapse = !busy && !error && hasVerifiedAcquisitionRevision(snapshot, automatic) &&
-    verified === snapshot.acquisitionVerified && (!automatic || eligibility === snapshot.modelEligibilityVerified) &&
-    !reason.trim() && acquisitionFields.every(({key})=>inputs[key]===acquisitionInputStrings(snapshot.effective)[key]);
-  if (!expanded && !busy && !error && hasVerifiedAcquisitionRevision(snapshot, automatic)) {
+  const canCollapse = !edited && !busy && !error && !reason.trim() && hasVerifiedAcquisitionRevision(snapshot, automatic);
+  if (!expanded && canCollapse) {
     const effective = snapshot.effective;
     return <div className="my-2 rounded border border-gray-700 p-2 text-xs text-gray-200"
       onKeyDown={event => event.stopPropagation()} onKeyUp={event => event.stopPropagation()}>
@@ -101,17 +101,17 @@ export default function ResearchAcquisitionInputs({reviewKey, readOnly, disabled
       {acquisitionFields.map(({key,label}) => <label key={key} className="block">
         {label}
         <input className="mt-1 block w-full rounded border border-gray-600 p-1" style={acquisitionInputStyle} type="text" inputMode="decimal"
-          value={inputs[key] || ''} disabled={locked} onChange={event => {setInputs(old=>({...old,[key]:event.target.value}));setVerified(false);setEligibility(false);setNotice('');onEvidenceState?.(null);}} />
+          value={inputs[key] || ''} disabled={locked} onChange={event => {setEdited(true);setInputs(old=>({...old,[key]:event.target.value}));setVerified(false);setEligibility(false);setNotice('');onEvidenceState?.(null);}} />
         <span className="block text-gray-400">DICOM: {snapshot.baseline.dicom?.[key] ?? 'Unavailable'} · baseline: {snapshot.baseline.values[key] ?? 'Unavailable'}</span>
       </label>)}
       {!locked ? <>
-        <button type="button" className="rounded border border-gray-500 px-2 py-1" onClick={()=>{setInputs(acquisitionInputStrings(snapshot.baseline.values));setVerified(false);setEligibility(false);setReason('');setError('');onEvidenceState?.(null);setNotice('Baseline restored locally. Save acquisition inputs to persist the change.');onNotify?.('Baseline restored locally. Save to persist.');}}>Restore baseline</button>
+        <button type="button" className="rounded border border-gray-500 px-2 py-1" onClick={()=>{setEdited(true);setInputs(acquisitionInputStrings(snapshot.baseline.values));setVerified(false);setEligibility(false);setReason('');setError('');onEvidenceState?.(null);setNotice('Baseline restored locally. Save acquisition inputs to persist the change.');onNotify?.('Baseline restored locally. Save to persist.');}}>Restore baseline</button>
         <label className="block">Reason for correction (only required for changed values)
           <textarea className="block w-full rounded border border-gray-600 p-1" style={acquisitionInputStyle} maxLength={500} value={reason} onChange={event=>setReason(event.target.value)} />
         </label>
-        <label className="block"><input type="checkbox" checked={verified} onChange={event=>{setVerified(event.target.checked);if(!event.target.checked)setEligibility(false);setError('');onEvidenceState?.(null);}} /> I verified these acquisition values.</label>
+        <label className="block"><input type="checkbox" checked={verified} onChange={event=>{setEdited(true);setVerified(event.target.checked);if(!event.target.checked)setEligibility(false);setError('');onEvidenceState?.(null);}} /> I verified these acquisition values.</label>
         {automatic ? <label className="block"><input type="checkbox" checked={eligibility} disabled={!verified}
-          onChange={event=>{setEligibility(event.target.checked);setError('');onEvidenceState?.(null);}} /> I confirmed that this patient and acquisition meet the configured PHN reference population and model eligibility criteria.</label> : null}
+          onChange={event=>{setEdited(true);setEligibility(event.target.checked);setError('');onEvidenceState?.(null);}} /> I confirmed that this patient and acquisition meet the configured PHN reference population and model eligibility criteria.</label> : null}
         <button type="button" className="rounded bg-blue-700 px-2 py-1 text-white" onClick={()=>void save()}>Save acquisition inputs</button>
       </> : null}
     </div> : null}
