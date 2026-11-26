@@ -1,4 +1,4 @@
-import {canShowResearchAcquisitionInputs, acquisitionInputStrings, buildAcquisitionOverrideRequest} from './researchAcquisitionInputs';
+import {canShowResearchAcquisitionInputs, acquisitionInputStrings, buildAcquisitionOverrideRequest, hasVerifiedAcquisitionRevision} from './researchAcquisitionInputs';
 const context = {reviewKey:'read-1',preview:false,review:{reviewType:'independent'},readSchema:{domain:'echo',config:{zScore:{enabled:true,readerAnthropometrics:'override'}}}};
 const snapshot = {editable:true,revision:2,baseline:{values:{heightCm:110,weightKg:20,ageYears:0}}};
 test('only configured independent Reads show acquisition inputs',()=>{
@@ -27,4 +27,23 @@ test('confirm unchanged values and restore exact baseline without a reason',()=>
  expect(buildAcquisitionOverrideRequest(corrected,inputs,'',true)?.overrides).toEqual({});
  expect(buildAcquisitionOverrideRequest(corrected,{...inputs,weightKg:'21'},'',true)?.overrides).toEqual({weightKg:21});
  expect(buildAcquisitionOverrideRequest(corrected,{...inputs,weightKg:'22'},'',true)).toBeNull();
+});
+
+test('automatic mode includes a single Read-level eligibility confirmation; manual mode keeps its old payload',()=>{
+  const snapshot={editable:true,revision:2,baseline:{values:{heightCm:110,weightKg:20,ageYears:6}},overrides:{}};
+  const inputs={heightCm:'110',weightKg:'20',ageYears:'6'};
+  const manual=buildAcquisitionOverrideRequest(snapshot,inputs,'',true);
+  expect(manual).not.toHaveProperty('modelEligibilityVerified');
+  expect(buildAcquisitionOverrideRequest(snapshot,inputs,'',true,true)).toMatchObject({modelEligibilityVerified:true});
+  expect(buildAcquisitionOverrideRequest(snapshot,inputs,'',false,true)).toMatchObject({modelEligibilityVerified:false});
+});
+
+test('collapse only saved verified acquisition revisions, including automatic eligibility',()=>{
+  const verified={revision:2,acquisitionVerified:true,modelEligibilityVerified:true};
+  expect(hasVerifiedAcquisitionRevision(verified,true)).toBe(true);
+  expect(hasVerifiedAcquisitionRevision({...verified,modelEligibilityVerified:false},true)).toBe(false);
+  expect(hasVerifiedAcquisitionRevision({...verified,modelEligibilityVerified:false},false)).toBe(true);
+  expect(hasVerifiedAcquisitionRevision({...verified,revision:0},false)).toBe(false);
+  expect(hasVerifiedAcquisitionRevision({...verified,acquisitionVerified:false},true)).toBe(false);
+  expect(hasVerifiedAcquisitionRevision(null,true)).toBe(false);
 });

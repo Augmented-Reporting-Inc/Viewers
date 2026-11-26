@@ -180,9 +180,35 @@ export async function saveResearchReadAnthropometrics(reviewKey: string, body: {
   overrides: Record<string, number>;
   reason: string;
   acquisitionVerified: boolean;
+  modelEligibilityVerified?: boolean;
 }, signal?: AbortSignal) {
   if (!reviewKey) throw new Error('Research review key is missing.');
   return fetchJson(`research/reviews/${encodeURIComponent(reviewKey)}/zscore-anthropometrics`, {
     method: 'PUT', body: JSON.stringify(body), signal,
+  });
+}
+
+export async function loadResearchReadZScores(reviewKey: string, signal?: AbortSignal) {
+  if (!reviewKey) throw new Error('Research review key is missing.');
+  return fetchJson(`research/reviews/${encodeURIComponent(reviewKey)}/zscore-results`, {
+    method: 'GET', cache: 'no-store', signal,
+  });
+}
+
+export async function attestResearchReadZScore(reviewKey: string, body: {
+  componentKey: string;
+  evidenceDigest: string;
+  confirmations: {applicability: boolean; technique: boolean; calibration: boolean};
+}, signal?: AbortSignal) {
+  if (!reviewKey) throw new Error('Research review key is missing.');
+  return fetchJson(`research/reviews/${encodeURIComponent(reviewKey)}/zscore-results/attest`, {
+    method: 'POST', cache: 'no-store', body: JSON.stringify(body), signal,
+  });
+}
+
+export async function previewResearchReadZScore(reviewKey: string, requestBody: string, signal?: AbortSignal) {
+  if (!reviewKey) throw new Error('Research review key is missing.');
+  return fetchJson(`research/reviews/${encodeURIComponent(reviewKey)}/zscore-results/preview`, {
+    method:'POST', cache:'no-store', body:requestBody, signal,
   });
 }

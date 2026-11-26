@@ -16,6 +16,8 @@ import { SharedIVCRapRVSPAnswer } from '../../../extension-ar-learning/src/compo
 import { LearningSingleChoiceAnswer } from '../../../extension-ar-learning/src/components/LearningSingleChoiceAnswer';
 import ResearchEchoGuidedControls from './ResearchEchoGuidedControls';
 import ResearchAcquisitionInputs from './ResearchAcquisitionInputs';
+import ResearchReadZScore, {ResearchReadZScorePreview} from './ResearchReadZScore';
+import {canShowResearchZScore,matchesSavedResearchZScoreEvidence,buildResearchZScorePreviewRequest} from '../utils/researchReadZScore';
 import { resolveResearchLengthCapture } from '../utils/researchLengthCapture';
 import { captureViewerQuestionMeasurement } from '../../../extension-ar-measurements/src/utils/questionMeasurementCapture';
 import { canShowResearchAcquisitionInputs } from '../utils/researchAcquisitionInputs';
@@ -322,10 +324,13 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
   const [saving, setSaving] = useState(false);
   const [completing, setCompleting] = useState(false);
   const [acquisitionBusy, setAcquisitionBusy] = useState(false);
+  const [scoreBusy,setScoreBusy] = useState(false);
+  const [acquisitionEvidence,setAcquisitionEvidence] = useState<{revision:number;verified:boolean;dirty:boolean}|null>(null);
   const [error, setError] = useState('');
 
   const load = useCallback(async () => {
     setLoading(true);
+    setAcquisitionEvidence(null);
     setError('');
 
     try {
@@ -1379,7 +1384,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
   const initializedReviewRef = useRef('');
   const editingAllowedRef = useRef(false);
   editingAllowedRef.current = !!context && !context.readOnly && !context.preview &&
-    !saving && !completing;
+    !saving && !completing && !acquisitionBusy && !scoreBusy;
   // Serialize navigation and invalidate stale work, including A -> B -> A.
   const queueNavigation = (work: (isCancelled: () => boolean) => Promise<void>) => {
     const generation = ++selectionGenerationRef.current;
@@ -1570,7 +1575,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
     cleanString(context?.review?.studyTitle) ||
     'Research Study';
   const reviewStatus = cleanString(context?.review?.status || 'preview');
-  const isBusy = saving || completing || acquisitionBusy;
+  const isBusy = saving || completing || acquisitionBusy || scoreBusy;
   const selectedField = visibleFields.find(field => field.key === selectedFieldKey) ||
     visibleFields[0];
   const groupedFields = getResearchGroupedFields(
@@ -1613,9 +1618,22 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
       trState.status === 'manual' || trState.status === 'unbound' ||
       trState.eligible.length > 1 || (trState.status === 'linked' && !trCaptured));
   const selectedLength = isResearchLengthQuestion(selectedField, readDomain);
+  const automaticZScore = context?.readSchema?.config?.zScore?.verificationMode === 'automatic_calibrated';
+  const showZScore = selectedLength && canShowResearchZScore(context,selectedField);
+  const savedZScoreEvidence = showZScore && !!context.review?.savedAt &&
+    !!acquisitionEvidence?.verified && !acquisitionEvidence.dirty &&
+    matchesSavedResearchZScoreEvidence(selectedField.key,calculatedReadState,persistedReadState,
+      allAnnotations,savedAnnotations,deletedAnnotationIdsRef.current);
   const lengthState = selectedLength ? getResearchLengthSourceState(
     selectedField, calculatedReadState.sources[selectedField.key], allAnnotations,
     viewerCandidates || [], context?.sourceStudyInstanceUID) : null;
+  const previewRequest = showZScore && automaticZScore && !savedZScoreEvidence &&
+    !saving && !completing && !acquisitionBusy && !!acquisitionEvidence?.verified &&
+    !acquisitionEvidence.dirty && lengthState?.status === 'linked'
+    ? buildResearchZScorePreviewRequest(context,selectedField,acquisitionEvidence.revision,
+      buildReadResultEntries(fields,calculatedReadState.values,calculatedReadState.sources),
+      allAnnotations,deletedAnnotationIdsRef.current) : null;
+  const previewRequestBody = previewRequest ? JSON.stringify(previewRequest) : '';
   const selectedSources = lengthState
     ? lengthState.eligible.map(item => item.annotation)
     : selectedField ? getResearchFieldSourceAnnotations(
@@ -1739,7 +1757,8 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
       {canShowResearchAcquisitionInputs(context) ? (
         <ResearchAcquisitionInputs key={context.reviewKey}
           reviewKey={context.reviewKey} readOnly={context.readOnly}
-          disabled={saving || completing} onBusy={setAcquisitionBusy} />
+          disabled={saving || completing || scoreBusy} onBusy={setAcquisitionBusy}
+          onEvidenceState={setAcquisitionEvidence} automatic={automaticZScore} />
       ) : null}
       {context.preview ? (
         <div className="mb-3 rounded border border-blue-900 bg-blue-950 p-3 text-xs text-blue-100">
@@ -1843,6 +1862,21 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
                 }
               }}
             />
+          ) : null}
+          {showZScore ? (
+            savedZScoreEvidence && !saving && !completing && !acquisitionBusy ? (
+              <ResearchReadZScore
+                key={`${context.reviewKey}:${selectedField.key}:${context.review.savedAt}:${acquisitionEvidence.revision}:${reviewStatus}`}
+                reviewKey={context.reviewKey} field={selectedField} savedAt={context.review.savedAt}
+                acquisitionRevision={acquisitionEvidence.revision} readOnly={context.readOnly}
+                disabled={saving || completing || acquisitionBusy}
+                visibility={context.readSchema.config.zScore.visibility} completed={reviewStatus === 'completed'}
+                onBusy={setScoreBusy} automatic={automaticZScore} />
+            ) : previewRequestBody ? <ResearchReadZScorePreview
+                key={JSON.stringify([context.reviewKey,context.review?.savedAt,previewRequestBody])}
+                reviewKey={context.reviewKey} field={selectedField}
+                acquisitionRevision={acquisitionEvidence.revision} requestBody={previewRequestBody} />
+              : <p className="mt-2 text-xs text-gray-400">{automaticZScore ? "Confirm acquisition inputs and reference eligibility, then capture a calibrated measurement. Save Read to persist eligible Z-scores; visibility follows the protocol." : "Save the measurement and confirmed acquisition inputs before verifying its Z-score."}</p>
           ) : null}
           {!isIVCRapRVSPQuestion ? groupedFields.map(companionField => (
             <ReadField
