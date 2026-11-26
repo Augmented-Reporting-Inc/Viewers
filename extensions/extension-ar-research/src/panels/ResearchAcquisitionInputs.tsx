@@ -69,6 +69,9 @@ export default function ResearchAcquisitionInputs({reviewKey, readOnly, disabled
     }
   }
   const locked = readOnly || disabled || busy || !snapshot?.editable;
+  const canCollapse = !busy && !error && hasVerifiedAcquisitionRevision(snapshot, automatic) &&
+    verified === snapshot.acquisitionVerified && (!automatic || eligibility === snapshot.modelEligibilityVerified) &&
+    !reason.trim() && acquisitionFields.every(({key})=>inputs[key]===acquisitionInputStrings(snapshot.effective)[key]);
   if (!expanded && !busy && !error && hasVerifiedAcquisitionRevision(snapshot, automatic)) {
     const effective = snapshot.effective;
     return <div className="my-2 rounded border border-gray-700 p-2 text-xs text-gray-200"
@@ -84,8 +87,11 @@ export default function ResearchAcquisitionInputs({reviewKey, readOnly, disabled
   }
   return <div className="my-2 rounded border border-gray-700 p-3 text-xs text-gray-200"
     onKeyDown={event => event.stopPropagation()} onKeyUp={event => event.stopPropagation()}>
-    <div className="font-semibold">Acquisition measurements</div>
-    <p className="mt-1 text-gray-400">DICOM defaults and verified manager corrections. Changes affect only this Read. {automatic ? 'Confirm acquisition values and reference eligibility once; eligible Z-scores calculate automatically when the Read is saved.' : 'Save and verify acquisition inputs before clinical Z-score verification.'}</p>
+    <div className="flex items-center justify-between gap-2">
+      <div className="font-semibold">Acquisition measurements</div>
+      {canCollapse ? <button type="button" aria-expanded={true} className="rounded border border-gray-500 px-2 py-1" onClick={()=>setExpanded(false)}>Collapse</button> : null}
+    </div>
+    <p className="mt-1 text-gray-400">DICOM defaults and verified manager corrections. Changes affect only this Read. {automatic ? 'Confirm acquisition values and reference eligibility once. Eligible measurements can show a provisional Z-score during the Read if permitted; Save Read persists verified results.' : 'Save and verify acquisition inputs before clinical Z-score verification.'}</p>
     <button type="button" disabled={busy || disabled} onClick={() => void load()} className="mt-2 rounded border border-gray-500 px-2 py-1 disabled:opacity-50">
       {snapshot ? 'Reload inputs' : 'Load acquisition inputs'}
     </button>
