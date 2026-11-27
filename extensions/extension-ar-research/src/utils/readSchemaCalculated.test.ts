@@ -5,6 +5,7 @@ import {
   buildReadFields,
   buildCalculatedReadState,
   buildReadResultEntries,
+  buildReadValueState,
 } from './readSchema';
 
 function fields(trUnit = 'm/s') {
@@ -33,6 +34,26 @@ const trSource = {
   sourceMeasurementKey: 'TR-annot-7',
 };
 const inputSources = { 'trVmax|': trSource, 'rap|': { source: 'manual' } };
+
+describe('Research saved categorical answer round-trip', () => {
+  it('retains exact saved Image Quality through calculation and result restoration', () => {
+    const quality = buildReadFields({ domain: 'echo', components: [{
+      componentKey: 'imageQuality', kind: 'ordinal',
+      config: { options: ['Poor', 'Fair', 'Good', 'Excellent'] },
+    }]});
+    const calculated = buildCalculatedReadState(quality, { 'imageQuality|': 'Good' },
+      { 'imageQuality|': { source: 'manual' } });
+    const restored = buildReadValueState({ entries: buildReadResultEntries(
+      quality, calculated.values, calculated.sources) });
+    expect(restored.values['imageQuality|']).toBe('Good');
+    expect(restored.sources['imageQuality|'].source).toBe('manual');
+  });
+  it('does not drop a configured zero-valued choice', () => {
+    const quality = buildReadFields({ components: [{ componentKey: 'quality', kind: 'ordinal',
+      config: { options: [{ value: 0, label: 'Poor' }, { value: 1, label: 'Good' }] } }] });
+    expect(quality[0].config.options).toEqual([{ value: '0', label: 'Poor' }, { value: '1', label: 'Good' }]);
+  });
+});
 
 describe('optional source-linked Research Read RVSP calculation', () => {
   it('uses measured TR Vmax and explicitly entered RAP, never a guessed RAP', () => {

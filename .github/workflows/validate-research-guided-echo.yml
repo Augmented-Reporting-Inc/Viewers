@@ -130,6 +130,7 @@ jobs:
             extensions/cornerstone/src/utils/efPhysicalCalibration.test.ts \
             extensions/cornerstone/src/utils/lvSimpsonContour.test.ts \
             extensions/cornerstone/src/utils/savedLVSimpsonRestoration.test.ts \
+            extensions/cornerstone/src/utils/savedAnnotationNavigationReady.test.ts \
             extensions/cornerstone/src/utils/installQuizContourTextRenderer.test.ts
       - name: Validate EF report compatibility after incorporating PR 156
         run: |

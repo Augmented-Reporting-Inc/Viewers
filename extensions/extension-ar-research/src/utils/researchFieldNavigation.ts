@@ -7,7 +7,7 @@ import { getResearchMeasurementToolForField } from './researchMeasurementTool';
 import { buildViewerMeasurementReadUpdates } from './readSchema';
 import { getEchoAreaSlot, getCalibratedEchoAreaCM2 } from '../../../extension-ar-measurements/src/utils/echoAreaMeasurements';
 import { getLAVolumeContourSlot, getVerifiedLAVolumeContourAreaCM2 } from '../../../extension-ar-measurements/src/utils/laVolume';
-import { getResearchEchoPhaseTarget, isRequiredResearchPhaseMissing } from './researchEchoWorkflow';
+import { getResearchEchoPhases, getResearchEchoPhaseTarget, isRequiredResearchPhaseMissing } from './researchEchoWorkflow';
 
 /**
  * Reuse existing OHIF viewer navigation commands rather than duplicating image
@@ -374,6 +374,68 @@ export function getResearchRVFACPhaseSources(
   field: any, annotations: any[] = [], studyInstanceId: unknown = ''
 ) {
   return getResearchContourPhaseSources(field, annotations, studyInstanceId, 'rvFac');
+}
+
+/** Completed composite entry uses only the uniquely linked saved source set.
+ * Follow the existing phase order, never a live measurement or gold target. */
+export function isResearchCompositeReviewQuestion(field: any, domain: string) {
+  return cleanString(domain).toLowerCase() === 'echo' &&
+    ['lvEjectionFraction', 'laVolumeDisks', 'rvFac', 'ivcCollapsibility'].includes(cleanString(field?.componentKey));
+}
+
+export function getResearchCompositeReviewEntrySource(
+  field: any, fieldSource: any, annotations: any[] = [], studyInstanceId: unknown = ''
+) {
+  if (!isResearchCompositeReviewQuestion(field, 'echo') || fieldSource?.source !== 'viewer-derived') return null;
+  const kind = cleanString(field.componentKey);
+  const prefix = kind === 'lvEjectionFraction' ? 'lv-simpson:' :
+    kind === 'laVolumeDisks' ? 'la-disks:' : kind === 'rvFac' ? 'rv-fac:' : 'ivc-collapse:';
+  const key = cleanString(fieldSource.sourceMeasurementKey);
+  if (!key.startsWith(prefix)) return null;
+  const slots = getResearchEchoPhases(field).map(phase => phase.slot);
+  const rawIds = key.slice(prefix.length).split(',').map(cleanString);
+  if (rawIds.length !== slots.length || rawIds.some(id => !id) ||
+      new Set(rawIds).size !== slots.length) return null;
+  const linked = rawIds.map(id => annotations.filter(annotation =>
+    cleanString(annotation?.annotationId || annotation?.annotationUID || annotation?.uid || annotation?.id) === id));
+  if (linked.some(matches => matches.length !== 1)) return null;
+  const owned = linked.map(matches => matches[0]);
+  const study = cleanString(studyInstanceId);
+  if (!study || !isResearchCandidateOnProtocolFrames(field, fieldSource, owned)) return null;
+  if (kind === 'ivcCollapsibility') {
+    // Use the same exact saved caliper display adapter as the explicit phase
+    // links. Never open a bare protocol frame in place of saved reader evidence.
+    const state = getResearchIVCPhaseDisplayState(field, owned, study);
+    if (!state.candidate || state.unresolvedCount) return null;
+    const ordered = slots.map(slot => {
+      const rows = state.displayPhaseSources[slot] || [];
+      return rows.length === 1 && rows[0].matchesTarget ? rows[0] : null;
+    });
+    return ordered.every(Boolean) ? ordered[0] : null;
+  }
+  const phaseState = kind === 'laVolumeDisks' ? getResearchLAPhaseSources(field, owned, study) :
+    kind === 'rvFac' ? getResearchRVFACPhaseSources(field, owned, study) : null;
+  const ordered = slots.map(slot => {
+    if (phaseState) {
+      const rows = phaseState.phaseSources[slot] || [];
+      return rows.length === 1 && rows[0].matchesTarget ? rows[0] : null;
+    }
+    const matches = owned.filter(annotation => {
+      const geometry = annotation?.lvSimpson || annotation?.measurements?.lvSimpson;
+      const sourceKind = cleanString(annotation?.measurementKind || geometry?.measurementKind ||
+        annotation?.measurements?.measurementKind);
+      return sourceKind === 'lvSimpsonSlot' &&
+        cleanString(geometry?.slot || annotation?.slot) === slot;
+    });
+    if (matches.length !== 1) return null;
+    const annotation = matches[0];
+    const target = getResearchEchoPhaseTarget(field, slot);
+    if (isRequiredResearchPhaseMissing(field, slot) ||
+        (target && !annotationMatchesTarget(annotation, target))) return null;
+    const displayAnnotation = getResearchOwnedSourceDisplay(annotation, study);
+    return displayAnnotation ? { annotation, displayAnnotation } : null;
+  });
+  return ordered.every(Boolean) ? ordered[0] : null;
 }
 
 /** Echo IVC label identity is shared by the calculator, redraw flow and UI. */

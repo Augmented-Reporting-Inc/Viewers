@@ -103,6 +103,38 @@ describe('Education and Research use Learning question renderer', () => {
       node.props.children === 'Open EF panel').props.disabled).toBe(true);
   });
 
+  it('allows EF review navigation with a locked answer, but not a blocked launcher', () => {
+    let opened = 0;
+    const props = { value: 58, onChange: () => {}, onOpen: () => opened++,
+      disabled: true, reviewNavigation: true, showInstructions: false };
+    const review = nodes(SharedEFQuestionAnswer(props));
+    expect(review.find(node => node.type === SharedMeasurementValueInput).props.disabled).toBe(true);
+    const launcher = review.find(node => node.type === 'button' && node.props.children === 'Open EF panel');
+    expect(launcher.props.disabled).toBe(false);
+    launcher.props.onClick({ preventDefault() {}, stopPropagation() {} });
+    expect(opened).toBe(1);
+    const blocked = nodes(SharedEFQuestionAnswer({ ...props, openDisabled: true }));
+    expect(blocked.find(node => node.type === 'button' && node.props.children === 'Open EF panel').props.disabled).toBe(true);
+    const draft = nodes(SharedEFQuestionAnswer({ ...props, reviewNavigation: false }));
+    expect(draft.find(node => node.type === 'button' && node.props.children === 'Open EF panel').props.disabled).toBe(true);
+  });
+
+  it('shows saved LA/RV phase navigation without acquisition buttons in review mode', () => {
+    for (const kind of ['laVolumeDisks', 'rvFac'] as const) {
+      const selected: string[] = [];
+      const tree = nodes(LearningEchoAcquisitionControls({
+        kind, disabled: true, readOnly: true, onAcquire: () => { throw Error('acquisition forbidden'); },
+        renderPhaseStatus: (slot, label) => React.createElement(SharedEchoPhaseStatus, {
+          slot, label, value: 8, hasSavedSource: true, onNavigate: () => selected.push(slot),
+        }),
+      }));
+      const buttons = tree.filter(node => node.type === 'button');
+      expect(buttons).toHaveLength(2);
+      buttons.forEach(button => button.props.onClick({ preventDefault() {}, stopPropagation() {} }));
+      expect(selected).toHaveLength(2);
+    }
+  });
+
   it('uses the shared EF renderer in both controllers without mixing answer APIs', () => {
     const learning = fs.readFileSync(
       path.resolve(__dirname, './CaseQuestionsPanel.tsx'), 'utf8'

@@ -102,8 +102,8 @@ export default function ResearchEchoGuidedControls({
       }
     }
   };
-  const run = async (key: string, action: () => Promise<any>) => {
-    if (disabled || readOnly || busy) return;
+  const run = async (key: string, action: () => Promise<any>, reviewNavigation = false) => {
+    if (disabled || (readOnly && !reviewNavigation) || busy) return;
     setBusy(key);
     try {
       await action();
@@ -131,10 +131,13 @@ export default function ResearchEchoGuidedControls({
           max={field?.config?.max}
           step="0.01"
           disabled={disabled || readOnly || !onChangeEFValue}
-          openDisabled={hasIncompleteRequiredEF || !commandsManager}
+          reviewNavigation={readOnly}
+          openDisabled={disabled || !commandsManager || (readOnly
+            ? !assessmentSavedEFAnnotations?.length : hasIncompleteRequiredEF)}
+          showInstructions={!readOnly}
           busy={busy === 'ef'}
           onOpen={() => void run('ef', async () => {
-            if (hasIncompleteRequiredEF) {
+            if (!readOnly && hasIncompleteRequiredEF) {
               throw new Error('Configure all four EF frames in Research Manager before opening the guided protocol.');
             }
             // Preserve Research-owned source evidence. The existing EF panel
@@ -157,12 +160,12 @@ export default function ResearchEchoGuidedControls({
               assessmentSavedEFAnnotations,
               assessmentSavedEFResult,
               deferSavedEFRestoration: true,
-              notifyAssessmentOnCalculate: true,
+              ...(readOnly ? { assessmentReviewOnly: true } : { notifyAssessmentOnCalculate: true }),
               questionKey: field.key,
             });
-          })}
+          }, readOnly)}
         />
-        {hasIncompleteRequiredEF ? (
+        {hasIncompleteRequiredEF && !readOnly ? (
           <div role="alert" className="text-xs text-amber-200">
             The Research protocol requires all four configured EF source frames
             before measurement can begin.
@@ -179,6 +182,7 @@ export default function ResearchEchoGuidedControls({
       <div className="mt-2 w-full min-w-0 max-w-full space-y-2 overflow-hidden">
         <LearningEchoAcquisitionControls
           kind={kind}
+          readOnly={readOnly}
           disabled={disabled || readOnly || !!busy}
           isPhaseBlocked={slot => isRequiredResearchPhaseMissing(field, slot)}
           onAcquire={(slot, technique) => void run(slot + ':' + technique, async () => {
@@ -191,7 +195,7 @@ export default function ResearchEchoGuidedControls({
             if (!sources.length) return (
               <SharedEchoPhaseStatus slot={slot} label={label} value={null}
                 disabled={disabled || readOnly}
-                onNavigate={target && isUsableResearchTarget(target) && onViewContourProtocolTarget
+                onNavigate={!readOnly && target && isUsableResearchTarget(target) && onViewContourProtocolTarget
                   ? () => onViewContourProtocolTarget(slot) : undefined} />
             );
             return sources.map((item: any, index: number) => (
@@ -202,7 +206,7 @@ export default function ResearchEchoGuidedControls({
                   value={item.matchesTarget ? item.areaCM2 : null}
                   unit="cm²" hasSavedSource
                   disabled={disabled || readOnly || !!busy}
-                  onNavigate={onViewContourSource ? () => onViewContourSource(item) : undefined}
+                  onNavigate={!disabled && onViewContourSource ? () => onViewContourSource(item) : undefined}
                   onDelete={!readOnly && onDeleteContourSource
                     ? () => onDeleteContourSource(item.annotation) : undefined} />
                 {!item.matchesTarget ? (
@@ -217,7 +221,7 @@ export default function ResearchEchoGuidedControls({
                 <span className="text-amber-300">Missing required protocol frame</span>
               ) : null}
               {(contourPhaseState?.phaseSources?.[slot]?.length || 0) > 1 ? (
-                <span className="text-amber-200">Multiple contours for this phase. Inspect and delete extras.</span>
+                <span className="text-amber-200">Multiple contours for this phase. {readOnly ? 'Inspect the saved sources.' : 'Inspect and delete extras.'}</span>
               ) : null}
             </>
           )}
@@ -279,7 +283,7 @@ export default function ResearchEchoGuidedControls({
           if (!sources.length) return (
             <SharedEchoPhaseStatus slot={slot} label={label} unit="mm" value={null}
               disabled={disabled || readOnly}
-              onNavigate={target && isUsableResearchTarget(target) && onViewContourProtocolTarget
+              onNavigate={!readOnly && target && isUsableResearchTarget(target) && onViewContourProtocolTarget
                 ? () => onViewContourProtocolTarget(slot) : undefined} />
           );
           return sources.map((item: any, index: number) => (

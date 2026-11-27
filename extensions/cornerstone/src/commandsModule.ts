@@ -38,6 +38,7 @@ import { hasUnpersistedLearnerMeasurementChanges } from './utils/learnerMeasurem
 import { resolveViewerMeasurementSaveScope, settleViewerMeasurementSaveMarkers } from './utils/viewerMeasurementSaveScope';
 import { reconcileLearnerIvcSnapshotSources } from './utils/learnerIvcSourceSnapshot';
 import { isExactViewerQuizSopFrameImageId } from './utils/exactViewerQuizSopFrame';
+import { getReadySavedNavigationViewportId, getReadySavedNavigationViewport, waitForSavedNavigationViewportData, waitForSavedNavigationContext, hasValidSavedNavigationUpdates } from './utils/savedAnnotationNavigationReady';
 import { getViewportEnabledElement } from './utils/getViewportEnabledElement';
 import { getLearnerQuizMeasurementDeleteDenial } from './utils/quizLearnerMeasurementDeletion';
 import getActiveViewportEnabledElement from './utils/getActiveViewportEnabledElement';
@@ -4877,38 +4878,29 @@ function getDisplaySetForSavedAnnotation(displaySetService, annotation) {
 async function waitForDisplaySetForSavedAnnotation({
   displaySetService,
   viewportGridService,
+  cornerstoneViewportService,
   annotation,
+  isCancelled,
+  requireDataReady = false,
   attempts = 150,
 }) {
-  let activeDisplaySet = null;
-
-  for (let attempt = 0; attempt < attempts; attempt += 1) {
-    const activeViewportId = viewportGridService.getActiveViewportId();
-
-    activeDisplaySet = getActiveViewportDisplaySet({
-      viewportGridService,
-      displaySetService,
-      viewportId: activeViewportId,
-    });
-
-    const displaySet = displaySetContainsSavedAnnotation(activeDisplaySet, annotation)
-      ? activeDisplaySet
-      : getDisplaySetForSavedAnnotation(displaySetService, annotation);
-
-    if (displaySet) {
-      return {
-        activeDisplaySet,
-        displaySet,
-      };
-    }
-
-    await sleep(100);
-  }
-
-  return {
-    activeDisplaySet,
-    displaySet: null,
-  };
+  return waitForSavedNavigationContext({
+    viewportGridService,
+    cornerstoneViewportService,
+    isCancelled,
+    requireDataReady,
+    attempts,
+    wait: () => sleep(100),
+    resolveDisplaySets: viewportId => {
+      const activeDisplaySet = getActiveViewportDisplaySet({
+        viewportGridService, displaySetService, viewportId,
+      });
+      const displaySet = displaySetContainsSavedAnnotation(activeDisplaySet, annotation)
+        ? activeDisplaySet
+        : getDisplaySetForSavedAnnotation(displaySetService, annotation);
+      return { activeDisplaySet, displaySet };
+    },
+  });
 }
 
 function getViewportsToUpdateSafely({
@@ -5213,7 +5205,7 @@ function findImageIdIndexForViewerQuizTarget(
 
 async function waitForViewerQuizTargetImageMatch(
   viewport, target = {}, attempts = 20, resolveViewport = null,
-  { requireExactSopFrame = false } = {}
+  { requireExactSopFrame = false, isCancelled = () => false } = {}
 ) {
   let lastMatch = {
     index: -1,
@@ -5224,6 +5216,7 @@ async function waitForViewerQuizTargetImageMatch(
   let latestViewport = viewport;
 
   for (let attempt = 0; attempt < attempts; attempt += 1) {
+    if (isCancelled()) return { ...lastMatch, index: -1, viewport: latestViewport };
     // A display-set update can recreate the viewport; retry against the
     // current instance instead of a stale previous image stack.
     const resolved = typeof resolveViewport === 'function' ? resolveViewport() : null;
@@ -5244,15 +5237,16 @@ async function waitForViewerQuizTargetImageMatch(
 
 async function jumpViewportToViewerQuizTargetImage(
   viewport, target = {}, resolveViewport = null,
-  { requireExactSopFrame = false } = {}
+  { requireExactSopFrame = false, isCancelled = () => false } = {}
 ) {
   // Instance-only quiz guidance has no gold frame and may require an
   // asynchronous cine display-set transition.
   const attempts = target.sopInstanceId && !Number.isFinite(target.frameNumber) ? 70 : 20;
   const { viewport: latestViewport, ...match } =
     await waitForViewerQuizTargetImageMatch(
-      viewport, target, attempts, resolveViewport, { requireExactSopFrame }
+      viewport, target, attempts, resolveViewport, { requireExactSopFrame, isCancelled }
     );
+  if (isCancelled()) return { ok: false, reason: 'cancelled' };
 
   if (match.index < 0) {
     console.warn('[ViewerQuiz] could not find target image in viewport stack', {
@@ -9735,6 +9729,7 @@ function commandsModule({
       // an unrelated clinical/learner AR Series for saved source evidence.
       assessmentSavedEFAnnotations = null,
       assessmentSavedEFResult = null,
+      assessmentReviewOnly = false,
       deferSavedEFRestoration = false,
       notifyAssessmentOnCalculate = false,
       questionKey = '',
@@ -9744,6 +9739,10 @@ function commandsModule({
       savedGoldMeasurement = null,
       goldAuthoringEditable = false,
     } = {}) => {
+      if (assessmentReviewOnly && (!Array.isArray(assessmentSavedEFAnnotations) ||
+          requestedSlot || requestedSessionId || panelOnly)) {
+        return { ok: false, reason: 'read-only-assessment-source-required' };
+      }
       const openProfile = !requestedSessionId && !requestedSlot
         ? startEFOpenProfile(panelOnly ? 'panel-only' :
             Array.isArray(assessmentSavedEFAnnotations) ? 'assessment-owned' : 'education-or-clinical')
@@ -9790,7 +9789,7 @@ function commandsModule({
       }
 
       const assessmentOwnedEF = Array.isArray(assessmentSavedEFAnnotations);
-      const panelFirst = assessmentOwnedEF && deferSavedEFRestoration &&
+      const panelFirst = assessmentOwnedEF && (deferSavedEFRestoration || assessmentReviewOnly) &&
         !requestedSlot && !requestedSessionId && !panelOnly;
       let pendingSavedEFRestoration = false;
       const restoreSources = async (sources: any[], cancelled: () => boolean, slots: readonly string[] = LV_TRACE_REQUIRED_SLOTS) => {
@@ -9918,18 +9917,20 @@ function commandsModule({
       const explicitSlot = normalizeLVSimpsonSlot(requestedSlot);
       const panelSources = (live: any[], studyInstanceId: string) => panelFirst
         ? mergeSavedLVSimpsonPanelSources({
-            saved: assessmentSavedEFAnnotations,
+            saved: assessmentReviewOnly
+              ? assessmentSavedEFAnnotations.map(source => ({ ...source, isLocked: true }))
+              : assessmentSavedEFAnnotations,
             // A stale MeasurementService record is not a restored source.
             // Preserve saved evidence until the native exact-frame contour exists.
-            live: live.filter(item => {
+            live: assessmentReviewOnly ? [] : live.filter(item => {
               const native = cornerstoneTools.annotation.state.getAnnotation?.(getMeasurementAnnotationId(item));
               return !!native?.data?.lvSimpson &&
                 isSavedLVSimpsonImageMatch(item, native.metadata?.referencedImageId);
             }),
             studyInstanceId,
             getId: getMeasurementAnnotationId, getSlot: getLVSimpsonSlotFromMeasurement,
-            isDeleted: id => viewerMeasurementsDeletedInSession.has(id),
-            isChanged: source => getSavedLVSimpsonSourceRevisionState(source) === 'changed',
+            isDeleted: id => !assessmentReviewOnly && viewerMeasurementsDeletedInSession.has(id),
+            isChanged: source => !assessmentReviewOnly && getSavedLVSimpsonSourceRevisionState(source) === 'changed',
           }) : live;
       const savedPanelSources = panelFirst ? panelSources([], activeEFStudy) : [];
       const hasSavedPanelSources = savedPanelSources.length > 0;
@@ -9944,7 +9945,7 @@ function commandsModule({
       // is a review action, not permission to overwrite A4C ED or restart
       // the 4-step guided drawing workflow.
       const reviewExistingContours = !requestedSessionId && !explicitSlot &&
-        (!nextMissingSlot || (assessmentOwnedEF &&
+        (assessmentReviewOnly || !nextMissingSlot || (assessmentOwnedEF &&
           (pendingSavedEFRestoration || slotCandidates.size > 0 || hasSavedPanelSources)));
 
       let slotSelection = explicitSlot ? buildLVSimpsonSlotSelection(explicitSlot) : null;
@@ -10018,14 +10019,14 @@ function commandsModule({
 
       // Suspend the previously active mouse tool once for the full four-slot
       // workflow. A later Continue may switch to a different viewport/group.
-      if (!panelOnly && !lvSimpsonMouseTools.isActive()) {
+      if (!panelOnly && !assessmentReviewOnly && !lvSimpsonMouseTools.isActive()) {
         lvSimpsonMouseTools.start();
       }
       const efToolGroupReference = toolGroupService.getToolGroupForViewport(activeViewportId);
       const efToolGroup = typeof efToolGroupReference === 'string'
         ? toolGroupService.getToolGroup(efToolGroupReference)
         : efToolGroupReference;
-      if (!panelOnly) lvSimpsonMouseTools.suspend(efToolGroup);
+      if (!panelOnly && !assessmentReviewOnly) lvSimpsonMouseTools.suspend(efToolGroup);
       refreshLVSimpsonToolbarState();
 
       const { label, slotInfo } = slotSelection;
@@ -10097,7 +10098,7 @@ function commandsModule({
         };
         lvSimpsonPanelController = {
           activeSlot: (reviewExistingContours || panelOnly) ? '' : slotInfo.slot,
-          canEdit: (!panelOnly || goldAuthoringEditable) &&
+          canEdit: !assessmentReviewOnly && (!panelOnly || goldAuthoringEditable) &&
             !(assessmentOwnedEF && pendingSavedEFRestoration),
           questionKey,
           savedGoldMeasurement,
@@ -10152,7 +10153,7 @@ function commandsModule({
             }
             // No unique saved source: an explicitly authored target is still
             // valid, but an ambiguous contour must not be guessed.
-            return saved.length > 1 ? null : getEFContourFrameTarget(this.efContourTargets, slot, { allowCanonical: allowCanonicalFrameTargets });
+            return assessmentReviewOnly || saved.length > 1 ? null : getEFContourFrameTarget(this.efContourTargets, slot, { allowCanonical: allowCanonicalFrameTargets });
           },
           canNavigateSlot(slot: string, snapshot?: any[]) {
             return isActiveStudy() && !!this.getNavigationTarget(slot, snapshot);
@@ -10162,6 +10163,39 @@ function commandsModule({
             const target = this.getNavigationTarget(slot);
             if (!target) return;
             cancelDrawingWithoutClosingPanel();
+            if (assessmentReviewOnly) {
+              const saved = getPanelMeasurements().filter(item =>
+                getLVSimpsonSlotFromMeasurement(item) === slot);
+              if (saved.length !== 1) return;
+              this.busy = true;
+              const cancelled = () => !isActiveStudy() || lvSimpsonPanelController !== this;
+              try {
+                // Same saved-source navigation/hydration used by Education.
+                // Always navigate, even if the contour is already hydrated.
+                const normalized = normalizeViewerQuizTarget(target);
+                const restored = await actions.jumpToSavedViewerAnnotation({
+                  annotation: { ...saved[0], isLocked: true,
+                    SOPInstanceUID: normalized.sopInstanceId,
+                    frameNumber: normalized.frameNumber },
+                  selectAnnotation: false, requireExactSopFrame: true,
+                  pauseCineOnSource: true, runDelayedDisplayRefresh: false,
+                  useQuizTargetNavigation: true,
+                  isCancelled: cancelled,
+                });
+                if (cancelled()) return;
+                if (restored?.ok !== true) {
+                  uiNotificationService.show({ title: 'LV EF', type: 'warning', duration: 5000,
+                    message: 'Saved contour could not be displayed on its exact frame.' });
+                  return;
+                }
+                this.activeSlot = slot;
+                updateLVSimpsonCurrentSlotLabel(slot);
+              } catch (error) {
+                if (!cancelled()) uiNotificationService.show({ title: 'LV EF', type: 'warning',
+                  duration: 5000, message: 'Saved contour navigation failed. Select its row to retry.' });
+              } finally { this.busy = false; }
+              return;
+            }
             const savedSlot = panelFirst ? getPanelMeasurements().filter(item =>
               item.arSavedEFPanelSource && getLVSimpsonSlotFromMeasurement(item) === slot) : [];
             if (savedSlot.length === 1) {
@@ -10269,7 +10303,7 @@ function commandsModule({
             });
           },
           onDeleteSlot(slot: string, ids: string[]) {
-            if (!LV_TRACE_REQUIRED_SLOTS.includes(slot) || !ids.length || !isActiveStudy() || this.busy) return;
+            if (this.canEdit === false || !LV_TRACE_REQUIRED_SLOTS.includes(slot) || !ids.length || !isActiveStudy() || this.busy) return;
             const currentItems = getPanelMeasurements()
               .filter(item => getLVSimpsonSlotFromMeasurement(item) === slot);
             if (currentItems.some(item => {
@@ -10291,7 +10325,7 @@ function commandsModule({
             showRecovery(`${getLVSimpsonSlotDisplayName(slot)} deleted. Select Draw to replace it, or choose another contour.`);
           },
           onAnnotationRemoved(annotationId: string) {
-            if (suppressLVSimpsonRecoveryEvents || !observedIds.has(annotationId)) return;
+            if (assessmentReviewOnly || suppressLVSimpsonRecoveryEvents || !observedIds.has(annotationId)) return;
             // Disarm this ID before invoking removeMeasurement: the service
             // and Cornerstone can each emit a removal event for the same ID.
             observedIds.delete(annotationId);
@@ -10538,6 +10572,36 @@ function commandsModule({
           } finally { controller.busy = false; }
         })();
       };
+      if (assessmentReviewOnly) {
+        // Display the immutable assessment snapshot; never calculate or
+        // publish an EF capture event, even when all four slots are present.
+        activeLVSimpsonWorkflowSessionId = '';
+        cancelActiveLVSimpsonCapture();
+        lvSimpsonMouseTools.restore();
+        refreshLVSimpsonToolbarState();
+        const saved = lvSimpsonPanelController?.getPanelMeasurements?.() || [];
+        const sourceIds = String(assessmentSavedEFResult?.sourceMeasurementKey || '')
+          .replace(/^lv-simpson:/, '').split(',').filter(Boolean);
+        const ids = new Set(saved.map(getMeasurementAnnotationId));
+        const value = Number(assessmentSavedEFResult?.value);
+        const verified = assessmentSavedEFResult?.source === 'viewer-derived' &&
+          assessmentSavedEFResult?.value != null &&
+          String(assessmentSavedEFResult?.value).trim() !== '' &&
+          String(assessmentSavedEFResult?.sourceMeasurementKey || '').startsWith('lv-simpson:') &&
+          sourceIds.length === 4 && new Set(sourceIds).size === 4 &&
+          ids.size === 4 && sourceIds.every(id => ids.has(id)) &&
+          LV_TRACE_REQUIRED_SLOTS.every(slot => getLVSimpsonSlotCandidates(saved).get(slot)?.length === 1) &&
+          Number.isFinite(value) && value >= 0 && value <= 100;
+        lvSimpsonPanelController.onCalculate = null;
+        renderLVSimpsonWorkflowPanel({
+          measurements: saved,
+          resultText: verified ? `Saved LVEF: ${roundQuizMeasurementValue(value, 2).toFixed(2)}%` : '',
+          instruction: 'Read only. Select a saved contour to open its exact image and frame.',
+          onCancel: hideLVSimpsonWorkflowPanel,
+        });
+        openProfile?.finish('review-ready');
+        return { ok: true, panelOpened: true };
+      }
       if (panelOnly) {
         // Educator authoring uses the same four-slot panel without starting a
         // drawing session. Choosing Freehand/Axis+Apex explicitly starts one.
@@ -15968,6 +16032,7 @@ function commandsModule({
       runDelayedDisplayRefresh = true,
       pauseCineOnSource = false,
       requireExactSopFrame = false,
+      useQuizTargetNavigation = false,
       isCancelled = () => false,
     } = {}) => {
       const cancelledResult = { ok: false, reason: 'cancelled' };
@@ -15983,20 +16048,30 @@ function commandsModule({
         };
       }
 
-      const activeViewportId = viewportGridService.getActiveViewportId();
-
       const seriesInstanceId =
         savedAnnotation.SeriesInstanceUID || savedAnnotation.referenceSeriesUID;
 
       const endDisplaySet = beginEFOpenStage('display-set-lookup');
-      const { activeDisplaySet, displaySet } = await waitForDisplaySetForSavedAnnotation({
+      const navigation = await waitForDisplaySetForSavedAnnotation({
         displaySetService,
         viewportGridService,
+        cornerstoneViewportService,
         annotation: savedAnnotation,
+        isCancelled,
+        requireDataReady: useQuizTargetNavigation,
       });
 
       endDisplaySet();
       if (isCancelled()) return cancelledResult;
+      if (!navigation) {
+        return { ok: false, reason: 'saved-navigation-context-not-ready', retryable: true, annotationId };
+      }
+      const { activeViewportId, activeDisplaySet, displaySet } = navigation;
+      // Do not use a viewport captured before layout initialization, or a
+      // viewport replaced while the async display-set lookup was pending.
+      if (getReadySavedNavigationViewportId(viewportGridService, cornerstoneViewportService, useQuizTargetNavigation) !== activeViewportId) {
+        return { ok: false, reason: 'saved-navigation-viewport-changed', retryable: true, annotationId };
+      }
       if (!displaySet) {
         console.warn('[MeasurementAnnotations] no displaySet for saved annotation', {
           annotationId,
@@ -16024,31 +16099,74 @@ function commandsModule({
       const activeDisplaySetAlreadyMatches =
         activeDisplaySet?.displaySetInstanceUID === displaySet.displaySetInstanceUID;
 
-      const viewportToUpdate = activeDisplaySetAlreadyMatches
-        ? null
-        : cornerstoneViewportService.findUpdateableViewportConfiguration(activeViewportId, {
-            displaySetInstanceUID: displaySet.displaySetInstanceUID,
-            metadata: buildHydrationMetadata(savedAnnotation, displaySet),
+      // Scored Education EF review uses the quiz target navigator to update
+      // the display set, allow the new stack presentation to settle and
+      // re-resolve the viewport. Reuse that exact route for completed EF
+      // source review, without borrowing quiz/gold answer persistence.
+      const useScoredReviewNavigation = useQuizTargetNavigation &&
+        requireExactSopFrame && pauseCineOnSource && isLVSimpsonMeasurement(savedAnnotation);
+      let targetViewportId = activeViewportId;
+      let quizNavigation = null;
+      if (useScoredReviewNavigation) {
+        quizNavigation = await actions.jumpToViewerQuizTarget({
+          viewerTarget: {
+            StudyInstanceUID: savedAnnotation.StudyInstanceUID || savedAnnotation.referenceStudyUID,
+            SeriesInstanceUID: seriesInstanceId,
+            SOPInstanceUID: savedAnnotation.SOPInstanceUID,
+            frameNumber: savedAnnotation.frameNumber,
             referencedImageId: savedAnnotation.referencedImageId,
+          },
+          requireExactSopFrame: true, pauseCineOnTarget: true,
+          requireReadyViewport: true, isCancelled,
+        });
+        if (isCancelled()) { endViewportSetup(); return cancelledResult; }
+        if (quizNavigation?.ok !== true ||
+            !hasValidSavedNavigationUpdates(viewportGridService, [{ viewportId: quizNavigation?.viewportId }]) ||
+            !isExactViewerQuizSopFrameImageId(quizNavigation.imageId,
+              savedAnnotation.SOPInstanceUID, savedAnnotation.frameNumber)) {
+          endViewportSetup();
+          return { ok: false, reason: 'saved-ef-quiz-target-not-ready', retryable: true, annotationId };
+        }
+        targetViewportId = quizNavigation.viewportId;
+      } else {
+        const viewportToUpdate = activeDisplaySetAlreadyMatches
+          ? null
+          : cornerstoneViewportService.findUpdateableViewportConfiguration(activeViewportId, {
+              displaySetInstanceUID: displaySet.displaySetInstanceUID,
+              metadata: buildHydrationMetadata(savedAnnotation, displaySet),
+              referencedImageId: savedAnnotation.referencedImageId,
+            });
+
+        targetViewportId = viewportToUpdate?.viewportId || activeViewportId;
+        if (!hasValidSavedNavigationUpdates(viewportGridService, [{ viewportId: targetViewportId }])) {
+          endViewportSetup();
+          return { ok: false, reason: 'saved-navigation-invalid-viewport', retryable: true, annotationId };
+        }
+        if (pauseCineOnSource) stopSourceCineForViewport(targetViewportId);
+
+        if (!activeDisplaySetAlreadyMatches) {
+          const viewportsToUpdate = getViewportsToUpdateSafely({
+            hangingProtocolService,
+            viewportId: targetViewportId,
+            displaySetInstanceId: displaySet.displaySetInstanceUID,
+            viewportOptions: viewportToUpdate?.viewportOptions,
+            context: 'MeasurementAnnotations',
           });
 
-      const targetViewportId = viewportToUpdate?.viewportId || activeViewportId;
-      if (pauseCineOnSource) stopSourceCineForViewport(targetViewportId);
-
-      if (!activeDisplaySetAlreadyMatches) {
-        const viewportsToUpdate = getViewportsToUpdateSafely({
-          hangingProtocolService,
-          viewportId: targetViewportId,
-          displaySetInstanceId: displaySet.displaySetInstanceUID,
-          viewportOptions: viewportToUpdate?.viewportOptions,
-          context: 'MeasurementAnnotations',
-        });
-
-        if (viewportsToUpdate.length) {
+          // React applies this update in a later reducer pass: a try/catch
+          // around the command cannot protect the viewer from a null ID.
+          if (!hasValidSavedNavigationUpdates(viewportGridService, viewportsToUpdate)) {
+            endViewportSetup();
+            return { ok: false, reason: 'saved-navigation-invalid-update', retryable: true, annotationId };
+          }
+          if (isCancelled()) {
+            endViewportSetup();
+            return cancelledResult;
+          }
           actions.setDisplaySetsForViewports({ viewportsToUpdate });
         }
-      }
 
+      }
       endViewportSetup();
       const endViewportReady = beginEFOpenStage('viewport-ready');
       const viewport = await waitForCurrentSavedAnnotationViewport({
@@ -16083,11 +16201,11 @@ function commandsModule({
       }
 
       const endFrameJump = beginEFOpenStage('frame-jump');
-      const actualReferencedImageId = await jumpViewportToSavedAnnotationImage(
-        viewport,
-        savedAnnotation,
-        requireExactSopFrame
-      );
+      const actualReferencedImageId = useScoredReviewNavigation
+        ? quizNavigation.imageId
+        : await jumpViewportToSavedAnnotationImage(
+            viewport, savedAnnotation, requireExactSopFrame
+          );
 
       endFrameJump();
       if (isCancelled()) return cancelledResult;
@@ -16134,9 +16252,11 @@ function commandsModule({
         ) ||
         viewport;
 
-      if (requireExactSopFrame && !isExactViewerQuizSopFrameImageId(
-          hydratedViewport.getCurrentImageId?.(), savedAnnotation.SOPInstanceUID,
-          savedAnnotation.frameNumber)) {
+      if ((useScoredReviewNavigation &&
+          cornerstoneViewportService.getCornerstoneViewport(targetViewportId) !== hydratedViewport) ||
+          (requireExactSopFrame && !isExactViewerQuizSopFrameImageId(
+            hydratedViewport.getCurrentImageId?.(), savedAnnotation.SOPInstanceUID,
+            savedAnnotation.frameNumber))) {
         return { ok: false, reason: 'saved-source-frame-changed-before-hydration', annotationId,
           viewportId: hydratedViewport.id || targetViewportId };
       }
@@ -16360,6 +16480,7 @@ function commandsModule({
               savedAnnotation.SOPInstanceUID, savedAnnotation.frameNumber);
         const finalImage = exactCurrent && hydratedViewport.getImageData?.()
           ? currentImage
+          : useScoredReviewNavigation ? ''
           : await jumpViewportToSavedAnnotationImage(hydratedViewport, savedAnnotation, requireExactSopFrame);
         if (!finalImage || !await waitForViewportImageReady(
           hydratedViewport, finalImage
@@ -16536,7 +16657,11 @@ function commandsModule({
     jumpToViewerQuizTarget: async ({
       viewerTarget, questionKey = '', requireExactSopFrame = false,
       pauseCineOnTarget = false,
+      requireReadyViewport = false,
+      isCancelled = () => false,
     } = {}) => {
+      const cancelledResult = { ok: false, reason: 'cancelled' };
+      if (isCancelled()) return cancelledResult;
       const target = normalizeViewerQuizTarget(viewerTarget);
 
       if (!hasViewerQuizTargetIdentity(target)) {
@@ -16551,11 +16676,29 @@ function commandsModule({
         };
       }
 
-      const activeViewportId = viewportGridService.getActiveViewportId();
+      const activeViewportId = requireReadyViewport
+        ? getReadySavedNavigationViewportId(viewportGridService, cornerstoneViewportService, true)
+        : viewportGridService.getActiveViewportId();
+      if (requireReadyViewport && !activeViewportId) {
+        return { ok: false, reason: 'quiz-target-viewport-not-ready' };
+      }
       const displaySet = getDisplaySetForViewerQuizTarget(displaySetService, target);
+      if (requireReadyViewport && (!displaySet?.displaySetInstanceUID ||
+          (target.studyInstanceId && String(displaySet.StudyInstanceUID || displaySet.studyInstanceUID || '') !== target.studyInstanceId))) {
+        return { ok: false, reason: 'quiz-target-display-set-not-ready' };
+      }
       let targetViewportId = activeViewportId;
 
-      if (displaySet?.displaySetInstanceUID) {
+      // Do not re-enable a stack that already contains the exact saved frame.
+      // In particular, initial completed-read navigation can otherwise race
+      // with stack initialization and reapply an invalid camera presentation.
+      const readyActiveViewport = requireReadyViewport && displaySet?.displaySetInstanceUID
+        ? getReadySavedNavigationViewport(viewportGridService, cornerstoneViewportService,
+            activeViewportId, displaySet.displaySetInstanceUID)
+        : null;
+      const reuseReadyStack = !!readyActiveViewport && findImageIdIndexForViewerQuizTarget(
+        readyActiveViewport, target, { requireExactSopFrame }).index >= 0;
+      if (displaySet?.displaySetInstanceUID && !reuseReadyStack) {
         const viewportToUpdate = cornerstoneViewportService.findUpdateableViewportConfiguration(
           activeViewportId,
           {
@@ -16581,17 +16724,35 @@ function commandsModule({
           context: 'ViewerQuiz',
         });
 
+        if (requireReadyViewport &&
+            !hasValidSavedNavigationUpdates(viewportGridService, viewportsToUpdate)) {
+          return { ok: false, reason: 'quiz-target-invalid-viewport-update' };
+        }
+        if (isCancelled()) return cancelledResult;
         if (viewportsToUpdate.length) {
           await Promise.resolve(actions.setDisplaySetsForViewports({ viewportsToUpdate }));
-          await sleep(300);
+          // Preserve the established Education default; strict saved review
+          // waits for the service's actual stack/presentation completion.
+          if (!requireReadyViewport) await sleep(300);
         }
       }
 
+      if (isCancelled()) return cancelledResult;
+      if (requireReadyViewport && !await waitForSavedNavigationViewportData({
+        viewportGridService, cornerstoneViewportService, viewportId: targetViewportId,
+        expectedDisplaySetId: displaySet.displaySetInstanceUID, isCancelled,
+        wait: () => sleep(100),
+      })) return isCancelled() ? cancelledResult :
+        { ok: false, reason: 'quiz-target-viewport-data-not-ready', retryable: true };
+      if (isCancelled()) return cancelledResult;
       const resolveTargetViewport = () =>
-        cornerstoneViewportService.getCornerstoneViewport(targetViewportId) ||
-        cornerstoneViewportService.getCornerstoneViewport(
+        requireReadyViewport
+          ? getReadySavedNavigationViewport(viewportGridService, cornerstoneViewportService,
+              targetViewportId, displaySet.displaySetInstanceUID)
+          : cornerstoneViewportService.getCornerstoneViewport(targetViewportId) ||
+        (!requireReadyViewport ? cornerstoneViewportService.getCornerstoneViewport(
           viewportGridService.getActiveViewportId()
-        );
+        ) : null);
       const viewport = resolveTargetViewport();
       if (pauseCineOnTarget) stopSourceCineForViewport(targetViewportId);
 
@@ -16608,8 +16769,12 @@ function commandsModule({
       }
 
       const jumpResult = await jumpViewportToViewerQuizTargetImage(
-        viewport, target, resolveTargetViewport, { requireExactSopFrame }
+        viewport, target, resolveTargetViewport, { requireExactSopFrame, isCancelled }
       );
+      if (isCancelled()) return cancelledResult;
+      if (requireReadyViewport && resolveTargetViewport() !== viewport) {
+        return { ok: false, reason: 'quiz-target-viewport-changed', retryable: true };
+      }
 
       // Navigating between saved quiz source frames can change the viewport's
       // tool group; keep the area renderer attached before displaying contours.
@@ -16634,10 +16799,14 @@ function commandsModule({
           // Reassert the exact SOP/frame once playback is paused.
           const settled = await jumpViewportToViewerQuizTargetImage(
             resolveTargetViewport(), target, resolveTargetViewport,
-            { requireExactSopFrame }
+            { requireExactSopFrame, isCancelled }
           );
+          if (isCancelled()) return cancelledResult;
           if (settled?.ok !== true) {
             return { ...settled, viewportId: targetViewportId };
+          }
+          if (requireReadyViewport && resolveTargetViewport() !== viewport) {
+            return { ok: false, reason: 'quiz-target-viewport-changed', retryable: true };
           }
         }
       }

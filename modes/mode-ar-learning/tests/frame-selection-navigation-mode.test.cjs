@@ -278,7 +278,7 @@ test('frame-only navigation re-resolves the display-set viewport and reports fai
     'utf8'
   );
   assert.match(commandsSource, /await Promise\.resolve\(actions\.setDisplaySetsForViewports\(\{ viewportsToUpdate \}\)\)/);
-  assert.match(commandsSource, /await waitForViewerQuizTargetImageMatch\(\s*viewport, target, attempts, resolveViewport, \{ requireExactSopFrame \}\s*\)/);
+  assert.match(commandsSource, /await waitForViewerQuizTargetImageMatch\(\s*viewport, target, attempts, resolveViewport, \{ requireExactSopFrame, isCancelled \}\s*\)/);
   assert.match(commandsSource, /cornerstoneViewportService\.getCornerstoneViewport\(targetViewportId\)/);
   assert.match(commandsSource, /const targetViewport = latestViewport \|\| viewport/);
   assert.match(commandsSource, /seriesDisplaySets\.find\(displaySet =>\s*displaySetContainsSavedAnnotation/);
@@ -405,6 +405,64 @@ test('async instance navigation refreshes a replaced viewport before matching', 
   assert.ok(resolves >= 2);
 });
 
+
+test('shared quiz target navigation retains Education defaults and cancels pending Research navigation', async () => {
+  const vm = require('node:vm');
+  const commandsSource = fs.readFileSync(
+    path.join(__dirname, '..', '..', '..', 'extensions', 'cornerstone', 'src', 'commandsModule.ts'),
+    'utf8'
+  );
+  const start = commandsSource.indexOf('async function waitForViewerQuizTargetImageMatch(');
+  const end = commandsSource.indexOf('function getSopInstanceIdFromImageId(', start);
+  assert.ok(start >= 0 && end > start);
+  let cancelled = false;
+  let cancelDuringWait = false;
+  const requested = { sopInstanceId: 'saved-sop', frameNumber: 3 };
+  const matchOptions = [];
+  const jump = vm.runInNewContext(
+    [commandsSource.slice(start, end), 'jumpViewportToViewerQuizTargetImage'].join('\n'),
+    {
+      sleep: async () => { if (cancelDuringWait) cancelled = true; },
+      findImageIdIndexForViewerQuizTarget: (viewport, target, options) => {
+        assert.equal(target, requested);
+        matchOptions.push(options.requireExactSopFrame);
+        return viewport.hasSop
+          ? { index: 2, imageId: 'saved-frame-3', imageIds: ['a', 'b', 'saved-frame-3'], source: 'sop-frame' }
+          : { index: -1, imageId: '', imageIds: [], source: 'not-found' };
+      },
+      console: { info() {}, warn() {} },
+    }
+  );
+  const calls = [];
+  const original = { hasSop: false, setImageIdIndex: async index => calls.push(['old', index]) };
+  const replacement = {
+    hasSop: true,
+    setImageIdIndex: async index => calls.push(['new', index]),
+    render: () => calls.push(['render']),
+  };
+  // Existing Education callers do not pass a cancellation callback.
+  const normal = await jump(original, requested, () => replacement, { requireExactSopFrame: true });
+  assert.equal(normal.ok, true);
+  assert.equal(normal.imageId, 'saved-frame-3');
+  assert.deepEqual(calls, [['new', 2], ['render']]);
+  assert.deepEqual(matchOptions, [true]);
+
+  // A pending Research selection is cancelled while awaiting the new stack.
+  // Even if the replacement becomes available next, it must not be changed.
+  calls.length = 0;
+  matchOptions.length = 0;
+  cancelDuringWait = true;
+  let resolutions = 0;
+  const stopped = await jump(original, requested, () => {
+    resolutions++;
+    return resolutions === 1 ? original : replacement;
+  }, { requireExactSopFrame: true, isCancelled: () => cancelled });
+  assert.equal(stopped.ok, false);
+  assert.equal(stopped.reason, 'cancelled');
+  assert.deepEqual(calls, []);
+  assert.deepEqual(matchOptions, [true]);
+  assert.equal(resolutions, 1);
+});
 
 test('Show your answer explicitly opens the learner-selected exact frame', () => {
   const start = panelSource.indexOf('function renderQuestionReview(');

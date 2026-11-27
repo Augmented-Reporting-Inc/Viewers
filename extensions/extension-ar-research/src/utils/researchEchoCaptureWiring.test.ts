@@ -91,6 +91,78 @@ describe('Research source capture is opt-in without changing other viewer workfl
   });
 });
 
+describe('Completed Research measurement review', () => {
+  const guided = fs.readFileSync(path.resolve(__dirname,
+    '../panels/ResearchEchoGuidedControls.tsx'), 'utf8');
+  const cine = fs.readFileSync(path.resolve(__dirname,
+    '../../../cornerstone/src/components/CinePlayer/CinePlayer.tsx'), 'utf8');
+  it('re-enters read-only mode and uses immutable saved evidence', () => {
+    expect(panel).toContain('getCompletedResearchReadOnlyUrl(');
+    expect(panel).toContain('window.location.replace(lockedUrl)');
+    expect(panel).toContain('context?.readOnly ? savedAnnotations : mergeMeasurementAnnotations(');
+    expect(panel).toContain('if (context?.readOnly && !context?.preview) return persistedReadState;');
+    expect(panel).toContain('onActivateSelected={selectedField && context.readOnly');
+    expect(panel).toContain('pauseCineOnSource: true');
+    expect(cine).toContain('!isLearningRoute && !isReadOnlyResearchRoute()');
+    expect(cine).toContain('isLengthMeasurementActive || isReadOnlyResearchRoute()');
+  });
+  it('restores the linked composite frame on question entry and initial completed Read load', () => {
+    const navigation = panel.slice(panel.indexOf('const navigateToField = async'),
+      panel.indexOf('const selectionGenerationRef'));
+    expect(navigation).toContain('getResearchCompositeReviewEntrySource(');
+    expect(navigation).toContain('persistedReadState.sources[field.key], savedAnnotations');
+    expect(navigation).toContain('context?.readOnly && !context?.preview && isResearchCompositeReviewQuestion');
+    expect(navigation.indexOf('return restoreResearchAnnotationSource(source, isCancelled,'))
+      .toBeLessThan(navigation.indexOf('const targets = getResearchProtocolViewerTargets(field)'));
+    expect(panel).toContain('(context?.readOnly && isResearchCompositeReviewQuestion(field, readDomain))) runFieldSelection(field)');
+    expect(panel).toContain('reviewOnly={context.readOnly && !context.preview}');
+  });
+  it('does not dispatch saved display sets before a current viewport is ready', () => {
+    const start = viewerCommands.indexOf('jumpToSavedViewerAnnotation: async');
+    const finish = viewerCommands.indexOf('endViewportSetup();\n      const endViewportReady', start);
+    const navigation = viewerCommands.slice(start, finish);
+    expect(navigation).toContain('await waitForDisplaySetForSavedAnnotation({');
+    expect(navigation).toContain('getReadySavedNavigationViewportId(viewportGridService, cornerstoneViewportService, useQuizTargetNavigation) !== activeViewportId');
+    expect(navigation).not.toContain('const activeViewportId = viewportGridService.getActiveViewportId();');
+    expect(navigation.indexOf('hasValidSavedNavigationUpdates(viewportGridService, viewportsToUpdate)')).toBeLessThan(
+      navigation.indexOf('actions.setDisplaySetsForViewports({ viewportsToUpdate })'));
+  });
+  it('uses Education scored-review frame navigation for completed EF, without a viewport reset', () => {
+    const navigation = panel.slice(panel.indexOf('const navigateToField = async'),
+      panel.indexOf('if (isResearchTRVmaxQuestion(field, readDomain))', panel.indexOf('const navigateToField = async')));
+    expect(navigation).toContain("field.componentKey === 'lvEjectionFraction'");
+    expect(panel).toContain('isCancelled: cancelled, useQuizTargetNavigation');
+    const slot = viewerCommands.slice(viewerCommands.indexOf('async onNavigateSlot(slot'),
+      viewerCommands.indexOf('const savedSlot = panelFirst', viewerCommands.indexOf('async onNavigateSlot(slot')));
+    expect(slot).toContain('if (assessmentReviewOnly)');
+    expect(slot).toContain('useQuizTargetNavigation: true');
+    const jump = viewerCommands.slice(viewerCommands.indexOf('jumpToSavedViewerAnnotation: async'),
+      viewerCommands.indexOf('showSavedViewerAnnotationsForSameImage: async'));
+    expect(jump).toContain('useQuizTargetNavigation = false');
+    expect(jump).toContain('quizNavigation = await actions.jumpToViewerQuizTarget({');
+    expect(jump).toContain('requireExactSopFrame: true, pauseCineOnTarget: true');
+    expect(jump).toContain('requireReadyViewport: true, isCancelled');
+    expect(jump).toContain('? quizNavigation.imageId');
+    expect(jump).not.toContain('resetCamera');
+    expect(jump).not.toContain('resetProperties');
+  });
+  it('opens the shared EF panel for review, not acquisition or calculation', () => {
+    expect(guided).toContain('reviewNavigation={readOnly}');
+    expect(guided).toContain('assessmentReviewOnly: true');
+    expect(viewerCommands).toContain('canEdit: !assessmentReviewOnly');
+    expect(viewerCommands).toContain('if (this.canEdit === false || !LV_TRACE_REQUIRED_SLOTS.includes(slot)');
+    expect(viewerCommands).toContain('if (assessmentReviewOnly || suppressLVSimpsonRecoveryEvents');
+    const review = viewerCommands.slice(
+      viewerCommands.indexOf('if (assessmentReviewOnly) {\n        // Display the immutable'),
+      viewerCommands.indexOf('if (panelOnly) {\n        // Educator authoring uses'));
+    expect(review).toContain('onCalculate = null');
+    expect(review).toContain('Saved LVEF:');
+    expect(review).not.toContain('calculateEF(');
+    expect(guided).toContain('readOnly={readOnly}');
+    expect(guided).toContain('onDelete={!readOnly && onDeleteContourSource');
+  });
+});
+
 describe('Research Length selection uses shared restoration and permissions', () => {
   it('restores linked Length before protocol-only navigation', () => {
     const start = panel.indexOf('const navigateToField = async');
@@ -192,5 +264,19 @@ describe('Research IVC shares Education phase and RAP/RVSP controls', () => {
     expect(panel).toContain('completeIVC={guidedIVCValue != null}');
     expect(panel).toContain('updateValue(rapField.key, value)');
     expect(panel).toContain('onDeleteIVCSource={annotation => void deleteResearchAnnotation(annotation)}');
+  });
+});
+
+describe('strict completed EF navigation uses the initialized Education target route', () => {
+  it('waits for completed stack data and avoids reinitializing a matching stack', () => {
+    const navigation = viewerCommands.slice(viewerCommands.indexOf('jumpToViewerQuizTarget: async'),
+      viewerCommands.indexOf('clearViewerQuizMarkerOptions:', viewerCommands.indexOf('jumpToViewerQuizTarget: async')));
+    expect(navigation).toContain('getReadySavedNavigationViewportId(viewportGridService, cornerstoneViewportService, true)');
+    expect(navigation).toContain('displaySet?.displaySetInstanceUID && !reuseReadyStack');
+    expect(navigation).toContain('if (!requireReadyViewport) await sleep(300)');
+    expect(navigation.indexOf('await waitForSavedNavigationViewportData({'))
+      .toBeLessThan(navigation.indexOf('await jumpViewportToViewerQuizTargetImage('));
+    expect(navigation).not.toContain('resetCamera');
+    expect(navigation).not.toContain('resetProperties');
   });
 });

@@ -16,6 +16,7 @@ export function SharedEFQuestionAnswer({
   step = '0.01',
   disabled = false,
   openDisabled = false,
+  reviewNavigation = false,
   busy = false,
   onOpen,
   onDelete,
@@ -30,6 +31,7 @@ export function SharedEFQuestionAnswer({
   step?: number | string;
   disabled?: boolean;
   openDisabled?: boolean;
+  reviewNavigation?: boolean;
   busy?: boolean;
   onOpen: () => void;
   onDelete?: () => void;
@@ -55,7 +57,7 @@ export function SharedEFQuestionAnswer({
         deleteLabel="Delete EF measurement"
       />
       <LearningEFPanelLauncher onOpen={onOpen}
-        disabled={disabled || openDisabled} busy={busy} />
+        disabled={openDisabled || (disabled && !reviewNavigation)} busy={busy} />
       {showInstructions && empty ? (
         <div className="text-xs text-gray-400">
           Complete four LV contours, select Calculate EF in the EF panel,

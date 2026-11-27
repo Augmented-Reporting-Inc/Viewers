@@ -32,6 +32,33 @@ describe('single Learning and Research protocol choice control', () => {
     expect(selected).toBe('3');
   });
 
+  it('explicitly displays the saved label in completed review and cannot change it', () => {
+    const all = leaves(LearningSingleChoiceAnswer({
+      name: 'quality', choices: [{ value: 'good', label: 'Good' }, { value: 'poor', label: 'Poor' }],
+      value: 'good', reviewOnly: true,
+      onChange: () => { throw Error('immutable answer'); },
+    }));
+    expect(all).toContain('Saved answer: ');
+    expect(all).toContain('Good');
+    const radios = all.filter(item => item.type === 'input');
+    expect(radios.map(item => item.props.checked)).toEqual([true, false]);
+    expect(radios.every(item => item.props.disabled)).toBe(true);
+    radios.forEach(item => item.props.onChange());
+  });
+
+  it('shows unmatched recorded values and distinguishes absent from zero or false', () => {
+    for (const [value, expected] of [['legacy quality', 'legacy quality'], [0, '0'], [false, 'FALSE']]) {
+      const all = leaves(LearningSingleChoiceAnswer({
+        name: 'quality', choices: [], value, reviewOnly: true, onChange: () => {},
+      }));
+      expect(all).toContain(expected);
+      expect(all).toContain('Saved value does not uniquely match the configured choices.');
+    }
+    expect(leaves(LearningSingleChoiceAnswer({
+      name: 'quality', choices, value: '', reviewOnly: true, onChange: () => {},
+    }))).toContain('No saved answer available');
+  });
+
   it('enforces read-only mode for saved Research and submitted Education', () => {
     const all = leaves(LearningSingleChoiceAnswer({
       name: 'locked',

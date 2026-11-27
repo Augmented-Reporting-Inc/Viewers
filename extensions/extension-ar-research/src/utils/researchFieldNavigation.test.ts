@@ -1,3 +1,4 @@
+import { getCompletedResearchReadOnlyUrl } from './researchContext';
 import { calculateRVFACFromMeasurements } from '../../../extension-ar-measurements/src/utils/echoAreaMeasurements';
 import {
   getResearchFieldMeasurementCandidates,
@@ -5,6 +6,7 @@ import {
   getResearchFieldSourceAnnotations,
   getResearchProtocolViewerTargets,
   getResearchQuestionEntryTarget,
+  getResearchCompositeReviewEntrySource,
   isResearchCandidateOnProtocolFrames,
   getResearchProtocolCompatibleCandidates,
   getResearchIVCMeasurementState,
@@ -19,6 +21,19 @@ import {
   getResearchTRVmaxSourceState,
   isResearchTRVmaxQuestion,
 } from './researchFieldNavigation';
+
+describe('completed Research read-only viewer entry', () => {
+  it('preserves the launch and changes only the access flag after confirmed completion', () => {
+    const href = 'https://viewer.example/rviewer/viewer?arResearchReviewKey=review&arMeasurementAccess=edit&StudyInstanceUIDs=study#route';
+    expect(getCompletedResearchReadOnlyUrl(href, 'in_review', 'edit')).toBeNull();
+    expect(getCompletedResearchReadOnlyUrl(href, 'completed', 'readonly')).toBeNull();
+    const locked = new URL(getCompletedResearchReadOnlyUrl(href, 'completed', 'edit')!);
+    expect(locked.searchParams.get('arMeasurementAccess')).toBe('readonly');
+    expect(locked.searchParams.get('arResearchReviewKey')).toBe('review');
+    expect(locked.searchParams.get('StudyInstanceUIDs')).toBe('study');
+    expect(locked.hash).toBe('#route');
+  });
+});
 
 describe('Research quiz-style field sources and navigation', () => {
   const field = { config: { measurementLabels: ['TRVel', 'TR Vmax'] } };
@@ -361,6 +376,49 @@ describe('Research question-entry source frame navigation', () => {
   });
 });
 
+describe('completed composite question entry uses only the linked saved contours', () => {
+  const study = 'study-composite';
+  const make = (kind: string, slot: string, frame: number, studyId = study) => ({
+    annotationId: slot + '-' + frame, toolName: 'SplineROI', StudyInstanceUID: studyId,
+    SeriesInstanceUID: 'series-' + slot, SOPInstanceUID: 'sop-' + slot, frameNumber: 1,
+    referencedImageId: 'wadors:/studies/' + studyId + '/series/series-' + slot +
+      '/instances/sop-' + slot + '/frames/' + frame,
+    points: [[0,0,0],[1,0,0],[1,1,0],[0,1,0]],
+    ...(kind === 'lvEjectionFraction' ? { measurementKind: 'lvSimpsonSlot', lvSimpson: { slot } } :
+      kind === 'laVolumeDisks' ? { measurementKind: 'laVolumeSlot', laVolume: { measurementKind: 'laVolumeSlot', slot } } :
+        { measurementKind: 'echoAreaSlot', echoArea: { slot }, label: slot === 'RV_ED' ? 'RVEDA' : 'RVESA' }),
+  });
+  for (const [kind, prefix, slots] of [
+    ['lvEjectionFraction', 'lv-simpson:', ['A4C_ED','A4C_ES','A2C_ED','A2C_ES']],
+    ['laVolumeDisks', 'la-disks:', ['A4C','A2C']],
+    ['rvFac', 'rv-fac:', ['RV_ED','RV_ES']],
+  ] as [string,string,string[]][]) {
+    it('opens the first saved phase for ' + kind + ' regardless of saved array order', () => {
+      const annotations = slots.map((slot,i) => make(kind,slot,i+3));
+      const field = { componentKey: kind, config: {} };
+      const source = { source: 'viewer-derived',
+        sourceMeasurementKey: prefix + [...annotations].reverse().map(item=>item.annotationId).join(',') };
+      const result = getResearchCompositeReviewEntrySource(field, source,
+        [make(kind,slots[0],99), ...[...annotations].reverse()], study);
+      expect(result.annotation).toBe(annotations[0]);
+      expect(result.displayAnnotation.SOPInstanceUID).toBe('sop-' + slots[0]);
+      expect(result.displayAnnotation.frameNumber).toBe(3);
+      expect(annotations[0].frameNumber).toBe(1);
+      expect(getResearchCompositeReviewEntrySource(field, source, annotations.slice(1), study)).toBeNull();
+      expect(getResearchCompositeReviewEntrySource(field, source, [...annotations, annotations[0]], study)).toBeNull();
+      expect(getResearchCompositeReviewEntrySource(field, source, annotations, 'foreign')).toBeNull();
+      expect(getResearchCompositeReviewEntrySource(field, {source:'manual'}, annotations, study)).toBeNull();
+      const pinned = { ...field, config: { compositeFrameGuidanceEnabled:true,
+        compositeFrameTargets: Object.fromEntries(slots.map((slot,i)=>[slot,
+          {sopInstanceUID:'sop-'+slot,frameNumber:i+3}])) }};
+      expect(getResearchCompositeReviewEntrySource(pinned, source, annotations, study)
+        .displayAnnotation.frameNumber).toBe(3);
+      pinned.config.compositeFrameTargets[slots[0]].frameNumber = 99;
+      expect(getResearchCompositeReviewEntrySource(pinned, source, annotations, study)).toBeNull();
+    });
+  }
+});
+
 describe('Research independent Length source restoration', () => {
   const study = 'study-length';
   const sop = 'sop-length';
@@ -603,6 +661,20 @@ describe('shared Research IVC phase display adapter', () => {
     expect(complete.candidate?.value).toBe(60);
     expect(complete.displayPhaseSources.IVC_INSP[0].displayAnnotation.frameNumber).toBe(22);
     expect(insp.frameNumber).toBe(1);
+  });
+  it('opens the saved expiration caliper on completed question entry, not just the protocol image', () => {
+    const exp=length('IVCexp',20,2),insp=length('IVCinsp',8,22);
+    const state=getResearchIVCPhaseDisplayState(field,[exp,insp],study);
+    expect(state.candidate).not.toBeNull();
+    const source=state.candidate;
+    const selected=getResearchCompositeReviewEntrySource(field,source,[insp,exp],study);
+    expect(selected.annotation).toBe(exp);
+    expect(selected.displayAnnotation.frameNumber).toBe(2);
+    expect(exp.frameNumber).toBe(1);
+    expect(getResearchCompositeReviewEntrySource(field,source,[insp],study)).toBeNull();
+    expect(getResearchCompositeReviewEntrySource(field,source,[exp,insp,exp],study)).toBeNull();
+    expect(getResearchCompositeReviewEntrySource(field,source,[exp,insp],'foreign')).toBeNull();
+    expect(getResearchCompositeReviewEntrySource(field,{source:'manual'},[exp,insp],study)).toBeNull();
   });
   it('keeps wrong-frame sources inspectable, but does not promote ambiguous or foreign evidence', () => {
     const exp=length('IVCexp',20,2),insp=length('IVCinsp',8,22);
