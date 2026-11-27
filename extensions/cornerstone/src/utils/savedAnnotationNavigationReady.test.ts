@@ -1,5 +1,5 @@
 import { getReadySavedNavigationViewportId, waitForSavedNavigationContext,
-  hasValidSavedNavigationUpdates } from './savedAnnotationNavigationReady';
+  hasValidSavedNavigationUpdates, getReadySavedNavigationViewport, waitForSavedNavigationViewportData } from './savedAnnotationNavigationReady';
 
 function fixture() {
   let state: any = { activeViewportId: null, viewports: new Map([
@@ -87,5 +87,57 @@ describe('saved annotation navigation waits for actual grid initialization', () 
       expect(hasValidSavedNavigationUpdates(f.grid,[{viewportId:'valid'},{viewportId:invalid}])).toBe(false);
     }
     expect(hasValidSavedNavigationUpdates(f.grid,[])).toBe(false);
+  });
+});
+
+describe('strict saved review waits for completed stack presentation', () => {
+  function setup() {
+    const f = fixture();
+    f.ready('v');
+    let complete = false;
+    const viewport = { id: 'v', getCurrentImageId: () => 'frame', getImageData: () => ({}) };
+    const cornerstone = {
+      getCornerstoneViewport: () => viewport,
+      isViewportDataReady: (_id: string, ids: string[]) => complete && ids.join() === 'initial-set',
+    };
+    return { ...f, cornerstone, viewport, complete: () => { complete = true; } };
+  }
+  it('does not navigate on ELEMENT_ENABLED or image availability alone', async () => {
+    const f = setup();
+    expect(getReadySavedNavigationViewportId(f.grid, f.cornerstone)).toBe('v');
+    expect(getReadySavedNavigationViewportId(f.grid, f.cornerstone, true)).toBeNull();
+    const wait = jest.fn(async () => { f.complete(); });
+    const result = await waitForSavedNavigationContext({
+      viewportGridService: f.grid, cornerstoneViewportService: f.cornerstone,
+      resolveDisplaySets: f.resolveDisplaySets, requireDataReady: true, attempts: 3, wait,
+    });
+    expect(wait).toHaveBeenCalledTimes(1);
+    expect(f.resolveDisplaySets).toHaveBeenCalledTimes(1);
+    expect(result?.activeViewportId).toBe('v');
+  });
+
+  it('does not accept a new grid assignment while the old stack is still present', async () => {
+    const f = setup();
+    f.complete();
+    expect(getReadySavedNavigationViewport(f.grid, f.cornerstone, 'v', 'initial-set')).toBe(f.viewport);
+    f.grid.getState().viewports.get('v').displaySetInstanceUIDs = ['saved-set'];
+    expect(getReadySavedNavigationViewport(f.grid, f.cornerstone, 'v', 'saved-set')).toBeNull();
+    const ready = await waitForSavedNavigationViewportData({
+      viewportGridService: f.grid, cornerstoneViewportService: f.cornerstone,
+      viewportId: 'v', expectedDisplaySetId: 'saved-set', attempts: 2, wait: async () => {},
+    });
+    expect(ready).toBeNull();
+  });
+
+  it('cancels an unfinished destination load without returning an old viewport', async () => {
+    const f = setup();
+    let cancelled = false;
+    const ready = await waitForSavedNavigationViewportData({
+      viewportGridService: f.grid, cornerstoneViewportService: f.cornerstone,
+      viewportId: 'v', expectedDisplaySetId: 'initial-set', attempts: 3,
+      isCancelled: () => cancelled,
+      wait: async () => { cancelled = true; f.complete(); },
+    });
+    expect(ready).toBeNull();
   });
 });

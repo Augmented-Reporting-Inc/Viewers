@@ -122,7 +122,7 @@ describe('Completed Research measurement review', () => {
     const finish = viewerCommands.indexOf('endViewportSetup();\n      const endViewportReady', start);
     const navigation = viewerCommands.slice(start, finish);
     expect(navigation).toContain('await waitForDisplaySetForSavedAnnotation({');
-    expect(navigation).toContain('getReadySavedNavigationViewportId(viewportGridService, cornerstoneViewportService) !== activeViewportId');
+    expect(navigation).toContain('getReadySavedNavigationViewportId(viewportGridService, cornerstoneViewportService, useQuizTargetNavigation) !== activeViewportId');
     expect(navigation).not.toContain('const activeViewportId = viewportGridService.getActiveViewportId();');
     expect(navigation.indexOf('hasValidSavedNavigationUpdates(viewportGridService, viewportsToUpdate)')).toBeLessThan(
       navigation.indexOf('actions.setDisplaySetsForViewports({ viewportsToUpdate })'));
@@ -264,5 +264,19 @@ describe('Research IVC shares Education phase and RAP/RVSP controls', () => {
     expect(panel).toContain('completeIVC={guidedIVCValue != null}');
     expect(panel).toContain('updateValue(rapField.key, value)');
     expect(panel).toContain('onDeleteIVCSource={annotation => void deleteResearchAnnotation(annotation)}');
+  });
+});
+
+describe('strict completed EF navigation uses the initialized Education target route', () => {
+  it('waits for completed stack data and avoids reinitializing a matching stack', () => {
+    const navigation = viewerCommands.slice(viewerCommands.indexOf('jumpToViewerQuizTarget: async'),
+      viewerCommands.indexOf('clearViewerQuizMarkerOptions:', viewerCommands.indexOf('jumpToViewerQuizTarget: async')));
+    expect(navigation).toContain('getReadySavedNavigationViewportId(viewportGridService, cornerstoneViewportService, true)');
+    expect(navigation).toContain('displaySet?.displaySetInstanceUID && !reuseReadyStack');
+    expect(navigation).toContain('if (!requireReadyViewport) await sleep(300)');
+    expect(navigation.indexOf('await waitForSavedNavigationViewportData({'))
+      .toBeLessThan(navigation.indexOf('await jumpViewportToViewerQuizTargetImage('));
+    expect(navigation).not.toContain('resetCamera');
+    expect(navigation).not.toContain('resetProperties');
   });
 });

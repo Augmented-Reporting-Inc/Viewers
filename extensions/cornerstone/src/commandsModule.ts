@@ -38,7 +38,7 @@ import { hasUnpersistedLearnerMeasurementChanges } from './utils/learnerMeasurem
 import { resolveViewerMeasurementSaveScope, settleViewerMeasurementSaveMarkers } from './utils/viewerMeasurementSaveScope';
 import { reconcileLearnerIvcSnapshotSources } from './utils/learnerIvcSourceSnapshot';
 import { isExactViewerQuizSopFrameImageId } from './utils/exactViewerQuizSopFrame';
-import { getReadySavedNavigationViewportId, waitForSavedNavigationContext, hasValidSavedNavigationUpdates } from './utils/savedAnnotationNavigationReady';
+import { getReadySavedNavigationViewportId, getReadySavedNavigationViewport, waitForSavedNavigationViewportData, waitForSavedNavigationContext, hasValidSavedNavigationUpdates } from './utils/savedAnnotationNavigationReady';
 import { getViewportEnabledElement } from './utils/getViewportEnabledElement';
 import { getLearnerQuizMeasurementDeleteDenial } from './utils/quizLearnerMeasurementDeletion';
 import getActiveViewportEnabledElement from './utils/getActiveViewportEnabledElement';
@@ -4881,12 +4881,14 @@ async function waitForDisplaySetForSavedAnnotation({
   cornerstoneViewportService,
   annotation,
   isCancelled,
+  requireDataReady = false,
   attempts = 150,
 }) {
   return waitForSavedNavigationContext({
     viewportGridService,
     cornerstoneViewportService,
     isCancelled,
+    requireDataReady,
     attempts,
     wait: () => sleep(100),
     resolveDisplaySets: viewportId => {
@@ -16056,6 +16058,7 @@ function commandsModule({
         cornerstoneViewportService,
         annotation: savedAnnotation,
         isCancelled,
+        requireDataReady: useQuizTargetNavigation,
       });
 
       endDisplaySet();
@@ -16066,7 +16069,7 @@ function commandsModule({
       const { activeViewportId, activeDisplaySet, displaySet } = navigation;
       // Do not use a viewport captured before layout initialization, or a
       // viewport replaced while the async display-set lookup was pending.
-      if (getReadySavedNavigationViewportId(viewportGridService, cornerstoneViewportService) !== activeViewportId) {
+      if (getReadySavedNavigationViewportId(viewportGridService, cornerstoneViewportService, useQuizTargetNavigation) !== activeViewportId) {
         return { ok: false, reason: 'saved-navigation-viewport-changed', retryable: true, annotationId };
       }
       if (!displaySet) {
@@ -16674,7 +16677,7 @@ function commandsModule({
       }
 
       const activeViewportId = requireReadyViewport
-        ? getReadySavedNavigationViewportId(viewportGridService, cornerstoneViewportService)
+        ? getReadySavedNavigationViewportId(viewportGridService, cornerstoneViewportService, true)
         : viewportGridService.getActiveViewportId();
       if (requireReadyViewport && !activeViewportId) {
         return { ok: false, reason: 'quiz-target-viewport-not-ready' };
@@ -16686,7 +16689,16 @@ function commandsModule({
       }
       let targetViewportId = activeViewportId;
 
-      if (displaySet?.displaySetInstanceUID) {
+      // Do not re-enable a stack that already contains the exact saved frame.
+      // In particular, initial completed-read navigation can otherwise race
+      // with stack initialization and reapply an invalid camera presentation.
+      const readyActiveViewport = requireReadyViewport && displaySet?.displaySetInstanceUID
+        ? getReadySavedNavigationViewport(viewportGridService, cornerstoneViewportService,
+            activeViewportId, displaySet.displaySetInstanceUID)
+        : null;
+      const reuseReadyStack = !!readyActiveViewport && findImageIdIndexForViewerQuizTarget(
+        readyActiveViewport, target, { requireExactSopFrame }).index >= 0;
+      if (displaySet?.displaySetInstanceUID && !reuseReadyStack) {
         const viewportToUpdate = cornerstoneViewportService.findUpdateableViewportConfiguration(
           activeViewportId,
           {
@@ -16719,13 +16731,25 @@ function commandsModule({
         if (isCancelled()) return cancelledResult;
         if (viewportsToUpdate.length) {
           await Promise.resolve(actions.setDisplaySetsForViewports({ viewportsToUpdate }));
-          await sleep(300);
+          // Preserve the established Education default; strict saved review
+          // waits for the service's actual stack/presentation completion.
+          if (!requireReadyViewport) await sleep(300);
         }
       }
 
       if (isCancelled()) return cancelledResult;
+      if (requireReadyViewport && !await waitForSavedNavigationViewportData({
+        viewportGridService, cornerstoneViewportService, viewportId: targetViewportId,
+        expectedDisplaySetId: displaySet.displaySetInstanceUID, isCancelled,
+        wait: () => sleep(100),
+      })) return isCancelled() ? cancelledResult :
+        { ok: false, reason: 'quiz-target-viewport-data-not-ready', retryable: true };
+      if (isCancelled()) return cancelledResult;
       const resolveTargetViewport = () =>
-        cornerstoneViewportService.getCornerstoneViewport(targetViewportId) ||
+        requireReadyViewport
+          ? getReadySavedNavigationViewport(viewportGridService, cornerstoneViewportService,
+              targetViewportId, displaySet.displaySetInstanceUID)
+          : cornerstoneViewportService.getCornerstoneViewport(targetViewportId) ||
         (!requireReadyViewport ? cornerstoneViewportService.getCornerstoneViewport(
           viewportGridService.getActiveViewportId()
         ) : null);
@@ -16748,6 +16772,9 @@ function commandsModule({
         viewport, target, resolveTargetViewport, { requireExactSopFrame, isCancelled }
       );
       if (isCancelled()) return cancelledResult;
+      if (requireReadyViewport && resolveTargetViewport() !== viewport) {
+        return { ok: false, reason: 'quiz-target-viewport-changed', retryable: true };
+      }
 
       // Navigating between saved quiz source frames can change the viewport's
       // tool group; keep the area renderer attached before displaying contours.
@@ -16777,6 +16804,9 @@ function commandsModule({
           if (isCancelled()) return cancelledResult;
           if (settled?.ok !== true) {
             return { ...settled, viewportId: targetViewportId };
+          }
+          if (requireReadyViewport && resolveTargetViewport() !== viewport) {
+            return { ok: false, reason: 'quiz-target-viewport-changed', retryable: true };
           }
         }
       }

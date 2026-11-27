@@ -68,6 +68,31 @@ class CornerstoneViewportService extends PubSubService implements IViewportServi
   viewportGridResizeObserver: ResizeObserver | null;
   viewportsDisplaySets: Map<string, string[]> = new Map();
   beforeResizePositionPresentations: Map<string, PositionPresentation> = new Map();
+  // Grid readiness is emitted on ELEMENT_ENABLED, before setStack and the
+  // saved camera/LUT presentation have completed. Track the actual load.
+  private viewportDataLoads = new Map<string, {
+    viewport?: Types.IViewport;
+    displaySetInstanceUIDs: string[];
+    ready: boolean;
+  }>();
+
+  private beginViewportDataLoad(viewportId: string, viewportData: StackViewportData | VolumeViewportData) {
+    const load = {
+      viewport: undefined as Types.IViewport | undefined,
+      displaySetInstanceUIDs: viewportData.data.map(data => data.displaySetInstanceUID),
+      ready: false,
+    };
+    this.viewportDataLoads.set(viewportId, load);
+    return load;
+  }
+
+  public isViewportDataReady(viewportId: string, displaySetInstanceUIDs: string[]): boolean {
+    const load = this.viewportDataLoads.get(viewportId);
+    return !!load?.ready && !!load.viewport &&
+      load.viewport === this.getCornerstoneViewport(viewportId) &&
+      load.displaySetInstanceUIDs.length === displaySetInstanceUIDs.length &&
+      load.displaySetInstanceUIDs.every((id, index) => id === displaySetInstanceUIDs[index]);
+  }
 
   // Some configs
   servicesManager: AppTypes.ServicesManager = null;
@@ -186,6 +211,7 @@ class CornerstoneViewportService extends PubSubService implements IViewportServi
       console.warn('Rendering engine not destroyed', e);
     }
     this.viewportsDisplaySets.clear();
+    this.viewportDataLoads.clear();
     this.renderingEngine = null;
     cache.purgeCache();
   }
@@ -206,6 +232,7 @@ class CornerstoneViewportService extends PubSubService implements IViewportServi
     // clean up
     this.viewportsById.delete(viewportId);
     this.viewportsDisplaySets.delete(viewportId);
+    this.viewportDataLoads.delete(viewportId);
   }
 
   /**
@@ -460,6 +487,7 @@ class CornerstoneViewportService extends PubSubService implements IViewportServi
     // element which is not what we want. But enabledElement as part of the
     // renderingEngine is designed to be used like this. This will trigger
     // ENABLED_ELEMENT again and again, which will run onEnableElement callbacks
+    const load = this.beginViewportDataLoad(viewportId, viewportData);
     renderingEngine.enableElement(viewportInput);
 
     viewportInfo.setViewportOptions(viewportOptions);
@@ -470,6 +498,7 @@ class CornerstoneViewportService extends PubSubService implements IViewportServi
     this.viewportsById.set(viewportId, viewportInfo);
 
     const viewport = renderingEngine.getViewport(viewportId);
+    load.viewport = viewport;
     const displaySetPromise = this._setDisplaySets(
       viewport,
       viewportData,
@@ -481,6 +510,10 @@ class CornerstoneViewportService extends PubSubService implements IViewportServi
     // viewport to access.  Doing it too early can result in exceptions or
     // invalid data.
     displaySetPromise.then(() => {
+      if (this.viewportDataLoads.get(viewportId) === load &&
+          this.getCornerstoneViewport(viewportId) === load.viewport) {
+        load.ready = true;
+      }
       this._broadcastEvent(this.EVENTS.VIEWPORT_DATA_CHANGED, {
         viewportData,
         viewportId,
@@ -1089,6 +1122,8 @@ class CornerstoneViewportService extends PubSubService implements IViewportServi
     const viewportInfo = this.getViewportInfo(viewportId);
     const viewport = this.getCornerstoneViewport(viewportId);
     const viewportCamera = viewport.getCamera();
+    const load = this.beginViewportDataLoad(viewportId, viewportData);
+    load.viewport = viewport;
 
     let displaySetPromise;
 
@@ -1106,6 +1141,10 @@ class CornerstoneViewportService extends PubSubService implements IViewportServi
     }
 
     displaySetPromise.then(() => {
+      if (this.viewportDataLoads.get(viewportId) === load &&
+          this.getCornerstoneViewport(viewportId) === load.viewport) {
+        load.ready = true;
+      }
       this._broadcastEvent(this.EVENTS.VIEWPORT_DATA_CHANGED, {
         viewportData,
         viewportId,
