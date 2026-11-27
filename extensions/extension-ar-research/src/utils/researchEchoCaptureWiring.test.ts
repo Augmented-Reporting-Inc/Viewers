@@ -117,6 +117,16 @@ describe('Completed Research measurement review', () => {
     expect(panel).toContain('(context?.readOnly && isResearchContourReviewQuestion(field, readDomain))) runFieldSelection(field)');
     expect(panel).toContain('reviewOnly={context.readOnly && !context.preview}');
   });
+  it('does not dispatch saved display sets before a current viewport is ready', () => {
+    const start = viewerCommands.indexOf('jumpToSavedViewerAnnotation: async');
+    const finish = viewerCommands.indexOf('endViewportSetup();\n      const endViewportReady', start);
+    const navigation = viewerCommands.slice(start, finish);
+    expect(navigation).toContain('await waitForDisplaySetForSavedAnnotation({');
+    expect(navigation).toContain('getReadySavedNavigationViewportId(viewportGridService, cornerstoneViewportService) !== activeViewportId');
+    expect(navigation).not.toContain('const activeViewportId = viewportGridService.getActiveViewportId();');
+    expect(navigation.indexOf('hasValidSavedNavigationUpdates(viewportGridService, viewportsToUpdate)')).toBeLessThan(
+      navigation.indexOf('actions.setDisplaySetsForViewports({ viewportsToUpdate })'));
+  });
   it('opens the shared EF panel for review, not acquisition or calculation', () => {
     expect(guided).toContain('reviewNavigation={readOnly}');
     expect(guided).toContain('assessmentReviewOnly: true');

@@ -38,6 +38,7 @@ import { hasUnpersistedLearnerMeasurementChanges } from './utils/learnerMeasurem
 import { resolveViewerMeasurementSaveScope, settleViewerMeasurementSaveMarkers } from './utils/viewerMeasurementSaveScope';
 import { reconcileLearnerIvcSnapshotSources } from './utils/learnerIvcSourceSnapshot';
 import { isExactViewerQuizSopFrameImageId } from './utils/exactViewerQuizSopFrame';
+import { getReadySavedNavigationViewportId, waitForSavedNavigationContext, hasValidSavedNavigationUpdates } from './utils/savedAnnotationNavigationReady';
 import { getViewportEnabledElement } from './utils/getViewportEnabledElement';
 import { getLearnerQuizMeasurementDeleteDenial } from './utils/quizLearnerMeasurementDeletion';
 import getActiveViewportEnabledElement from './utils/getActiveViewportEnabledElement';
@@ -4877,38 +4878,27 @@ function getDisplaySetForSavedAnnotation(displaySetService, annotation) {
 async function waitForDisplaySetForSavedAnnotation({
   displaySetService,
   viewportGridService,
+  cornerstoneViewportService,
   annotation,
+  isCancelled,
   attempts = 150,
 }) {
-  let activeDisplaySet = null;
-
-  for (let attempt = 0; attempt < attempts; attempt += 1) {
-    const activeViewportId = viewportGridService.getActiveViewportId();
-
-    activeDisplaySet = getActiveViewportDisplaySet({
-      viewportGridService,
-      displaySetService,
-      viewportId: activeViewportId,
-    });
-
-    const displaySet = displaySetContainsSavedAnnotation(activeDisplaySet, annotation)
-      ? activeDisplaySet
-      : getDisplaySetForSavedAnnotation(displaySetService, annotation);
-
-    if (displaySet) {
-      return {
-        activeDisplaySet,
-        displaySet,
-      };
-    }
-
-    await sleep(100);
-  }
-
-  return {
-    activeDisplaySet,
-    displaySet: null,
-  };
+  return waitForSavedNavigationContext({
+    viewportGridService,
+    cornerstoneViewportService,
+    isCancelled,
+    attempts,
+    wait: () => sleep(100),
+    resolveDisplaySets: viewportId => {
+      const activeDisplaySet = getActiveViewportDisplaySet({
+        viewportGridService, displaySetService, viewportId,
+      });
+      const displaySet = displaySetContainsSavedAnnotation(activeDisplaySet, annotation)
+        ? activeDisplaySet
+        : getDisplaySetForSavedAnnotation(displaySetService, annotation);
+      return { activeDisplaySet, displaySet };
+    },
+  });
 }
 
 function getViewportsToUpdateSafely({
@@ -16052,20 +16042,29 @@ function commandsModule({
         };
       }
 
-      const activeViewportId = viewportGridService.getActiveViewportId();
-
       const seriesInstanceId =
         savedAnnotation.SeriesInstanceUID || savedAnnotation.referenceSeriesUID;
 
       const endDisplaySet = beginEFOpenStage('display-set-lookup');
-      const { activeDisplaySet, displaySet } = await waitForDisplaySetForSavedAnnotation({
+      const navigation = await waitForDisplaySetForSavedAnnotation({
         displaySetService,
         viewportGridService,
+        cornerstoneViewportService,
         annotation: savedAnnotation,
+        isCancelled,
       });
 
       endDisplaySet();
       if (isCancelled()) return cancelledResult;
+      if (!navigation) {
+        return { ok: false, reason: 'saved-navigation-context-not-ready', retryable: true, annotationId };
+      }
+      const { activeViewportId, activeDisplaySet, displaySet } = navigation;
+      // Do not use a viewport captured before layout initialization, or a
+      // viewport replaced while the async display-set lookup was pending.
+      if (getReadySavedNavigationViewportId(viewportGridService, cornerstoneViewportService) !== activeViewportId) {
+        return { ok: false, reason: 'saved-navigation-viewport-changed', retryable: true, annotationId };
+      }
       if (!displaySet) {
         console.warn('[MeasurementAnnotations] no displaySet for saved annotation', {
           annotationId,
@@ -16102,6 +16101,10 @@ function commandsModule({
           });
 
       const targetViewportId = viewportToUpdate?.viewportId || activeViewportId;
+      if (!hasValidSavedNavigationUpdates(viewportGridService, [{ viewportId: targetViewportId }])) {
+        endViewportSetup();
+        return { ok: false, reason: 'saved-navigation-invalid-viewport', retryable: true, annotationId };
+      }
       if (pauseCineOnSource) stopSourceCineForViewport(targetViewportId);
 
       if (!activeDisplaySetAlreadyMatches) {
@@ -16113,9 +16116,17 @@ function commandsModule({
           context: 'MeasurementAnnotations',
         });
 
-        if (viewportsToUpdate.length) {
-          actions.setDisplaySetsForViewports({ viewportsToUpdate });
+        // React applies this update in a later reducer pass: a try/catch
+        // around the command cannot protect the viewer from a null ID.
+        if (!hasValidSavedNavigationUpdates(viewportGridService, viewportsToUpdate)) {
+          endViewportSetup();
+          return { ok: false, reason: 'saved-navigation-invalid-update', retryable: true, annotationId };
         }
+        if (isCancelled()) {
+          endViewportSetup();
+          return cancelledResult;
+        }
+        actions.setDisplaySetsForViewports({ viewportsToUpdate });
       }
 
       endViewportSetup();
