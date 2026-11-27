@@ -280,3 +280,18 @@ describe('strict completed EF navigation uses the initialized Education target r
     expect(navigation).not.toContain('resetProperties');
   });
 });
+
+describe('Research frame authoring follows the shared question selector', () => {
+  it('binds capture and phase navigation to the active question rather than launch intent', () => {
+    const capture = panel.slice(panel.indexOf('const captureCurrentProtocolFrame ='),
+      panel.indexOf('const jumpToProtocolTarget ='));
+    expect(capture).toContain('const selection = authoringSelection;');
+    expect(capture).toContain("runCommand('getCurrentViewerQuizFrameAnswer', {})");
+    expect(capture).toContain('await sendResearchAuthoringFrame(window, protocolFramePickerIntent, selection, target)');
+    expect(capture).not.toContain('protocolFramePickerIntent.componentKey');
+    expect(panel).toContain('getResearchAuthoringFrameSelection(authoringField, capturePhaseSelection)');
+    expect(panel).toContain('authoringReadyKey !== authoringSelection.key');
+    expect(panel).toContain('authoringCapturedTargets.current[selection.key] = target');
+    expect(panel).toContain('disabled={isBusy || capturingProtocolFrame}');
+  });
+});
