@@ -1223,6 +1223,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
   const jumpToAnnotation = useCallback(
     async (annotation: any, options: {
       requireExactSopFrame?: boolean; isCancelled?: () => boolean;
+      resetExactFramePresentation?: boolean;
     } = {}) => {
       if (options.isCancelled?.()) return false;
       try {
@@ -1334,14 +1335,15 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
 
   // A deleted source must not be restored by queued navigation. Reuse this
   // same guarded display path for automatic selection and explicit resolution.
-  const restoreResearchAnnotationSource = (item: any, isCancelled: () => boolean) => {
+  const restoreResearchAnnotationSource = (item: any, isCancelled: () => boolean, resetEFPresentation = false) => {
     const sourceId = getAnnotationKey(item.annotation);
     const cancelled = () => isCancelled() || !sourceId ||
       deletedAnnotationIdsRef.current.has(sourceId);
     return jumpToAnnotation({
       ...item.displayAnnotation,
       ...(context?.readOnly || context?.preview ? { isLocked: true } : {}),
-    }, { requireExactSopFrame: true, isCancelled: cancelled });
+    }, { requireExactSopFrame: true, isCancelled: cancelled,
+      resetExactFramePresentation: resetEFPresentation });
   };
 
   const navigateToField = async (field: any, isCancelled: () => boolean) => {
@@ -1350,7 +1352,8 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
       const source = getResearchCompositeReviewEntrySource(
         field, persistedReadState.sources[field.key], savedAnnotations,
         context?.sourceStudyInstanceUID);
-      if (source) return restoreResearchAnnotationSource(source, isCancelled);
+      if (source) return restoreResearchAnnotationSource(source, isCancelled,
+        field.componentKey === 'lvEjectionFraction');
       if (persistedReadState.sources[field.key]?.sourceMeasurementKey) {
         notify(servicesManager, 'Saved measurement source could not be resolved; inspect the saved phases.', 'warning');
       }

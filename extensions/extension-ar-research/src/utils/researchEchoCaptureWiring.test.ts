@@ -112,7 +112,7 @@ describe('Completed Research measurement review', () => {
     expect(navigation).toContain('getResearchCompositeReviewEntrySource(');
     expect(navigation).toContain('persistedReadState.sources[field.key], savedAnnotations');
     expect(navigation).toContain('context?.readOnly && !context?.preview && isResearchCompositeReviewQuestion');
-    expect(navigation.indexOf('return restoreResearchAnnotationSource(source, isCancelled)'))
+    expect(navigation.indexOf('return restoreResearchAnnotationSource(source, isCancelled,'))
       .toBeLessThan(navigation.indexOf('const targets = getResearchProtocolViewerTargets(field)'));
     expect(panel).toContain('(context?.readOnly && isResearchCompositeReviewQuestion(field, readDomain))) runFieldSelection(field)');
     expect(panel).toContain('reviewOnly={context.readOnly && !context.preview}');
@@ -126,6 +126,23 @@ describe('Completed Research measurement review', () => {
     expect(navigation).not.toContain('const activeViewportId = viewportGridService.getActiveViewportId();');
     expect(navigation.indexOf('hasValidSavedNavigationUpdates(viewportGridService, viewportsToUpdate)')).toBeLessThan(
       navigation.indexOf('actions.setDisplaySetsForViewports({ viewportsToUpdate })'));
+  });
+  it('resets presentation only for completed EF navigation after the exact source is ready', () => {
+    const composite = panel.slice(panel.indexOf('const navigateToField = async'),
+      panel.indexOf('if (isResearchTRVmaxQuestion(field, readDomain))', panel.indexOf('const navigateToField = async')));
+    expect(composite).toContain("field.componentKey === 'lvEjectionFraction'");
+    expect(panel).toContain('resetExactFramePresentation: resetEFPresentation');
+    const slot = viewerCommands.slice(viewerCommands.indexOf('async onNavigateSlot(slot'),
+      viewerCommands.indexOf('const savedSlot = panelFirst', viewerCommands.indexOf('async onNavigateSlot(slot')));
+    expect(slot).toContain('if (assessmentReviewOnly)');
+    expect(slot).toContain('resetExactFramePresentation: true');
+    const jump = viewerCommands.slice(viewerCommands.indexOf('jumpToSavedViewerAnnotation: async'),
+      viewerCommands.indexOf('showSavedViewerAnnotationsForSameImage: async'));
+    expect(jump).toContain('resetExactFramePresentation = false');
+    expect(jump).toContain('resetExactFramePresentation && requireExactSopFrame');
+    expect(jump).toContain('isLVSimpsonMeasurement(savedAnnotation)');
+    expect(jump.indexOf('resetSavedFramePresentation(hydratedViewport, exactAndCurrent, isCancelled)'))
+      .toBeGreaterThan(jump.indexOf('stopSourceCineForViewport(sourceViewportId)'));
   });
   it('opens the shared EF panel for review, not acquisition or calculation', () => {
     expect(guided).toContain('reviewNavigation={readOnly}');

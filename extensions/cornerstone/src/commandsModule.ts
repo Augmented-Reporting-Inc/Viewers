@@ -38,7 +38,7 @@ import { hasUnpersistedLearnerMeasurementChanges } from './utils/learnerMeasurem
 import { resolveViewerMeasurementSaveScope, settleViewerMeasurementSaveMarkers } from './utils/viewerMeasurementSaveScope';
 import { reconcileLearnerIvcSnapshotSources } from './utils/learnerIvcSourceSnapshot';
 import { isExactViewerQuizSopFrameImageId } from './utils/exactViewerQuizSopFrame';
-import { getReadySavedNavigationViewportId, waitForSavedNavigationContext, hasValidSavedNavigationUpdates } from './utils/savedAnnotationNavigationReady';
+import { getReadySavedNavigationViewportId, waitForSavedNavigationContext, hasValidSavedNavigationUpdates, resetViewportPresentation, resetSavedFramePresentation } from './utils/savedAnnotationNavigationReady';
 import { getViewportEnabledElement } from './utils/getViewportEnabledElement';
 import { getLearnerQuizMeasurementDeleteDenial } from './utils/quizLearnerMeasurementDeletion';
 import getActiveViewportEnabledElement from './utils/getActiveViewportEnabledElement';
@@ -10175,6 +10175,7 @@ function commandsModule({
                     frameNumber: normalized.frameNumber },
                   selectAnnotation: false, requireExactSopFrame: true,
                   pauseCineOnSource: true, runDelayedDisplayRefresh: false,
+                  resetExactFramePresentation: true,
                   isCancelled: cancelled,
                 });
                 if (cancelled()) return;
@@ -14589,10 +14590,7 @@ function commandsModule({
 
       const { viewport } = enabledElement;
 
-      viewport.resetProperties?.();
-      viewport.resetCamera();
-
-      viewport.render();
+      resetViewportPresentation(viewport);
     },
     scaleViewport: ({ direction }) => {
       const enabledElement = _getActiveViewportEnabledElement();
@@ -16027,6 +16025,7 @@ function commandsModule({
       runDelayedDisplayRefresh = true,
       pauseCineOnSource = false,
       requireExactSopFrame = false,
+      resetExactFramePresentation = false,
       isCancelled = () => false,
     } = {}) => {
       const cancelledResult = { ok: false, reason: 'cancelled' };
@@ -16449,7 +16448,24 @@ function commandsModule({
             annotationId, viewportId: sourceViewportId };
         }
         if (isCancelled()) return cancelledResult;
-        hydratedViewport.render?.();
+        if (resetExactFramePresentation && requireExactSopFrame &&
+            isLVSimpsonMeasurement(savedAnnotation)) {
+          // A completed Research EF review requests the same presentation
+          // reset as the toolbar, only on the loaded exact source frame.
+          // Do this after cine stop and all delayed annotation rendering.
+          const exactAndCurrent = () =>
+            cornerstoneViewportService.getCornerstoneViewport(sourceViewportId) === hydratedViewport &&
+            isExactViewerQuizSopFrameImageId(hydratedViewport.getCurrentImageId?.(),
+              savedAnnotation.SOPInstanceUID, savedAnnotation.frameNumber) &&
+            !!hydratedViewport.getImageData?.();
+          if (!resetSavedFramePresentation(hydratedViewport, exactAndCurrent, isCancelled)) {
+            endFinalFrameCheck();
+            return { ok: false, reason: 'saved-source-presentation-not-ready',
+              retryable: true, annotationId, viewportId: sourceViewportId };
+          }
+        } else {
+          hydratedViewport.render?.();
+        }
         endFinalFrameCheck();
       }
 
