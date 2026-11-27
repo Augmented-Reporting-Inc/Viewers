@@ -1,0 +1,31 @@
+name: Validate managed Viewer3 deployment
+
+on:
+  pull_request:
+    branches: [port/3.11-custom]
+    paths:
+      - '.github/workflows/build-deploy-viewer3.yml'
+      - '.github/workflows/validate-viewer3-deployment.yml'
+      - 'scripts/operations/deploy-viewer3.*'
+      - 'scripts/operations/test_deploy_viewer3.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  host-fixture:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    container: python:3.8-bullseye
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Validate host syntax and isolated transaction fixtures
+        run: |
+          python3 --version
+          bash --version | head -1
+          bash -n scripts/operations/deploy-viewer3.sh
+          python3 -m py_compile scripts/operations/deploy-viewer3.py
+          python3 scripts/operations/test_deploy_viewer3.py -v
