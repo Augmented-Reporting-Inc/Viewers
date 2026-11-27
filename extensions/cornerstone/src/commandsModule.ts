@@ -151,7 +151,7 @@ import { beginEFOpenStage, measureEFOpenStage, startEFOpenProfile, type EFOpenSt
 import { consumeViewerLengthFirstLabelMode } from './utils/viewerLengthLabelMode';
 import { getViewerQuizRouteMeasurementDomain } from '../../extension-ar-learning/src/utils/viewerQuizMeasurementDomain';
 import { resolveViewerQuizGoldAreaBackfill, resolveSavedEFGoldContourAreas, resolveVerifiedEFGoldContourAreasFromDicom } from '../../extension-ar-measurements/src/utils/quizGoldAreaBackfill';
-import { getSubmittedEFReviewContour, getFocusedEFComparisonImageId } from './utils/quizEFSubmittedReviewContour';
+import { getSubmittedEFReviewContour, getFocusedEFComparisonImageId, isComparisonAnnotationIndexed } from './utils/quizEFSubmittedReviewContour';
 
 const { DefaultHistoryMemo } = csUtils.HistoryMemo;
 const toggleSyncFunctions = {
@@ -17852,9 +17852,7 @@ function commandsModule({
         // group is not proof that the contour is visible. Fall through to
         // the existing temporary overlay hydration rather than skipping it.
         const nativeIndexedForFocusedFrame = !isFocusedEFReview ||
-          (!!viewport.element && (annotation.state.getAnnotations?.(
-            String(native?.metadata?.toolName || ''), viewport.element
-          ) || []).some(candidate => candidate.annotationUID === sourceId));
+          isComparisonAnnotationIndexed(annotation.state, viewport.element, native, sourceId);
         if (native && expectedImage && nativeImage === expectedImage &&
             nativeIndexedForFocusedFrame) {
           if (entry.variant === 'rubric' &&
@@ -17949,9 +17947,8 @@ function commandsModule({
         if ((entry.slot || (entry.variant === 'rubric' && !!embeddedGoldAnnotation && !persistedRubricAnnotation)) && viewport.element) {
           const toolName = String(hydratedAnnotation.metadata?.toolName || '');
           const visibleInViewport = () =>
-            (annotation.state.getAnnotations?.(toolName, viewport.element) || []).some(
-              candidate => candidate.annotationUID === comparisonAnnotationId
-            );
+            isComparisonAnnotationIndexed(annotation.state, viewport.element,
+              hydratedAnnotation, comparisonAnnotationId);
           if (!visibleInViewport()) {
             // Ultrasound stack viewports can have an undefined/empty annotation
             // group key. The manager's exact key (not the viewport element or

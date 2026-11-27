@@ -83,3 +83,17 @@ export function getFocusedEFComparisonImageId({
         sourceTarget?.frameNumber)) return '';
   return imageId;
 }
+
+/** A missing native annotation must fall through to temporary hydration.
+ * Cornerstone's unfiltered group lookup can return a tool-keyed object rather
+ * than an array. Query only a named tool and match only its exact annotation.
+ * A missing/unknown group is not proof of visibility. */
+export function isComparisonAnnotationIndexed(
+  annotationState: any, element: any, nativeAnnotation: any, annotationId: string
+): boolean {
+  const toolName = text(nativeAnnotation?.metadata?.toolName);
+  if (!nativeAnnotation || !element || !toolName || !text(annotationId)) return false;
+  const result = annotationState?.getAnnotations?.(toolName, element);
+  const rows = Array.isArray(result) ? result : result?.[toolName];
+  return Array.isArray(rows) && rows.some(row => row?.annotationUID === annotationId);
+}

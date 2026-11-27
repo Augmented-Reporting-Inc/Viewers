@@ -1,4 +1,4 @@
-import { getSubmittedEFReviewContour, getFocusedEFComparisonImageId } from './quizEFSubmittedReviewContour';
+import { getSubmittedEFReviewContour, getFocusedEFComparisonImageId, isComparisonAnnotationIndexed } from './quizEFSubmittedReviewContour';
 
 const frame = (slot: string) => ({
   studyInstanceUID: 'study-test', seriesInstanceUID: 'series-test',
@@ -116,5 +116,39 @@ describe('focused submitted EF comparison uses the actual active frame', () => {
       activeTarget: {...active, referencedImageId: active.referencedImageId.replace('/frames/2','/frames/20')},
       sourceTarget: active, currentImageId: active.referencedImageId.replace('/frames/2','/frames/20'),
     })).toBe('');
+  });
+});
+
+describe('comparison annotation indexing uses the actual Cornerstone group result', () => {
+  const element = {};
+  const native = { annotationUID: 'learner-A4C_ED', metadata: { toolName: 'PlanarFreehandROI' } };
+  const id = native.annotationUID;
+  it('does not call the unfiltered group lookup when the native contour is absent', () => {
+    const state = { getAnnotations: jest.fn(() => ({ PlanarFreehandROI: [native] })) };
+    expect(isComparisonAnnotationIndexed(state, element, null, id)).toBe(false);
+    expect(isComparisonAnnotationIndexed(state, element, { metadata: {} }, id)).toBe(false);
+    expect(isComparisonAnnotationIndexed(state, element, { metadata: { toolName: '' } }, id)).toBe(false);
+    expect(state.getAnnotations).not.toHaveBeenCalled();
+  });
+  it('handles both a named-tool array and a tool-keyed group without throwing', () => {
+    for (const result of [[native], { PlanarFreehandROI: [native] }]) {
+      const state = { getAnnotations: jest.fn(() => result) };
+      expect(isComparisonAnnotationIndexed(state, element, native, id)).toBe(true);
+      expect(state.getAnnotations).toHaveBeenCalledWith('PlanarFreehandROI', element);
+    }
+    for (const result of [null, undefined, {}, { PlanarFreehandROI: {} },
+      { SplineROI: [native] }, [null, { annotationUID: 'gold-A4C_ED' }]]) {
+      const state = { getAnnotations: jest.fn(() => result) };
+      expect(isComparisonAnnotationIndexed(state, element, native, id)).toBe(false);
+    }
+  });
+  it('allows learner and gold overlays to be independently indexed after hydration', () => {
+    const gold = { ...native, annotationUID: 'gold-A4C_ED' };
+    const state = { getAnnotations: jest.fn()
+      .mockReturnValueOnce({}).mockReturnValueOnce([native, gold])
+      .mockReturnValueOnce({ PlanarFreehandROI: [native, gold] }) };
+    expect(isComparisonAnnotationIndexed(state, element, native, id)).toBe(false);
+    expect(isComparisonAnnotationIndexed(state, element, native, id)).toBe(true);
+    expect(isComparisonAnnotationIndexed(state, element, gold, gold.annotationUID)).toBe(true);
   });
 });
