@@ -1,4 +1,4 @@
-import { getSubmittedEFReviewContour } from './quizEFSubmittedReviewContour';
+import { getSubmittedEFReviewContour, getFocusedEFComparisonImageId } from './quizEFSubmittedReviewContour';
 
 const frame = (slot: string) => ({
   studyInstanceUID: 'study-test', seriesInstanceUID: 'series-test',
@@ -76,5 +76,45 @@ describe('submitted EF answer review contour selection', () => {
     expect(select(doc)?.volumeML).toBeNull();
     doc.isLearnerCopy = false;
     expect(select(doc)).toBeNull();
+  });
+});
+
+describe('focused submitted EF comparison uses the actual active frame', () => {
+  it('resolves all four submitted contours, including non-first stack frames and stale cache URLs', () => {
+    const doc = submitted();
+    for (const slot of slots) {
+      const gold = frame(slot);
+      const learner = select(doc, slot, gold)!;
+      const active = {...gold, referencedImageId: gold.referencedImageId.replace('wadors:/', 'wadors:https://current.invalid/')};
+      const firstImage = active.referencedImageId.replace('/frames/2', '/frames/1');
+      for (const sourceTarget of [gold, learner.target]) {
+        expect(getFocusedEFComparisonImageId({
+          activeTarget: active, sourceTarget, currentImageId: active.referencedImageId,
+        })).toBe(active.referencedImageId);
+        expect(getFocusedEFComparisonImageId({
+          activeTarget: active, sourceTarget, currentImageId: firstImage,
+        })).toBe('');
+      }
+      expect(learner.target.referencedImageId).toBe(gold.referencedImageId);
+    }
+  });
+  it('rejects wrong study, series, instance, frame and stale active viewport identity', () => {
+    const active = frame('A4C_ES');
+    for (const sourceTarget of [
+      {...active, studyInstanceUID: 'other-study'},
+      {...active, seriesInstanceUID: 'other-series'},
+      {...active, sopInstanceUID: 'other-sop'},
+      {...active, frameNumber: 20},
+      {...active, frameNumber: 0},
+      null,
+    ]) {
+      expect(getFocusedEFComparisonImageId({
+        activeTarget: active, sourceTarget, currentImageId: active.referencedImageId,
+      })).toBe('');
+    }
+    expect(getFocusedEFComparisonImageId({
+      activeTarget: {...active, referencedImageId: active.referencedImageId.replace('/frames/2','/frames/20')},
+      sourceTarget: active, currentImageId: active.referencedImageId.replace('/frames/2','/frames/20'),
+    })).toBe('');
   });
 });

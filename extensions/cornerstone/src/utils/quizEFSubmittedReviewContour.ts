@@ -3,6 +3,8 @@
  * response, not live MeasurementService state or a current educator definition,
  * is authoritative. Never choose an arbitrary contour by label/area.
  */
+import { isExactViewerQuizSopFrameImageId } from './exactViewerQuizSopFrame';
+
 export const MAX_EF_REVIEW_CONTOUR_POINTS = 10000;
 const text = (value: unknown) => String(value ?? '').trim();
 
@@ -64,4 +66,20 @@ export function getSubmittedEFReviewContour({
     target: { ...part.target },
     volumeML: Number.isFinite(volume) && volume > 0 ? volume : null,
   };
+}
+
+/** Focused review overlays are display-only, not acquired LV Simpson sources.
+ * Their partial slot metadata must never make a generic saved-contour matcher
+ * accept the first stack image. Use the actual verified active DICOM frame.
+ * The saved image-cache URL can differ between viewer sessions; the immutable
+ * study/series/SOP/frame identity must not. Never retarget a different frame. */
+export function getFocusedEFComparisonImageId({
+  activeTarget, sourceTarget, currentImageId,
+}: { activeTarget: any; sourceTarget: any; currentImageId: unknown }): string {
+  const imageId = text(currentImageId);
+  if (!sameDicomFrame(activeTarget, sourceTarget) ||
+      !imageId || text(activeTarget?.referencedImageId) !== imageId ||
+      !isExactViewerQuizSopFrameImageId(imageId, sourceTarget?.sopInstanceUID,
+        sourceTarget?.frameNumber)) return '';
+  return imageId;
 }
