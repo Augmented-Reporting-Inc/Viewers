@@ -73,6 +73,8 @@ import {
   getResearchIVCMeasurementState,
   getResearchIVCPhaseDisplayState,
   getResearchQuestionEntryTarget,
+  isResearchContourReviewQuestion,
+  getResearchCompositeReviewEntrySource,
   getResearchIVCAnnotationSlot,
   isValidResearchIVCPhaseSource,
   getResearchBindingSources,
@@ -148,6 +150,7 @@ function ReadField({
   hideHeader = false,
   lengthAnswer = false,
   measurementLabel = '',
+  reviewOnly = false,
 }: {
   field: any;
   value: any;
@@ -159,6 +162,7 @@ function ReadField({
   hideHeader?: boolean;
   lengthAnswer?: boolean;
   measurementLabel?: string;
+  reviewOnly?: boolean;
 }) {
   const kind = cleanString(field.kind).toLowerCase();
   const numeric = ['measurement', 'continuous', 'number', 'numeric'].includes(kind);
@@ -222,12 +226,13 @@ function ReadField({
         </div>
       ) : null}
 
-      {options.length > 0 && field.componentKey !== 'rap' ? (
+      {(options.length > 0 || (reviewOnly && ['ordinal', 'rating', 'categorical', 'select', 'boolean'].includes(kind))) && field.componentKey !== 'rap' ? (
         <LearningSingleChoiceAnswer
           name={field.key}
           choices={options}
           value={value}
           disabled={disabled || calculated}
+          reviewOnly={reviewOnly}
           onChange={onChange}
         />
       ) : options.length > 0 ? (
@@ -463,6 +468,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
   );
 
   const updateValue = useCallback((fieldKey, nextValue) => {
+    if (!context || context.readOnly || context.preview) return;
     setValues(current => ({
       ...current,
       [fieldKey]: nextValue,
@@ -480,7 +486,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
       valueSourcesRef.current = next;
       return next;
     });
-  }, []);
+  }, [context]);
 
   const refreshViewerMeasurementBindings = useCallback(async (
     prepared?: { serialized: any; efSnapshot: any }, explicitLAFieldKey = ''
@@ -1340,6 +1346,16 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
 
   const navigateToField = async (field: any, isCancelled: () => boolean) => {
     if (isCancelled()) return false;
+    if (context?.readOnly && !context?.preview && isResearchContourReviewQuestion(field, readDomain)) {
+      const source = getResearchCompositeReviewEntrySource(
+        field, persistedReadState.sources[field.key], savedAnnotations,
+        context?.sourceStudyInstanceUID);
+      if (source) return restoreResearchAnnotationSource(source, isCancelled);
+      if (persistedReadState.sources[field.key]?.sourceMeasurementKey) {
+        notify(servicesManager, 'Saved contour source could not be resolved; inspect the saved phases.', 'warning');
+      }
+      return false;
+    }
     if (isResearchTRVmaxQuestion(field, readDomain)) {
       const state = getResearchTRVmaxSourceState(
         field, calculatedReadState.sources[field.key], allAnnotations,
@@ -1436,8 +1452,9 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
     setSelectedFieldKey(key);
     runFieldSelection(field);
   };
-  // A reopened review's first selected Length question also restores its
-  // saved source. Do not jump again whenever binding refreshes or Save runs.
+  // Reopening a completed Read restores its first selected saved contour
+  // (including EF when first), or existing Length/TR evidence.
+  // Do not jump again whenever binding refreshes or Save runs.
   useEffect(() => {
     const reviewKey = cleanString(context?.reviewKey);
     if (loading || !commandsManager || context?.preview || !reviewKey ||
@@ -1445,8 +1462,9 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
     const field = visibleFields.find(item => item.key === selectedFieldKey);
     if (!field) return;
     initializedReviewRef.current = reviewKey;
-    if (isResearchLengthQuestion(field, readDomain) || isResearchTRVmaxQuestion(field, readDomain)) runFieldSelection(field);
-  }, [loading, commandsManager, context?.reviewKey, context?.preview,
+    if (isResearchLengthQuestion(field, readDomain) || isResearchTRVmaxQuestion(field, readDomain) ||
+        (context?.readOnly && isResearchContourReviewQuestion(field, readDomain))) runFieldSelection(field);
+  }, [loading, commandsManager, context?.reviewKey, context?.preview, context?.readOnly,
     selectedFieldKey, visibleFields, readDomain]);
   useEffect(() => () => { ++selectionGenerationRef.current; },
     [context?.reviewKey, context?.readOnly, context?.preview]);
@@ -1848,6 +1866,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
               field={selectedField}
               readDomain={readDomain}
               hideHeader
+              reviewOnly={context.readOnly && !context.preview}
               lengthAnswer={selectedLength}
               measurementLabel={lengthState?.selected
                 ? getAnnotationLabel(lengthState.selected.annotation) : ''}
@@ -1896,6 +1915,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
             <ReadField
               key={companionField.key}
               field={companionField}
+              reviewOnly={context.readOnly && !context.preview}
               readDomain={readDomain}
               value={calculatedReadState.values[companionField.key] ?? ''}
               source={calculatedReadState.sources[companionField.key]}

@@ -8,6 +8,14 @@ on:
         required: true
         default: port/3.11-custom
         type: string
+      existing_image:
+        description: 'Optional existing immutable Viewer3 tag@sha256 digest (skip build)'
+        required: false
+        type: string
+      expected_previous:
+        description: 'Exact currently running Viewer3 tag@sha256 digest (required for deploy)'
+        required: false
+        type: string
       deploy_to_production:
         description: 'Deploy to production viewer3?'
         required: true
@@ -45,6 +53,10 @@ jobs:
         env:
           DEPLOY: ${{ inputs.deploy_to_production }}
           CONFIRMATION: ${{ inputs.confirmation }}
+          EXISTING: ${{ inputs.existing_image }}
+          EXPECTED_PREVIOUS: ${{ inputs.expected_previous }}
+          SOURCE_REF: ${{ inputs.source_ref }}
+          AR_DEPLOY_MODE: ${{ vars.AR_DEPLOY_MODE }}
         run: |
           set -euo pipefail
           [[ -n "$AWS_PRODUCTION_DEPLOY_ROLE_ARN" ]] || { echo 'Missing deploy role ARN' >&2; exit 1; }
@@ -53,6 +65,18 @@ jobs:
             echo 'Enter DEPLOY_VIEWER3 to approve production deployment' >&2
             exit 1
           fi
+          pattern='^804220655312[.]dkr[.]ecr[.]ca-central-1[.]amazonaws[.]com/s3orth:ohifar311-gha-[0-9a-f]{12}-[0-9]+@sha256:[0-9a-f]{64}$'
+          if [[ "$DEPLOY" == true ]]; then
+            [[ "$GITHUB_REF" == refs/heads/port/3.11-custom && "$AR_DEPLOY_MODE" == managed ]] || {
+              echo 'Production deploy requires integrated workflow and AR_DEPLOY_MODE=managed' >&2; exit 1;
+            }
+            [[ "$EXPECTED_PREVIOUS" =~ $pattern ]] || { echo 'Exact expected previous image required' >&2; exit 1; }
+          fi
+          if [[ -n "$EXISTING" ]]; then
+            [[ "$EXISTING" =~ $pattern && "$SOURCE_REF" =~ ^[0-9a-f]{40}$ ]] || {
+              echo 'Existing image requires immutable digest and full source commit SHA' >&2; exit 1;
+            }
+          fi
 
       - name: Checkout requested viewer source
         uses: actions/checkout@v4
@@ -60,10 +84,10 @@ jobs:
           ref: ${{ inputs.source_ref }}
           persist-credentials: false
 
-      - name: Checkout trusted deployment script from port/3.11-custom
+      - name: Checkout deployment script from the selected workflow revision
         uses: actions/checkout@v4
         with:
-          ref: port/3.11-custom
+          ref: ${{ github.sha }}
           path: .viewer-deployment
           persist-credentials: false
 
@@ -72,7 +96,8 @@ jobs:
         run: |
           set -euo pipefail
           bash -n .viewer-deployment/scripts/operations/deploy-viewer3.sh
-          cp .viewer-deployment/scripts/operations/deploy-viewer3.sh "$RUNNER_TEMP/deploy-viewer3.sh"
+          python3 -m py_compile .viewer-deployment/scripts/operations/deploy-viewer3.py
+          cp .viewer-deployment/scripts/operations/deploy-viewer3.{sh,py} "$RUNNER_TEMP/"
           rm -rf .viewer-deployment
 
       - name: Configure AWS OIDC credentials
@@ -83,27 +108,42 @@ jobs:
           role-session-name: github-viewer3-${{ github.run_id }}
 
       - name: Verify AWS identity
-        run: aws sts get-caller-identity
+        run: |
+          set -euo pipefail
+          [[ "$(aws sts get-caller-identity --query Account --output text)" == 804220655312 ]]
+          echo 'Expected AWS account verified'
 
       - name: Login to Amazon ECR
+        if: ${{ inputs.existing_image == '' }}
         uses: aws-actions/amazon-ecr-login@v2
 
       - name: Set up Docker Buildx
+        if: ${{ inputs.existing_image == '' }}
         uses: docker/setup-buildx-action@v3
 
       - name: Determine immutable image tag
         id: image
         shell: bash
+        env:
+          EXISTING: ${{ inputs.existing_image }}
+          SOURCE_REF: ${{ inputs.source_ref }}
         run: |
           set -euo pipefail
           SOURCE_SHA="$(git rev-parse HEAD)"
           TAG="ohifar311-gha-${SOURCE_SHA:0:12}-${GITHUB_RUN_ID}"
           IMAGE="$ECR_REGISTRY/$ECR_REPOSITORY:$TAG"
+          if [[ -n "$EXISTING" ]]; then
+            [[ "$SOURCE_SHA" == "$SOURCE_REF" ]] || { echo 'Source checkout mismatch' >&2; exit 1; }
+            IMAGE="${EXISTING%@*}"
+            TAG="${IMAGE##*:}"
+            [[ "$TAG" == ohifar311-gha-"${SOURCE_SHA:0:12}"-* ]] || { echo 'Image/source revision mismatch' >&2; exit 1; }
+          fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
           echo "source_sha=$SOURCE_SHA" >> "$GITHUB_OUTPUT"
 
       - name: Build and publish image
+        if: ${{ inputs.existing_image == '' }}
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -124,10 +164,12 @@ jobs:
         env:
           TAG: ${{ steps.image.outputs.tag }}
           IMAGE: ${{ steps.image.outputs.image }}
+          EXISTING: ${{ inputs.existing_image }}
         run: |
           set -euo pipefail
           DIGEST="$(aws ecr describe-images --region "$AWS_REGION" --repository-name "$ECR_REPOSITORY" --image-ids "imageTag=$TAG" --query 'imageDetails[0].imageDigest' --output text)"
           [[ "$DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]] || { echo 'Missing or invalid image digest' >&2; exit 1; }
+          [[ -z "$EXISTING" || "$EXISTING" == "$IMAGE@$DIGEST" ]] || { echo 'ECR digest mismatch' >&2; exit 1; }
           echo "pinned_image=$IMAGE@$DIGEST" >> "$GITHUB_OUTPUT"
           echo "### Viewer3" >> "$GITHUB_STEP_SUMMARY"
           echo "- Commit: ${{ steps.image.outputs.source_sha }}" >> "$GITHUB_STEP_SUMMARY"
@@ -138,26 +180,60 @@ jobs:
         shell: bash
         env:
           IMAGE: ${{ steps.pinned.outputs.pinned_image }}
+          EXPECTED_PREVIOUS: ${{ inputs.expected_previous }}
         run: |
           set -euo pipefail
-          SCRIPT_B64="$(base64 -w0 "$RUNNER_TEMP/deploy-viewer3.sh")"
-          COMMAND_JSON="$(jq -nc --arg script "$SCRIPT_B64" --arg image "$IMAGE" '{commands:[
-            "set -eu",
-            ("printf %s " + ($script|@sh) + " | base64 -d > /tmp/ar-deploy-viewer3.sh"),
-            "chmod 700 /tmp/ar-deploy-viewer3.sh",
-            ("bash /tmp/ar-deploy-viewer3.sh " + ($image|@sh)),
-            "rm -f /tmp/ar-deploy-viewer3.sh"
-          ]}')"
-          COMMAND_ID="$(aws ssm send-command --instance-ids "$PRODUCTION_INSTANCE_ID" --document-name AWS-RunShellScript --comment "AR viewer3 ${GITHUB_RUN_ID}" --timeout-seconds 900 --max-errors 0 --parameters "$COMMAND_JSON" --query 'Command.CommandId' --output text)"
+          # Keep delivery, execution and runner polling deadlines distinct.
+          # Stage only the reviewed scripts in a private per-invocation directory.
+          COMMAND_JSON="$(python3 - "$RUNNER_TEMP" "$IMAGE" "$EXPECTED_PREVIOUS" <<'PY'
+          import base64, json, pathlib, shlex, sys
+          source = pathlib.Path(sys.argv[1])
+          names = ("deploy-viewer3.sh", "deploy-viewer3.py")
+          commands = [
+              "set -eu", "umask 077",
+              'WORK_DIR="$(mktemp -d /home/ubuntu/compose/.ar-viewer3-release.XXXXXXXX)"',
+              'cleanup() { rm -f "$WORK_DIR/deploy-viewer3.sh" "$WORK_DIR/deploy-viewer3.py"; rmdir "$WORK_DIR"; }',
+              "trap cleanup EXIT",
+          ]
+          for name in names:
+              encoded = base64.b64encode((source / name).read_bytes()).decode("ascii")
+              for offset in range(0, len(encoded), 3000):
+                  redirect = ">" if offset == 0 else ">>"
+                  commands.append("printf %s " + shlex.quote(encoded[offset:offset+3000]) +
+                                  ' | base64 -d ' + redirect + ' "$WORK_DIR/' + name + '"')
+          commands.append('bash "$WORK_DIR/deploy-viewer3.sh" ' + " ".join(map(shlex.quote, sys.argv[2:])))
+          parameters = json.dumps({"commands": commands, "executionTimeout": ["1200"]}, separators=(",", ":"))
+          if len(parameters.encode("utf-8")) > 48 * 1024:
+              sys.exit("SSM payload exceeds reviewed local ceiling")
+          print(parameters)
+          PY
+          )"
+          COMMAND_ID="$(aws ssm send-command --instance-ids "$PRODUCTION_INSTANCE_ID" --document-name AWS-RunShellScript --comment "AR viewer3 ${GITHUB_RUN_ID}" --timeout-seconds 120 --max-errors 0 --parameters "$COMMAND_JSON" --query 'Command.CommandId' --output text)"
+          [[ "$COMMAND_ID" =~ ^[a-f0-9-]{36}$ ]] || { echo 'Uncertain SSM dispatch; reconcile before retry' >&2; exit 1; }
           echo "SSM command: $COMMAND_ID"
-          RESULT=TimedOut
-          for attempt in $(seq 1 120); do
-            RESULT="$(aws ssm get-command-invocation --command-id "$COMMAND_ID" --instance-id "$PRODUCTION_INSTANCE_ID" --query Status --output text 2>/dev/null || true)"
-            case "$RESULT" in
-              Success|Failed|Cancelled|TimedOut|Cancelling) break ;;
-            esac
-            sleep 5
+          deadline=$((SECONDS + 1410))
+          errors=0
+          while (( SECONDS < deadline )); do
+            if result="$(AWS_MAX_ATTEMPTS=1 aws ssm get-command-invocation --command-id "$COMMAND_ID" --instance-id "$PRODUCTION_INSTANCE_ID" --cli-read-timeout 20 --cli-connect-timeout 10 --query '{Status:Status,ResponseCode:ResponseCode}' --output json 2>/dev/null)"; then
+              errors=0
+              status="$(jq -er '.Status' <<<"$result")"
+              response="$(jq -er '.ResponseCode' <<<"$result")"
+              case "$status" in
+                Success)
+                  [[ "$response" == 0 ]] || exit 1
+                  echo 'Production deployment successful' >> "$GITHUB_STEP_SUMMARY"
+                  exit 0 ;;
+                Pending|InProgress|Delayed|Cancelling) ;;
+                Failed|Cancelled|TimedOut)
+                  echo "Viewer3 SSM failed: $status; reconcile host state before retry" >&2
+                  exit 1 ;;
+                *) echo 'Unknown SSM status; reconcile before retry' >&2; exit 1 ;;
+              esac
+            else
+              errors=$((errors + 1))
+              (( errors < 6 )) || { echo 'SSM status unavailable; reconcile before retry' >&2; exit 1; }
+            fi
+            sleep 10
           done
-          aws ssm get-command-invocation --command-id "$COMMAND_ID" --instance-id "$PRODUCTION_INSTANCE_ID" --query '{Status:Status,ResponseCode:ResponseCode,Output:StandardOutputContent,Error:StandardErrorContent}' --output json
-          [[ "$RESULT" == Success ]] || { echo "Viewer3 SSM deploy failed: $RESULT" >&2; exit 1; }
-          echo 'Production deployment successful' >> "$GITHUB_STEP_SUMMARY"
+          echo 'SSM wait exhausted; command may still be active. Reconcile before retry.' >&2
+          exit 1

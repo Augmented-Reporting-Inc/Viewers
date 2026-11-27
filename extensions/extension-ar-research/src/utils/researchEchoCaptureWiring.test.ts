@@ -106,6 +106,17 @@ describe('Completed Research measurement review', () => {
     expect(cine).toContain('!isLearningRoute && !isReadOnlyResearchRoute()');
     expect(cine).toContain('isLengthMeasurementActive || isReadOnlyResearchRoute()');
   });
+  it('restores the linked composite frame on question entry and initial completed Read load', () => {
+    const navigation = panel.slice(panel.indexOf('const navigateToField = async'),
+      panel.indexOf('const selectionGenerationRef'));
+    expect(navigation).toContain('getResearchCompositeReviewEntrySource(');
+    expect(navigation).toContain('persistedReadState.sources[field.key], savedAnnotations');
+    expect(navigation).toContain('context?.readOnly && !context?.preview && isResearchContourReviewQuestion');
+    expect(navigation.indexOf('return restoreResearchAnnotationSource(source, isCancelled)'))
+      .toBeLessThan(navigation.indexOf('const targets = getResearchProtocolViewerTargets(field)'));
+    expect(panel).toContain('(context?.readOnly && isResearchContourReviewQuestion(field, readDomain))) runFieldSelection(field)');
+    expect(panel).toContain('reviewOnly={context.readOnly && !context.preview}');
+  });
   it('opens the shared EF panel for review, not acquisition or calculation', () => {
     expect(guided).toContain('reviewNavigation={readOnly}');
     expect(guided).toContain('assessmentReviewOnly: true');

@@ -86,7 +86,7 @@ function normalizeOptions(value: any) {
   return (Array.isArray(value) ? value : [])
     .map(option => {
       if (option && typeof option === 'object' && !Array.isArray(option)) {
-        const optionValue = cleanString(option.value ?? option.label);
+        const optionValue = String(option.value ?? option.label ?? '').trim();
         return optionValue
           ? {
               value: optionValue,
@@ -95,7 +95,7 @@ function normalizeOptions(value: any) {
           : null;
       }
 
-      const optionValue = cleanString(option);
+      const optionValue = String(option ?? '').trim();
       return optionValue
         ? {
             value: optionValue,
