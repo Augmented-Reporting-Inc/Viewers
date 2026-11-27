@@ -48,20 +48,3 @@ export async function waitForSavedNavigationContext({
   }
   return null;
 }
-
-/** Reuse the toolbar Reset Viewport operation; never change stored geometry. */
-export function resetViewportPresentation(viewport: any) {
-  viewport.resetProperties?.();
-  viewport.resetCamera();
-  viewport.render();
-}
-
-/** Opt-in saved EF review only. Verify exact current source before and after
- * resetting presentation; never reset an unrelated or cancelled viewport. */
-export function resetSavedFramePresentation(
-  viewport: any, isExactCurrent: () => boolean, isCancelled: () => boolean
-): boolean {
-  if (isCancelled() || !isExactCurrent()) return false;
-  resetViewportPresentation(viewport);
-  return !isCancelled() && isExactCurrent();
-}

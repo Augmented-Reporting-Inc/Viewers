@@ -127,22 +127,24 @@ describe('Completed Research measurement review', () => {
     expect(navigation.indexOf('hasValidSavedNavigationUpdates(viewportGridService, viewportsToUpdate)')).toBeLessThan(
       navigation.indexOf('actions.setDisplaySetsForViewports({ viewportsToUpdate })'));
   });
-  it('resets presentation only for completed EF navigation after the exact source is ready', () => {
-    const composite = panel.slice(panel.indexOf('const navigateToField = async'),
+  it('uses Education scored-review frame navigation for completed EF, without a viewport reset', () => {
+    const navigation = panel.slice(panel.indexOf('const navigateToField = async'),
       panel.indexOf('if (isResearchTRVmaxQuestion(field, readDomain))', panel.indexOf('const navigateToField = async')));
-    expect(composite).toContain("field.componentKey === 'lvEjectionFraction'");
-    expect(panel).toContain('resetExactFramePresentation: resetEFPresentation');
+    expect(navigation).toContain("field.componentKey === 'lvEjectionFraction'");
+    expect(panel).toContain('isCancelled: cancelled, useQuizTargetNavigation');
     const slot = viewerCommands.slice(viewerCommands.indexOf('async onNavigateSlot(slot'),
       viewerCommands.indexOf('const savedSlot = panelFirst', viewerCommands.indexOf('async onNavigateSlot(slot')));
     expect(slot).toContain('if (assessmentReviewOnly)');
-    expect(slot).toContain('resetExactFramePresentation: true');
+    expect(slot).toContain('useQuizTargetNavigation: true');
     const jump = viewerCommands.slice(viewerCommands.indexOf('jumpToSavedViewerAnnotation: async'),
       viewerCommands.indexOf('showSavedViewerAnnotationsForSameImage: async'));
-    expect(jump).toContain('resetExactFramePresentation = false');
-    expect(jump).toContain('resetExactFramePresentation && requireExactSopFrame');
-    expect(jump).toContain('isLVSimpsonMeasurement(savedAnnotation)');
-    expect(jump.indexOf('resetSavedFramePresentation(hydratedViewport, exactAndCurrent, isCancelled)'))
-      .toBeGreaterThan(jump.indexOf('stopSourceCineForViewport(sourceViewportId)'));
+    expect(jump).toContain('useQuizTargetNavigation = false');
+    expect(jump).toContain('quizNavigation = await actions.jumpToViewerQuizTarget({');
+    expect(jump).toContain('requireExactSopFrame: true, pauseCineOnTarget: true');
+    expect(jump).toContain('requireReadyViewport: true, isCancelled');
+    expect(jump).toContain('? quizNavigation.imageId');
+    expect(jump).not.toContain('resetCamera');
+    expect(jump).not.toContain('resetProperties');
   });
   it('opens the shared EF panel for review, not acquisition or calculation', () => {
     expect(guided).toContain('reviewNavigation={readOnly}');

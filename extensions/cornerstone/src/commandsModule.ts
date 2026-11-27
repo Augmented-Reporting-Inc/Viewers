@@ -38,7 +38,7 @@ import { hasUnpersistedLearnerMeasurementChanges } from './utils/learnerMeasurem
 import { resolveViewerMeasurementSaveScope, settleViewerMeasurementSaveMarkers } from './utils/viewerMeasurementSaveScope';
 import { reconcileLearnerIvcSnapshotSources } from './utils/learnerIvcSourceSnapshot';
 import { isExactViewerQuizSopFrameImageId } from './utils/exactViewerQuizSopFrame';
-import { getReadySavedNavigationViewportId, waitForSavedNavigationContext, hasValidSavedNavigationUpdates, resetViewportPresentation, resetSavedFramePresentation } from './utils/savedAnnotationNavigationReady';
+import { getReadySavedNavigationViewportId, waitForSavedNavigationContext, hasValidSavedNavigationUpdates } from './utils/savedAnnotationNavigationReady';
 import { getViewportEnabledElement } from './utils/getViewportEnabledElement';
 import { getLearnerQuizMeasurementDeleteDenial } from './utils/quizLearnerMeasurementDeletion';
 import getActiveViewportEnabledElement from './utils/getActiveViewportEnabledElement';
@@ -5203,7 +5203,7 @@ function findImageIdIndexForViewerQuizTarget(
 
 async function waitForViewerQuizTargetImageMatch(
   viewport, target = {}, attempts = 20, resolveViewport = null,
-  { requireExactSopFrame = false } = {}
+  { requireExactSopFrame = false, isCancelled = () => false } = {}
 ) {
   let lastMatch = {
     index: -1,
@@ -5214,6 +5214,7 @@ async function waitForViewerQuizTargetImageMatch(
   let latestViewport = viewport;
 
   for (let attempt = 0; attempt < attempts; attempt += 1) {
+    if (isCancelled()) return { ...lastMatch, index: -1, viewport: latestViewport };
     // A display-set update can recreate the viewport; retry against the
     // current instance instead of a stale previous image stack.
     const resolved = typeof resolveViewport === 'function' ? resolveViewport() : null;
@@ -5234,15 +5235,16 @@ async function waitForViewerQuizTargetImageMatch(
 
 async function jumpViewportToViewerQuizTargetImage(
   viewport, target = {}, resolveViewport = null,
-  { requireExactSopFrame = false } = {}
+  { requireExactSopFrame = false, isCancelled = () => false } = {}
 ) {
   // Instance-only quiz guidance has no gold frame and may require an
   // asynchronous cine display-set transition.
   const attempts = target.sopInstanceId && !Number.isFinite(target.frameNumber) ? 70 : 20;
   const { viewport: latestViewport, ...match } =
     await waitForViewerQuizTargetImageMatch(
-      viewport, target, attempts, resolveViewport, { requireExactSopFrame }
+      viewport, target, attempts, resolveViewport, { requireExactSopFrame, isCancelled }
     );
+  if (isCancelled()) return { ok: false, reason: 'cancelled' };
 
   if (match.index < 0) {
     console.warn('[ViewerQuiz] could not find target image in viewport stack', {
@@ -10175,7 +10177,7 @@ function commandsModule({
                     frameNumber: normalized.frameNumber },
                   selectAnnotation: false, requireExactSopFrame: true,
                   pauseCineOnSource: true, runDelayedDisplayRefresh: false,
-                  resetExactFramePresentation: true,
+                  useQuizTargetNavigation: true,
                   isCancelled: cancelled,
                 });
                 if (cancelled()) return;
@@ -14590,7 +14592,10 @@ function commandsModule({
 
       const { viewport } = enabledElement;
 
-      resetViewportPresentation(viewport);
+      viewport.resetProperties?.();
+      viewport.resetCamera();
+
+      viewport.render();
     },
     scaleViewport: ({ direction }) => {
       const enabledElement = _getActiveViewportEnabledElement();
@@ -16025,7 +16030,7 @@ function commandsModule({
       runDelayedDisplayRefresh = true,
       pauseCineOnSource = false,
       requireExactSopFrame = false,
-      resetExactFramePresentation = false,
+      useQuizTargetNavigation = false,
       isCancelled = () => false,
     } = {}) => {
       const cancelledResult = { ok: false, reason: 'cancelled' };
@@ -16091,43 +16096,74 @@ function commandsModule({
       const activeDisplaySetAlreadyMatches =
         activeDisplaySet?.displaySetInstanceUID === displaySet.displaySetInstanceUID;
 
-      const viewportToUpdate = activeDisplaySetAlreadyMatches
-        ? null
-        : cornerstoneViewportService.findUpdateableViewportConfiguration(activeViewportId, {
-            displaySetInstanceUID: displaySet.displaySetInstanceUID,
-            metadata: buildHydrationMetadata(savedAnnotation, displaySet),
+      // Scored Education EF review uses the quiz target navigator to update
+      // the display set, allow the new stack presentation to settle and
+      // re-resolve the viewport. Reuse that exact route for completed EF
+      // source review, without borrowing quiz/gold answer persistence.
+      const useScoredReviewNavigation = useQuizTargetNavigation &&
+        requireExactSopFrame && pauseCineOnSource && isLVSimpsonMeasurement(savedAnnotation);
+      let targetViewportId = activeViewportId;
+      let quizNavigation = null;
+      if (useScoredReviewNavigation) {
+        quizNavigation = await actions.jumpToViewerQuizTarget({
+          viewerTarget: {
+            StudyInstanceUID: savedAnnotation.StudyInstanceUID || savedAnnotation.referenceStudyUID,
+            SeriesInstanceUID: seriesInstanceId,
+            SOPInstanceUID: savedAnnotation.SOPInstanceUID,
+            frameNumber: savedAnnotation.frameNumber,
             referencedImageId: savedAnnotation.referencedImageId,
+          },
+          requireExactSopFrame: true, pauseCineOnTarget: true,
+          requireReadyViewport: true, isCancelled,
+        });
+        if (isCancelled()) { endViewportSetup(); return cancelledResult; }
+        if (quizNavigation?.ok !== true ||
+            !hasValidSavedNavigationUpdates(viewportGridService, [{ viewportId: quizNavigation?.viewportId }]) ||
+            !isExactViewerQuizSopFrameImageId(quizNavigation.imageId,
+              savedAnnotation.SOPInstanceUID, savedAnnotation.frameNumber)) {
+          endViewportSetup();
+          return { ok: false, reason: 'saved-ef-quiz-target-not-ready', retryable: true, annotationId };
+        }
+        targetViewportId = quizNavigation.viewportId;
+      } else {
+        const viewportToUpdate = activeDisplaySetAlreadyMatches
+          ? null
+          : cornerstoneViewportService.findUpdateableViewportConfiguration(activeViewportId, {
+              displaySetInstanceUID: displaySet.displaySetInstanceUID,
+              metadata: buildHydrationMetadata(savedAnnotation, displaySet),
+              referencedImageId: savedAnnotation.referencedImageId,
+            });
+
+        targetViewportId = viewportToUpdate?.viewportId || activeViewportId;
+        if (!hasValidSavedNavigationUpdates(viewportGridService, [{ viewportId: targetViewportId }])) {
+          endViewportSetup();
+          return { ok: false, reason: 'saved-navigation-invalid-viewport', retryable: true, annotationId };
+        }
+        if (pauseCineOnSource) stopSourceCineForViewport(targetViewportId);
+
+        if (!activeDisplaySetAlreadyMatches) {
+          const viewportsToUpdate = getViewportsToUpdateSafely({
+            hangingProtocolService,
+            viewportId: targetViewportId,
+            displaySetInstanceId: displaySet.displaySetInstanceUID,
+            viewportOptions: viewportToUpdate?.viewportOptions,
+            context: 'MeasurementAnnotations',
           });
 
-      const targetViewportId = viewportToUpdate?.viewportId || activeViewportId;
-      if (!hasValidSavedNavigationUpdates(viewportGridService, [{ viewportId: targetViewportId }])) {
-        endViewportSetup();
-        return { ok: false, reason: 'saved-navigation-invalid-viewport', retryable: true, annotationId };
-      }
-      if (pauseCineOnSource) stopSourceCineForViewport(targetViewportId);
-
-      if (!activeDisplaySetAlreadyMatches) {
-        const viewportsToUpdate = getViewportsToUpdateSafely({
-          hangingProtocolService,
-          viewportId: targetViewportId,
-          displaySetInstanceId: displaySet.displaySetInstanceUID,
-          viewportOptions: viewportToUpdate?.viewportOptions,
-          context: 'MeasurementAnnotations',
-        });
-
-        // React applies this update in a later reducer pass: a try/catch
-        // around the command cannot protect the viewer from a null ID.
-        if (!hasValidSavedNavigationUpdates(viewportGridService, viewportsToUpdate)) {
-          endViewportSetup();
-          return { ok: false, reason: 'saved-navigation-invalid-update', retryable: true, annotationId };
+          // React applies this update in a later reducer pass: a try/catch
+          // around the command cannot protect the viewer from a null ID.
+          if (!hasValidSavedNavigationUpdates(viewportGridService, viewportsToUpdate)) {
+            endViewportSetup();
+            return { ok: false, reason: 'saved-navigation-invalid-update', retryable: true, annotationId };
+          }
+          if (isCancelled()) {
+            endViewportSetup();
+            return cancelledResult;
+          }
+          actions.setDisplaySetsForViewports({ viewportsToUpdate });
         }
-        if (isCancelled()) {
-          endViewportSetup();
-          return cancelledResult;
-        }
-        actions.setDisplaySetsForViewports({ viewportsToUpdate });
-      }
 
+      }
       endViewportSetup();
       const endViewportReady = beginEFOpenStage('viewport-ready');
       const viewport = await waitForCurrentSavedAnnotationViewport({
@@ -16162,11 +16198,11 @@ function commandsModule({
       }
 
       const endFrameJump = beginEFOpenStage('frame-jump');
-      const actualReferencedImageId = await jumpViewportToSavedAnnotationImage(
-        viewport,
-        savedAnnotation,
-        requireExactSopFrame
-      );
+      const actualReferencedImageId = useScoredReviewNavigation
+        ? quizNavigation.imageId
+        : await jumpViewportToSavedAnnotationImage(
+            viewport, savedAnnotation, requireExactSopFrame
+          );
 
       endFrameJump();
       if (isCancelled()) return cancelledResult;
@@ -16213,9 +16249,11 @@ function commandsModule({
         ) ||
         viewport;
 
-      if (requireExactSopFrame && !isExactViewerQuizSopFrameImageId(
-          hydratedViewport.getCurrentImageId?.(), savedAnnotation.SOPInstanceUID,
-          savedAnnotation.frameNumber)) {
+      if ((useScoredReviewNavigation &&
+          cornerstoneViewportService.getCornerstoneViewport(targetViewportId) !== hydratedViewport) ||
+          (requireExactSopFrame && !isExactViewerQuizSopFrameImageId(
+            hydratedViewport.getCurrentImageId?.(), savedAnnotation.SOPInstanceUID,
+            savedAnnotation.frameNumber))) {
         return { ok: false, reason: 'saved-source-frame-changed-before-hydration', annotationId,
           viewportId: hydratedViewport.id || targetViewportId };
       }
@@ -16439,6 +16477,7 @@ function commandsModule({
               savedAnnotation.SOPInstanceUID, savedAnnotation.frameNumber);
         const finalImage = exactCurrent && hydratedViewport.getImageData?.()
           ? currentImage
+          : useScoredReviewNavigation ? ''
           : await jumpViewportToSavedAnnotationImage(hydratedViewport, savedAnnotation, requireExactSopFrame);
         if (!finalImage || !await waitForViewportImageReady(
           hydratedViewport, finalImage
@@ -16448,24 +16487,7 @@ function commandsModule({
             annotationId, viewportId: sourceViewportId };
         }
         if (isCancelled()) return cancelledResult;
-        if (resetExactFramePresentation && requireExactSopFrame &&
-            isLVSimpsonMeasurement(savedAnnotation)) {
-          // A completed Research EF review requests the same presentation
-          // reset as the toolbar, only on the loaded exact source frame.
-          // Do this after cine stop and all delayed annotation rendering.
-          const exactAndCurrent = () =>
-            cornerstoneViewportService.getCornerstoneViewport(sourceViewportId) === hydratedViewport &&
-            isExactViewerQuizSopFrameImageId(hydratedViewport.getCurrentImageId?.(),
-              savedAnnotation.SOPInstanceUID, savedAnnotation.frameNumber) &&
-            !!hydratedViewport.getImageData?.();
-          if (!resetSavedFramePresentation(hydratedViewport, exactAndCurrent, isCancelled)) {
-            endFinalFrameCheck();
-            return { ok: false, reason: 'saved-source-presentation-not-ready',
-              retryable: true, annotationId, viewportId: sourceViewportId };
-          }
-        } else {
-          hydratedViewport.render?.();
-        }
+        hydratedViewport.render?.();
         endFinalFrameCheck();
       }
 
@@ -16632,7 +16654,11 @@ function commandsModule({
     jumpToViewerQuizTarget: async ({
       viewerTarget, questionKey = '', requireExactSopFrame = false,
       pauseCineOnTarget = false,
+      requireReadyViewport = false,
+      isCancelled = () => false,
     } = {}) => {
+      const cancelledResult = { ok: false, reason: 'cancelled' };
+      if (isCancelled()) return cancelledResult;
       const target = normalizeViewerQuizTarget(viewerTarget);
 
       if (!hasViewerQuizTargetIdentity(target)) {
@@ -16647,8 +16673,17 @@ function commandsModule({
         };
       }
 
-      const activeViewportId = viewportGridService.getActiveViewportId();
+      const activeViewportId = requireReadyViewport
+        ? getReadySavedNavigationViewportId(viewportGridService, cornerstoneViewportService)
+        : viewportGridService.getActiveViewportId();
+      if (requireReadyViewport && !activeViewportId) {
+        return { ok: false, reason: 'quiz-target-viewport-not-ready' };
+      }
       const displaySet = getDisplaySetForViewerQuizTarget(displaySetService, target);
+      if (requireReadyViewport && (!displaySet?.displaySetInstanceUID ||
+          (target.studyInstanceId && String(displaySet.StudyInstanceUID || displaySet.studyInstanceUID || '') !== target.studyInstanceId))) {
+        return { ok: false, reason: 'quiz-target-display-set-not-ready' };
+      }
       let targetViewportId = activeViewportId;
 
       if (displaySet?.displaySetInstanceUID) {
@@ -16677,17 +16712,23 @@ function commandsModule({
           context: 'ViewerQuiz',
         });
 
+        if (requireReadyViewport &&
+            !hasValidSavedNavigationUpdates(viewportGridService, viewportsToUpdate)) {
+          return { ok: false, reason: 'quiz-target-invalid-viewport-update' };
+        }
+        if (isCancelled()) return cancelledResult;
         if (viewportsToUpdate.length) {
           await Promise.resolve(actions.setDisplaySetsForViewports({ viewportsToUpdate }));
           await sleep(300);
         }
       }
 
+      if (isCancelled()) return cancelledResult;
       const resolveTargetViewport = () =>
         cornerstoneViewportService.getCornerstoneViewport(targetViewportId) ||
-        cornerstoneViewportService.getCornerstoneViewport(
+        (!requireReadyViewport ? cornerstoneViewportService.getCornerstoneViewport(
           viewportGridService.getActiveViewportId()
-        );
+        ) : null);
       const viewport = resolveTargetViewport();
       if (pauseCineOnTarget) stopSourceCineForViewport(targetViewportId);
 
@@ -16704,8 +16745,9 @@ function commandsModule({
       }
 
       const jumpResult = await jumpViewportToViewerQuizTargetImage(
-        viewport, target, resolveTargetViewport, { requireExactSopFrame }
+        viewport, target, resolveTargetViewport, { requireExactSopFrame, isCancelled }
       );
+      if (isCancelled()) return cancelledResult;
 
       // Navigating between saved quiz source frames can change the viewport's
       // tool group; keep the area renderer attached before displaying contours.
@@ -16730,8 +16772,9 @@ function commandsModule({
           // Reassert the exact SOP/frame once playback is paused.
           const settled = await jumpViewportToViewerQuizTargetImage(
             resolveTargetViewport(), target, resolveTargetViewport,
-            { requireExactSopFrame }
+            { requireExactSopFrame, isCancelled }
           );
+          if (isCancelled()) return cancelledResult;
           if (settled?.ok !== true) {
             return { ...settled, viewportId: targetViewportId };
           }

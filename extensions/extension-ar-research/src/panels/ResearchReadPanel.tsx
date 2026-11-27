@@ -1223,7 +1223,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
   const jumpToAnnotation = useCallback(
     async (annotation: any, options: {
       requireExactSopFrame?: boolean; isCancelled?: () => boolean;
-      resetExactFramePresentation?: boolean;
+      useQuizTargetNavigation?: boolean;
     } = {}) => {
       if (options.isCancelled?.()) return false;
       try {
@@ -1335,15 +1335,14 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
 
   // A deleted source must not be restored by queued navigation. Reuse this
   // same guarded display path for automatic selection and explicit resolution.
-  const restoreResearchAnnotationSource = (item: any, isCancelled: () => boolean, resetEFPresentation = false) => {
+  const restoreResearchAnnotationSource = (item: any, isCancelled: () => boolean, useQuizTargetNavigation = false) => {
     const sourceId = getAnnotationKey(item.annotation);
     const cancelled = () => isCancelled() || !sourceId ||
       deletedAnnotationIdsRef.current.has(sourceId);
     return jumpToAnnotation({
       ...item.displayAnnotation,
       ...(context?.readOnly || context?.preview ? { isLocked: true } : {}),
-    }, { requireExactSopFrame: true, isCancelled: cancelled,
-      resetExactFramePresentation: resetEFPresentation });
+    }, { requireExactSopFrame: true, isCancelled: cancelled, useQuizTargetNavigation });
   };
 
   const navigateToField = async (field: any, isCancelled: () => boolean) => {
