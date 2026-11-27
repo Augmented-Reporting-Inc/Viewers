@@ -17,6 +17,31 @@ BASE = ("services:\n  viewer3:\n    image: " + OLD +
 
 
 class ReleaseTests(unittest.TestCase):
+    def test_manifest_rejects_unreviewed_overlays_and_retained_override(self):
+        cfg = self.root / "config/compose"
+        cfg.mkdir(parents=True)
+        (cfg / "images.yml").write_text("other pins")
+        (self.root / ".ar-ses-invitation.override.yml").write_text("fixture")
+        manifest = cfg / "manifest.json"
+        files = ["docker-compose.yml", ".ar-ses-invitation.override.yml", "config/compose/images.yml"]
+        manifest.write_text(json.dumps({"files": files, "version": 1}))
+        self.assertEqual(len(release.checked_files(self.root)), 4)
+        override = self.root / ".ar-formapi-deploy.override.yml"
+        override.write_text("fixture")
+        with self.assertRaises(RuntimeError):
+            release.checked_files(self.root)
+        override.unlink()
+        manifest.write_text(json.dumps({"files": files + ["unreviewed.yml"], "version": 1}))
+        with self.assertRaises(RuntimeError):
+            release.checked_files(self.root)
+
+    def test_compose_always_passes_managed_switch(self):
+        with patch.object(release, "run", return_value=b"ok") as run:
+            release.compose(self.root, "config", "--format", "json")
+            run.assert_called_once_with(
+                ["python3", str(self.root / "scripts/operations/ar-compose.py"),
+                 "--ar-managed", "config", "--format", "json"], cwd=str(self.root))
+
     def test_pin_changes_only_viewer3(self):
         self.assertEqual(release.replace_viewer_pin(BASE, OLD, NEW),
                          BASE.replace(OLD.encode(), NEW.encode()))

@@ -84,10 +84,10 @@ jobs:
           ref: ${{ inputs.source_ref }}
           persist-credentials: false
 
-      - name: Checkout trusted deployment script from port/3.11-custom
+      - name: Checkout deployment script from the selected workflow revision
         uses: actions/checkout@v4
         with:
-          ref: port/3.11-custom
+          ref: ${{ github.sha }}
           path: .viewer-deployment
           persist-credentials: false
 
