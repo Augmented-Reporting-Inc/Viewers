@@ -662,6 +662,20 @@ describe('shared Research IVC phase display adapter', () => {
     expect(complete.displayPhaseSources.IVC_INSP[0].displayAnnotation.frameNumber).toBe(22);
     expect(insp.frameNumber).toBe(1);
   });
+  it('opens the saved expiration caliper on completed question entry, not just the protocol image', () => {
+    const exp=length('IVCexp',20,2),insp=length('IVCinsp',8,22);
+    const state=getResearchIVCPhaseDisplayState(field,[exp,insp],study);
+    expect(state.candidate).not.toBeNull();
+    const source=state.candidate;
+    const selected=getResearchCompositeReviewEntrySource(field,source,[insp,exp],study);
+    expect(selected.annotation).toBe(exp);
+    expect(selected.displayAnnotation.frameNumber).toBe(2);
+    expect(exp.frameNumber).toBe(1);
+    expect(getResearchCompositeReviewEntrySource(field,source,[insp],study)).toBeNull();
+    expect(getResearchCompositeReviewEntrySource(field,source,[exp,insp,exp],study)).toBeNull();
+    expect(getResearchCompositeReviewEntrySource(field,source,[exp,insp],'foreign')).toBeNull();
+    expect(getResearchCompositeReviewEntrySource(field,{source:'manual'},[exp,insp],study)).toBeNull();
+  });
   it('keeps wrong-frame sources inspectable, but does not promote ambiguous or foreign evidence', () => {
     const exp=length('IVCexp',20,2),insp=length('IVCinsp',8,22);
     const wrong=length('IVCexp',30,11);

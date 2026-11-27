@@ -378,18 +378,18 @@ export function getResearchRVFACPhaseSources(
 
 /** Completed composite entry uses only the uniquely linked saved source set.
  * Follow the existing phase order, never a live measurement or gold target. */
-export function isResearchContourReviewQuestion(field: any, domain: string) {
+export function isResearchCompositeReviewQuestion(field: any, domain: string) {
   return cleanString(domain).toLowerCase() === 'echo' &&
-    ['lvEjectionFraction', 'laVolumeDisks', 'rvFac'].includes(cleanString(field?.componentKey));
+    ['lvEjectionFraction', 'laVolumeDisks', 'rvFac', 'ivcCollapsibility'].includes(cleanString(field?.componentKey));
 }
 
 export function getResearchCompositeReviewEntrySource(
   field: any, fieldSource: any, annotations: any[] = [], studyInstanceId: unknown = ''
 ) {
-  if (!isResearchContourReviewQuestion(field, 'echo') || fieldSource?.source !== 'viewer-derived') return null;
+  if (!isResearchCompositeReviewQuestion(field, 'echo') || fieldSource?.source !== 'viewer-derived') return null;
   const kind = cleanString(field.componentKey);
   const prefix = kind === 'lvEjectionFraction' ? 'lv-simpson:' :
-    kind === 'laVolumeDisks' ? 'la-disks:' : 'rv-fac:';
+    kind === 'laVolumeDisks' ? 'la-disks:' : kind === 'rvFac' ? 'rv-fac:' : 'ivc-collapse:';
   const key = cleanString(fieldSource.sourceMeasurementKey);
   if (!key.startsWith(prefix)) return null;
   const slots = getResearchEchoPhases(field).map(phase => phase.slot);
@@ -402,6 +402,17 @@ export function getResearchCompositeReviewEntrySource(
   const owned = linked.map(matches => matches[0]);
   const study = cleanString(studyInstanceId);
   if (!study || !isResearchCandidateOnProtocolFrames(field, fieldSource, owned)) return null;
+  if (kind === 'ivcCollapsibility') {
+    // Use the same exact saved caliper display adapter as the explicit phase
+    // links. Never open a bare protocol frame in place of saved reader evidence.
+    const state = getResearchIVCPhaseDisplayState(field, owned, study);
+    if (!state.candidate || state.unresolvedCount) return null;
+    const ordered = slots.map(slot => {
+      const rows = state.displayPhaseSources[slot] || [];
+      return rows.length === 1 && rows[0].matchesTarget ? rows[0] : null;
+    });
+    return ordered.every(Boolean) ? ordered[0] : null;
+  }
   const phaseState = kind === 'laVolumeDisks' ? getResearchLAPhaseSources(field, owned, study) :
     kind === 'rvFac' ? getResearchRVFACPhaseSources(field, owned, study) : null;
   const ordered = slots.map(slot => {

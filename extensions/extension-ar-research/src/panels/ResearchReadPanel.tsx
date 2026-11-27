@@ -73,7 +73,7 @@ import {
   getResearchIVCMeasurementState,
   getResearchIVCPhaseDisplayState,
   getResearchQuestionEntryTarget,
-  isResearchContourReviewQuestion,
+  isResearchCompositeReviewQuestion,
   getResearchCompositeReviewEntrySource,
   getResearchIVCAnnotationSlot,
   isValidResearchIVCPhaseSource,
@@ -1346,13 +1346,13 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
 
   const navigateToField = async (field: any, isCancelled: () => boolean) => {
     if (isCancelled()) return false;
-    if (context?.readOnly && !context?.preview && isResearchContourReviewQuestion(field, readDomain)) {
+    if (context?.readOnly && !context?.preview && isResearchCompositeReviewQuestion(field, readDomain)) {
       const source = getResearchCompositeReviewEntrySource(
         field, persistedReadState.sources[field.key], savedAnnotations,
         context?.sourceStudyInstanceUID);
       if (source) return restoreResearchAnnotationSource(source, isCancelled);
       if (persistedReadState.sources[field.key]?.sourceMeasurementKey) {
-        notify(servicesManager, 'Saved contour source could not be resolved; inspect the saved phases.', 'warning');
+        notify(servicesManager, 'Saved measurement source could not be resolved; inspect the saved phases.', 'warning');
       }
       return false;
     }
@@ -1463,7 +1463,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
     if (!field) return;
     initializedReviewRef.current = reviewKey;
     if (isResearchLengthQuestion(field, readDomain) || isResearchTRVmaxQuestion(field, readDomain) ||
-        (context?.readOnly && isResearchContourReviewQuestion(field, readDomain))) runFieldSelection(field);
+        (context?.readOnly && isResearchCompositeReviewQuestion(field, readDomain))) runFieldSelection(field);
   }, [loading, commandsManager, context?.reviewKey, context?.preview, context?.readOnly,
     selectedFieldKey, visibleFields, readDomain]);
   useEffect(() => () => { ++selectionGenerationRef.current; },

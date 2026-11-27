@@ -111,10 +111,10 @@ describe('Completed Research measurement review', () => {
       panel.indexOf('const selectionGenerationRef'));
     expect(navigation).toContain('getResearchCompositeReviewEntrySource(');
     expect(navigation).toContain('persistedReadState.sources[field.key], savedAnnotations');
-    expect(navigation).toContain('context?.readOnly && !context?.preview && isResearchContourReviewQuestion');
+    expect(navigation).toContain('context?.readOnly && !context?.preview && isResearchCompositeReviewQuestion');
     expect(navigation.indexOf('return restoreResearchAnnotationSource(source, isCancelled)'))
       .toBeLessThan(navigation.indexOf('const targets = getResearchProtocolViewerTargets(field)'));
-    expect(panel).toContain('(context?.readOnly && isResearchContourReviewQuestion(field, readDomain))) runFieldSelection(field)');
+    expect(panel).toContain('(context?.readOnly && isResearchCompositeReviewQuestion(field, readDomain))) runFieldSelection(field)');
     expect(panel).toContain('reviewOnly={context.readOnly && !context.preview}');
   });
   it('does not dispatch saved display sets before a current viewport is ready', () => {
