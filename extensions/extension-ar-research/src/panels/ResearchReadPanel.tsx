@@ -37,7 +37,10 @@ import { getResearchMeasurementToolForField } from '../utils/researchMeasurement
 import {
   getResearchFramePickerIntent,
   getResearchCapturedFrameTarget,
-  RESEARCH_FRAME_CAPTURE_MESSAGE,
+  getResearchAuthoringFrameSelection,
+  getResearchAuthoringFrameTarget,
+  navigateResearchAuthoringFrame,
+  sendResearchAuthoringFrame,
 } from '../utils/researchFramePicker';
 import {
   getResearchRapChoices,
@@ -311,6 +314,10 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
   const [capturingProtocolFrame, setCapturingProtocolFrame] = useState(false);
   const [capturedProtocolFrame, setCapturedProtocolFrame] = useState('');
   const [capturePhaseSelection, setCapturePhaseSelection] = useState('');
+  const [authoringReadyKey, setAuthoringReadyKey] = useState('');
+  const authoringCapturedTargets = useRef<Record<string, any>>({});
+  const initializedPickerRef = useRef('');
+  const captureInFlightRef = useRef(false);
   const protocolFramePickerIntent = useMemo(
     () => getResearchFramePickerIntent(
       typeof window !== 'undefined' ? window.location.search : '',
@@ -318,14 +325,6 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
     ),
     []
   );
-  const isBatchFramePicker = protocolFramePickerIntent?.phaseKey === '__all__';
-  const capturePhases = isBatchFramePicker
-    ? getResearchEchoPhases({ componentKey: protocolFramePickerIntent.componentKey })
-    : [];
-  const capturePhaseKey = isBatchFramePicker
-    ? (capturePhases.find(phase => phase.slot === capturePhaseSelection)?.slot ||
-      capturePhases[0]?.slot || '')
-    : (protocolFramePickerIntent?.phaseKey || '');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [completing, setCompleting] = useState(false);
@@ -403,12 +402,23 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
   }, [visibleFields, questionNavigationMode]);
 
   useEffect(() => {
-    if (!protocolFramePickerIntent || !visibleFields.length) return;
+    if (!protocolFramePickerIntent || !context?.preview || !visibleFields.length ||
+        initializedPickerRef.current === protocolFramePickerIntent.session) return;
+    initializedPickerRef.current = protocolFramePickerIntent.session;
     const target = visibleFields.find(field =>
       field.componentKey === protocolFramePickerIntent.componentKey
     );
-    if (target) setSelectedFieldKey(target.key);
-  }, [protocolFramePickerIntent, visibleFields]);
+    if (target) {
+      setSelectedFieldKey(target.key);
+      setCapturePhaseSelection(protocolFramePickerIntent.phaseKey);
+    }
+  }, [protocolFramePickerIntent, context?.preview, visibleFields]);
+
+  const authoringField = context?.preview && protocolFramePickerIntent &&
+    context.sourceStudyInstanceUID === protocolFramePickerIntent.studyInstanceUID &&
+    readDomain === 'echo'
+    ? visibleFields.find(field => field.key === selectedFieldKey) : null;
+  const authoringSelection = getResearchAuthoringFrameSelection(authoringField, capturePhaseSelection);
 
   const allAnnotations = useMemo(
     () => context?.readOnly ? savedAnnotations : mergeMeasurementAnnotations(
@@ -1267,48 +1277,36 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
   };
 
   const captureCurrentProtocolFrame = async () => {
-    if (!context?.preview || !protocolFramePickerIntent ||
-        capturingProtocolFrame || !commandsManager) return;
+    // Snapshot the active question and phase, never the launch question.
+    const selection = authoringSelection;
+    if (!context?.preview || !protocolFramePickerIntent || !selection ||
+        authoringReadyKey !== selection.key || captureInFlightRef.current || !commandsManager) return;
     if (!window.opener || window.opener.closed) {
-      notify(servicesManager,
-        'The Research Manager window is unavailable. Reopen the frame picker from the manager.',
-        'warning');
+      notify(servicesManager, 'The Research Manager window is unavailable. Reopen the frame picker from the manager.', 'warning');
       return;
     }
+    const generation = selectionGenerationRef.current;
+    captureInFlightRef.current = true;
     setCapturingProtocolFrame(true);
     setCapturedProtocolFrame('');
     try {
-      // EXACTLY the Education authoring frame command: it captures active
-      // OHIF viewport study/series/SOP/frame, not a display-text guess.
+      // EXACTLY the Education authoring frame command.
       const response = await commandsManager.runCommand('getCurrentViewerQuizFrameAnswer', {});
+      if (selectionGenerationRef.current !== generation) return;
       const target = getResearchCapturedFrameTarget(response, protocolFramePickerIntent);
-      window.opener.postMessage({
-        type: RESEARCH_FRAME_CAPTURE_MESSAGE,
-        session: protocolFramePickerIntent.session,
-        studyInstanceUID: protocolFramePickerIntent.studyInstanceUID,
-        componentKey: protocolFramePickerIntent.componentKey,
-        phaseKey: capturePhaseKey,
-        target,
-      }, protocolFramePickerIntent.parentOrigin);
-      setCapturedProtocolFrame(
-        'Captured frame ' + target.frameNumber +
-        ' for ' + protocolFramePickerIntent.componentKey +
-        (capturePhaseKey ? ' / ' + capturePhaseKey : '') +
-        '. Return to Research Manager and click Save.'
-      );
-      notify(servicesManager, 'Frame sent to Research Manager. Save the protocol there.');
-      if (isBatchFramePicker) {
-        const currentIndex = capturePhases.findIndex(phase => phase.slot === capturePhaseKey);
-        if (currentIndex >= 0 && currentIndex + 1 < capturePhases.length) {
-          setCapturePhaseSelection(capturePhases[currentIndex + 1].slot);
-        }
-      }
+      await sendResearchAuthoringFrame(window, protocolFramePickerIntent, selection, target);
+      if (selectionGenerationRef.current !== generation) return;
+      authoringCapturedTargets.current[selection.key] = target;
+      setCapturedProtocolFrame('Captured frame ' + target.frameNumber + ' for ' +
+        authoringField.label + (selection.phaseKey ? ' / ' + selection.phaseKey : '') +
+        '. Return to Research Manager and click Save.');
+      notify(servicesManager, 'Selected question updated in Research Manager. Save the protocol there.');
     } catch (captureError) {
+      if (selectionGenerationRef.current !== generation) return;
       console.warn('[AR Research] unable to capture authoring frame', captureError);
-      notify(servicesManager,
-        captureError?.message || 'Unable to capture the active DICOM frame.',
-        'warning');
+      notify(servicesManager, captureError?.message || 'Unable to capture the active DICOM frame.', 'warning');
     } finally {
+      captureInFlightRef.current = false;
       setCapturingProtocolFrame(false);
     }
   };
@@ -1448,12 +1446,43 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
   });
   const selectField = (key: string) => {
     const field = fields.find(item => item.key === key);
-    if (!field) return;
+    if (!field || captureInFlightRef.current) return;
+    if (context?.preview && protocolFramePickerIntent) {
+      if (selectedFieldKey === key) return;
+      ++selectionGenerationRef.current;
+      setAuthoringReadyKey('');
+      setCapturedProtocolFrame('');
+      setCapturePhaseSelection('');
+      setSelectedFieldKey(key);
+      return;
+    }
     pendingIVCReplacementRef.current = null;
     initializedReviewRef.current = cleanString(context?.reviewKey);
     setSelectedFieldKey(key);
     runFieldSelection(field);
   };
+  // Preview authoring uses the same queued question navigation and strict
+  // Education target command as review. Restore staged targets on re-entry.
+  useEffect(() => {
+    if (loading || !commandsManager || !authoringField || !authoringSelection) return;
+    const selection = authoringSelection;
+    setAuthoringReadyKey('');
+    queueNavigation(async isCancelled => {
+      try {
+        const target = getResearchAuthoringFrameTarget(
+          authoringField, selection.phaseKey, authoringCapturedTargets.current);
+        if (target && !await navigateResearchAuthoringFrame({
+          commandsManager, target, questionKey: selection.fieldKey, isCancelled,
+        }) && !isCancelled()) {
+          notify(servicesManager, 'Unable to open the configured frame. Select the correct image manually before replacing the target.', 'warning');
+        }
+      } finally {
+        if (!isCancelled()) setAuthoringReadyKey(selection.key);
+      }
+    });
+    return () => { ++selectionGenerationRef.current; };
+  }, [loading, commandsManager, authoringField, authoringSelection?.key]);
+
   // Reopening a completed Read restores its first selected saved contour
   // (including EF when first), or existing Length/TR evidence.
   // Do not jump again whenever binding refreshes or Save runs.
@@ -1773,7 +1802,7 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
       onSelect={selectField}
       onActivateSelected={selectedField && context.readOnly && !context.preview
         ? () => selectField(selectedField.key) : undefined}
-      disabled={isBusy}
+      disabled={isBusy || capturingProtocolFrame}
       readOnly={context.readOnly}
       selectorTitle="Question"
       description={
@@ -1804,46 +1833,49 @@ export default function ResearchReadPanel({ servicesManager, commandsManager }) 
       {context.preview && protocolFramePickerIntent ? (
         <div className="mb-3 rounded border border-cyan-700 bg-cyan-950/30 p-3 text-xs text-cyan-100">
           <div className="font-semibold text-sm">Research protocol frame authoring</div>
-          <p className="mt-1">
-            Capture the source for {protocolFramePickerIntent.componentKey}
-            {!isBatchFramePicker && protocolFramePickerIntent.phaseKey
-              ? ' / ' + protocolFramePickerIntent.phaseKey : ''}.
-            Select the correct instance and cine frame in the viewer first.
-            {isBatchFramePicker
-              ? ' Capture each phase here without reopening the viewer.' : ''}
-          </p>
-          {isBatchFramePicker && capturePhases.length > 0 ? (
-            <label className="mt-2 block text-xs">
-              Contour / measurement phase
-              <select
-                className="mt-1 block w-full rounded border border-cyan-500 bg-gray-950 p-2 text-white"
-                value={capturePhaseKey}
-                disabled={capturingProtocolFrame}
-                onChange={event => setCapturePhaseSelection(event.target.value)}
+          {authoringSelection ? (
+            <>
+              <p className="mt-1">
+                Capture the source for {authoringField.label}.
+                Select the correct instance and cine frame for this question.
+              </p>
+              {authoringSelection.phases.length > 0 ? (
+                <label className="mt-2 block text-xs">
+                  Contour / measurement phase
+                  <select
+                    className="mt-1 block w-full rounded border border-cyan-500 bg-gray-950 p-2 text-white"
+                    value={authoringSelection.phaseKey}
+                    disabled={capturingProtocolFrame}
+                    onChange={event => {
+                      if (captureInFlightRef.current || event.target.value === authoringSelection.phaseKey) return;
+                      ++selectionGenerationRef.current;
+                      setAuthoringReadyKey('');
+                      setCapturedProtocolFrame('');
+                      setCapturePhaseSelection(event.target.value);
+                    }}
+                  >
+                    {authoringSelection.phases.map(phase => (
+                      <option key={phase.slot} value={phase.slot}>{phase.label}</option>
+                    ))}
+                  </select>
+                </label>
+              ) : null}
+              <button
+                type="button"
+                className="mt-2 rounded border border-cyan-500 bg-cyan-900 px-3 py-2 font-semibold text-white disabled:opacity-40"
+                disabled={capturingProtocolFrame || !commandsManager || authoringReadyKey !== authoringSelection.key}
+                onClick={() => void captureCurrentProtocolFrame()}
               >
-                {capturePhases.map(phase => (
-                  <option key={phase.slot} value={phase.slot}>{phase.label}</option>
-                ))}
-              </select>
-            </label>
-          ) : null}
-          <button
-            type="button"
-            className="mt-2 rounded border border-cyan-500 bg-cyan-900 px-3 py-2 font-semibold text-white disabled:opacity-40"
-            disabled={capturingProtocolFrame || !commandsManager}
-            onClick={() => void captureCurrentProtocolFrame()}
-          >
-            {capturingProtocolFrame
-              ? 'Capturing current frame…'
-              : isBatchFramePicker && capturePhaseKey
-                ? 'Capture ' + capturePhaseKey + ' frame'
-                : 'Capture current frame'}
-          </button>
-          {capturedProtocolFrame ? (
-            <div role="status" className="mt-2 text-green-200">
-              {capturedProtocolFrame}
-            </div>
-          ) : null}
+                {capturingProtocolFrame ? 'Capturing current frame…' :
+                  authoringReadyKey !== authoringSelection.key ? 'Opening configured frame…' :
+                  authoringSelection.phaseKey ? 'Capture ' + authoringSelection.phaseKey + ' frame' :
+                  'Capture current frame'}
+              </button>
+              {capturedProtocolFrame ? (
+                <div role="status" className="mt-2 text-green-200">{capturedProtocolFrame}</div>
+              ) : null}
+            </>
+          ) : <p className="mt-1">This question has no configurable measurement frame.</p>}
         </div>
       ) : null}
         </>

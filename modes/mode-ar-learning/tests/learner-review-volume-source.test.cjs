@@ -87,3 +87,22 @@ test('learner footer uses per-action labels while retaining shared disabled stat
   assert.doesNotMatch(footer, /quizSaving \? 'Saving…'/);
   assert.doesNotMatch(footer, /quizSaving \? 'Submitting…'/);
 });
+
+test('submitted EF comparison hydrates both variants on the verified active frame, not the first saved LV stack image', () => {
+  const start = commands.indexOf('showViewerQuizMeasurementComparison: async');
+  const end = commands.indexOf('getCurrentViewerQuizFrameAnswer: async', start);
+  assert.ok(start >= 0 && end > start);
+  const review = commands.slice(start,end);
+  assert.match(review, /getSubmittedEFReviewContour\(\{/);
+  assert.match(review, /const focusedFrame = isFocusedEFReview \? await actions\.getCurrentViewerQuizFrameAnswer/);
+  assert.match(review, /const focusedImageId = isFocusedEFReview \? getFocusedEFComparisonImageId/);
+  assert.match(review, /if \(isFocusedEFReview && !focusedImageId\) continue/);
+  assert.match(review, /const match = isFocusedEFReview\s*\? \{ index: getViewportImageIds\(viewport\)\.indexOf\(focusedImageId\), imageId: focusedImageId \}/);
+  assert.match(review, /nativeIndexedForFocusedFrame/);
+  assert.match(review, /isComparisonAnnotationIndexed\(annotation.state, viewport.element, native, sourceId\)/);
+  assert.match(review, /isComparisonAnnotationIndexed\(annotation.state, viewport.element,\s*hydratedAnnotation, comparisonAnnotationId\)/);
+  assert.doesNotMatch(review, /getAnnotations\?\.\([\s\S]{0,180}\|\| \[\]\)\.some/);
+  assert.match(review, /sourceAnnotation: isFocusedEFReview \? \{[\s\S]*?referencedImageId: focusedImageId,[\s\S]*?toolName: 'PlanarFreehandROI'/);
+  assert.match(review, /learnerRendered = true/);
+  assert.match(review, /rubricRendered = true/);
+});

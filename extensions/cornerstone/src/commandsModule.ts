@@ -151,7 +151,7 @@ import { beginEFOpenStage, measureEFOpenStage, startEFOpenProfile, type EFOpenSt
 import { consumeViewerLengthFirstLabelMode } from './utils/viewerLengthLabelMode';
 import { getViewerQuizRouteMeasurementDomain } from '../../extension-ar-learning/src/utils/viewerQuizMeasurementDomain';
 import { resolveViewerQuizGoldAreaBackfill, resolveSavedEFGoldContourAreas, resolveVerifiedEFGoldContourAreasFromDicom } from '../../extension-ar-measurements/src/utils/quizGoldAreaBackfill';
-import { getSubmittedEFReviewContour } from './utils/quizEFSubmittedReviewContour';
+import { getSubmittedEFReviewContour, getFocusedEFComparisonImageId, isComparisonAnnotationIndexed } from './utils/quizEFSubmittedReviewContour';
 
 const { DefaultHistoryMemo } = csUtils.HistoryMemo;
 const toggleSyncFunctions = {
@@ -17708,6 +17708,24 @@ function commandsModule({
         };
       }
 
+      // The navigation command can resolve a different viewport. Verify
+      // the actual reached frame before using either submitted overlay.
+      const focusedFrame = isFocusedEFReview ? await actions.getCurrentViewerQuizFrameAnswer({
+        viewportId: comparisonViewportId,
+      }) : null;
+      if (comparisonGeneration !== viewerQuizComparisonGeneration) {
+        return { ok: false, reason: 'review-question-changed', renderedCount: 0 };
+      }
+      const focusedActiveTarget = focusedFrame?.ok === true
+        ? focusedFrame.answer?.selectedTarget || focusedFrame.answer?.viewerTarget : null;
+      if (isFocusedEFReview && !getFocusedEFComparisonImageId({
+        activeTarget: focusedActiveTarget, sourceTarget: focusedGold?.target,
+        currentImageId: viewport.getCurrentImageId?.(),
+      })) {
+        return { ok: false, reason: 'exact-ef-source-frame-unavailable',
+          learnerRendered: false, rubricRendered: false, renderedSlots: [] };
+      }
+
       // Gold measurement comparison is a separate hydration path from
       // jumpToSavedViewerAnnotation. Install the scoped area renderer here too:
       // restoring the annotation alone does not install getTextLines.
@@ -17807,20 +17825,36 @@ function commandsModule({
       ].filter(entry => !!entry.sourceAnnotation);
 
       for (const entry of entries) {
+        if (comparisonGeneration !== viewerQuizComparisonGeneration) {
+          return { ok: false, reason: 'review-question-changed', renderedCount: 0 };
+        }
+        const focusedImageId = isFocusedEFReview ? getFocusedEFComparisonImageId({
+          activeTarget: focusedActiveTarget,
+          sourceTarget: {
+            studyInstanceUID: entry.sourceAnnotation?.StudyInstanceUID,
+            seriesInstanceUID: entry.sourceAnnotation?.SeriesInstanceUID,
+            sopInstanceUID: entry.sourceAnnotation?.SOPInstanceUID,
+            frameNumber: entry.sourceAnnotation?.frameNumber,
+          },
+          currentImageId: viewport.getCurrentImageId?.(),
+        }) : '';
+        if (isFocusedEFReview && !focusedImageId) continue;
         const sourceId = String(entry.sourceAnnotation?.annotationId ||
           entry.sourceAnnotation?.uid || '').trim();
         const native = compositeRubric && sourceId &&
           (entry.variant === 'rubric' || (entry.variant === 'learner' && isFocusedEFReview))
           ? annotation.state.getAnnotation?.(sourceId) : null;
         const expectedImage = normalizeImageIdForCompare(
-          entry.sourceAnnotation?.referencedImageId || '');
+          focusedImageId || entry.sourceAnnotation?.referencedImageId || '');
         const nativeImage = normalizeImageIdForCompare(
           native?.metadata?.referencedImageId || '');
-        if (native && expectedImage && nativeImage === expectedImage) {
-          if (isFocusedEFReview) {
-            const activeImage = normalizeImageIdForCompare(viewport.getCurrentImageId?.() || '');
-            if (!activeImage || activeImage !== expectedImage) continue;
-          }
+        // A native hit on an old cache reference or a different annotation
+        // group is not proof that the contour is visible. Fall through to
+        // the existing temporary overlay hydration rather than skipping it.
+        const nativeIndexedForFocusedFrame = !isFocusedEFReview ||
+          isComparisonAnnotationIndexed(annotation.state, viewport.element, native, sourceId);
+        if (native && expectedImage && nativeImage === expectedImage &&
+            nativeIndexedForFocusedFrame) {
           if (entry.variant === 'rubric' &&
               rubricMeasurement?.measurementKind === 'lvSimpsonEF') {
             applyVerifiedEFGoldLabel(sourceId, entry.slot, rubricMeasurement);
@@ -17852,16 +17886,27 @@ function commandsModule({
           continue;
         }
         const comparisonAnnotation = buildViewerQuizMeasurementComparisonAnnotation({
-          sourceAnnotation: entry.sourceAnnotation,
+          sourceAnnotation: isFocusedEFReview ? {
+            ...entry.sourceAnnotation, referencedImageId: focusedImageId,
+            // Submitted points are the persisted display polyline, not
+            // SplineROI control handles. Temporary comparison overlays must
+            // reproduce that polyline without reconstructing a spline.
+            toolName: 'PlanarFreehandROI',
+          } : entry.sourceAnnotation,
           variant: entry.variant,
           questionKey: entry.slot ? `${questionKey}-${entry.slot}` : questionKey,
         });
         // A composite can span different source frames. Rehydrate every
         // contour against its own image rather than navigating the viewport to
         // each subsequent frame (which would leave the wrong frame visible).
-        const match = entry.slot
-          ? findImageIdIndexForSavedAnnotation(viewport, comparisonAnnotation)
-          : await waitForSavedAnnotationImageMatch(viewport, comparisonAnnotation);
+        // Focused EF already verified study/series/SOP/frame on the active
+        // viewport. Partial review-only LV metadata is not an acquisition
+        // source; never use the generic saved LV matcher for this pair.
+        const match = isFocusedEFReview
+          ? { index: getViewportImageIds(viewport).indexOf(focusedImageId), imageId: focusedImageId }
+          : entry.slot
+            ? findImageIdIndexForSavedAnnotation(viewport, comparisonAnnotation)
+            : await waitForSavedAnnotationImageMatch(viewport, comparisonAnnotation);
         if (entry.slot && match.index < 0) continue;
         if (entry.slot && isFocusedEFReview) {
           // Only show a per-slot contour on the exact currently displayed frame.
@@ -17902,9 +17947,8 @@ function commandsModule({
         if ((entry.slot || (entry.variant === 'rubric' && !!embeddedGoldAnnotation && !persistedRubricAnnotation)) && viewport.element) {
           const toolName = String(hydratedAnnotation.metadata?.toolName || '');
           const visibleInViewport = () =>
-            (annotation.state.getAnnotations?.(toolName, viewport.element) || []).some(
-              candidate => candidate.annotationUID === comparisonAnnotationId
-            );
+            isComparisonAnnotationIndexed(annotation.state, viewport.element,
+              hydratedAnnotation, comparisonAnnotationId);
           if (!visibleInViewport()) {
             // Ultrasound stack viewports can have an undefined/empty annotation
             // group key. The manager's exact key (not the viewport element or
